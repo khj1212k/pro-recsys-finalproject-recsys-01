@@ -1,0 +1,95 @@
+# ==========================
+# 1. 공통 및 IDE 설정
+# ==========================
+# 운영체제 파일
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# VS Code 및 에디터 설정
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ==========================
+# 2. 보안 및 환경 변수 (★가장 중요)
+# ==========================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+secrets.json
+
+# ==========================
+# 3. Python (Backend & AI 공통)
+# ==========================
+# 컴파일된 파일
+__pycache__/
+*.py[cod]
+*.pyc
+*$py.class
+
+# 가상환경 (이름이 다양할 수 있어서 다 넣어둠)
+.venv/
+venv/
+env/
+ENV/
+
+# 배포 및 라이브러리
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Jupyter Notebook (AI 팀용)
+.ipynb_checkpoints/
+
+# 로그
+*.log
+
+# ==========================
+# 4. AI & 데이터 (AI Workspace)
+# ==========================
+# 무거운 모델 파일 (GitHub 용량 초과 방지)
+*.pt
+*.pth
+*.h5
+*.onnx
+*.pkl
+
+# 데이터셋 (CSV, Excel 등)
+# 필요하다면 주석(#)을 풀어서 커밋에 포함시키세요.
+# *.csv
+# *.xlsx
+# data/
+
+# 크롤링 결과물 등
+ai_workspace/data/
+ai_workspace/output/
+
+# ==========================
+# 5. Frontend (React/Node)
+# ==========================
+# 의존성 패키지 (용량이 매우 큼, 절대 올리면 안 됨)
+node_modules/
+
+# 빌드 결과물
+frontend/build/
+frontend/dist/
+
+# 패키지 매니저 로그
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ==========================
+# 6. 기타
+# ==========================
+# Postgres 데이터 (Docker 사용 시)
+postgres_data/
+
+# Alembic 자동 생성 캐시 (필요시)
+backend/__pycache__/
