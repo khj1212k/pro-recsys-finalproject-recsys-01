@@ -36,11 +36,9 @@ class NewsRaw(SQLModel, table=True):
     press_id: int = Field(foreign_key="press.press_id")
     raw_news_title: str
     raw_news_content: str
-    writer: Optional[str] = None 
     raw_news_url: str
     # [Vector] 원문 기사 임베딩 (768차원 예시)
     embedding_result: List[float] = Field(default=None, sa_column=Column(Vector(768)))
-    press_category: Optional[str] = None
     raw_news_created_at: str
     raw_news_crawled_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
