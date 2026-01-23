@@ -43,7 +43,9 @@ class NewsRaw(SQLModel, table=True):
     raw_news_crawled_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
-    used_check: bool = Field(default=False)
+    # 뉴스레터 ID (FK, Nullable) - 사용여부(used_check) 대신 사용
+    # 연결된 뉴스레터가 없으면 NULL(None)
+    news_letter_id: Optional[int] = Field(default=None, foreign_key="news_letter.news_letter_id")
 
 # 5. 뉴스 레터 (News_Letter)
 class NewsLetter(SQLModel, table=True):
@@ -62,9 +64,6 @@ class NewsLetter(SQLModel, table=True):
     # [JSON] 뉴스레터 키워드
     news_letter_keywords: List[str] = Field(default=[], sa_column=Column(JSON))
     raw_news_count: int = Field(default=1)
-    # 원문 기사 ID 리스트 (JSONB)
-    # 예: [102, 105, 304]
-    raw_news_ids: List[int] = Field(default=[], sa_column=Column(JSON))
 
 # 6. 뉴스레터-카테고리 매핑 (News_Letter_Categories)
 class NewsLetterCategories(SQLModel, table=True):
