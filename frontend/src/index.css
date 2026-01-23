@@ -1,0 +1,286 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap');
+
+@layer base {
+  :root {
+    /* White background */
+    --background: 0 0% 100%;
+    --foreground: 220 15% 20%;
+
+    /* Card surfaces - Cloud Dancer #F0F7F7 */
+    --card: 180 8% 96%;
+    --card-foreground: 220 15% 20%;
+
+    --popover: 180 8% 96%;
+    --popover-foreground: 220 15% 20%;
+
+    /* Pantone Clearly Aqua - main accent */
+    --primary: 139 24% 85%;
+    --primary-foreground: 220 20% 25%;
+
+    /* Deeper aqua for hover states */
+    --primary-hover: 139 28% 75%;
+
+    /* Secondary - muted warm */
+    --secondary: 35 20% 88%;
+    --secondary-foreground: 220 15% 25%;
+
+    --muted: 35 15% 85%;
+    --muted-foreground: 220 10% 45%;
+
+    --accent: 139 24% 85%;
+    --accent-foreground: 220 20% 25%;
+
+    /* Status colors */
+    --destructive: 0 65% 55%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 145 50% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 60%;
+    --warning-foreground: 220 20% 20%;
+
+    --info: 200 80% 55%;
+    --info-foreground: 0 0% 100%;
+
+    /* Borders and inputs */
+    --border: 35 20% 85%;
+    --input: 35 20% 88%;
+    --ring: 139 28% 70%;
+
+    --radius: 1.5rem;
+
+    /* Category colors */
+    --politics: 0 70% 60%;
+    --economy: 38 85% 55%;
+    --it: 200 80% 55%;
+    --society: 150 50% 50%;
+    --culture: 280 60% 65%;
+    --science: 170 60% 45%;
+    --world: 220 60% 55%;
+
+    /* Sidebar */
+    --sidebar-background: 180 8% 96%;
+    --sidebar-foreground: 220 15% 25%;
+    --sidebar-primary: 139 24% 85%;
+    --sidebar-primary-foreground: 220 20% 25%;
+    --sidebar-accent: 139 20% 88%;
+    --sidebar-accent-foreground: 220 15% 25%;
+    --sidebar-border: 35 20% 88%;
+    --sidebar-ring: 139 28% 70%;
+
+    /* Shadows */
+    --shadow-soft: 0 4px 20px -4px hsl(220 15% 20% / 0.08);
+    --shadow-medium: 0 8px 30px -6px hsl(220 15% 20% / 0.12);
+    --shadow-card: 0 2px 12px -2px hsl(220 15% 20% / 0.06);
+  }
+
+  .dark {
+    --background: 220 20% 12%;
+    --foreground: 40 15% 92%;
+
+    --card: 220 18% 16%;
+    --card-foreground: 40 15% 92%;
+
+    --popover: 220 18% 14%;
+    --popover-foreground: 40 15% 92%;
+
+    --primary: 150 35% 40%;
+    --primary-foreground: 40 15% 95%;
+
+    --primary-hover: 150 40% 50%;
+
+    --secondary: 220 15% 22%;
+    --secondary-foreground: 40 15% 88%;
+
+    --muted: 220 15% 25%;
+    --muted-foreground: 40 10% 60%;
+
+    --accent: 150 30% 35%;
+    --accent-foreground: 40 15% 95%;
+
+    --destructive: 0 60% 45%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 15% 25%;
+    --input: 220 15% 22%;
+    --ring: 150 35% 50%;
+
+    --sidebar-background: 220 18% 14%;
+    --sidebar-foreground: 40 15% 90%;
+    --sidebar-primary: 150 35% 40%;
+    --sidebar-primary-foreground: 40 15% 95%;
+    --sidebar-accent: 220 15% 20%;
+    --sidebar-accent-foreground: 40 15% 90%;
+    --sidebar-border: 220 15% 22%;
+    --sidebar-ring: 150 35% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Noto Sans KR', sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold tracking-tight;
+  }
+}
+
+@layer components {
+  .card-news {
+    @apply bg-card rounded-3xl p-6 transition-all duration-300;
+    box-shadow: var(--shadow-card);
+  }
+
+  .card-news:hover {
+    box-shadow: var(--shadow-medium);
+    @apply -translate-y-1;
+  }
+
+  .btn-primary {
+    @apply bg-primary text-primary-foreground rounded-2xl px-6 py-3 font-medium transition-all duration-200;
+  }
+
+  .btn-primary:hover {
+    @apply bg-[hsl(var(--primary-hover))] scale-[1.02];
+  }
+
+  .category-badge {
+    @apply px-3 py-1 rounded-full text-xs font-medium;
+  }
+
+  .input-field {
+    @apply bg-card border-border rounded-2xl px-4 py-3 w-full transition-all duration-200 focus:ring-2 focus:ring-primary focus:border-transparent outline-none;
+  }
+
+  .sidebar-link {
+    @apply flex items-center gap-3 px-4 py-3 rounded-2xl transition-all duration-200 text-muted-foreground;
+  }
+
+  .sidebar-link:hover {
+    @apply bg-sidebar-accent text-sidebar-foreground;
+  }
+
+  .sidebar-link.active {
+    @apply bg-primary text-primary-foreground font-medium;
+  }
+
+  .time-tab {
+    @apply px-4 py-2 rounded-xl text-sm font-medium transition-all duration-200;
+  }
+
+  .time-tab.active {
+    @apply bg-primary text-primary-foreground;
+  }
+
+  .time-tab:not(.active) {
+    @apply bg-secondary text-secondary-foreground hover:bg-muted;
+  }
+
+  .keyword-chip {
+    @apply inline-flex items-center gap-1 px-3 py-1.5 bg-primary/30 text-primary-foreground rounded-full text-sm font-medium cursor-pointer transition-all duration-200 hover:bg-primary/50;
+  }
+
+  .quiz-option {
+    @apply w-full p-4 rounded-2xl border-2 border-border bg-card text-left transition-all duration-200 hover:border-primary hover:bg-primary/10;
+  }
+
+  .quiz-option.selected {
+    @apply border-primary bg-primary/20;
+  }
+
+  .quiz-option.correct {
+    @apply border-success bg-success/20;
+  }
+
+  .quiz-option.incorrect {
+    @apply border-destructive bg-destructive/20;
+  }
+
+  .stat-card {
+    @apply bg-card rounded-3xl p-5 transition-all duration-300;
+    box-shadow: var(--shadow-card);
+  }
+
+  .swipe-card {
+    @apply absolute inset-0 bg-card rounded-3xl p-6 cursor-grab active:cursor-grabbing;
+    box-shadow: var(--shadow-medium);
+  }
+}
+
+@layer utilities {
+  .animate-slide-up {
+    animation: slideUp 0.4s ease-out;
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
+  }
+
+  .animate-scale-in {
+    animation: scaleIn 0.2s ease-out;
+  }
+
+  .animate-swipe-left {
+    animation: swipeLeft 0.3s ease-out forwards;
+  }
+
+  .animate-swipe-right {
+    animation: swipeRight 0.3s ease-out forwards;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes swipeLeft {
+  to {
+    opacity: 0;
+    transform: translateX(-150%) rotate(-15deg);
+  }
+}
+
+@keyframes swipeRight {
+  to {
+    opacity: 0;
+    transform: translateX(150%) rotate(15deg);
+  }
+}
