@@ -153,3 +153,42 @@ def get_category_news(
                 break
                 
     return result
+
+# Response Schema (Detail)
+class NewsDetailResponse(NewsResponse):
+    news_letter_content: str
+    category_id: int
+    category_name: str
+
+@router.get("/{news_letter_id}", response_model=NewsDetailResponse)
+def get_newsletter_detail(
+    news_letter_id: int,
+    session: Session = Depends(get_session)
+):
+    """
+    Get detailed information of a specific newsletter by ID.
+    Includes content, sentence, keywords, and category info.
+    """
+    # Join NewsLetter -> NewsLetterCategories -> Category
+    result = session.exec(
+        select(NewsLetter, Category)
+        .join(NewsLetterCategories, NewsLetter.news_letter_id == NewsLetterCategories.news_letter_id)
+        .join(Category, NewsLetterCategories.category_id == Category.category_id)
+        .where(NewsLetter.news_letter_id == news_letter_id)
+    ).first()
+    
+    if not result:
+        raise HTTPException(status_code=404, detail="Newsletter not found")
+        
+    nl, cat = result
+    
+    return NewsDetailResponse(
+        news_letter_id=nl.news_letter_id,
+        news_letter_title=nl.news_letter_title,
+        news_letter_sentence=nl.news_letter_sentence,
+        news_letter_content=nl.news_letter_content,
+        news_letter_keywords=nl.news_letter_keywords,
+        news_letter_created_at=nl.news_letter_created_at,
+        category_id=cat.category_id,
+        category_name=cat.category_name
+    )
