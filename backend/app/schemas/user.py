@@ -8,6 +8,13 @@ class UserCreate(BaseModel):
     gender: Optional[str] = None # "Male", "Female", "Not specified"
     birth_year: Optional[int] = None
 
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+class UserCategoryUpdate(BaseModel):
+    categories: list[int]
+
 class UserResponse(BaseModel):
     user_id: int
     user_email: str

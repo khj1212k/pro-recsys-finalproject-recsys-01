@@ -1,5 +1,5 @@
 from sqlmodel import Session, select
-from app.models.user import User
+from app.models.user import User, UserPreferredCategories
 from app.schemas.user import UserCreate
 from app.security import get_password_hash
 
@@ -37,4 +37,25 @@ def create_user(session: Session, user: UserCreate) -> User:
     except Exception as e:
         session.rollback()
         print(f"회원가입 중 에러 발생: {e}")
+
+        raise e
+
+def update_user_categories(session: Session, user: User, category_ids: list[int]) -> User:
+    try:
+        # 기존 카테고리 삭제
+        statement = select(UserPreferredCategories).where(UserPreferredCategories.user_id == user.user_id)
+        results = session.exec(statement).all()
+        for result in results:
+            session.delete(result)
+            
+        # 새로운 카테고리 추가
+        for cat_id in category_ids:
+            user_pref = UserPreferredCategories(user_id=user.user_id, category_id=cat_id)
+            session.add(user_pref)
+            
+        session.commit()
+        session.refresh(user)
+        return user
+    except Exception as e:
+        session.rollback()
         raise e
