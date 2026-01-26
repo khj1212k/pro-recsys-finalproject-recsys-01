@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
-import { Bookmark, X, Clock, Check } from 'lucide-react';
-import { mockNewsArticles, categoryNames, categoryColors } from '@/data/mockData';
+import React, { useState, useEffect } from 'react';
+import { Bookmark, X, Clock, Check, Loader2 } from 'lucide-react';
+import { categoryNames, categoryColors } from '@/data/mockData';
 import { useUserStore } from '@/store/userStore';
 import { Category, NewsArticle } from '@/types';
+import { fetchOnboardingNews } from '@/lib/api';
+import { mapCategoryKeyToCode, formatDate } from '@/lib/utils';
+import { toast } from "sonner";
 
 // 마크다운 인라인 요소 렌더링 함수
 const renderMarkdownInline = (text: string): React.ReactNode => {
@@ -38,9 +41,39 @@ const categories: Category[] = ['politics', 'economy', 'it', 'society', 'culture
 const CategoriesPage: React.FC = () => {
   const [activeCategory, setActiveCategory] = useState<Category>('politics');
   const [selectedArticle, setSelectedArticle] = useState<NewsArticle | null>(null);
+  const [articles, setArticles] = useState<NewsArticle[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   const { user, addReadArticle } = useUserStore();
 
-  const articles = mockNewsArticles.filter((a) => a.category === activeCategory);
+  useEffect(() => {
+    const loadNews = async () => {
+        setIsLoading(true);
+        try {
+            const code = mapCategoryKeyToCode(activeCategory);
+            const data = await fetchOnboardingNews(code);
+            const mapped: NewsArticle[] = data.map(item => ({
+                id: item.news_letter_id.toString(),
+                title: item.news_letter_title,
+                summary: item.news_letter_sentence,
+                context: "", 
+                facts: [],
+                category: activeCategory,
+                keywords: item.news_letter_keywords.map((k, i) => ({ id: `k${i}`, term: k, category: activeCategory, savedAt: new Date() })),
+                sourceUrl: "#",
+                publishedAt: new Date(item.news_letter_created_at),
+                hookingSentence: item.news_letter_sentence
+            }));
+            setArticles(mapped);
+        } catch (e) {
+            console.error(e);
+            toast.error("뉴스를 불러오는데 실패했습니다.");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+    loadNews();
+  }, [activeCategory]);
+
 
   const handleCardClick = (article: NewsArticle) => {
     setSelectedArticle(article);
@@ -103,7 +136,7 @@ const CategoriesPage: React.FC = () => {
                 </span>
                 <div className="flex items-center gap-1 text-xs text-muted-foreground">
                   <Clock className="w-3.5 h-3.5" />
-                  <span>오늘</span>
+                  <span>{formatDate(selectedArticle.publishedAt)}</span>
                 </div>
               </div>
               <button
@@ -131,30 +164,7 @@ const CategoriesPage: React.FC = () => {
             </div>
 
             <div className="flex flex-col gap-6 mb-8">
-              {/* 핵심 맥락 */}
-              <div className="bg-secondary/50 rounded-2xl p-6 hover:bg-secondary/70 transition-colors">
-                <p className="text-sm font-bold text-foreground mb-3 flex items-center gap-2">
-                  <span className="text-xl">💡</span> 핵심 맥락
-                </p>
-                <p className="text-muted-foreground leading-relaxed">{selectedArticle.context}</p>
-              </div>
-
-              {/* 3대 팩트 */}
-              <div className="bg-secondary/50 rounded-2xl p-6 hover:bg-secondary/70 transition-colors">
-                <p className="text-sm font-bold text-foreground mb-3 flex items-center gap-2">
-                  <span className="text-xl">📌</span> 3대 팩트
-                </p>
-                <ul className="space-y-3">
-                  {selectedArticle.facts.map((fact, idx) => (
-                    <li key={idx} className="flex items-start gap-3 text-muted-foreground">
-                      <span className="w-5 h-5 rounded-full bg-background border border-border flex items-center justify-center text-xs font-bold text-foreground flex-shrink-0 mt-0.5 shadow-sm">
-                        {idx + 1}
-                      </span>
-                      <span className="flex-1">{fact}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+               
             </div>
 
             {/* Keywords Section */}
@@ -268,7 +278,7 @@ const ArticleCard: React.FC<ArticleCardProps> = ({
       {/* Time Info - Moved to Top Right */}
       <div className="absolute top-4 right-4 flex items-center gap-1 text-xs text-muted-foreground">
         <Clock className="w-3.5 h-3.5" />
-        <span>오늘</span>
+        <span>{formatDate(article.publishedAt)}</span>
       </div>
 
       <div className="flex items-center gap-2 mb-3">
