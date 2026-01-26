@@ -100,5 +100,23 @@ export interface NewsDetailResponse extends NewsResponse {
   category_name: string;
 }
 
-export interface OnboardingNewsResponse extends NewsResponse {}
+export interface OnboardingNewsResponse extends NewsResponse { }
+
+// --- Auth DTOs ---
+
+export interface SignupRequest {
+  email: string;
+  password: string;
+  nickname: string;
+  gender?: 'Male' | 'Female' | 'Not specified';
+  birth_year?: number;
+}
+
+export interface AuthResponse {
+  user_id: number;
+  user_email: string;
+  user_nickname: string;
+  user_gender_code?: number;
+  user_birth_year?: number;
+}
 

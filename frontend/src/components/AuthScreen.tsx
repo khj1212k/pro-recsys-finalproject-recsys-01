@@ -17,7 +17,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
   const { login, register } = useUserStore();
   const [error, setError] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -44,6 +44,10 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
         setError('이메일을 입력해주세요.');
         return;
       }
+      if (!password.trim()) {
+        setError('비밀번호를 입력해주세요.');
+        return;
+      }
       if (!gender) {
         setError('성별을 선택해주세요.');
         return;
@@ -53,11 +57,18 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
         return;
       }
 
-      const success = register(nickname.trim(), email.trim(), gender, Number(birthYear));
+      const success = await register(nickname.trim(), email.trim(), gender, Number(birthYear), password.trim());
       if (success) {
-        onAuthComplete();
+        // Auto-login after registration
+        const loginSuccess = login(email.trim());
+        if (loginSuccess) {
+          onAuthComplete();
+        } else {
+          setIsLogin(true);
+          setError('회원가입 완료! 로그인해주세요.');
+        }
       } else {
-        setError('이미 가입된 이메일입니다.');
+        setError('이미 가입된 이메일이거나 오류가 발생했습니다.');
       }
     }
   };
