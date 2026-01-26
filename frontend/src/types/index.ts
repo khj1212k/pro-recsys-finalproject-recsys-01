@@ -78,3 +78,27 @@ export interface CategoryStats {
   count: number;
   date: Date;
 }
+
+// --- Backend API Response Types (DTOs) ---
+
+export interface NewsResponse {
+  news_letter_id: number;
+  news_letter_title: string;
+  news_letter_sentence: string;
+  news_letter_keywords: string[];
+  news_letter_created_at: string;
+}
+
+export interface TodayNewsResponse extends NewsResponse {
+  category_id: number;
+  category_name: string;
+}
+
+export interface NewsDetailResponse extends NewsResponse {
+  news_letter_content: string;
+  category_id: number;
+  category_name: string;
+}
+
+export interface OnboardingNewsResponse extends NewsResponse {}
+

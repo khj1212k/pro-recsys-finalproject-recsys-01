@@ -1,8 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Sun, Utensils, Moon, Clock, Check, X } from 'lucide-react';
-import { mockNewsArticles, categoryNames, categoryColors } from '@/data/mockData';
+import { categoryNames, categoryColors } from '@/data/mockData';
 import { useUserStore } from '@/store/userStore';
 import { NewsArticle } from '@/types';
+import { fetchTodayNews, fetchNewsletterDetail } from '@/lib/api';
+import { mapCategoryIdToKey, formatDate } from '@/lib/utils';
+import { toast } from "sonner"; // Assuming sonner is installed as per package.json
 
 // 마크다운 인라인 요소 렌더링 함수
 const renderMarkdownInline = (text: string): React.ReactNode => {
@@ -33,28 +36,78 @@ const renderMarkdownInline = (text: string): React.ReactNode => {
   return parts.length > 0 ? <>{parts}</> : text;
 };
 
-type TimeSlot = 'morning' | 'lunch' | 'evening';
+type TimeSlot = 'morning' | 'lunch' | 'evening' | 'custom';
 
 const timeSlots: { id: TimeSlot; label: string; time: string; icon: React.ElementType }[] = [
   { id: 'morning', label: '아침', time: '08:00', icon: Sun },
   { id: 'lunch', label: '점심', time: '12:00', icon: Utensils },
   { id: 'evening', label: '저녁', time: '18:00', icon: Moon },
+  { id: 'custom', label: '추천', time: 'Now', icon: Clock }, // Added Custom slot for API data testing if needed
 ];
 
 const HomePage: React.FC = () => {
   const [activeSlot, setActiveSlot] = useState<TimeSlot>('evening');
   const [selectedArticle, setSelectedArticle] = useState<NewsArticle | null>(null);
+  const [articles, setArticles] = useState<NewsArticle[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   const { user, addReadArticle } = useUserStore();
 
-  // Get articles based on time slot (mock distribution)
-  const getArticlesForSlot = (slot: TimeSlot): NewsArticle[] => {
-    const startIdx = slot === 'morning' ? 0 : slot === 'lunch' ? 4 : 8;
-    return mockNewsArticles.slice(startIdx, startIdx + 4);
-  };
+  // Fetch API Data
+  useEffect(() => {
+    const loadNews = async () => {
+      setIsLoading(true);
+      try {
+        const data = await fetchTodayNews();
+        // Convert DTO to Frontend Model
+        const mappedArticles: NewsArticle[] = data.map(item => ({
+             id: item.news_letter_id.toString(),
+             title: item.news_letter_title,
+             summary: item.news_letter_sentence, // Hooking sentence as summary in list
+             context: "API Context Placeholder", // API doesn't return context yet
+             facts: [],
+             category: mapCategoryIdToKey(item.category_id),
+             keywords: item.news_letter_keywords.map((k, i) => ({ id: `k${i}`, term: k, category: mapCategoryIdToKey(item.category_id), savedAt: new Date() })),
+             sourceUrl: "#",
+             publishedAt: new Date(item.news_letter_created_at),
+             hookingSentence: item.news_letter_sentence
+        }));
+        setArticles(mappedArticles);
+      } catch (error) {
+        console.error("Failed to fetch news:", error);
+        toast.error("뉴스를 불러오는데 실패했습니다.");
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    
+    // Only fetch for 'evening' slot for now as it maps to 'Today's News'
+    if (activeSlot === 'evening') {
+         loadNews();
+    } else {
+        setArticles([]);
+    }
+  }, [activeSlot]);
 
-  const articles = getArticlesForSlot(activeSlot);
-
-  const handleCardClick = (article: NewsArticle) => {
+  const handleCardClick = async (article: NewsArticle) => {
+    // Determine if we need to fetch full detail
+    if (!article.fullContent) {
+        try {
+            const detail = await fetchNewsletterDetail(parseInt(article.id));
+            const detailedArticle = {
+                ...article,
+                fullContent: detail.news_letter_content,
+                // If backend returns distinct sentence/summary, update here
+            };
+            setSelectedArticle(detailedArticle);
+            addReadArticle(article.id);
+            return;
+        } catch (e) {
+            console.error(e);
+            toast.error("상세 내용을 불러오지 못했습니다.");
+            // Fallback to existing data
+        }
+    }
+    
     setSelectedArticle(article);
     addReadArticle(article.id);
   };
@@ -80,7 +133,7 @@ const HomePage: React.FC = () => {
 
       {/* Time Tabs */}
       <div className="flex gap-3 mb-8 overflow-x-auto pb-2">
-        {timeSlots.map((slot) => {
+        {timeSlots.filter(s => s.id !== 'custom').map((slot) => { // Hide custom
           const isActive = activeSlot === slot.id;
           const isEvening = slot.id === 'evening';
 
@@ -122,38 +175,47 @@ const HomePage: React.FC = () => {
 
       {/* Issue Cards - Grid Layout */}
       {activeSlot === 'evening' ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {articles.map((article, index) => {
-            const isRead = isArticleRead(article.id);
+        <div className="min-h-[200px]"> 
+        {isLoading ? (
+             <div className="flex justify-center py-20 text-muted-foreground">뉴스를 배달하고 있어요... 🚚</div>
+        ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {articles.map((article, index) => {
+                const isRead = isArticleRead(article.id);
 
-            return (
-              <article
-                key={article.id}
-                onClick={() => handleCardClick(article)}
-                className="card-news animate-slide-up cursor-pointer relative hover:shadow-medium transition-shadow"
-                style={{ animationDelay: `${index * 100}ms` }}
-              >
+                return (
+                <article
+                    key={article.id}
+                    onClick={() => handleCardClick(article)}
+                    className="card-news animate-slide-up cursor-pointer relative hover:shadow-medium transition-shadow"
+                    style={{ animationDelay: `${index * 100}ms` }}
+                >
+                    <div className="flex items-start justify-between gap-4 mb-4">
+                    <span className={`category-badge ${categoryColors[article.category]}`}>
+                        {categoryNames[article.category]}
+                    </span>
+                    </div>
 
+                    <h2 className="text-lg font-bold text-foreground mb-3">
+                    {article.title}
+                    </h2>
 
-                <div className="flex items-start justify-between gap-4 mb-4">
-                  <span className={`category-badge ${categoryColors[article.category]}`}>
-                    {categoryNames[article.category]}
-                  </span>
-                  {/* Time indicator removed */}
-                </div>
-
-                <h2 className="text-lg font-bold text-foreground mb-3">
-                  {article.title}
-                </h2>
-
-                {/* 한 줄 요약 - Always visible */}
-                <div className="bg-primary/20 rounded-2xl p-4">
-                  <p className="text-sm font-medium text-foreground mb-2">📝 한 줄 요약</p>
-                  <p className="text-foreground text-sm line-clamp-3">{article.summary}</p>
-                </div>
-              </article>
-            );
-          })}
+                    {/* 한 줄 요약 - Always visible */}
+                    <div className="bg-primary/20 rounded-2xl p-4">
+                    <p className="text-sm font-medium text-foreground mb-2">📝 한 줄 요약</p>
+                    <p className="text-foreground text-sm line-clamp-3">{article.summary}</p>
+                    </div>
+                </article>
+                );
+            })}
+            
+            {!isLoading && articles.length === 0 && (
+                 <div className="col-span-2 text-center py-10 text-muted-foreground">
+                    오늘의 추천 뉴스가 없습니다.
+                 </div>
+            )}
+            </div>
+        )}
         </div>
       ) : (
         <div className="flex flex-col items-center justify-center py-20 text-center animate-fade-in">
@@ -177,7 +239,7 @@ const HomePage: React.FC = () => {
                 </span>
                 <div className="flex items-center gap-1 text-xs text-muted-foreground">
                   <Clock className="w-3.5 h-3.5" />
-                  <span>오늘</span>
+                  <span>{formatDate(selectedArticle.publishedAt)}</span>
                 </div>
               </div>
               <button
@@ -205,30 +267,7 @@ const HomePage: React.FC = () => {
             </div>
 
             <div className="flex flex-col gap-6 mb-8">
-              {/* 핵심 맥락 */}
-              <div className="bg-secondary/50 rounded-2xl p-6 hover:bg-secondary/70 transition-colors">
-                <p className="text-sm font-bold text-foreground mb-3 flex items-center gap-2">
-                  <span className="text-xl">💡</span> 핵심 맥락
-                </p>
-                <p className="text-muted-foreground leading-relaxed">{selectedArticle.context}</p>
-              </div>
 
-              {/* 3대 팩트 */}
-              <div className="bg-secondary/50 rounded-2xl p-6 hover:bg-secondary/70 transition-colors">
-                <p className="text-sm font-bold text-foreground mb-3 flex items-center gap-2">
-                  <span className="text-xl">📌</span> 3대 팩트
-                </p>
-                <ul className="space-y-3">
-                  {selectedArticle.facts.map((fact, idx) => (
-                    <li key={idx} className="flex items-start gap-3 text-muted-foreground">
-                      <span className="w-5 h-5 rounded-full bg-background border border-border flex items-center justify-center text-xs font-bold text-foreground flex-shrink-0 mt-0.5 shadow-sm">
-                        {idx + 1}
-                      </span>
-                      <span className="flex-1">{fact}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
             </div>
 
             {/* Keywords Section */}
@@ -314,10 +353,10 @@ const HomePage: React.FC = () => {
           </div>
         </div>
       )}
-
-      {/* Keyword Modal Removed */}
     </div>
   );
 };
 
 export default HomePage;
+
+
