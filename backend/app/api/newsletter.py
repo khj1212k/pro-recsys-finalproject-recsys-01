@@ -1,20 +1,106 @@
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Depends, Query, HTTPException, Header
 from sqlmodel import Session, select, SQLModel
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 from app.database import get_session
 from app.models.news import NewsLetter, NewsLetterCategories, Category
-from app.models.batch import NewsLettersCategory
+from app.models.batch import NewsLettersCategory, NewsLetterTodayBatch
 
 router = APIRouter(prefix="/newsletters", tags=["newsletters"])
 
-# Response Schema (Same as onboarding for consistency)
+# Response Schema (Common)
 class NewsResponse(SQLModel):
     news_letter_id: int
     news_letter_title: str
     news_letter_sentence: str
     news_letter_keywords: List[str] = []
     news_letter_created_at: datetime
+
+# Response Schema (Today)
+class TodayNewsResponse(NewsResponse):
+    category_id: int
+    category_name: str
+
+# Mock Authentication Dependency
+def mock_verify_token(x_user_id: Optional[str] = Header(None)) -> int:
+    """
+    Mock dependency to simulate user authentication.
+    In production, this would parse the Access Token.
+    
+    [TODO for Auth Integration]:
+    1. Replace this dependency with the actual auth handler (e.g., `get_current_user`).
+    2. Change client request to use 'Authorization: Bearer <token>' instead of 'x-user-id'.
+    """
+    if not x_user_id:
+        raise HTTPException(status_code=401, detail="User ID header missing")
+    try:
+        return int(x_user_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid User ID")
+
+@router.get("/today", response_model=List[TodayNewsResponse])
+def get_today_news(
+    user_id: int = Depends(mock_verify_token),
+    session: Session = Depends(get_session)
+):
+    """
+    Get personalized daily newsletters for the authenticated user.
+    """
+    
+    # 1. Get today's batch for user
+    today_batch = session.exec(
+        select(NewsLetterTodayBatch)
+        .where(NewsLetterTodayBatch.user_id == user_id)
+        .order_by(NewsLetterTodayBatch.created_at.desc())
+        .limit(1)
+    ).first()
+    
+    if not today_batch or not today_batch.news_letter_ids:
+        return []
+    
+    target_ids = today_batch.news_letter_ids
+    
+    # 2. Fetch NewsLetters with Categories
+    # Join NewsLetter -> NewsLetterCategories -> Category
+    results = session.exec(
+        select(NewsLetter, Category)
+        .join(NewsLetterCategories, NewsLetter.news_letter_id == NewsLetterCategories.news_letter_id)
+        .join(Category, NewsLetterCategories.category_id == Category.category_id)
+        .where(NewsLetter.news_letter_id.in_(target_ids))
+    ).all()
+    
+    # 3. Construct Response (Preserving order of target_ids)
+    # Map results by ID
+    news_map = {}
+    for nl, cat in results:
+        # A newsletter might belong to multiple categories, here we pick one (or handled as list if schema allowed)
+        # For this DTO, we assume one primary category context per item in this list.
+        news_map[nl.news_letter_id] = {
+            "news": nl,
+            "category": cat
+        }
+        
+    response_list = []
+    for nid in target_ids:
+        if nid in news_map:
+            item = news_map[nid]
+            nl = item["news"]
+            cat = item["category"]
+            
+            response_list.append(TodayNewsResponse(
+                news_letter_id=nl.news_letter_id,
+                news_letter_title=nl.news_letter_title,
+                news_letter_sentence=nl.news_letter_sentence,
+                news_letter_keywords=nl.news_letter_keywords,
+                news_letter_created_at=nl.news_letter_created_at,
+                category_id=cat.category_id,
+                category_name=cat.category_name
+            ))
+            
+            if len(response_list) >= 40:
+                break
+                
+    return response_list
 
 @router.get("", response_model=List[NewsResponse])
 def get_category_news(
