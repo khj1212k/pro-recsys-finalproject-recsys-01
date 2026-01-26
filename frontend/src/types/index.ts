@@ -120,3 +120,17 @@ export interface AuthResponse {
   user_birth_year?: number;
 }
 
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+  user_id: number;
+  user_email: string;
+  user_nickname: string;
+}
+
+

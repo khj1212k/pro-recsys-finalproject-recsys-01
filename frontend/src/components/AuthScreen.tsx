@@ -22,17 +22,21 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
     setError('');
 
     if (isLogin) {
-      // Login Logic: Use Email Only
+      // Login Logic: Use Email and Password
       if (!email.trim()) {
         setError('이메일을 입력해주세요.');
         return;
       }
+      if (!password.trim()) {
+        setError('비밀번호를 입력해주세요.');
+        return;
+      }
 
-      const success = login(email.trim());
+      const success = await login(email.trim(), password.trim());
       if (success) {
         onAuthComplete();
       } else {
-        setError('가입되지 않은 이메일입니다. 회원가입을 먼저 진행해주세요.');
+        setError('로그인에 실패했습니다. 이메일과 비밀번호를 확인해주세요.');
       }
     } else {
       // Sign Up Logic: Nickname + Email + Gender + BirthYear
@@ -48,6 +52,10 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
         setError('비밀번호를 입력해주세요.');
         return;
       }
+      if (password.trim().length < 8) {
+        setError('비밀번호는 최소 8자 이상이어야 합니다.');
+        return;
+      }
       if (!gender) {
         setError('성별을 선택해주세요.');
         return;
@@ -60,7 +68,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
       const success = await register(nickname.trim(), email.trim(), gender, Number(birthYear), password.trim());
       if (success) {
         // Auto-login after registration
-        const loginSuccess = login(email.trim());
+        const loginSuccess = await login(email.trim(), password.trim());
         if (loginSuccess) {
           onAuthComplete();
         } else {

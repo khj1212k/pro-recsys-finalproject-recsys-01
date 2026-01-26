@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { User, Keyword, Category, QuizScore } from '@/types';
-import { registerUser } from '@/lib/api';
+import { registerUser, loginUser } from '@/lib/api';
 
 interface UserState {
   user: User | null;
@@ -11,7 +11,7 @@ interface UserState {
   hasCompletedOnboarding: boolean;
 
   // Actions
-  login: (email: string) => boolean;
+  login: (email: string, password?: string) => Promise<boolean>;
   register: (nickname: string, email: string, gender: 'male' | 'female' | 'none', birthYear: number, password: string) => Promise<boolean>;
   logout: () => void;
   updateNickname: (nickname: string) => void;
@@ -34,20 +34,51 @@ export const useUserStore = create<UserState>()(
       isLoggedIn: false,
       hasCompletedOnboarding: false,
 
-      login: (email: string) => {
-        const { users } = get();
-        const existingUser = users[email];
+      login: async (email: string, password?: string) => {
+        try {
+          // If password is provided, try API login
+          if (password) {
+            const response = await loginUser({ email, password });
 
-        if (existingUser) {
-          set({
-            user: existingUser,
-            currentUserEmail: email,
-            isLoggedIn: true,
-            hasCompletedOnboarding: existingUser.interests.length > 0,
-          });
-          return true;
+            // Map backend response to User state
+            const user: User = {
+              nickname: response.user_nickname,
+              interests: [], // TODO: Load from API if available
+              savedKeywords: [],
+              readArticles: [],
+              quizScores: [],
+              gender: 'none', // Default, will be updated by profile fetch later
+              birthYear: undefined
+            };
+
+            set((state) => ({
+              user: user,
+              currentUserEmail: email,
+              isLoggedIn: true,
+              hasCompletedOnboarding: user.interests.length > 0
+            }));
+
+            return true;
+          }
+
+          // Fallback for demo/dev without password (if needed, or remove)
+          const { users } = get();
+          const existingUser = users[email];
+          if (existingUser) {
+            set({
+              user: existingUser,
+              currentUserEmail: email,
+              isLoggedIn: true,
+              hasCompletedOnboarding: existingUser.interests.length > 0,
+            });
+            return true;
+          }
+
+          return false;
+        } catch (error) {
+          console.error("Login failed:", error);
+          return false;
         }
-        return false;
       },
 
 
