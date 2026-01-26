@@ -1,4 +1,4 @@
-import { NewsDetailResponse, TodayNewsResponse, OnboardingNewsResponse, SignupRequest, AuthResponse } from "@/types";
+import { NewsDetailResponse, TodayNewsResponse, OnboardingNewsResponse, SignupRequest, AuthResponse, LoginRequest, LoginResponse } from "@/types";
 
 // Base URL handled by Vite Proxy (/api -> backend)
 const BASE_URL = "/api";
@@ -72,6 +72,30 @@ export async function registerUser(data: SignupRequest): Promise<AuthResponse> {
 
   if (!response.ok) {
     let errorMessage = "Failed to register";
+    try {
+      const errorData = await response.json();
+      errorMessage = errorData.detail || errorMessage;
+    } catch (e) {
+      console.error("No error details from server");
+    }
+    throw new Error(errorMessage);
+  }
+
+  return response.json();
+}
+
+// 5. User Login
+export async function loginUser(data: LoginRequest): Promise<LoginResponse> {
+  const response = await fetch(`${BASE_URL}/auth/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    let errorMessage = "Failed to login";
     try {
       const errorData = await response.json();
       errorMessage = errorData.detail || errorMessage;
