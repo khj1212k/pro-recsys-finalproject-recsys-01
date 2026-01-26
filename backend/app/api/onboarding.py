@@ -1,13 +1,22 @@
 from fastapi import APIRouter, Depends, Query, HTTPException
-from sqlmodel import Session, select
+from sqlmodel import Session, select, SQLModel
 from typing import List, Optional
+from datetime import datetime
 from app.database import get_session
 from app.models.news import NewsLetter, NewsLetterCategories, Category
 from app.models.batch import NewsLettersCategory
 
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
-@router.get("/news")
+# Response Schema
+class OnboardingNewsResponse(SQLModel):
+    news_letter_id: int
+    news_letter_title: str
+    news_letter_sentence: str
+    news_letter_keywords: List[str] = []
+    news_letter_created_at: datetime
+
+@router.get("/news", response_model=List[OnboardingNewsResponse])
 def get_onboarding_news(
     category: int = Query(..., description="Category Code (e.g., 100, 200)"),
     session: Session = Depends(get_session)
@@ -15,6 +24,7 @@ def get_onboarding_news(
     """
     Get top 6 recommended newsletters for a specific category code during onboarding.
     Ranked by the latest batch result in NewsLettersCategory.
+    Returns optimized fields only.
     """
     
     # 1. Validate Category Code and get ID

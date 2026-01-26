@@ -8,8 +8,10 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# UTF-8 인코딩 설정
-engine = create_engine(DATABASE_URL, connect_args={"client_encoding": "utf8"})
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"options": "-c client_encoding=utf8"}
+)
 
 def get_session() -> Generator[Session, None, None]:
     with Session(engine) as session:
