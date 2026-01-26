@@ -4,6 +4,8 @@ export interface User {
   savedKeywords: Keyword[];
   readArticles: string[];
   quizScores: QuizScore[];
+  gender?: 'male' | 'female' | 'none';
+  birthYear?: number;
 }
 
 export interface Keyword {

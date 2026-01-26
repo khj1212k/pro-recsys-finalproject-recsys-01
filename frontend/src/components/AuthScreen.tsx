@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Newspaper, User, Mail, Lock, ArrowRight } from 'lucide-react';
+import { Newspaper, User, Mail, Lock, ArrowRight, Calendar, ChevronDown } from 'lucide-react';
 import { useUserStore } from '@/store/userStore';
 
 interface AuthScreenProps {
@@ -11,6 +11,9 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
   const [nickname, setNickname] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [gender, setGender] = useState<'male' | 'female' | 'none' | null>(null);
+  const [birthYear, setBirthYear] = useState('');
+  const [isYearDropdownOpen, setIsYearDropdownOpen] = useState(false);
   const { login, register } = useUserStore();
   const [error, setError] = useState('');
 
@@ -32,7 +35,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
         setError('가입되지 않은 이메일입니다. 회원가입을 먼저 진행해주세요.');
       }
     } else {
-      // Sign Up Logic: Nickname + Email
+      // Sign Up Logic: Nickname + Email + Gender + BirthYear
       if (!nickname.trim()) {
         setError('별명을 입력해주세요.');
         return;
@@ -41,8 +44,16 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
         setError('이메일을 입력해주세요.');
         return;
       }
+      if (!gender) {
+        setError('성별을 선택해주세요.');
+        return;
+      }
+      if (!birthYear || isNaN(Number(birthYear)) || Number(birthYear) < 1900 || Number(birthYear) > new Date().getFullYear()) {
+        setError('올바른 태어난 연도를 입력해주세요.');
+        return;
+      }
 
-      const success = register(nickname.trim(), email.trim());
+      const success = register(nickname.trim(), email.trim(), gender, Number(birthYear));
       if (success) {
         onAuthComplete();
       } else {
@@ -105,6 +116,89 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
                   />
                 </div>
               </div>
+            )}
+
+            {!isLogin && (
+              <>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">성별</label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setGender('male')}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 border ${gender === 'male'
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-background text-muted-foreground border-border hover:bg-secondary'
+                        }`}
+                    >
+                      남
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGender('female')}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 border ${gender === 'female'
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-background text-muted-foreground border-border hover:bg-secondary'
+                        }`}
+                    >
+                      여
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGender('none')}
+                      className={`flex-1 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 border ${gender === 'none'
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-background text-muted-foreground border-border hover:bg-secondary'
+                        }`}
+                    >
+                      응답없음
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">태어난 연도</label>
+                  <div className="relative">
+                    <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground pointer-events-none z-10" />
+                    <button
+                      type="button"
+                      onClick={() => setIsYearDropdownOpen(!isYearDropdownOpen)}
+                      className={`input-field pl-12 pr-10 w-full text-left relative flex items-center ${!birthYear ? 'text-muted-foreground' : 'text-foreground'}`}
+                    >
+                      {birthYear ? `${birthYear}년` : '태어난 연도를 선택해주세요'}
+                      <ChevronDown className={`absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground transition-transform duration-200 ${isYearDropdownOpen ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {/* Custom Dropdown Menu */}
+                    {isYearDropdownOpen && (
+                      <div className="absolute top-full left-0 right-0 mt-2 bg-card border border-border rounded-xl shadow-lg max-h-60 overflow-y-auto z-50 animate-fade-in scrollbar-hide">
+                        {Array.from({ length: 100 }, (_, i) => new Date().getFullYear() - i).map((year) => (
+                          <button
+                            key={year}
+                            type="button"
+                            onClick={() => {
+                              setBirthYear(year.toString());
+                              setIsYearDropdownOpen(false);
+                            }}
+                            className={`w-full px-4 py-3 text-left hover:bg-secondary transition-colors text-sm ${birthYear === year.toString() ? 'bg-primary/10 text-primary font-medium' : 'text-foreground'
+                              }`}
+                          >
+                            {year}년
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Backdrop to close dropdown on outside click */}
+                    {isYearDropdownOpen && (
+                      <div
+                        className="fixed inset-0 z-40 bg-transparent"
+                        onClick={() => setIsYearDropdownOpen(false)}
+                      />
+                    )}
+                  </div>
+                </div>
+              </>
             )}
 
             <div className="space-y-2">
