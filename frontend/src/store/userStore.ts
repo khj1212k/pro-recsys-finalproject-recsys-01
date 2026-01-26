@@ -11,7 +11,7 @@ interface UserState {
 
   // Actions
   login: (email: string) => boolean;
-  register: (nickname: string, email: string) => boolean;
+  register: (nickname: string, email: string, gender: 'male' | 'female' | 'none', birthYear: number) => boolean;
   logout: () => void;
   updateNickname: (nickname: string) => void;
   completeOnboarding: (interests: Category[]) => void;
@@ -49,7 +49,7 @@ export const useUserStore = create<UserState>()(
         return false;
       },
 
-      register: (nickname: string, email: string) => {
+      register: (nickname: string, email: string, gender: 'male' | 'female' | 'none', birthYear: number) => {
         const { users } = get();
         if (users[email]) {
           return false; // Email already exists
@@ -63,6 +63,8 @@ export const useUserStore = create<UserState>()(
           savedKeywords: [],
           readArticles: [],
           quizScores: [],
+          gender, // Added
+          birthYear, // Added
         };
 
         set((state) => ({

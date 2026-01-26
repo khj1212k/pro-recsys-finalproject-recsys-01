@@ -93,3 +93,6 @@ postgres_data/
 
 # Alembic 자동 생성 캐시 (필요시)
 backend/__pycache__/
+
+node_modules/
+frontend/node_modules/
