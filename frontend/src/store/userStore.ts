@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { User, Keyword, Category, QuizScore } from '@/types';
+import { registerUser } from '@/lib/api';
 
 interface UserState {
   user: User | null;
@@ -11,7 +12,7 @@ interface UserState {
 
   // Actions
   login: (email: string) => boolean;
-  register: (nickname: string, email: string, gender: 'male' | 'female' | 'none', birthYear: number) => boolean;
+  register: (nickname: string, email: string, gender: 'male' | 'female' | 'none', birthYear: number, password: string) => Promise<boolean>;
   logout: () => void;
   updateNickname: (nickname: string) => void;
   completeOnboarding: (interests: Category[]) => void;
@@ -49,33 +50,35 @@ export const useUserStore = create<UserState>()(
         return false;
       },
 
-      register: (nickname: string, email: string, gender: 'male' | 'female' | 'none', birthYear: number) => {
-        const { users } = get();
-        if (users[email]) {
-          return false; // Email already exists
+
+      register: async (nickname: string, email: string, gender: 'male' | 'female' | 'none', birthYear: number, password: string) => {
+        try {
+          // Map frontend gender to backend format
+          const genderMap: Record<string, 'Male' | 'Female' | 'Not specified'> = {
+            'male': 'Male',
+            'female': 'Female',
+            'none': 'Not specified'
+          };
+
+          await registerUser({
+            email,
+            password,
+            nickname,
+            gender: genderMap[gender],
+            birth_year: birthYear
+          });
+
+          // Registration successful
+          // Note: We don't verify if email exists locally anymore, as backend handles it.
+          // Note: We don't automatically login here, user needs to login.
+
+          return true;
+        } catch (error) {
+          console.error("Registration failed:", error);
+          return false;
         }
-
-        // Duplicate nickname check REMOVED as requested.
-
-        const newUser: User = {
-          nickname: nickname,
-          interests: [],
-          savedKeywords: [],
-          readArticles: [],
-          quizScores: [],
-          gender, // Added
-          birthYear, // Added
-        };
-
-        set((state) => ({
-          users: { ...state.users, [email]: newUser },
-          user: newUser,
-          currentUserEmail: email,
-          isLoggedIn: true,
-          hasCompletedOnboarding: false,
-        }));
-        return true;
       },
+
 
       logout: () => {
         set({
