@@ -24,3 +24,6 @@ class UserResponse(BaseModel):
     
     class Config:
         from_attributes = True
+
+class UserRead(UserResponse):
+    interests: list[int] = []

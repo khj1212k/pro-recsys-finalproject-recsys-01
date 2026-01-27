@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { User, Keyword, Category, QuizScore } from '@/types';
-import { registerUser, loginUser, updateUserCategories } from '@/lib/api';
-import { mapCategoryKeyToCode } from '@/lib/utils';
+import { registerUser, loginUser, updateUserCategories, fetchUserProfile } from '@/lib/api';
+import { mapCategoryKeyToCode, mapCategoryIdToKey } from '@/lib/utils';
 
 interface UserState {
   user: User | null;
@@ -25,6 +25,7 @@ interface UserState {
   addQuizScore: (score: QuizScore) => void;
   getReadingStats: () => { category: Category; count: number }[];
   updateCategories: (categories: Category[]) => Promise<void>;
+  fetchUser: () => Promise<void>;
 }
 
 export const useUserStore = create<UserState>()(
@@ -41,23 +42,20 @@ export const useUserStore = create<UserState>()(
         try {
           if (password) {
             const response = await loginUser({ email, password });
-            const user: User = {
-              nickname: response.user_nickname,
-              interests: [],
-              savedKeywords: [],
-              readArticles: [],
-              quizScores: [],
-              gender: 'none',
-              birthYear: undefined
-            };
-
             set((state) => ({
-              user: user,
+              accessToken: response.access_token,
               currentUserEmail: email,
               isLoggedIn: true,
-              accessToken: response.access_token,
-              hasCompletedOnboarding: user.interests.length > 0
             }));
+
+            // Fetch full profile including interests
+            await get().fetchUser();
+
+            const user = get().user;
+            if (user) {
+              set({ hasCompletedOnboarding: user.interests.length > 0 });
+            }
+
             return true;
           }
 
@@ -260,6 +258,32 @@ export const useUserStore = create<UserState>()(
           } catch (e) {
             console.error("Failed to sync categories:", e);
           }
+        }
+      },
+
+      fetchUser: async () => {
+        const { accessToken } = get();
+        if (!accessToken) return;
+
+        try {
+          const profile = await fetchUserProfile(accessToken);
+          // Convert codes (100) to keys ('politics')
+          const interests = profile.interests.map((code) => mapCategoryIdToKey(code));
+
+          set((state) => ({
+            user: {
+              nickname: profile.user_nickname,
+              interests: interests,
+              savedKeywords: state.user?.savedKeywords || [],
+              readArticles: state.user?.readArticles || [],
+              quizScores: state.user?.quizScores || [],
+              gender: 'none',
+              birthYear: profile.user_birth_year
+            },
+            hasCompletedOnboarding: interests.length > 0
+          }));
+        } catch (e) {
+          console.error("Failed to fetch user profile:", e);
         }
       },
     }),

@@ -1,4 +1,4 @@
-import { NewsDetailResponse, TodayNewsResponse, OnboardingNewsResponse, SignupRequest, AuthResponse, LoginRequest, LoginResponse } from "@/types";
+import { NewsDetailResponse, TodayNewsResponse, OnboardingNewsResponse, SignupRequest, AuthResponse, LoginRequest, LoginResponse, UserProfileResponse } from "@/types";
 
 // Base URL handled by Vite Proxy (/api -> backend)
 const BASE_URL = "/api";
@@ -125,6 +125,20 @@ export async function updateUserCategories(categories: number[], token: string):
 
   if (!response.ok) {
     throw new Error(`Failed to update categories: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// 7. Get User Profile
+export async function fetchUserProfile(token: string): Promise<UserProfileResponse> {
+  const response = await fetch(`${BASE_URL}/users/me`, {
+    method: "GET",
+    headers: getHeaders(token),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch user profile: ${response.status}`);
   }
 
   return response.json();
