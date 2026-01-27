@@ -10,8 +10,7 @@ import { toast } from "sonner";
 interface OnboardingProps {
   onComplete: () => void;
 }
-
-const allCategories: Category[] = ['politics', 'economy', 'it', 'society', 'culture', 'science', 'world'];
+const allCategories = Object.keys(categoryNames) as Category[];
 
 const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
   const [step, setStep] = useState<'categories' | 'articles'>('categories');
@@ -330,10 +329,10 @@ function getCategoryDescription(category: Category): string {
   const descriptions: Record<Category, string> = {
     politics: '국회, 정부, 선거 소식',
     economy: '금리, 주식, 부동산 이야기',
-    it: 'AI, 테크, 디지털 트렌드',
+    it: 'AI, 테크, 물리, 화학',
     society: '일상 속 사회 이슈',
     culture: '문화, 라이프스타일',
-    science: '우주, 환경, 의학',
+    sports: '배구, 축구, 야구, 농구',
     world: '글로벌 뉴스와 트렌드',
   };
   return descriptions[category];
