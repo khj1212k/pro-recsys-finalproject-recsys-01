@@ -1,6 +1,6 @@
 export interface User {
   nickname: string;
-  interests: string[];
+  interests: Category[];
   savedKeywords: Keyword[];
   readArticles: string[];
   quizScores: QuizScore[];
