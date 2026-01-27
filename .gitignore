@@ -96,3 +96,9 @@ backend/__pycache__/
 
 node_modules/
 frontend/node_modules/
+
+# ==========================
+# 7. Airflow
+# ==========================
+ai_workspace/airflow_home/
+ai_workspace/dags/__pycache__/
