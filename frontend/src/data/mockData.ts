@@ -3,10 +3,10 @@ import { NewsArticle, OnboardingCard, Keyword, Quiz, Category } from '@/types';
 export const categoryNames: Record<Category, string> = {
   politics: '정치',
   economy: '경제',
-  it: 'IT',
+  it: 'IT/과학',
   society: '사회',
   culture: '생활/문화',
-  science: '과학',
+  sports: '스포츠',
   world: '세계',
 };
 
@@ -17,7 +17,7 @@ export const categoryColors: Record<Category, string> = {
   it: 'bg-blue-500 text-white',
   society: 'bg-green-500 text-white',
   culture: 'bg-purple-400 text-white',
-  science: 'bg-indigo-500 text-white',
+  sports: 'bg-indigo-500 text-white',
   world: 'bg-orange-400 text-white',
 };
 
@@ -37,8 +37,8 @@ export const onboardingCards: OnboardingCard[] = [
   {
     id: 'onb-3',
     category: 'it',
-    title: 'IT/테크 뉴스',
-    description: 'AI, 스마트폰, 테크 트렌드까지! 최신 기술 소식과 디지털 라이프 스타일을 한눈에 알아보세요.',
+    title: 'IT/과학 뉴스',
+    description: 'AI, 스마트폰부터 우주 과학까지! 최신 기술 트렌드와 과학의 세계를 한눈에 알아보세요.',
   },
   {
     id: 'onb-4',
@@ -54,9 +54,9 @@ export const onboardingCards: OnboardingCard[] = [
   },
   {
     id: 'onb-6',
-    category: 'science',
-    title: '과학 뉴스',
-    description: '우주, 환경, 의학, 기술 등 과학의 신비로운 세계를 쉽고 재미있게 탐험해요. 궁금증을 해결해드립니다!',
+    category: 'sports',
+    title: '스포츠 뉴스',
+    description: '손흥민, 김민재, 이강인 등 해외파 소식부터 국내 야구, 축구까지! 가슴 뛰는 스포츠 현장을 전해드립니다.',
   },
   {
     id: 'onb-7',
@@ -714,12 +714,12 @@ FOMO가 무서운 이유는 사람을 조급하게 만들기 때문이에요. "�
   // --- [과학 (Science)] ---
   {
     id: 'sci-1',
-    category: 'science',
+    category: 'it',
     title: '🧪 상온 초전도체, 드디어 재현 성공? 에너지 혁명 올까',
     summary: 'KAIST 연구팀이 영하 10도에서도 작동하는 초전도 물질을 발견했다는 소식이에요. 전기 저항이 0이 되면 전기가 하나도 안 새어나가서 전기 요금이 엄청 싸질 수 있대요. 아직 갈 길이 멀지만 꿈의 기술이죠!',
     context: '전기 요금 걱정 없는 세상? 이 기술만 완성되면 가능해요.',
     facts: ['상온 작동 가능성 확인', '전력 송전 손실 0에 도전', '자기부상열차 대중화 기대'],
-    keywords: [{ id: 'k12', term: '초전도체', category: 'science', savedAt: new Date() }],
+    keywords: [{ id: 'k12', term: '초전도체', category: 'it', savedAt: new Date() }],
     sourceUrl: '#', publishedAt: new Date(),
     hookingSentence: '전기 요금이 0원이 되는 마법, 상온 초전도체가 진짜라면?',
     fullContent: `
@@ -747,47 +747,71 @@ FOMO가 무서운 이유는 사람을 조급하게 만들기 때문이에요. "�
 `  },
   {
     id: 'sci-2',
-    category: 'science',
+    category: 'it',
     title: '🚀 다누리 2호 발사 성공! 한국도 이제 달 정복 나선다',
     summary: '우리나라가 만든 달 탐사선이 달 궤도에 무사히 안착했어요. 이제 달 표면을 정밀하게 조사해서 우리가 직접 달에 착륙할 자리를 찾을 거래요. 우주 강국으로 가는 큰 발걸음입니다.',
     context: '우주 전쟁에 우리나라도 당당히 한 축! 곧 한국인이 달을 걷게 될까요?',
     facts: ['국내 독자 기술 탑재', '달 남극 자원 탐색 수행', '심우주 통신 기술 확보'],
-    keywords: [{ id: 'k33', term: '다누리', category: 'science', savedAt: new Date() }],
+    keywords: [{ id: 'k33', term: '다누리', category: 'it', savedAt: new Date() }],
     sourceUrl: '#', publishedAt: new Date(),
     hookingSentence: '우리나라도 이제 달에 간다! 다누리호가 보낸 사진 보셨나요?'
   },
   {
     id: 'sci-3',
-    category: 'science',
+    category: 'it',
     title: '🧬 "노화는 질병이다?" 젊음을 유지하는 역노화 기술',
     summary: '나이를 먹는 건 자연스러운 게 아니라 고칠 수 있는 병이다? 최근 과학계에서는 세포의 시계를 거꾸로 돌리는 연구가 활발해요. 건강하게 100살 넘게 사는 게 꿈이 아니게 될지도 몰라요.',
     context: '죽지 않는 삶은 무섭지만, 아프지 않고 늙는 건 모두의 소망이죠.',
     facts: ['세포 리프로그래밍 기술', '노화 방지 약물 임상 진행 중', '평균 수명 연장에 따른 사회 변화 예고'],
-    keywords: [{ id: 'k34', term: '역노화', category: 'science', savedAt: new Date() }],
+    keywords: [{ id: 'k34', term: '역노화', category: 'it', savedAt: new Date() }],
     sourceUrl: '#', publishedAt: new Date(),
     hookingSentence: '100살 넘어도 20대처럼 건강하게? 노화를 치료하는 약이 온대요.'
   },
   {
     id: 'sci-4',
-    category: 'science',
+    category: 'it',
     title: '🍎 기후 위기로 과일 값이 폭등? "금사과"의 비밀',
     summary: '요즘 사과 값이 왜 이렇게 비싼가 했더니, 기후 위기 때문이래요. 꽃이 필 때 갑자기 추워지거나 병충해가 돌아서 수확량이 줄어든 거죠. 과학적으로 농사를 짓는 스마트팜이 대안으로 뜨고 있습니다.',
     context: '기후 위기는 남의 일이 아니라 내 식탁 물가 문제예요.',
     facts: ['이상 기후로 인한 작황 부진', '스마트팜 보급 확대 필요성', '종자 개량을 통한 내성 강화'],
-    keywords: [{ id: 'k35', term: '스마트팜', category: 'science', savedAt: new Date() }],
+    keywords: [{ id: 'k35', term: '스마트팜', category: 'it', savedAt: new Date() }],
     sourceUrl: '#', publishedAt: new Date(),
     hookingSentence: '사과 하나에 만 원? 기후 위기가 내 식탁을 공격하고 있어요.'
   },
   {
     id: 'sci-5',
-    category: 'science',
+    category: 'it',
     title: '🔋 "한 번 충전하면 1,000km?" 차세대 전고체 배터리',
     summary: '전기차 최대의 약점인 배터리! 불도 안 나고 용량은 훨씬 큰 "전고체 배터리"가 상용화를 앞두고 있어요. 전기차가 내연기관차를 완전히 대체할 수 있는 마지막 퍼즐입니다.',
     context: '전기차 사고 불안하셨죠? 이 배터리가 나오면 고민 끝이에요.',
     facts: ['화재 위험 없는 고체 전해질', '에너지 밀도 획기적 향상', '글로벌 배터리 패권 경쟁'],
-    keywords: [{ id: 'k36', term: '전고체배터리', category: 'science', savedAt: new Date() }],
+    keywords: [{ id: 'k36', term: '전고체배터리', category: 'it', savedAt: new Date() }],
     sourceUrl: '#', publishedAt: new Date(),
     hookingSentence: '충전 없이 서울에서 부산 왕복? 전기차의 끝판왕이 옵니다.'
+  },
+
+  // --- [스포츠 (Sports)] ---
+  {
+    id: 'spt-1',
+    category: 'sports',
+    title: '⚽ 손흥민, 통산 100호골 달성 눈앞! EPL 역사를 쓴다',
+    summary: '토트넘의 캡틴 손흥민 선수가 또 한 번의 대기록에 도전해요. 아시아 선수 최초의 기록들을 갈아치우고 있는 그가 이번 주말 경기에서 100호골 금자탑을 쌓을 수 있을까요?',
+    context: '새벽잠 설치게 만드는 우리 캡틴, 그의 발끝에 전 세계가 주목하고 있어요.',
+    facts: ['EPL 통산 100호골 도전', '아시아 선수 최초 기록 경신', '주말 경기 선발 출전 예상'],
+    keywords: [{ id: 'k_spt1', term: '손흥민', category: 'sports', savedAt: new Date() }],
+    sourceUrl: '#', publishedAt: new Date(),
+    hookingSentence: '손흥민 선수가 또 일을 낼까요? 이번 주말, 역사적인 순간을 놓치지 마세요.'
+  },
+  {
+    id: 'spt-2',
+    category: 'sports',
+    title: '⚾ 프로야구 개막, "올해 우승 후보는 누구?"',
+    summary: '야구의 계절이 돌아왔습니다! 시범 경기부터 뜨거운 열기를 보여준 프로야구, 올해는 어떤 팀이 가을 야구의 주인공이 될까요? 각 팀의 전력 분석과 관전 포인트를 짚어드립니다.',
+    context: '치킨 한 손에 들고 직관 가야죠! 야구 팬들의 심장이 다시 뜁니다.',
+    facts: ['역대급 전력 평준화', '신인 드래프트 유망주 활약 기대', '다양한 팬 서비스 도입'],
+    keywords: [{ id: 'k_spt2', term: '프로야구', category: 'sports', savedAt: new Date() }],
+    sourceUrl: '#', publishedAt: new Date(),
+    hookingSentence: '퇴근하고 야구장 가실 분? 올해 프로야구가 역대급 재미를 예고했어요.'
   },
 
   // --- [세계 (World)] ---
@@ -939,7 +963,7 @@ export const mockQuizzes: Quiz[] = [
     question: '전기 저항이 0이 되어 에너지 손실 없이 전류가 흐르는 물질을 무엇이라 할까요?',
     correctAnswer: '초전도체',
     explanation: '초전도체는 특정 온도 이하에서 저항이 완전히 사라지는 혁신적인 물질입니다.',
-    category: 'science',
+    category: 'it',
   },
   {
     id: 'q7',
@@ -1034,7 +1058,7 @@ export const mockQuizzes: Quiz[] = [
     question: '한국의 첫 번째 달 탐사선으로, 최근 달 궤도 안착에 성공한 기체의 이름은?',
     correctAnswer: '다누리',
     explanation: '다누리는 대한민국의 우주 영토를 넓히는 첫 번째 달 궤도선입니다.',
-    category: 'science',
+    category: 'it',
   },
   {
     id: 'q18',

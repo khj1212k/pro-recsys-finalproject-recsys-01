@@ -36,7 +36,7 @@ const renderMarkdownInline = (text: string): React.ReactNode => {
   return parts.length > 0 ? <>{parts}</> : text;
 };
 
-const categories: Category[] = ['politics', 'economy', 'it', 'society', 'culture', 'science', 'world'];
+const categories: Category[] = ['politics', 'economy', 'it', 'society', 'culture', 'sports', 'world'];
 
 const CategoriesPage: React.FC = () => {
   const [activeCategory, setActiveCategory] = useState<Category>('politics');
