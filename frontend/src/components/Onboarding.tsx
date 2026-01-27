@@ -3,7 +3,7 @@ import { Newspaper, Check, ArrowRight, ArrowLeft, Loader2 } from 'lucide-react';
 import { categoryNames, categoryColors } from '@/data/mockData';
 import { useUserStore } from '@/store/userStore';
 import { Category, NewsArticle } from '@/types';
-import { fetchOnboardingNews } from '@/lib/api';
+import { fetchOnboardingNews, updateUserNewsletters } from '@/lib/api';
 import { mapCategoryKeyToCode, mapCategoryIdToKey } from '@/lib/utils';
 import { toast } from "sonner";
 
@@ -18,8 +18,8 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
   const [selectedCategories, setSelectedCategories] = useState<Category[]>([]);
   const [currentCategoryIndex, setCurrentCategoryIndex] = useState(0);
   const [selectedArticles, setSelectedArticles] = useState<Record<Category, string[]>>({} as Record<Category, string[]>);
-  const { completeOnboarding } = useUserStore();
-  
+  const { completeOnboarding, accessToken } = useUserStore();
+
   // New State for API Data
   const [loadedArticles, setLoadedArticles] = useState<Record<string, NewsArticle[]>>({});
   const [isLoading, setIsLoading] = useState(false);
@@ -43,49 +43,49 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
       setStep('articles');
     }
   };
-  
+
   // Fetch Articles when step changes to 'articles' or category index changes
   useEffect(() => {
     const fetchArticles = async () => {
-        if (step !== 'articles') return;
-        
-        const currentCategory = selectedCategories[currentCategoryIndex];
-        if (!currentCategory) return;
-        
-        // Return if already loaded
-        if (loadedArticles[currentCategory]) return;
+      if (step !== 'articles') return;
 
-        setIsLoading(true);
-        try {
-            const code = mapCategoryKeyToCode(currentCategory);
-            const data = await fetchOnboardingNews(code);
-            
-            const mapped: NewsArticle[] = data.map(item => ({
-                id: item.news_letter_id.toString(),
-                title: item.news_letter_title,
-                summary: item.news_letter_sentence, // Assuming hooking sentence is good summary
-                context: "context", 
-                facts: [],
-                category: currentCategory,
-                keywords: item.news_letter_keywords.map((k, i) => ({ id: `k${i}`, term: k, category: currentCategory, savedAt: new Date()})),
-                sourceUrl: "#",
-                publishedAt: new Date(item.news_letter_created_at),
-                hookingSentence: item.news_letter_sentence
-            }));
-            
-            setLoadedArticles(prev => ({
-                ...prev,
-                [currentCategory]: mapped
-            }));
-            
-        } catch (error) {
-            console.error(error);
-            toast.error("데이터를 불러오지 못했습니다.");
-        } finally {
-            setIsLoading(false);
-        }
+      const currentCategory = selectedCategories[currentCategoryIndex];
+      if (!currentCategory) return;
+
+      // Return if already loaded
+      if (loadedArticles[currentCategory]) return;
+
+      setIsLoading(true);
+      try {
+        const code = mapCategoryKeyToCode(currentCategory);
+        const data = await fetchOnboardingNews(code);
+
+        const mapped: NewsArticle[] = data.map(item => ({
+          id: item.news_letter_id.toString(),
+          title: item.news_letter_title,
+          summary: item.news_letter_sentence, // Assuming hooking sentence is good summary
+          context: "context",
+          facts: [],
+          category: currentCategory,
+          keywords: item.news_letter_keywords.map((k, i) => ({ id: `k${i}`, term: k, category: currentCategory, savedAt: new Date() })),
+          sourceUrl: "#",
+          publishedAt: new Date(item.news_letter_created_at),
+          hookingSentence: item.news_letter_sentence
+        }));
+
+        setLoadedArticles(prev => ({
+          ...prev,
+          [currentCategory]: mapped
+        }));
+
+      } catch (error) {
+        console.error(error);
+        toast.error("데이터를 불러오지 못했습니다.");
+      } finally {
+        setIsLoading(false);
+      }
     };
-    
+
     fetchArticles();
   }, [step, currentCategoryIndex, selectedCategories, loadedArticles]);
 
@@ -112,8 +112,29 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
       setCurrentCategoryIndex((prev) => prev + 1);
     } else {
       // Finish onboarding
-      completeOnboarding(selectedCategories);
-      onComplete();
+      const allSelectedNewsletterIds = Object.values(selectedArticles)
+        .flat()
+        .map(id => parseInt(id, 10))
+        .filter(id => !isNaN(id));
+
+      if (accessToken) {
+        updateUserNewsletters(allSelectedNewsletterIds, accessToken)
+          .then(() => {
+            completeOnboarding(selectedCategories);
+            onComplete();
+          })
+          .catch(err => {
+            console.error("Failed to save newsletters", err);
+            toast.error("뉴스레터 저장 중 오류가 발생했습니다.");
+            // Still complete even if newsletter save fails? 
+            // Maybe better to block or just proceed. Let's proceed.
+            completeOnboarding(selectedCategories);
+            onComplete();
+          });
+      } else {
+        completeOnboarding(selectedCategories);
+        onComplete();
+      }
     }
   };
 
@@ -227,56 +248,56 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
         {step === 'articles' && currentCategory && (
           <div className="animate-fade-in">
             <div className="mb-8">
-                {isLoading ? (
-                    <div className="flex justify-center py-20">
-                        <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                    </div>
-                ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    {categoryArticles.slice(0, 6).map((article) => {
-                      const isSelected = selectedArticles[currentCategory]?.includes(article.id);
-                      return (
-                        <button
-                          key={article.id}
-                          onClick={() => handleArticleToggle(article.id)}
-                          disabled={!isSelected && currentSelectedCount >= 3}
-                          className={`p-5 rounded-3xl border-2 text-left transition-all duration-200 h-full flex flex-col ${isSelected
-                            ? 'border-primary bg-primary/10 shadow-md'
-                            : currentSelectedCount >= 3
-                              ? 'border-border bg-muted/50 opacity-50 cursor-not-allowed'
-                              : 'border-border bg-card hover:border-primary/50 hover:shadow-sm'
-                            }`}
-                        >
-                          <div className="flex items-start justify-between gap-2 mb-3">
-                            <h4 className="font-bold text-foreground text-sm leading-tight line-clamp-2">
-                              {article.title}
-                            </h4>
-                            {isSelected && (
-                              <div className="flex-shrink-0 w-5 h-5 bg-primary rounded-full flex items-center justify-center">
-                                <Check className="w-3 h-3 text-primary-foreground" />
-                              </div>
-                            )}
-                          </div>
-    
-                          <p className="text-xs text-stone-600 font-bold mb-3 leading-relaxed">
-                            {article.hookingSentence}
-                          </p>
-    
-                          <div className="flex flex-wrap gap-1 mt-auto">
-                            {article.keywords.slice(0, 3).map((kw) => (
-                              <span
-                                key={kw.id}
-                                className="text-[10px] bg-background border border-border px-2 py-1 rounded-full text-muted-foreground"
-                              >
-                                #{kw.term}
-                              </span>
-                            ))}
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
+              {isLoading ? (
+                <div className="flex justify-center py-20">
+                  <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {categoryArticles.slice(0, 6).map((article) => {
+                    const isSelected = selectedArticles[currentCategory]?.includes(article.id);
+                    return (
+                      <button
+                        key={article.id}
+                        onClick={() => handleArticleToggle(article.id)}
+                        disabled={!isSelected && currentSelectedCount >= 3}
+                        className={`p-5 rounded-3xl border-2 text-left transition-all duration-200 h-full flex flex-col ${isSelected
+                          ? 'border-primary bg-primary/10 shadow-md'
+                          : currentSelectedCount >= 3
+                            ? 'border-border bg-muted/50 opacity-50 cursor-not-allowed'
+                            : 'border-border bg-card hover:border-primary/50 hover:shadow-sm'
+                          }`}
+                      >
+                        <div className="flex items-start justify-between gap-2 mb-3">
+                          <h4 className="font-bold text-foreground text-sm leading-tight line-clamp-2">
+                            {article.title}
+                          </h4>
+                          {isSelected && (
+                            <div className="flex-shrink-0 w-5 h-5 bg-primary rounded-full flex items-center justify-center">
+                              <Check className="w-3 h-3 text-primary-foreground" />
+                            </div>
+                          )}
+                        </div>
+
+                        <p className="text-xs text-stone-600 font-bold mb-3 leading-relaxed">
+                          {article.hookingSentence}
+                        </p>
+
+                        <div className="flex flex-wrap gap-1 mt-auto">
+                          {article.keywords.slice(0, 3).map((kw) => (
+                            <span
+                              key={kw.id}
+                              className="text-[10px] bg-background border border-border px-2 py-1 rounded-full text-muted-foreground"
+                            >
+                              #{kw.term}
+                            </span>
+                          ))}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             {/* Navigation */}
