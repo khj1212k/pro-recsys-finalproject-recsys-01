@@ -143,3 +143,18 @@ export async function fetchUserProfile(token: string): Promise<UserProfileRespon
 
   return response.json();
 }
+
+// 8. Update User Newsletters
+export async function updateUserNewsletters(newsLetterIds: number[], token: string): Promise<any> {
+  const response = await fetch(`${BASE_URL}/users/me/newsletters`, {
+    method: "PUT",
+    headers: getHeaders(token),
+    body: JSON.stringify({ news_letter_ids: newsLetterIds }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to update newsletters: ${response.status}`);
+  }
+
+  return response.json();
+}

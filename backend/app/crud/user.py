@@ -1,5 +1,5 @@
 from sqlmodel import Session, select
-from app.models.user import User, UserPreferredCategories
+from app.models.user import User, UserPreferredCategories, UserPreferredNewsletter
 from app.models.news import Category
 from app.schemas.user import UserCreate
 from app.security import get_password_hash
@@ -61,6 +61,26 @@ def update_user_categories(session: Session, user: User, category_codes: list[in
         # 3. Add new preferences
         for cat_id in target_category_ids:
             user_pref = UserPreferredCategories(user_id=user.user_id, category_id=cat_id)
+            session.add(user_pref)
+            
+        session.commit()
+        session.refresh(user)
+        return user
+    except Exception as e:
+        session.rollback()
+        raise e
+
+def update_user_newsletters(session: Session, user: User, news_letter_ids: list[int]) -> User:
+    try:
+        # 1. Delete existing preferences
+        statement = select(UserPreferredNewsletter).where(UserPreferredNewsletter.user_id == user.user_id)
+        results = session.exec(statement).all()
+        for result in results:
+            session.delete(result)
+            
+        # 2. Add new preferences
+        for nl_id in news_letter_ids:
+            user_pref = UserPreferredNewsletter(user_id=user.user_id, news_letter_id=nl_id)
             session.add(user_pref)
             
         session.commit()

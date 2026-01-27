@@ -15,6 +15,9 @@ class UserLogin(BaseModel):
 class UserCategoryUpdate(BaseModel):
     categories: list[int]
 
+class UserNewsletterUpdate(BaseModel):
+    news_letter_ids: list[int]
+
 class UserResponse(BaseModel):
     user_id: int
     user_email: str
