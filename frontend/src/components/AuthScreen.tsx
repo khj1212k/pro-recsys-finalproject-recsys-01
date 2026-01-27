@@ -3,7 +3,7 @@ import { Newspaper, User, Mail, Lock, ArrowRight, Calendar, ChevronDown } from '
 import { useUserStore } from '@/store/userStore';
 
 interface AuthScreenProps {
-  onAuthComplete: () => void;
+  onAuthComplete: (shouldOnboard: boolean) => void;
 }
 
 const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
@@ -34,7 +34,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
 
       const success = await login(email.trim(), password.trim());
       if (success) {
-        onAuthComplete();
+        onAuthComplete(false);
       } else {
         setError('로그인에 실패했습니다. 이메일과 비밀번호를 확인해주세요.');
       }
@@ -70,7 +70,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
         // Auto-login after registration
         const loginSuccess = await login(email.trim(), password.trim());
         if (loginSuccess) {
-          onAuthComplete();
+          onAuthComplete(true);
         } else {
           setIsLogin(true);
           setError('회원가입 완료! 로그인해주세요.');
