@@ -1,21 +1,22 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { User, Keyword, Category, QuizScore } from '@/types';
-import { registerUser, loginUser } from '@/lib/api';
+import { registerUser, loginUser, updateUserCategories, fetchUserProfile } from '@/lib/api';
+import { mapCategoryKeyToCode, mapCategoryIdToKey } from '@/lib/utils';
 
 interface UserState {
   user: User | null;
   currentUserEmail: string | null;
-  users: Record<string, User>; // Stored users by email
+  users: Record<string, User>;
   isLoggedIn: boolean;
+  accessToken: string | null;
   hasCompletedOnboarding: boolean;
 
-  // Actions
   login: (email: string, password?: string) => Promise<boolean>;
   register: (nickname: string, email: string, gender: 'male' | 'female' | 'none', birthYear: number, password: string) => Promise<boolean>;
   logout: () => void;
   updateNickname: (nickname: string) => void;
-  completeOnboarding: (interests: Category[]) => void;
+  completeOnboarding: (interests: Category[]) => Promise<void>;
   addInterest: (interest: Category) => void;
   removeInterest: (interest: Category) => void;
   saveKeyword: (keyword: Keyword) => void;
@@ -23,6 +24,8 @@ interface UserState {
   addReadArticle: (articleId: string) => void;
   addQuizScore: (score: QuizScore) => void;
   getReadingStats: () => { category: Category; count: number }[];
+  updateCategories: (categories: Category[]) => Promise<void>;
+  fetchUser: () => Promise<void>;
 }
 
 export const useUserStore = create<UserState>()(
@@ -30,38 +33,32 @@ export const useUserStore = create<UserState>()(
     (set, get) => ({
       user: null,
       currentUserEmail: null,
-      users: {}, // DB Initialized (Empty)
+      users: {},
       isLoggedIn: false,
+      accessToken: null,
       hasCompletedOnboarding: false,
 
       login: async (email: string, password?: string) => {
         try {
-          // If password is provided, try API login
           if (password) {
             const response = await loginUser({ email, password });
-
-            // Map backend response to User state
-            const user: User = {
-              nickname: response.user_nickname,
-              interests: [], // TODO: Load from API if available
-              savedKeywords: [],
-              readArticles: [],
-              quizScores: [],
-              gender: 'none', // Default, will be updated by profile fetch later
-              birthYear: undefined
-            };
-
             set((state) => ({
-              user: user,
+              accessToken: response.access_token,
               currentUserEmail: email,
               isLoggedIn: true,
-              hasCompletedOnboarding: user.interests.length > 0
             }));
+
+            // Fetch full profile including interests
+            await get().fetchUser();
+
+            const user = get().user;
+            if (user) {
+              set({ hasCompletedOnboarding: user.interests.length > 0 });
+            }
 
             return true;
           }
 
-          // Fallback for demo/dev without password (if needed, or remove)
           const { users } = get();
           const existingUser = users[email];
           if (existingUser) {
@@ -69,11 +66,11 @@ export const useUserStore = create<UserState>()(
               user: existingUser,
               currentUserEmail: email,
               isLoggedIn: true,
+              accessToken: "demo-token",
               hasCompletedOnboarding: existingUser.interests.length > 0,
             });
             return true;
           }
-
           return false;
         } catch (error) {
           console.error("Login failed:", error);
@@ -81,10 +78,8 @@ export const useUserStore = create<UserState>()(
         }
       },
 
-
       register: async (nickname: string, email: string, gender: 'male' | 'female' | 'none', birthYear: number, password: string) => {
         try {
-          // Map frontend gender to backend format
           const genderMap: Record<string, 'Male' | 'Female' | 'Not specified'> = {
             'male': 'Male',
             'female': 'Female',
@@ -98,11 +93,6 @@ export const useUserStore = create<UserState>()(
             gender: genderMap[gender],
             birth_year: birthYear
           });
-
-          // Registration successful
-          // Note: We don't verify if email exists locally anymore, as backend handles it.
-          // Note: We don't automatically login here, user needs to login.
-
           return true;
         } catch (error) {
           console.error("Registration failed:", error);
@@ -110,12 +100,12 @@ export const useUserStore = create<UserState>()(
         }
       },
 
-
       logout: () => {
         set({
           user: null,
           currentUserEmail: null,
           isLoggedIn: false,
+          accessToken: null,
           hasCompletedOnboarding: false,
         });
       },
@@ -131,56 +121,30 @@ export const useUserStore = create<UserState>()(
         });
       },
 
-      completeOnboarding: (interests: Category[]) => {
-        set((state) => {
-          if (!state.user || !state.currentUserEmail) return state;
-          const updatedUser = { ...state.user, interests };
-          // IMPORTANT: Update the users map as well to persist changes for next login
-          return {
-            user: updatedUser,
-            users: { ...state.users, [state.currentUserEmail]: updatedUser },
-            hasCompletedOnboarding: true,
-          };
-        });
+      completeOnboarding: async (interests: Category[]) => {
+        const { updateCategories } = get();
+        await updateCategories(interests);
+
+        set((state) => ({
+          hasCompletedOnboarding: true
+        }));
       },
 
       addInterest: (interest: Category) => {
-        set((state) => {
-          if (!state.user || !state.currentUserEmail) return state;
-          if (state.user.interests.includes(interest)) return state;
-          return {
-            user: {
-              ...state.user,
-              interests: [...state.user.interests, interest],
-            },
-            users: {
-              ...state.users,
-              [state.currentUserEmail]: {
-                ...state.user,
-                interests: [...state.user.interests, interest],
-              },
-            },
-          };
-        });
+        const { user, updateCategories } = get();
+        if (!user) return;
+        if (user.interests.includes(interest)) return;
+
+        const updatedInterests = [...user.interests, interest];
+        updateCategories(updatedInterests);
       },
 
       removeInterest: (interest: Category) => {
-        set((state) => {
-          if (!state.user || !state.currentUserEmail) return state;
-          return {
-            user: {
-              ...state.user,
-              interests: state.user.interests.filter((i) => i !== interest),
-            },
-            users: {
-              ...state.users,
-              [state.currentUserEmail]: {
-                ...state.user,
-                interests: state.user.interests.filter((i) => i !== interest),
-              },
-            },
-          };
-        });
+        const { user, updateCategories } = get();
+        if (!user) return;
+
+        const updatedInterests = user.interests.filter(i => i !== interest);
+        updateCategories(updatedInterests);
       },
 
       saveKeyword: (keyword: Keyword) => {
@@ -273,9 +237,58 @@ export const useUserStore = create<UserState>()(
           count: user.readArticles.filter((id) => id && typeof id === 'string' && id.startsWith(category.slice(0, 3))).length + Math.floor(Math.random() * 10),
         }));
       },
+
+      updateCategories: async (categories: Category[]) => {
+        // 1. Optimistic Update
+        set((state) => {
+          if (!state.user || !state.currentUserEmail) return state;
+          const updatedUser = { ...state.user, interests: categories };
+          return {
+            user: updatedUser,
+            users: { ...state.users, [state.currentUserEmail]: updatedUser }
+          };
+        });
+
+        // 2. API Sync
+        const { accessToken } = get();
+        if (accessToken) {
+          const codes = categories.map(c => mapCategoryKeyToCode(c));
+          try {
+            await updateUserCategories(codes, accessToken);
+          } catch (e) {
+            console.error("Failed to sync categories:", e);
+          }
+        }
+      },
+
+      fetchUser: async () => {
+        const { accessToken } = get();
+        if (!accessToken) return;
+
+        try {
+          const profile = await fetchUserProfile(accessToken);
+          // Convert codes (100) to keys ('politics')
+          const interests = profile.interests.map((code) => mapCategoryIdToKey(code));
+
+          set((state) => ({
+            user: {
+              nickname: profile.user_nickname,
+              interests: interests,
+              savedKeywords: state.user?.savedKeywords || [],
+              readArticles: state.user?.readArticles || [],
+              quizScores: state.user?.quizScores || [],
+              gender: 'none',
+              birthYear: profile.user_birth_year
+            },
+            hasCompletedOnboarding: interests.length > 0
+          }));
+        } catch (e) {
+          console.error("Failed to fetch user profile:", e);
+        }
+      },
     }),
     {
-      name: 'news-grow-user-v2',
+      name: 'news-grow-user-v3',
     }
   )
 );

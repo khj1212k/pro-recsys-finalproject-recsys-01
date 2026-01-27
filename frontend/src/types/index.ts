@@ -1,6 +1,6 @@
 export interface User {
   nickname: string;
-  interests: string[];
+  interests: Category[];
   savedKeywords: Keyword[];
   readArticles: string[];
   quizScores: QuizScore[];
@@ -131,6 +131,15 @@ export interface LoginResponse {
   user_id: number;
   user_email: string;
   user_nickname: string;
+}
+
+export interface UserProfileResponse {
+  user_id: number;
+  user_email: string;
+  user_nickname: string;
+  user_gender_code?: number;
+  user_birth_year?: number;
+  interests: number[]; // Category Codes
 }
 
 
