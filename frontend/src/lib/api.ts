@@ -1,4 +1,4 @@
-import { NewsDetailResponse, TodayNewsResponse, OnboardingNewsResponse } from "@/types";
+import { NewsDetailResponse, TodayNewsResponse, OnboardingNewsResponse, SignupRequest, AuthResponse, LoginRequest, LoginResponse, UserProfileResponse } from "@/types";
 
 // Base URL handled by Vite Proxy (/api -> backend)
 const BASE_URL = "/api";
@@ -10,10 +10,17 @@ const TEMP_USER_ID = "1";
  * Common headers with Auth injection
  * // TODO: Replace x-user-id with Authorization: Bearer <token> later
  */
-const getHeaders = () => ({
-  "Content-Type": "application/json",
-  "x-user-id": TEMP_USER_ID,
-});
+const getHeaders = (token?: string) => {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  } else {
+    headers["x-user-id"] = TEMP_USER_ID;
+  }
+  return headers;
+};
 
 // --- API Functions ---
 
@@ -55,6 +62,98 @@ export async function fetchOnboardingNews(categoryCode: number): Promise<Onboard
 
   if (!response.ok) {
     throw new Error(`Failed to fetch onboarding news: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// 4. User Signup
+export async function registerUser(data: SignupRequest): Promise<AuthResponse> {
+  const response = await fetch(`${BASE_URL}/auth/signup`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    let errorMessage = "Failed to register";
+    try {
+      const errorData = await response.json();
+      errorMessage = errorData.detail || errorMessage;
+    } catch (e) {
+      console.error("No error details from server");
+    }
+    throw new Error(errorMessage);
+  }
+
+  return response.json();
+}
+
+// 5. User Login
+export async function loginUser(data: LoginRequest): Promise<LoginResponse> {
+  const response = await fetch(`${BASE_URL}/auth/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    let errorMessage = "Failed to login";
+    try {
+      const errorData = await response.json();
+      errorMessage = errorData.detail || errorMessage;
+    } catch (e) {
+      console.error("No error details from server");
+    }
+    throw new Error(errorMessage);
+  }
+
+  return response.json();
+}
+
+// 6. Update User Categories
+export async function updateUserCategories(categories: number[], token: string): Promise<any> {
+  const response = await fetch(`${BASE_URL}/users/me/categories`, {
+    method: "PUT",
+    headers: getHeaders(token),
+    body: JSON.stringify({ categories }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to update categories: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// 7. Get User Profile
+export async function fetchUserProfile(token: string): Promise<UserProfileResponse> {
+  const response = await fetch(`${BASE_URL}/users/me`, {
+    method: "GET",
+    headers: getHeaders(token),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to fetch user profile: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// 8. Update User Newsletters
+export async function updateUserNewsletters(newsLetterIds: number[], token: string): Promise<any> {
+  const response = await fetch(`${BASE_URL}/users/me/newsletters`, {
+    method: "PUT",
+    headers: getHeaders(token),
+    body: JSON.stringify({ news_letter_ids: newsLetterIds }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to update newsletters: ${response.status}`);
   }
 
   return response.json();

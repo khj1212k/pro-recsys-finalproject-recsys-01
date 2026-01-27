@@ -1,5 +1,6 @@
 from sqlmodel import Session, select
-from app.models.user import User, UserPreferredCategories
+from app.models.user import User, UserPreferredCategories, UserPreferredNewsletter
+from app.models.news import Category
 from app.schemas.user import UserCreate
 from app.security import get_password_hash
 
@@ -40,17 +41,46 @@ def create_user(session: Session, user: UserCreate) -> User:
 
         raise e
 
-def update_user_categories(session: Session, user: User, category_ids: list[int]) -> User:
+def update_user_categories(session: Session, user: User, category_codes: list[int]) -> User:
     try:
-        # 기존 카테고리 삭제
+        # 1. Map category codes (100, 200...) to category_ids
+        # Find category_ids where category_code is in the input list
+        cat_stmt = select(Category.category_id).where(Category.category_code.in_(category_codes))
+        target_category_ids = session.exec(cat_stmt).all()
+
+        if not target_category_ids and category_codes:
+            # If codes provided but no IDs found, might want to warn or just proceed empty
+            print(f"Warning: No matching categories found for codes {category_codes}")
+
+        # 2. Delete existing preferences
         statement = select(UserPreferredCategories).where(UserPreferredCategories.user_id == user.user_id)
         results = session.exec(statement).all()
         for result in results:
             session.delete(result)
             
-        # 새로운 카테고리 추가
-        for cat_id in category_ids:
+        # 3. Add new preferences
+        for cat_id in target_category_ids:
             user_pref = UserPreferredCategories(user_id=user.user_id, category_id=cat_id)
+            session.add(user_pref)
+            
+        session.commit()
+        session.refresh(user)
+        return user
+    except Exception as e:
+        session.rollback()
+        raise e
+
+def update_user_newsletters(session: Session, user: User, news_letter_ids: list[int]) -> User:
+    try:
+        # 1. Delete existing preferences
+        statement = select(UserPreferredNewsletter).where(UserPreferredNewsletter.user_id == user.user_id)
+        results = session.exec(statement).all()
+        for result in results:
+            session.delete(result)
+            
+        # 2. Add new preferences
+        for nl_id in news_letter_ids:
+            user_pref = UserPreferredNewsletter(user_id=user.user_id, news_letter_id=nl_id)
             session.add(user_pref)
             
         session.commit()

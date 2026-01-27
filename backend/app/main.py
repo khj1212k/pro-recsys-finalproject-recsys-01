@@ -1,5 +1,4 @@
 from fastapi import FastAPI
-<<<<<<< HEAD
 from app.api import onboarding, auth, users, newsletter
 
 app = FastAPI()

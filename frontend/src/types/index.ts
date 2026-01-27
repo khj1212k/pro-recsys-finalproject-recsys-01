@@ -1,6 +1,6 @@
 export interface User {
   nickname: string;
-  interests: string[];
+  interests: Category[];
   savedKeywords: Keyword[];
   readArticles: string[];
   quizScores: QuizScore[];
@@ -100,5 +100,46 @@ export interface NewsDetailResponse extends NewsResponse {
   category_name: string;
 }
 
-export interface OnboardingNewsResponse extends NewsResponse {}
+export interface OnboardingNewsResponse extends NewsResponse { }
+
+// --- Auth DTOs ---
+
+export interface SignupRequest {
+  email: string;
+  password: string;
+  nickname: string;
+  gender?: 'Male' | 'Female' | 'Not specified';
+  birth_year?: number;
+}
+
+export interface AuthResponse {
+  user_id: number;
+  user_email: string;
+  user_nickname: string;
+  user_gender_code?: number;
+  user_birth_year?: number;
+}
+
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface LoginResponse {
+  access_token: string;
+  token_type: string;
+  user_id: number;
+  user_email: string;
+  user_nickname: string;
+}
+
+export interface UserProfileResponse {
+  user_id: number;
+  user_email: string;
+  user_nickname: string;
+  user_gender_code?: number;
+  user_birth_year?: number;
+  interests: number[]; // Category Codes
+}
+
 
