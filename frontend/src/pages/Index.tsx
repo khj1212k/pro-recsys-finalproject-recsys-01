@@ -15,7 +15,10 @@ const Index = () => {
 
   // Auth flow
   if (!isLoggedIn) {
-    return <AuthScreen onAuthComplete={() => setShowOnboarding(true)} />;
+    return <AuthScreen onAuthComplete={(shouldOnboard) => {
+      setShowOnboarding(shouldOnboard);
+      setCurrentPage('home');
+    }} />;
   }
 
   // Onboarding flow
