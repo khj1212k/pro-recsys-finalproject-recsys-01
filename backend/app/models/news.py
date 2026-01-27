@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 from sqlmodel import Field, SQLModel, JSON, Column
 from pgvector.sqlalchemy import Vector
 
+from sqlalchemy.dialects.postgresql import TSVECTOR
+
 # 1. 카테고리 (Category)
 class Category(SQLModel, table=True):
     __tablename__ = "category"
@@ -46,6 +48,9 @@ class NewsRaw(SQLModel, table=True):
     # 뉴스레터 ID (FK, Nullable) - 사용여부(used_check) 대신 사용
     # 연결된 뉴스레터가 없으면 NULL(None)
     news_letter_id: Optional[int] = Field(default=None, foreign_key="news_letter.news_letter_id")
+    
+    # Hybrid Search Vector
+    search_vector: Optional[str] = Field(default=None, sa_column=Column(TSVECTOR))
 
 # 5. 뉴스 레터 (News_Letter)
 class NewsLetter(SQLModel, table=True):
@@ -64,6 +69,10 @@ class NewsLetter(SQLModel, table=True):
     # [JSON] 뉴스레터 키워드
     news_letter_keywords: List[str] = Field(default=[], sa_column=Column(JSON))
     raw_news_count: int = Field(default=1)
+    # Batch Info
+    run_id: Optional[int] = Field(default=None)
+    # Generation Log
+    generation_history: Optional[dict] = Field(default={}, sa_column=Column(JSON))
 
 # 6. 뉴스레터-카테고리 매핑 (News_Letter_Categories)
 class NewsLetterCategories(SQLModel, table=True):
@@ -72,3 +81,14 @@ class NewsLetterCategories(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     news_letter_id: int = Field(foreign_key="news_letter.news_letter_id")
     category_id: int = Field(foreign_key="category.category_id")
+
+# 7. 클러스터링 히스토리 (Cluster_History)
+class ClusterHistory(SQLModel, table=True):
+    __tablename__ = "cluster_history"
+    
+    history_id: Optional[int] = Field(default=None, primary_key=True)
+    run_id: Optional[int] = Field(default=None)
+    cluster_log: Optional[dict] = Field(default={}, sa_column=Column(JSON))
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc)
+    )
