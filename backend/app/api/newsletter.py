@@ -21,26 +21,14 @@ class TodayNewsResponse(NewsResponse):
     category_id: int
     category_name: str
 
-# Mock Authentication Dependency
-def mock_verify_token(x_user_id: Optional[str] = Header(None)) -> int:
-    """
-    Mock dependency to simulate user authentication.
-    In production, this would parse the Access Token.
-    
-    [TODO for Auth Integration]:
-    1. Replace this dependency with the actual auth handler (e.g., `get_current_user`).
-    2. Change client request to use 'Authorization: Bearer <token>' instead of 'x-user-id'.
-    """
-    if not x_user_id:
-        raise HTTPException(status_code=401, detail="User ID header missing")
-    try:
-        return int(x_user_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid User ID")
+from app.models.user import User
+from app.api.user_check import get_current_user
+
+# ... (Previous code) ...
 
 @router.get("/today", response_model=List[TodayNewsResponse])
 def get_today_news(
-    user_id: int = Depends(mock_verify_token),
+    user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
     """
@@ -50,7 +38,7 @@ def get_today_news(
     # 1. Get today's batch for user
     today_batch = session.exec(
         select(NewsLetterTodayBatch)
-        .where(NewsLetterTodayBatch.user_id == user_id)
+        .where(NewsLetterTodayBatch.user_id == user.user_id)
         .order_by(NewsLetterTodayBatch.created_at.desc())
         .limit(1)
     ).first()

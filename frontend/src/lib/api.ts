@@ -10,12 +10,23 @@ const TEMP_USER_ID = "1";
  * Common headers with Auth injection
  * // TODO: Replace x-user-id with Authorization: Bearer <token> later
  */
+const getToken = (): string | null => {
+  try {
+    const storage = localStorage.getItem('news-grow-user-v3');
+    if (!storage) return null;
+    const { state } = JSON.parse(storage);
+    return state.accessToken || state.token || null;
+  } catch {
+    return null;
+  }
+};
 const getHeaders = (token?: string) => {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
+  const effectiveToken = token || getToken();
+  if (effectiveToken) {
+    headers["Authorization"] = `Bearer ${effectiveToken}`;
   } else {
     headers["x-user-id"] = TEMP_USER_ID;
   }

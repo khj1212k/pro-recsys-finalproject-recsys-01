@@ -75,7 +75,27 @@ const CategoriesPage: React.FC = () => {
   }, [activeCategory]);
 
 
-  const handleCardClick = (article: NewsArticle) => {
+  const handleCardClick = async (article: NewsArticle) => {
+    // Determine if we need to fetch full detail
+    if (!article.fullContent) {
+        try {
+            // Need to import fetchNewsletterDetail first (see next edit)
+            // But assuming it's available or I will add the import
+            const { fetchNewsletterDetail } = await import('@/lib/api');
+            const detail = await fetchNewsletterDetail(parseInt(article.id));
+            const detailedArticle = {
+                ...article,
+                fullContent: detail.news_letter_content,
+            };
+            setSelectedArticle(detailedArticle);
+            addReadArticle(article.id);
+            return;
+        } catch (e) {
+            console.error(e);
+            toast.error("상세 내용을 불러오지 못했습니다.");
+        }
+    }
+    
     setSelectedArticle(article);
     addReadArticle(article.id);
   };
