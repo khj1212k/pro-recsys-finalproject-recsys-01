@@ -40,7 +40,7 @@ class NewsRaw(SQLModel, table=True):
     raw_news_content: str
     raw_news_url: str
     # [Vector] 원문 기사 임베딩 (768차원 예시)
-    embedding_result: List[float] = Field(default=None, sa_column=Column(Vector(768)))
+    embedding_result: List[float] = Field(default=None, sa_column=Column(Vector(1024)))
     raw_news_created_at: str
     raw_news_crawled_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
@@ -65,7 +65,7 @@ class NewsLetter(SQLModel, table=True):
         default_factory=lambda: datetime.now(timezone.utc)
     )
     # [Vector] 뉴스레터 임베딩
-    news_letter_embedding: List[float] = Field(default=None, sa_column=Column(Vector(768)))
+    news_letter_embedding: List[float] = Field(default=None, sa_column=Column(Vector(1024)))
     # [JSON] 뉴스레터 키워드
     news_letter_keywords: List[str] = Field(default=[], sa_column=Column(JSON))
     raw_news_count: int = Field(default=1)
