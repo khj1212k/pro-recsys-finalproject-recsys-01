@@ -15,7 +15,6 @@ interface UserState {
   login: (email: string, password?: string) => Promise<boolean>;
   register: (nickname: string, email: string, gender: 'male' | 'female' | 'none', birthYear: number, password: string) => Promise<boolean>;
   logout: () => void;
-  updateNickname: (nickname: string) => void;
   completeOnboarding: (interests: Category[]) => Promise<void>;
   addInterest: (interest: Category) => void;
   removeInterest: (interest: Category) => void;
@@ -110,16 +109,7 @@ export const useUserStore = create<UserState>()(
         });
       },
 
-      updateNickname: (nickname: string) => {
-        set((state) => {
-          if (!state.user || !state.currentUserEmail) return state;
-          const updatedUser = { ...state.user, nickname };
-          return {
-            user: updatedUser,
-            users: { ...state.users, [state.currentUserEmail]: updatedUser }
-          };
-        });
-      },
+
 
       completeOnboarding: async (interests: Category[]) => {
         const { updateCategories } = get();
@@ -231,7 +221,7 @@ export const useUserStore = create<UserState>()(
         const user = get().user;
         if (!user) return [];
 
-        const categories: Category[] = ['politics', 'economy', 'it', 'society', 'culture', 'science', 'world'];
+        const categories: Category[] = ['politics', 'economy', 'it', 'society', 'culture', 'sports', 'world'];
         return categories.map((category) => ({
           category,
           count: user.readArticles.filter((id) => id && typeof id === 'string' && id.startsWith(category.slice(0, 3))).length + Math.floor(Math.random() * 10),
