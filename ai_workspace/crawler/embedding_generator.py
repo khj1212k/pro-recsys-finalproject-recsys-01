@@ -66,7 +66,7 @@ def generate_embeddings_for_articles(batch_size: int = None, force_cpu: bool = F
                 embedding_str = str(embedding)
                 cur.execute("""
                     UPDATE news_raw
-                    SET embedding_result = %s, updated_at = NOW()
+                    SET embedding_result = %s
                     WHERE raw_news_id = %s
                 """, (embedding_str, raw_news_id))
                 success_count += 1

@@ -68,6 +68,7 @@ build/
 # 크롤링 결과물 등
 ai_workspace/data/
 ai_workspace/output/
+ai_workspace/logs/
 
 # ==========================
 # 5. Frontend (React/Node)
