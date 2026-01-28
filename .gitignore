@@ -103,3 +103,8 @@ backend/__pycache__/
 
 node_modules/
 frontend/node_modules/
+
+# ==========================
+# 7. Airflow
+# ==========================
+backend/airflow/

@@ -16,7 +16,7 @@ class User(SQLModel, table=True):
     )
     # [Vector] 사용자 임베딩 (ERD 반영)
     # news.py와 동일하게 벡터 적용 (차원 수 768 예시)
-    user_embedding: List[float] = Field(default=None, sa_column=Column(Vector(768)))
+    user_embedding: List[float] = Field(default=None, sa_column=Column(Vector(1024)))
     # 0:unknown, 1:male, 2:female
     user_gender_code: Optional[int] = Field(default=None, sa_column_kwargs={"comment": "0:unknown, 1:male, 2:female"})
     user_birth_year: Optional[int] = None
