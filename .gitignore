@@ -49,6 +49,13 @@ build/
 # 로그
 *.log
 
+# 추천모델 학습용 임시 데이터 파일
+newsletter_share.json
+
+# 추천모델을 위한 임시 임베딩 파일
+ai_workspace/recommend-engine/data
+ai_workspace/recommend-engine/results
+
 # ==========================
 # 4. AI & 데이터 (AI Workspace)
 # ==========================
