@@ -100,4 +100,5 @@ frontend/node_modules/
 # ==========================
 # 7. Airflow
 # ==========================
-backend/airflow/
+backend/airflow/*
+!backend/airflow/dags/
