@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { User, Save, LogOut, Check, X, Plus } from 'lucide-react';
+import { User, LogOut, X, Plus } from 'lucide-react';
 import { useUserStore } from '@/store/userStore';
 import { Category } from '@/types';
 import { categoryNames, categoryColors } from '@/data/mockData';
@@ -8,21 +8,11 @@ interface ProfilePageProps {
   onLogout: () => void;
 }
 
-const allCategories: Category[] = ['politics', 'economy', 'it', 'society', 'culture', 'science', 'world'];
+const allCategories: Category[] = ['politics', 'economy', 'it', 'society', 'culture', 'sports', 'world'];
 
 const ProfilePage: React.FC<ProfilePageProps> = ({ onLogout }) => {
-  const { user, updateNickname, logout, addInterest, removeInterest } = useUserStore();
-  const [nickname, setNickname] = useState(user?.nickname || '');
-  const [isSaved, setIsSaved] = useState(false);
+  const { user, logout, addInterest, removeInterest } = useUserStore();
   const [showAddInterest, setShowAddInterest] = useState(false);
-
-  const handleSave = () => {
-    if (nickname.trim()) {
-      updateNickname(nickname.trim());
-      setIsSaved(true);
-      setTimeout(() => setIsSaved(false), 2000);
-    }
-  };
 
   const handleLogout = () => {
     logout();
@@ -62,34 +52,7 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ onLogout }) => {
           </div>
         </div>
 
-        {/* Nickname Edit */}
-        <div className="space-y-3">
-          <label className="text-sm font-medium text-foreground">별명 변경</label>
-          <input
-            type="text"
-            value={nickname}
-            onChange={(e) => setNickname(e.target.value)}
-            className="input-field"
-            placeholder="새 별명을 입력하세요"
-          />
-          <button
-            onClick={handleSave}
-            className={`btn-primary w-full flex items-center justify-center gap-2 ${isSaved ? 'bg-success' : ''
-              }`}
-          >
-            {isSaved ? (
-              <>
-                <Check className="w-5 h-5" />
-                저장되었습니다!
-              </>
-            ) : (
-              <>
-                <Save className="w-5 h-5" />
-                저장하기
-              </>
-            )}
-          </button>
-        </div>
+        {/* Nickname Edit Removed */}
       </div>
 
       {/* Interests Management */}
