@@ -1,0 +1,19 @@
+model:
+  name: "BAAI/bge-m3"
+  device: "cuda"
+  batch_size: 32
+  max_length: 1024
+
+recommendation:
+  method: "weighted_avg"  # Options: max_pooling, weighted_avg, attention
+  use_mmr: False
+  top_k: 7
+  mmr_lambda: 0.7
+
+# [데이터 생성 설정 (Offline Test Only)]
+data_generation:
+  # [서버 통합 시 주의사항]
+  # 해당 기능은 서버 통합 이전에만 해당되는 부분입니다.
+  # 서버 통합 이후에는 하이퍼 파라미터로 설정하는 것이 아닌,
+  # 실제 DB에서 읽어들이는 유저의 수를 따라갈 것입니다.
+  num_dummy_users: 50
