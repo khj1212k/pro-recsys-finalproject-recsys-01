@@ -6,9 +6,12 @@ from app.database import get_session
 from app.models.news import NewsLetter, NewsLetterCategories, Category
 from app.models.batch import NewsLettersCategory, NewsLetterTodayBatch
 
+from app.models.user import User
+from app.api.user_check import get_current_user
+
 router = APIRouter(prefix="/newsletters", tags=["newsletters"])
 
-# Response Schema (Common)
+# 뉴스레터 응답 Schema
 class NewsResponse(SQLModel):
     news_letter_id: int
     news_letter_title: str
@@ -16,26 +19,17 @@ class NewsResponse(SQLModel):
     news_letter_keywords: List[str] = []
     news_letter_created_at: datetime
 
-# Response Schema (Today)
+# 오늘의 뉴스레터 응답 Schema
 class TodayNewsResponse(NewsResponse):
     category_id: int
     category_name: str
-
-from app.models.user import User
-from app.api.user_check import get_current_user
-
-# ... (Previous code) ...
 
 @router.get("/today", response_model=List[TodayNewsResponse])
 def get_today_news(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session)
 ):
-    """
-    Get personalized daily newsletters for the authenticated user.
-    """
-    
-    # 1. Get today's batch for user
+    # 1. 사용자별 오늘의 뉴스레터 Batch ID 조회
     today_batch = session.exec(
         select(NewsLetterTodayBatch)
         .where(NewsLetterTodayBatch.user_id == user.user_id)
@@ -48,8 +42,7 @@ def get_today_news(
     
     target_ids = today_batch.news_letter_ids
     
-    # 2. Fetch NewsLetters with Categories
-    # Join NewsLetter -> NewsLetterCategories -> Category
+    # 2. 뉴스레터-카테고리 정보 조회
     results = session.exec(
         select(NewsLetter, Category)
         .join(NewsLetterCategories, NewsLetter.news_letter_id == NewsLetterCategories.news_letter_id)
@@ -57,12 +50,9 @@ def get_today_news(
         .where(NewsLetter.news_letter_id.in_(target_ids))
     ).all()
     
-    # 3. Construct Response (Preserving order of target_ids)
-    # Map results by ID
+    # 3. 응답 생성
     news_map = {}
     for nl, cat in results:
-        # A newsletter might belong to multiple categories, here we pick one (or handled as list if schema allowed)
-        # For this DTO, we assume one primary category context per item in this list.
         news_map[nl.news_letter_id] = {
             "news": nl,
             "category": cat
@@ -95,13 +85,8 @@ def get_category_news(
     category: int = Query(..., description="Category Code (e.g., 100, 200)"),
     session: Session = Depends(get_session)
 ):
-    """
-    Get popular newsletters for a specific category.
-    Ranked by the latest batch result in NewsLettersCategory.
-    Returns top 40 items.
-    """
     
-    # 1. Validate Category Code and get ID
+    # 1. 카테고리 코드 기반 ID 조회
     category_obj = session.exec(
         select(Category).where(Category.category_code == category)
     ).first()
@@ -111,7 +96,7 @@ def get_category_news(
     
     target_category_id = category_obj.category_id
 
-    # 2. Get latest batch ranking
+    # 2. 최신 Batch ranking 조회
     latest_batch = session.exec(
         select(NewsLettersCategory).order_by(NewsLettersCategory.created_at.desc()).limit(1)
     ).first()
@@ -121,7 +106,7 @@ def get_category_news(
 
     ranked_ids = latest_batch.news_letter_ids
 
-    # 3. Filter by Category ID
+    # 3. 카테고리 ID 기반 필터링
     statement = (
         select(NewsLetter)
         .join(NewsLetterCategories)
@@ -132,7 +117,7 @@ def get_category_news(
     candidates = session.exec(statement).all()
     candidates_map = {newsletter.news_letter_id: newsletter for newsletter in candidates}
     
-    # 4. Construct result preserving rank order (Limit 40)
+    # 4. 결과 생성 (40개 제한)
     result = []
     for nid in ranked_ids:
         if nid in candidates_map:
@@ -142,7 +127,7 @@ def get_category_news(
                 
     return result
 
-# Response Schema (Detail)
+# 뉴스레터 상세 조회 Schema
 class NewsDetailResponse(NewsResponse):
     news_letter_content: str
     category_id: int
@@ -153,11 +138,7 @@ def get_newsletter_detail(
     news_letter_id: int,
     session: Session = Depends(get_session)
 ):
-    """
-    Get detailed information of a specific newsletter by ID.
-    Includes content, sentence, keywords, and category info.
-    """
-    # Join NewsLetter -> NewsLetterCategories -> Category
+    # 뉴스레터 ID 기반 조회
     result = session.exec(
         select(NewsLetter, Category)
         .join(NewsLetterCategories, NewsLetter.news_letter_id == NewsLetterCategories.news_letter_id)
