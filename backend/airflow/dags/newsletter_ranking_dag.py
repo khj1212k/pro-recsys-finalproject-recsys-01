@@ -1,7 +1,14 @@
 from airflow import DAG
-from airflow.operators.bash import BashOperator
+from airflow.providers.standard.operators.bash import BashOperator
 from datetime import datetime, timedelta
 import pendulum
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+
+PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
+env_path = PROJECT_ROOT / '.env'
+load_dotenv(env_path)
 
 kst = pendulum.timezone("Asia/Seoul")
 
@@ -19,12 +26,11 @@ with DAG(
     default_args=default_args,
     description='Calculate popularity ranking for newsletters daily',
     schedule='45 17 * * *',
-    start_date=datetime(2024, 1, 1, tzinfo=kst),
+    start_date=datetime(2026, 1, 28, tzinfo=kst),
     catchup=False,
     tags=['ranking', 'newsletter'],
 ) as dag:
 
-    PROJECT_ROOT = "/data/ephemeral/home/sojeong/final-project/pro-recsys-finalproject-recsys-01/backend"
     PYTHON_EXEC = f"{PROJECT_ROOT}/.venv/bin/python"
     SCRIPT_PATH = f"{PROJECT_ROOT}/scheduler/calculate_ranking.py"
 
