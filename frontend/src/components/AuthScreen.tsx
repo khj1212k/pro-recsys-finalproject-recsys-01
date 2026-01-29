@@ -83,14 +83,14 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-10 animate-slide-up">
-          <div className="inline-flex items-center justify-center w-20 h-20 bg-primary rounded-[2rem] mb-5 shadow-medium">
-            <Newspaper className="w-10 h-10 text-primary-foreground" />
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-[2rem] mb-5 overflow-hidden">
+            <img src="/favicon.ico" alt="Logo" className="w-full h-full object-cover scale-105" />
           </div>
           <h1 className="text-3xl font-bold text-foreground">News-Grow</h1>
-          <p className="text-muted-foreground mt-2">뉴스와 함께 성장하세요</p>
+          <p className="text-muted-foreground mt-2">RecSys-01 Final Project</p>
         </div>
 
-        {/* 로그인 / 화원가입 토글 버튼 */}
+        {/* 로그인 / 회원가입 토글 버튼 */}
         <div className="card-news animate-scale-in">
           <div className="flex bg-secondary rounded-2xl p-1 mb-6">
             <button

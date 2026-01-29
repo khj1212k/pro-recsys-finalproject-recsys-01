@@ -38,8 +38,8 @@ const Sidebar: React.FC<SidebarProps> = ({
           className="flex items-center gap-3 cursor-pointer"
           onClick={() => onPageChange('home')}
         >
-          <div className="w-10 h-10 bg-primary rounded-xl flex items-center justify-center">
-            <Newspaper className="w-5 h-5 text-primary-foreground" />
+          <div className="w-10 h-10 rounded-xl overflow-hidden">
+            <img src="/favicon.ico" alt="Logo" className="w-full h-full object-cover scale-105" />
           </div>
           <span className="font-bold text-foreground text-lg">News-Grow</span>
         </div>
@@ -77,8 +77,8 @@ const Sidebar: React.FC<SidebarProps> = ({
           className="flex items-center gap-3 cursor-pointer"
           onClick={() => onPageChange('home')}
         >
-          <div className="w-10 h-10 bg-primary rounded-xl flex items-center justify-center">
-            <Newspaper className="w-5 h-5 text-primary-foreground" />
+          <div className="w-10 h-10 rounded-xl overflow-hidden">
+            <img src="/favicon.ico" alt="Logo" className="w-full h-full object-cover scale-105" />
           </div>
           <span className="font-bold text-foreground">News-Grow</span>
         </div>
@@ -99,8 +99,8 @@ const Sidebar: React.FC<SidebarProps> = ({
       >
         {/* Logo */}
         <div className="h-20 flex items-center gap-3 px-6 border-b border-sidebar-border">
-          <div className="w-11 h-11 bg-primary rounded-2xl flex items-center justify-center">
-            <Newspaper className="w-6 h-6 text-primary-foreground" />
+          <div className="w-11 h-11 rounded-2xl overflow-hidden">
+            <img src="/favicon.ico" alt="Logo" className="w-full h-full object-cover scale-105" />
           </div>
           <div>
             <h1 className="font-bold text-foreground">News-Grow</h1>
