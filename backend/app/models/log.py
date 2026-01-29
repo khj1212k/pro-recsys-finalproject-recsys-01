@@ -4,7 +4,7 @@ from sqlmodel import Field, SQLModel
 
 # 8. 사용자-뉴스레터 로그 (User_NewsLetter_CTR_log)
 class UserNewsLetterCTRLog(SQLModel, table=True):
-    __tablename__ = "User_NewsLetter_CTR_log"
+    __tablename__ = "user_newsletter_ctr_log"
     
     log_id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.user_id")
