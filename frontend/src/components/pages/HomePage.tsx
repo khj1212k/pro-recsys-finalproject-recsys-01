@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Sun, Utensils, Moon, Clock, Check, X } from 'lucide-react';
-import { categoryNames, categoryColors } from '@/data/mockData';
+import { categoryNames, categoryColors } from '@/data/category_constants';
 import { useUserStore } from '@/store/userStore';
 import { NewsArticle } from '@/types';
 import { fetchTodayNews, fetchNewsletterDetail } from '@/lib/api';

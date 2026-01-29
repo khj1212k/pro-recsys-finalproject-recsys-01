@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Newspaper, Check, ArrowRight, ArrowLeft, Loader2 } from 'lucide-react';
-import { categoryNames, categoryColors } from '@/data/mockData';
+import { categoryNames, categoryColors } from '@/data/category_constants';
 import { useUserStore } from '@/store/userStore';
 import { Category, NewsArticle } from '@/types';
 import { fetchOnboardingNews, updateUserNewsletters } from '@/lib/api';

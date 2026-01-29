@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Bookmark, X, Clock, Check, Loader2 } from 'lucide-react';
-import { categoryNames, categoryColors } from '@/data/mockData';
+import { categoryNames, categoryColors } from '@/data/category_constants';
 import { useUserStore } from '@/store/userStore';
 import { Category, NewsArticle } from '@/types';
 import { fetchOnboardingNews } from '@/lib/api';

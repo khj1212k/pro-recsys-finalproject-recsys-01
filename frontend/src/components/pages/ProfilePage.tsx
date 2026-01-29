@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { User, LogOut, X, Plus } from 'lucide-react';
 import { useUserStore } from '@/store/userStore';
 import { Category } from '@/types';
-import { categoryNames, categoryColors } from '@/data/mockData';
+import { categoryNames, categoryColors } from '@/data/category_constants';
 
 interface ProfilePageProps {
   onLogout: () => void;
