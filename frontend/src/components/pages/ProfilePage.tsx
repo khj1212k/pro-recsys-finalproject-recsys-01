@@ -51,8 +51,6 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ onLogout }) => {
             <p className="text-sm text-muted-foreground">News-Grow 뉴비</p>
           </div>
         </div>
-
-        {/* Nickname Edit Removed */}
       </div>
 
       {/* Interests Management */}
@@ -70,7 +68,7 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ onLogout }) => {
           )}
         </div>
 
-        {/* Current Interests */}
+        {/* Selected Interests */}
         {user?.interests && user.interests.length > 0 ? (
           <div className="flex flex-wrap gap-2 mb-4">
             {user.interests.map((interest) => {
@@ -95,7 +93,7 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ onLogout }) => {
           <p className="text-sm text-muted-foreground mb-4">관심 분야를 추가해주세요</p>
         )}
 
-        {/* Add Interest Dropdown */}
+        {/* Interest Dropdown */}
         {showAddInterest && availableCategories.length > 0 && (
           <div className="border-t border-border pt-4">
             <p className="text-sm font-medium text-foreground mb-3">추가할 분야 선택</p>

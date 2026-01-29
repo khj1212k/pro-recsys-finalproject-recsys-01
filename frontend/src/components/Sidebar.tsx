@@ -32,7 +32,7 @@ const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   return (
     <>
-      {/* Desktop Top Navigation Bar */}
+      {/* Navigation Bar */}
       <header className="hidden lg:flex fixed top-0 left-0 right-0 h-16 bg-background border-b border-border z-40 items-center justify-between px-8">
         <div
           className="flex items-center gap-3 cursor-pointer"
@@ -128,7 +128,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         {/* Footer */}
         <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-sidebar-border">
           <p className="text-xs text-muted-foreground text-center">
-            © 2025 News-Grow
+            © 2026 RecSys-01
           </p>
         </div>
       </aside>
