@@ -8,7 +8,7 @@ from app.models.batch import NewsLettersCategory
 
 router = APIRouter(prefix="/onboarding", tags=["onboarding"])
 
-# Response Schema
+# 뉴스레터 응답 Schema
 class OnboardingNewsResponse(SQLModel):
     news_letter_id: int
     news_letter_title: str
@@ -21,14 +21,8 @@ def get_onboarding_news(
     category: int = Query(..., description="Category Code (e.g., 100, 200)"),
     session: Session = Depends(get_session)
 ):
-    """
-    Get top 6 recommended newsletters for a specific category code during onboarding.
-    Ranked by the latest batch result in NewsLettersCategory.
-    Returns optimized fields only.
-    """
-    
-    # 1. Validate Category Code and get ID
-    # Search by category_code (e.g. 100) instead of category_id (PK)
+    # 1. 카테고리 코드 기반 ID 조회
+
     category_obj = session.exec(
         select(Category).where(Category.category_code == category)
     ).first()
@@ -38,8 +32,7 @@ def get_onboarding_news(
     
     target_category_id = category_obj.category_id
 
-    # 2. Get latest batch ranking
-    # Fetch the most recent NewsLettersCategory entry
+    # 2. 최신 Batch ranking 조회
     latest_batch = session.exec(
         select(NewsLettersCategory).order_by(NewsLettersCategory.created_at.desc()).limit(1)
     ).first()
@@ -49,11 +42,7 @@ def get_onboarding_news(
 
     ranked_ids = latest_batch.news_letter_ids
 
-    # 3. Filter by Category ID
-    # We need to find which of these ranked_ids belong to the requested category.
-    # To preserve order, we can query all matching newsletters for this category first.
-    
-    # helper query to check category association
+    # 3. 카테고리 ID 기반 필터링
     statement = (
         select(NewsLetter)
         .join(NewsLetterCategories)
@@ -63,10 +52,9 @@ def get_onboarding_news(
     
     candidates = session.exec(statement).all()
     
-    # Map candidates by ID for O(1) lookup
+    # 4. 결과 생성 (6개 제한)
     candidates_map = {newsletter.news_letter_id: newsletter for newsletter in candidates}
     
-    # 4. Construct result preserving rank order
     result = []
     for nid in ranked_ids:
         if nid in candidates_map:

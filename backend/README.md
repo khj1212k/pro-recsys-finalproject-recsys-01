@@ -1,15 +1,47 @@
-### Backend
+## Backend
+- FastAPI 기반의 백엔드 서버
+- API 제공 및 데이터베이스 관리
 
-FastAPI 기반의 백엔드 서버입니다. API 제공 및 데이터베이스 관리를 담당합니다. 
+### 폴더 구조 및 역할
 
-#### 폴더 구조 및 역할
-
-- **venv/**: 백엔드 전용 Python 가상환경 폴더.
-- **main.py**: FastAPI 애플리케이션의 진입점(Entry point). 서버 실행 파일.
-- **alembic/**: DB 마이그레이션 도구. 테이블 생성 및 스키마 변경 관리 담당.
-
+- **venv/**: 백엔드 전용 Python 가상환경 폴더
 - **app/**
-  - **models/**: ★ DB 스키마 정의 (User, News, Rank 등 ORM 모델).
-  - **api/**: REST API 라우터 및 핸들러 정의.
-  - **crud/**: DB CRUD(Create, Read, Update, Delete) 쿼리 함수 모음.
-- **scheduler/**: 오래된 데이터 삭제, 정리 등 주기적인 작업을 수행하는 스크립트.
+  - **main.py**: FastAPI 애플리케이션 Entry point
+  - **models/**: DB 스키마 정의
+  - **api/**: REST API 라우터 End point 정의
+  - **crud/**: DB CRUD(Create, Read, Update, Delete) 쿼리 함수
+- **alembic/**: DB 마이그레이션
+- **scheduler/**: 주기적인 배치 작업
+
+---
+
+### 시작하기
+
+#### 1. 가상환경 설정 및 패키지 설치
+```bash
+# 가상환경 생성
+python -m venv .venv
+
+# 가상환경 활성화
+source .venv/bin/activate
+
+# 의존성 패키지 설치
+pip install -r requirements.txt
+```
+
+#### 2. 환경 변수 설정 (.env)
+`backend/.env` 파일을 생성하고 아래 환경 변수 설정 추가
+```ini
+DATABASE_URL=postgresql://user:password@localhost:5432/dbname
+SECRET_KEY=your_secret_key
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=30
+UPSTAGE_API_KEY=your_upstage_api_key
+```
+
+#### 3. 서버 실행
+```bash
+uvicorn app.main:app --reload
+```
+
+`http://localhost:8000/docs`에서 API 문서 확인 가능합니다.

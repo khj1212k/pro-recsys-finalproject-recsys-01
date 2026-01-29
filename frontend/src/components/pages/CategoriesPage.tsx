@@ -1,18 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { Bookmark, X, Clock, Check, Loader2 } from 'lucide-react';
-import { categoryNames, categoryColors } from '@/data/mockData';
+import { categoryNames, categoryColors } from '@/data/category_constants';
 import { useUserStore } from '@/store/userStore';
 import { Category, NewsArticle } from '@/types';
 import { fetchOnboardingNews } from '@/lib/api';
 import { mapCategoryKeyToCode, formatDate } from '@/lib/utils';
 import { toast } from "sonner";
 
-// 마크다운 인라인 요소 렌더링 함수
 const renderMarkdownInline = (text: string): React.ReactNode => {
   const parts: React.ReactNode[] = [];
   let key = 0;
 
-  // **볼드** 처리
   const boldRegex = /\*\*(.+?)\*\*/g;
   let match;
   let lastIndex = 0;
@@ -47,55 +45,52 @@ const CategoriesPage: React.FC = () => {
 
   useEffect(() => {
     const loadNews = async () => {
-        setIsLoading(true);
-        try {
-            const code = mapCategoryKeyToCode(activeCategory);
-            const data = await fetchOnboardingNews(code);
-            const mapped: NewsArticle[] = data.map(item => ({
-                id: item.news_letter_id.toString(),
-                title: item.news_letter_title,
-                summary: item.news_letter_sentence,
-                context: "", 
-                facts: [],
-                category: activeCategory,
-                keywords: item.news_letter_keywords.map((k, i) => ({ id: `k${i}`, term: k, category: activeCategory, savedAt: new Date() })),
-                sourceUrl: "#",
-                publishedAt: new Date(item.news_letter_created_at),
-                hookingSentence: item.news_letter_sentence
-            }));
-            setArticles(mapped);
-        } catch (e) {
-            console.error(e);
-            toast.error("뉴스를 불러오는데 실패했습니다.");
-        } finally {
-            setIsLoading(false);
-        }
+      setIsLoading(true);
+      try {
+        const code = mapCategoryKeyToCode(activeCategory);
+        const data = await fetchOnboardingNews(code);
+        const mapped: NewsArticle[] = data.map(item => ({
+          id: item.news_letter_id.toString(),
+          title: item.news_letter_title,
+          summary: item.news_letter_sentence,
+          context: "",
+          facts: [],
+          category: activeCategory,
+          keywords: item.news_letter_keywords.map((k, i) => ({ id: `k${i}`, term: k, category: activeCategory, savedAt: new Date() })),
+          sourceUrl: "#",
+          publishedAt: new Date(item.news_letter_created_at),
+          hookingSentence: item.news_letter_sentence
+        }));
+        setArticles(mapped);
+      } catch (e) {
+        console.error(e);
+        toast.error("뉴스를 불러오는데 실패했습니다.");
+      } finally {
+        setIsLoading(false);
+      }
     };
     loadNews();
   }, [activeCategory]);
 
 
   const handleCardClick = async (article: NewsArticle) => {
-    // Determine if we need to fetch full detail
     if (!article.fullContent) {
-        try {
-            // Need to import fetchNewsletterDetail first (see next edit)
-            // But assuming it's available or I will add the import
-            const { fetchNewsletterDetail } = await import('@/lib/api');
-            const detail = await fetchNewsletterDetail(parseInt(article.id));
-            const detailedArticle = {
-                ...article,
-                fullContent: detail.news_letter_content,
-            };
-            setSelectedArticle(detailedArticle);
-            addReadArticle(article.id);
-            return;
-        } catch (e) {
-            console.error(e);
-            toast.error("상세 내용을 불러오지 못했습니다.");
-        }
+      try {
+        const { fetchNewsletterDetail } = await import('@/lib/api');
+        const detail = await fetchNewsletterDetail(parseInt(article.id));
+        const detailedArticle = {
+          ...article,
+          fullContent: detail.news_letter_content,
+        };
+        setSelectedArticle(detailedArticle);
+        addReadArticle(article.id);
+        return;
+      } catch (e) {
+        console.error(e);
+        toast.error("상세 내용을 불러오지 못했습니다.");
+      }
     }
-    
+
     setSelectedArticle(article);
     addReadArticle(article.id);
   };
@@ -144,7 +139,7 @@ const CategoriesPage: React.FC = () => {
         })}
       </div>
 
-      {/* Consolidated Article Modal */}
+      {/* News Letter Modal */}
       {selectedArticle && (
         <div className="fixed inset-0 bg-foreground/30 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-card rounded-3xl p-6 w-full max-w-4xl shadow-medium animate-scale-in my-8 max-h-[90vh] overflow-y-auto">
@@ -173,8 +168,6 @@ const CategoriesPage: React.FC = () => {
               {selectedArticle.title}
             </h1>
 
-            {/* --- Info Sections --- */}
-
             {/* 한 줄 요약 */}
             <div className="bg-primary/20 rounded-2xl p-6 mb-8 transform hover:scale-[1.01] transition-transform duration-200">
               <p className="text-sm font-bold text-foreground mb-3 flex items-center gap-2">
@@ -184,7 +177,7 @@ const CategoriesPage: React.FC = () => {
             </div>
 
             <div className="flex flex-col gap-6 mb-8">
-               
+
             </div>
 
             {/* Keywords Section */}
@@ -202,7 +195,7 @@ const CategoriesPage: React.FC = () => {
               </div>
             </div>
 
-            {/* --- Divider --- */}
+            {/* Divider */}
             <div className="relative py-8">
               <div className="absolute inset-0 flex items-center">
                 <div className="w-full border-t border-border border-dashed"></div>
@@ -212,7 +205,7 @@ const CategoriesPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Full Content - Newsletter Style */}
+            {/* Full Content */}
             {selectedArticle.fullContent ? (
               <div className="prose prose-lg max-w-none mt-4 animate-fade-in-up">
                 <div className="text-foreground leading-relaxed space-y-4">
@@ -235,7 +228,6 @@ const CategoriesPage: React.FC = () => {
                       );
                     }
                     // H1
-                    // H1 - Hide title as per user request
                     if (trimmedLine.startsWith('# ')) {
                       return null;
                     }
@@ -258,7 +250,7 @@ const CategoriesPage: React.FC = () => {
               </div>
             )}
 
-            {/* Footer Close Button */}
+            {/* Close Button */}
             <div className="border-t border-border pt-8 mt-12 sticky bottom-0 bg-card pb-2">
               <button
                 onClick={() => setSelectedArticle(null)}
@@ -270,8 +262,6 @@ const CategoriesPage: React.FC = () => {
           </div>
         </div>
       )}
-
-      {/* Keyword Modal Removed */}
     </div>
   );
 };
@@ -295,7 +285,7 @@ const ArticleCard: React.FC<ArticleCardProps> = ({
       style={{ animationDelay: `${index * 100}ms` }}
       onClick={() => onCardClick(article)}
     >
-      {/* Time Info - Moved to Top Right */}
+      {/* Time Info */}
       <div className="absolute top-4 right-4 flex items-center gap-1 text-xs text-muted-foreground">
         <Clock className="w-3.5 h-3.5" />
         <span>{formatDate(article.publishedAt)}</span>
@@ -308,9 +298,6 @@ const ArticleCard: React.FC<ArticleCardProps> = ({
       </div>
 
       <h2 className="text-lg font-bold text-foreground mb-3">{article.title}</h2>
-
-      {/* Hooking Sentence display if available */}
-
 
       <div className="bg-primary/20 rounded-2xl p-4">
         <p className="text-sm font-medium text-foreground mb-2">📝 한 줄 요약</p>

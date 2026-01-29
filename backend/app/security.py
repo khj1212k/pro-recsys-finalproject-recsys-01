@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 import os
 from pathlib import Path
 
-# 서버 실행 경로 (backend/)를 기준으로 .env 파일 path 지정
 BASE_DIR = Path(os.getcwd())
 
 load_dotenv(BASE_DIR / ".env")

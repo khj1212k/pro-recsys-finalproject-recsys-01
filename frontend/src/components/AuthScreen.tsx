@@ -22,7 +22,6 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
     setError('');
 
     if (isLogin) {
-      // Login Logic: Use Email and Password
       if (!email.trim()) {
         setError('이메일을 입력해주세요.');
         return;
@@ -39,7 +38,6 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
         setError('로그인에 실패했습니다. 이메일과 비밀번호를 확인해주세요.');
       }
     } else {
-      // Sign Up Logic: Nickname + Email + Gender + BirthYear
       if (!nickname.trim()) {
         setError('별명을 입력해주세요.');
         return;
@@ -67,7 +65,6 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
 
       const success = await register(nickname.trim(), email.trim(), gender, Number(birthYear), password.trim());
       if (success) {
-        // Auto-login after registration
         const loginSuccess = await login(email.trim(), password.trim());
         if (loginSuccess) {
           onAuthComplete(true);
@@ -86,16 +83,15 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
       <div className="w-full max-w-md">
         {/* Logo */}
         <div className="text-center mb-10 animate-slide-up">
-          <div className="inline-flex items-center justify-center w-20 h-20 bg-primary rounded-[2rem] mb-5 shadow-medium">
-            <Newspaper className="w-10 h-10 text-primary-foreground" />
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-[2rem] mb-5 overflow-hidden">
+            <img src="/favicon.ico" alt="Logo" className="w-full h-full object-cover scale-105" />
           </div>
           <h1 className="text-3xl font-bold text-foreground">News-Grow</h1>
-          <p className="text-muted-foreground mt-2">뉴스와 함께 성장하세요</p>
+          <p className="text-muted-foreground mt-2">RecSys-01 Final Project</p>
         </div>
 
-        {/* Auth Card */}
+        {/* 로그인 / 회원가입 토글 버튼 */}
         <div className="card-news animate-scale-in">
-          {/* Toggle */}
           <div className="flex bg-secondary rounded-2xl p-1 mb-6">
             <button
               onClick={() => setIsLogin(true)}
@@ -137,6 +133,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
               </div>
             )}
 
+            {/* 회원가입 */}
             {!isLogin && (
               <>
                 <div className="space-y-2">
@@ -188,7 +185,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
                       <ChevronDown className={`absolute right-4 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground transition-transform duration-200 ${isYearDropdownOpen ? 'rotate-180' : ''}`} />
                     </button>
 
-                    {/* Custom Dropdown Menu */}
+                    {/* 생년 드롭다운 */}
                     {isYearDropdownOpen && (
                       <div className="absolute top-full left-0 right-0 mt-2 bg-card border border-border rounded-xl shadow-lg max-h-60 overflow-y-auto z-50 animate-fade-in scrollbar-hide">
                         {Array.from({ length: 100 }, (_, i) => new Date().getFullYear() - i).map((year) => (
@@ -208,7 +205,6 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
                       </div>
                     )}
 
-                    {/* Backdrop to close dropdown on outside click */}
                     {isYearDropdownOpen && (
                       <div
                         className="fixed inset-0 z-40 bg-transparent"
