@@ -22,7 +22,7 @@ export interface QuizScore {
   total: number;
 }
 
-export type Category = 'politics' | 'economy' | 'it' | 'society' | 'culture' | 'science' | 'world';
+export type Category = 'politics' | 'economy' | 'it' | 'society' | 'culture' | 'sports' | 'world';
 
 export type QuizType = 'ox' | 'multiple' | 'short' | 'application';
 

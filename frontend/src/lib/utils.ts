@@ -13,7 +13,7 @@ export function mapCategoryIdToKey(id: number): any { // Return type 'Category' 
     300: 'it',
     400: 'society',
     500: 'culture',
-    600: 'science',
+    600: 'sports',
     700: 'world'
   };
   return map[id] || 'society'; // Default fallback
@@ -33,7 +33,7 @@ export function mapCategoryKeyToCode(key: string): number {
         'it': 300,
         'society': 400,
         'culture': 500,
-        'science': 600,
+        'sports': 600,
         'world': 700
     };
     return map[key] || 400;
