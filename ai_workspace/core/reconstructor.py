@@ -1,0 +1,343 @@
+"""
+LLM-based news reconstructor
+Supports Naver HyperCLOVA X and OpenAI
+"""
+import os
+import json
+from typing import Dict, List, Optional, Any
+
+from core.llm_client import get_llm_client, extract_json_from_response, BaseLLMClient
+
+
+class NewsReconstructor:
+    """LLM-based news reconstructor with iterative refinement support"""
+
+    def __init__(self, provider: Optional[str] = None):
+        """
+        Initialize NewsReconstructor
+
+        Args:
+            provider: LLM provider ('naver', 'openai', or None for auto-detect from env)
+        """
+        self.client: BaseLLMClient = get_llm_client(provider)
+
+    def reconstruct(self, articles: List[Dict], feedback: Optional[str] = None) -> Optional[Dict]:
+        """
+        Reconstruct multiple articles into a unified newsletter.
+        
+        Args:
+            articles: List of article dicts (raw_news_id, press_name, title, content)
+            feedback: Optional feedback from previous evaluation to guide regeneration
+            
+        Returns:
+            result: Reconstructed news dict or None
+        """
+        if not articles:
+            return None
+
+        # Limit number of articles to avoid context length issues
+        # Sort by content length (descending) to keep most informative articles
+        MAX_ARTICLES = 10
+        if len(articles) > MAX_ARTICLES:
+            articles.sort(key=lambda x: len(x.get('content') or ''), reverse=True)
+            articles = articles[:MAX_ARTICLES]
+
+        # Build articles text
+        articles_text = ""
+        for i, art in enumerate(articles, 1):
+            content_preview = art.get('content', '')[:2000] if art.get('content') else "(본문 없음)"
+            articles_text += f"""
+---
+[기사 {i}]
+출처: {art.get('press_name', '알 수 없음')}
+제목: {art.get('title', '')}
+본문:
+{content_preview}
+---
+"""
+
+        # Build feedback instruction if provided
+        feedback_instruction = ""
+        if feedback:
+            feedback_instruction = f"""
+⚠️ 이전 작성이 다음 이유로 거부되었습니다:
+{feedback}
+
+위 피드백을 반영하여 수정된 뉴스레터를 작성하세요.
+"""
+
+        prompt = f"""
+당신은 여러 언론사의 기사를 큐레이션해
+독자가 한눈에 이 이슈가 '무엇에 관한 이야기이고,
+지금 어떤 방향으로 전개되고 있는지'를 이해할 수 있도록 정리하는
+뉴스레터 에디터입니다.
+
+{feedback_instruction}
+
+아래 기사들은 반드시 하나의 동일한 사건은 아니지만,
+같은 주제·맥락·결을 공유하는 뉴스들입니다.
+이 기사들을 종합해 하나의 **주제형 뉴스 브리핑**을 작성하세요.
+
+원본 기사들:
+{articles_text}
+
+작성 원칙:
+
+1. **첫 문장 규칙 (가장 중요 / 누락 시 실패)**:
+   - 본문 첫 문장은
+     **'핵심 주체·이슈(명사) + 현재 벌어지는 구체적 흐름(동사·변화)'**가
+     하나의 문장 안에 자연스럽게 드러나도록 작성하세요.
+   - 해당 이슈가 진행 중인 국면이나 변화가 명확한 경우,
+     '확산되고 있다 / 갈리고 있다 / 이어지고 있다 /
+      본격화되고 있다 / 변수로 떠올랐다 / 국면에 들어섰다'와 같은
+     **흐름·국면 표현을 활용할 수 있습니다.**
+   - 독자가 첫 문장만 읽고도
+     "아, 지금 이 이슈가 어떤 방향으로 가고 있구나"를
+     이해할 수 있어야 합니다.
+   - 단순한 분위기 묘사나
+     수치·사건 발생만 나열하는 문장으로 시작하지 마세요.
+
+2. **주제 중심 정리**:
+   - 개별 사건을 억지로 하나의 인과 서사로 엮지 마세요.
+   - 기사 전체에서 공통적으로 드러나는
+     **문제의식, 갈등 축, 정책 방향, 여론 변화**를 중심으로 정리하세요.
+
+3. **다중 사건 허용 + 중심 사건 축 제시**:
+   - 여러 사건을 다룰 수 있으나,
+     전체 흐름을 설명하는 **중심 사건 축**을 먼저 제시하세요.
+   - 이 축은 하나의 단일 사건일 수도 있고,
+     여러 **동등한 사건 사례들의 묶음**일 수도 있습니다.
+   - 중심 사건 축은 본문 첫 문단에서
+     다른 사건과 구분되도록 가장 먼저, 가장 구체적으로 서술하세요.
+   - 다른 사건들은
+     배경 사례, 병렬 사례, 제도적 반응, 여론 지표 등
+     전체 흐름 속에서의 역할을 구분해 서술하세요.
+
+4. **병렬적 서술 원칙**:
+   - 사건 간 인과관계가 불분명할 경우
+     인과 표현을 만들지 말고 병렬적으로 설명하세요.
+   - '~한 사례가 있다', '~도 함께 벌어졌다',
+     '이와 별개로' 같은 표현을 사용할 수 있습니다.
+
+5. **중요도 조절**:
+   - 전체 주제와 직접 연결되지 않는 이슈는
+     본문 후반부에서 맥락 보조 수준으로만 언급하세요.
+   - 경제 지표·국제 이슈 등은
+     주제와의 연결점이 명확할 때만 비중 있게 다루세요.
+
+6. **사실과 해석 구분**:
+   - 확인된 사실은 단정적으로 서술하세요.
+   - 해석·전망은
+     '~로 해석된다', '~라는 평가가 나온다'처럼 구분해 표현하세요.
+
+7. **구조화된 브리핑 형식**:
+   - 제목 (15자 이내, 공백 포함):
+     핵심 키워드 + 흐름·변화를 함축 (명사형 또는 '~다' 체)
+     ⚠️ 제목은 반드시 15자 이내로 작성. 영문/숫자 포함 시 12자 이내.
+     (예: "비트코인, 최고가 경신", "의대 증원 갈등 심화")
+   - 한줄요약 (30자 내외):
+     **무엇이 왜 주목받는지**가 드러나도록 작성
+   - 본문 (500~800자, '~다' 체):
+     * 첫 문단: 핵심 주체·이슈 + 현재 흐름 요약
+     * 중간 문단: 중심 사건 축과 관련 사건들을 역할별로 정리
+     * 마지막 문단: 이 흐름의 의미와 향후 관전 포인트
+
+8. **객관적 톤 유지 (매우 중요)**:
+   - '충격', '경악', '논란', '파문', '결국' 등 감정적/주관적 수식어 절대 사용 금지.
+   - '긴장이 고조되고 있다' -> '긴장이 이어지고 있다'와 같이 건조하게 서술.
+   - 사실 관계 위주로만 작성.
+
+9. **키워드 선정 기준** (5개):
+   - 핵심 주체 (1~2)
+   - 핵심 이슈·사건명 (1~2)
+   - 정책·제도·개념 또는 구조적 변화 (1~2)
+   - 검색·분류에 유용한 구체 명사 위주
+
+출력 형식 (JSON):
+{{
+    "title": "주제의 핵심을 드러내는 제목",
+    "sentence": "주제를 요약하는 한줄 설명",
+    "content": "주제형 뉴스 브리핑 본문",
+    "keywords": ["주제 키워드", "사건/정책/기업명", "핵심 개념", "고유명사", "행위 또는 변화"],
+    "categories": ["카테고리1", "카테고리2"]
+}}
+
+**카테고리 규칙 (매우 중요):**
+categories 필드는 반드시 다음 7개 중에서 정확히 1~2개만 선택하세요:
+- "정치"
+- "경제"
+- "사회"
+- "세계"
+- "IT/과학"
+- "생활/문화"
+- "스포츠"
+
+위 7개 이외의 카테고리는 절대 사용하지 마세요. 띄어쓰기나 특수문자도 정확히 일치시켜야 합니다.
+
+반드시 위 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요."""
+
+        try:
+            messages = [
+                {
+                    "role": "system",
+                    "content": "당신은 20년 경력의 뉴스 에디터입니다. 여러 언론사의 기사를 통합하여 객관적이고 사실 중심의 균형 잡힌 기사를 작성합니다. 육하원칙을 준수하고 확인된 사실과 의견을 명확히 구분합니다. 모든 응답은 반드시 JSON 형식으로만 제공합니다. 카테고리는 반드시 정치/경제/사회/국제/IT과학/생활문화/스포츠 중에서만 선택해야 합니다."
+                },
+                {"role": "user", "content": prompt}
+            ]
+
+            response = self.client.chat_completion(
+                messages=messages,
+                temperature=0.2,
+                max_tokens=4096
+            )
+
+            if not response:
+                print("LLM 응답 없음")
+                return None
+
+            result = extract_json_from_response(response)
+            if not result:
+                print(f"JSON 파싱 실패: {response[:200]}...")
+                return None
+
+            return result
+
+        except Exception as e:
+            print(f"LLM 호출 실패: {e}")
+            return None
+
+
+def _sanitize_text(text: str) -> str:
+    """Remove invalid UTF-8 characters and normalize text for database storage"""
+    if not text:
+        return ""
+    # Remove null bytes and other problematic characters
+    text = text.replace('\x00', '')
+    # Encode to UTF-8, ignoring invalid characters, then decode back
+    text = text.encode('utf-8', errors='ignore').decode('utf-8')
+    # Also remove any remaining surrogates
+    text = text.encode('utf-8', errors='surrogatepass').decode('utf-8', errors='ignore')
+    return text
+
+
+def save_news_letter(conn, article_ids: List[int], reconstructed: Dict) -> int:
+    """
+    Save reconstructed news to news_letter table.
+    Updates news_raw.news_letter_id for associated articles.
+
+    Args:
+        conn: DB connection
+        article_ids: Original article IDs
+        reconstructed: Reconstructed result dict
+
+    Returns:
+        saved_id: Saved record ID
+    """
+    cur = conn.cursor()
+
+    # Sanitize all text fields to prevent UTF-8 encoding errors
+    title = _sanitize_text(reconstructed.get('title', ''))
+    sentence = _sanitize_text(reconstructed.get('sentence', ''))
+    content = _sanitize_text(reconstructed.get('content', ''))
+    keywords = [_sanitize_text(k) for k in reconstructed.get('keywords', [])]
+
+    keywords_json = json.dumps(keywords, ensure_ascii=False)
+
+    cur.execute('''
+        INSERT INTO news_letter (
+            news_letter_title, news_letter_sentence, news_letter_content,
+            news_letter_keywords, raw_news_count, news_letter_created_at
+        ) VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+        RETURNING news_letter_id
+    ''', (
+        title,
+        sentence,
+        content,
+        keywords_json,
+        len(article_ids)
+    ))
+
+    saved_id = cur.fetchone()[0]
+
+    # Save categories to news_letter_categories table
+    # Category mapping for flexible matching
+    CATEGORY_MAP = {
+        '정치': '정치',
+        '경제': '경제',
+        '사회': '사회',
+        '국제': '세계',
+        '세계': '세계',
+        'IT과학': 'IT/과학',
+        'IT/과학': 'IT/과학',
+        '과학': 'IT/과학',
+        'IT': 'IT/과학',
+        '문화': '생활/문화',
+        '생활': '생활/문화',
+        '생활문화': '생활/문화',
+        '스포츠': '스포츠',
+    }
+    
+    categories = reconstructed.get('categories', [])
+    for category in categories:
+        if category:
+            # Map to DB category name
+            mapped_category = CATEGORY_MAP.get(category, category)
+            
+            cur.execute('SELECT category_id FROM category WHERE category_name = %s', (mapped_category,))
+            cat_row = cur.fetchone()
+            if cat_row:
+                cur.execute('''
+                    INSERT INTO news_letter_categories (news_letter_id, category_id)
+                    VALUES (%s, %s)
+                    ON CONFLICT DO NOTHING
+                ''', (saved_id, cat_row[0]))
+
+    # Update news_raw.news_letter_id for associated articles
+    for article_id in article_ids:
+        cur.execute('''
+            UPDATE news_raw
+            SET news_letter_id = %s
+            WHERE raw_news_id = %s
+        ''', (saved_id, article_id))
+
+    conn.commit()
+
+    return saved_id
+
+
+def generate_newsletter_embedding(conn, news_letter_id: int, content: str) -> bool:
+    """
+    Generate and save embedding for a newsletter.
+    
+    Args:
+        conn: DB connection
+        news_letter_id: Newsletter ID to update
+        content: Newsletter content to embed
+        
+    Returns:
+        success: True if embedding was saved
+    """
+    try:
+        # Try to import embedder (optional dependency)
+        from core.embedder import NewsEmbedder
+        
+        embedder = NewsEmbedder(verbose=False)
+        embedding = embedder.generate_embedding(content)
+        
+        if embedding:
+            cur = conn.cursor()
+            cur.execute('''
+                UPDATE news_letter
+                SET news_letter_embedding = %s
+                WHERE news_letter_id = %s
+            ''', (embedding, news_letter_id))
+            conn.commit()
+            return True
+    except ImportError:
+        # Embedder not available, skip embedding generation
+        pass
+    except Exception as e:
+        print(f"Newsletter embedding generation failed: {e}")
+    
+    return False
+
