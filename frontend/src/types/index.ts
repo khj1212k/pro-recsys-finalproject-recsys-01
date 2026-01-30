@@ -142,4 +142,7 @@ export interface UserProfileResponse {
   interests: number[];
 }
 
-
+export interface LogResponse {
+  status: string;
+  log_id: number;
+}

@@ -3,7 +3,7 @@ import { Bookmark, X, Clock, Check, Loader2 } from 'lucide-react';
 import { categoryNames, categoryColors } from '@/data/category_constants';
 import { useUserStore } from '@/store/userStore';
 import { Category, NewsArticle } from '@/types';
-import { fetchOnboardingNews } from '@/lib/api';
+import { fetchOnboardingNews, fetchNewsletterDetail, sendNewsletterClickLog } from '@/lib/api';
 import { mapCategoryKeyToCode, formatDate } from '@/lib/utils';
 import { toast } from "sonner";
 
@@ -74,9 +74,10 @@ const CategoriesPage: React.FC = () => {
 
 
   const handleCardClick = async (article: NewsArticle) => {
+    sendNewsletterClickLog(parseInt(article.id)).catch(err => console.error(err));
+
     if (!article.fullContent) {
       try {
-        const { fetchNewsletterDetail } = await import('@/lib/api');
         const detail = await fetchNewsletterDetail(parseInt(article.id));
         const detailedArticle = {
           ...article,

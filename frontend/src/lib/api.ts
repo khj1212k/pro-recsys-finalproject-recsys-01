@@ -1,4 +1,4 @@
-import { NewsDetailResponse, TodayNewsResponse, OnboardingNewsResponse, SignupRequest, AuthResponse, LoginRequest, LoginResponse, UserProfileResponse } from "@/types";
+import { NewsDetailResponse, TodayNewsResponse, OnboardingNewsResponse, SignupRequest, AuthResponse, LoginRequest, LoginResponse, UserProfileResponse, LogResponse } from "@/types";
 
 // Base URL
 const BASE_URL = "/api";
@@ -161,6 +161,27 @@ export async function updateUserNewsletters(newsLetterIds: number[], token: stri
 
   if (!response.ok) {
     throw new Error(`Failed to update newsletters: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// 9. 뉴스레터 클릭 로그 전송
+export async function sendNewsletterClickLog(newsLetterId: number): Promise<LogResponse> {
+  const token = getToken();
+  // 로그인은 필수지만, 토큰이 없으면 전송하지 않음 (Silent Fail)
+  if (!token) {
+    return { status: "fail", log_id: -1 };
+  }
+
+  const response = await fetch(`${BASE_URL}/logs/newsletter/click`, {
+    method: "POST",
+    headers: getHeaders(token),
+    body: JSON.stringify({ news_letter_id: newsLetterId }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to send log: ${response.status}`);
   }
 
   return response.json();
