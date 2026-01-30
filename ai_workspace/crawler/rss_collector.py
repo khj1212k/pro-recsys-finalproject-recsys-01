@@ -83,7 +83,7 @@ class RssCollector:
                     url,
                     headers=self.headers,
                     timeout=Settings.REQUEST_TIMEOUT,
-                    verify=False
+                    verify=Settings.SSL_VERIFY
                 )
                 feed = feedparser.parse(response.content)
 

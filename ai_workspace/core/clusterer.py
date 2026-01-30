@@ -123,6 +123,12 @@ def load_embeddings_from_db(conn, exclude_clustered: bool = True) -> Dict:
     press_names = []
     contents = []
 
+    def sanitize_text(text):
+        """Clean text for UTF-8 compatibility"""
+        if not text:
+            return ""
+        return text.encode('utf-8', errors='replace').decode('utf-8')
+
     for row in rows:
         raw_news_id, title, emb, press_name, content = row
 
@@ -134,10 +140,10 @@ def load_embeddings_from_db(conn, exclude_clustered: bool = True) -> Dict:
             emb = np.array(emb)
 
         ids.append(raw_news_id)
-        titles.append(title)
+        titles.append(sanitize_text(title))
         embeddings.append(emb)
-        press_names.append(press_name)
-        contents.append(content or "")
+        press_names.append(sanitize_text(press_name))
+        contents.append(sanitize_text(content) or "")
 
     return {
         'ids': np.array(ids),

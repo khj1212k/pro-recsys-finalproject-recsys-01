@@ -11,9 +11,7 @@ import os
 import math
 from typing import Optional, List, Tuple, Any
 
-# =========================
 # 모든 로그 / tqdm 제거
-# =========================
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
@@ -175,7 +173,7 @@ class NewsEmbedder:
 
 
 # ============================================================
-# 벤치마크 (막대바 없음)
+# 벤치마크 
 # ============================================================
 def benchmark_embedding(sample_texts=None, batch_size=8):
     if sample_texts is None:

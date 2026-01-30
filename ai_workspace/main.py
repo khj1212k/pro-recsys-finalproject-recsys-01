@@ -10,6 +10,7 @@ Full Pipeline:
 import argparse
 import sys
 import os
+from typing import Optional
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -21,14 +22,13 @@ from db.connection import get_connection
 from config.settings import Settings
 
 
-def reset_test_db():
+def reset_test_db() -> None:
     """Test DB 초기화 (스키마 재생성 포함)"""
-    import os
     from db.schema import full_reset
-    
+
     db_name = os.getenv("DB_NAME", "test_db")
     print(f"\n🗑️  Resetting database: {db_name}")
-    
+
     # DB 이름이 test_db일 때만 전체 리셋 허용 (안전장치)
     if db_name == 'test_db':
         full_reset()
@@ -36,7 +36,7 @@ def reset_test_db():
         print(f"⚠️  Skipping full reset for safety (DB_NAME={db_name})")
 
 
-def run_collect():
+def run_collect() -> int:
     """Stage 1: RSS 수집"""
     print("\n" + "=" * 60)
     print("📡 Stage 1: RSS 뉴스 수집")
@@ -47,7 +47,7 @@ def run_collect():
     return collector.collect_rss()
 
 
-def run_extract(num_workers: int = 8):
+def run_extract(num_workers: int = 8) -> int:
     """Stage 2: 본문 추출"""
     print("\n" + "=" * 60)
     print("📰 Stage 2: 본문 추출")
@@ -58,7 +58,7 @@ def run_extract(num_workers: int = 8):
     return extractor.extract_parallel(num_workers=num_workers)
 
 
-def run_embed(force_cpu: bool = False, batch_size: int = None):
+def run_embed(force_cpu: bool = False, batch_size: Optional[int] = None) -> int:
     """Stage 3: 임베딩 생성"""
     print("\n" + "=" * 60)
     print("🔢 Stage 3: 임베딩 생성")
@@ -68,7 +68,7 @@ def run_embed(force_cpu: bool = False, batch_size: int = None):
     return generate_embeddings_for_articles(force_cpu=force_cpu, batch_size=batch_size)
 
 
-def run_newsletter(limit: int = None, min_cluster_size: int = 3, min_samples: int = 2) -> int:
+def run_newsletter(limit: Optional[int] = None, min_cluster_size: int = 3, min_samples: int = 2) -> int:
     """Stage 4-5: 클러스터링 + LangGraph 뉴스레터 생성"""
     print("\n" + "=" * 60)
     print("🚀 Stage 4-5: 클러스터링 + LangGraph 뉴스레터 생성")
@@ -210,16 +210,12 @@ def run_newsletter(limit: int = None, min_cluster_size: int = 3, min_samples: in
     print("=" * 60)
     print(f"  Newsletters created: {total_completed}")
     print(f"  Clusters failed: {total_failed}")
-    print(f"  Clusters failed: {total_failed}")
     print(f"  Clusters skipped: {total_skipped}")
 
     return total_completed
 
 
-    return total_completed
-
-
-def run_newsletter_adaptive(limit: int = None, min_cluster_size: int = 5, min_samples: int = 2, min_target: int = 0) -> int:
+def run_newsletter_adaptive(limit: Optional[int] = None, min_cluster_size: int = 5, min_samples: int = 2, min_target: int = 0) -> int:
     """Run newsletter generation with adaptive cluster sizing to meet minimum target"""
     total_created = 0
     current_min_cluster = min_cluster_size
@@ -245,10 +241,16 @@ def run_newsletter_adaptive(limit: int = None, min_cluster_size: int = 5, min_sa
     return total_created
 
 
-def run_full_pipeline(num_workers: int = 8, force_cpu: bool = False, batch_size: int = None,
-                      limit: int = None, min_cluster_size: int = 5, min_samples: int = 2,
-                      min_target: int = 0,
-                      reset_db: bool = True):
+def run_full_pipeline(
+    num_workers: int = 8,
+    force_cpu: bool = False,
+    batch_size: Optional[int] = None,
+    limit: Optional[int] = None,
+    min_cluster_size: int = 5,
+    min_samples: int = 2,
+    min_target: int = 0,
+    reset_db: bool = True
+) -> None:
     """전체 파이프라인 실행"""
     print("\n" + "=" * 60)
     print("🚀 AI Workspace - Full Pipeline")
@@ -276,7 +278,7 @@ def run_full_pipeline(num_workers: int = 8, force_cpu: bool = False, batch_size:
     )
 
 
-def print_status():
+def print_status() -> None:
     """Print current database status"""
     conn = get_connection()
     cur = conn.cursor()
@@ -317,7 +319,7 @@ def print_status():
     conn.close()
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="AI Workspace - LangGraph News Pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,

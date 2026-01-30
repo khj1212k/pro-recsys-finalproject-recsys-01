@@ -11,6 +11,8 @@ from workflow.nodes import (
     handle_cluster_eval_failure,
     generate_newsletter,
     evaluate_newsletter,
+    embed_newsletter_node,
+    convert_tone_node,
     save_newsletter_to_db,
     handle_newsletter_max_retries,
     route_after_cluster_eval,
@@ -30,9 +32,12 @@ def create_newsletter_workflow() -> StateGraph:
        - FAIL -> End
     3. Generate newsletter
     4. Evaluate newsletter quality
-       - PASS -> Save -> End
+       - PASS -> Embed newsletter (original text)
        - FAIL -> Retry -> Generate
        - Max Retries -> End
+    5. Embed newsletter (from original formal text)
+    6. Convert tone (formal -> casual with emojis)
+    7. Save (converted text + original embedding) -> End
     """
     
     # Create the graph
@@ -44,6 +49,8 @@ def create_newsletter_workflow() -> StateGraph:
     workflow.add_node("handle_cluster_fail", handle_cluster_eval_failure)
     workflow.add_node("generate_newsletter", generate_newsletter)
     workflow.add_node("eval_newsletter", evaluate_newsletter)
+    workflow.add_node("embed_newsletter", embed_newsletter_node)  # NEW: Generate embedding from original
+    workflow.add_node("convert_tone", convert_tone_node)  # NEW: Convert tone to casual
     workflow.add_node("save_newsletter", save_newsletter_to_db)
     workflow.add_node("handle_max_retries", handle_newsletter_max_retries)
     
@@ -83,11 +90,17 @@ def create_newsletter_workflow() -> StateGraph:
         "eval_newsletter",
         route_after_newsletter_eval,
         {
-            "pass": "save_newsletter",
+            "pass": "embed_newsletter",  # Changed: Embed first from original text
             "retry": "generate_newsletter",
             "max_retries": "handle_max_retries"
         }
     )
+    
+    # After embedding: convert tone (NEW)
+    workflow.add_edge("embed_newsletter", "convert_tone")
+    
+    # After tone conversion: save (NEW)
+    workflow.add_edge("convert_tone", "save_newsletter")
     
     # Save -> END (No loop back)
     workflow.add_edge("save_newsletter", END)

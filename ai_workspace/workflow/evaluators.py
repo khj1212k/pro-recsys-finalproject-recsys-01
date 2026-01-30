@@ -1,16 +1,12 @@
 """
 LLM-based Evaluators for LangGraph workflow
-Provides cluster and newsletter quality evaluation using GPT
+Supports Naver HyperCLOVA X and OpenAI
 """
 import os
 import json
 from typing import Dict, List, Optional
 
-try:
-    from openai import OpenAI
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
+from core.llm_client import get_llm_client, extract_json_from_response, BaseLLMClient
 
 
 class ClusterEvaluator:
@@ -18,7 +14,7 @@ class ClusterEvaluator:
 
     SYSTEM_PROMPT = """You are an expert news analyst evaluating clusters of news articles.
 Your job is to determine if articles in a cluster represent a single coherent news event or topic.
-Always respond in valid JSON format."""
+Always respond in valid JSON format only. No other text."""
 
     USER_PROMPT_TEMPLATE = """You are evaluating a cluster of {n_articles} news articles.
 Determine if these articles represent a **single coherent news event** or topic.
@@ -35,32 +31,33 @@ Determine if these articles represent a **single coherent news event** or topic.
 **Articles in this cluster:**
 {articles_text}
 
-**Output JSON**:
+**Output JSON only**:
 {{
   "decision": "PASS" or "FAIL",
   "confidence": 0.0-1.0,
   "summary": "One-line theme of this cluster",
   "feedback": "If FAIL, explain which articles don't belong and why. If PASS, leave empty.",
   "outlier_indices": [indices of outlier articles (0-indexed), empty if PASS]
-}}"""
+}}
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-mini"):
-        if not OPENAI_AVAILABLE:
-            raise ImportError("openai library required: pip install openai")
-        
-        self.model = model
-        api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY required")
-        self.client = OpenAI(api_key=api_key)
+Only output valid JSON. No other text."""
+
+    def __init__(self, provider: Optional[str] = None):
+        """
+        Initialize ClusterEvaluator
+
+        Args:
+            provider: LLM provider ('naver', 'openai', or None for auto-detect)
+        """
+        self.client: BaseLLMClient = get_llm_client(provider)
 
     def evaluate(self, articles: List[Dict]) -> Dict:
         """
         Evaluate a cluster of articles.
-        
+
         Args:
             articles: List of article dicts with 'title', 'press_name', 'content'
-            
+
         Returns:
             Evaluation result dict with decision, confidence, summary, feedback, outlier_indices
         """
@@ -90,18 +87,37 @@ Content Preview: {content_preview}...
         )
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt}
-                ],
+            messages = [
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ]
+
+            response = self.client.chat_completion(
+                messages=messages,
                 temperature=0.1,
-                response_format={"type": "json_object"}
+                max_tokens=2048
             )
 
-            result = json.loads(response.choices[0].message.content)
-            
+            if not response:
+                return {
+                    "decision": "FAIL",
+                    "confidence": 0.0,
+                    "summary": "",
+                    "feedback": "LLM response empty",
+                    "outlier_indices": []
+                }
+
+            result = extract_json_from_response(response)
+
+            if not result:
+                return {
+                    "decision": "FAIL",
+                    "confidence": 0.0,
+                    "summary": "",
+                    "feedback": f"JSON parsing failed: {response[:100]}...",
+                    "outlier_indices": []
+                }
+
             # Ensure all required fields exist
             return {
                 "decision": result.get("decision", "FAIL"),
@@ -127,7 +143,7 @@ class NewsletterEvaluator:
 
     SYSTEM_PROMPT = """You are an expert news editor evaluating newsletter drafts.
 Your job is to ensure the newsletter meets quality standards for publication.
-Always respond in valid JSON format."""
+Always respond in valid JSON format only. No other text."""
 
     USER_PROMPT_TEMPLATE = """You are evaluating a generated newsletter draft.
 
@@ -149,32 +165,33 @@ Summary: {sentence}
 Content:
 {content}
 
-**Output JSON**:
+**Output JSON only**:
 {{
   "decision": "PASS" or "FAIL",
   "score": 0-10,
   "feedback": "Specific issues to fix if FAIL. Be very specific about what to change.",
   "issues": ["list", "of", "specific", "problems"]
-}}"""
+}}
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-mini"):
-        if not OPENAI_AVAILABLE:
-            raise ImportError("openai library required: pip install openai")
-        
-        self.model = model
-        api_key = api_key or os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY required")
-        self.client = OpenAI(api_key=api_key)
+Only output valid JSON. No other text."""
+
+    def __init__(self, provider: Optional[str] = None):
+        """
+        Initialize NewsletterEvaluator
+
+        Args:
+            provider: LLM provider ('naver', 'openai', or None for auto-detect)
+        """
+        self.client: BaseLLMClient = get_llm_client(provider)
 
     def evaluate(self, newsletter: Dict, source_articles: List[Dict]) -> Dict:
         """
         Evaluate a newsletter draft.
-        
+
         Args:
             newsletter: Dict with title, sentence, content, keywords, categories
             source_articles: Original articles used to generate the newsletter
-            
+
         Returns:
             Evaluation result dict with decision, score, feedback, issues
         """
@@ -199,21 +216,38 @@ Content:
         )
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt}
-                ],
+            messages = [
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "user", "content": prompt}
+            ]
+
+            response = self.client.chat_completion(
+                messages=messages,
                 temperature=0.1,
-                response_format={"type": "json_object"}
+                max_tokens=2048
             )
 
-            result = json.loads(response.choices[0].message.content)
-            
+            if not response:
+                return {
+                    "decision": "FAIL",
+                    "score": 0,
+                    "feedback": "LLM response empty",
+                    "issues": ["API call returned empty"]
+                }
+
+            result = extract_json_from_response(response)
+
+            if not result:
+                return {
+                    "decision": "FAIL",
+                    "score": 0,
+                    "feedback": f"JSON parsing failed: {response[:100]}...",
+                    "issues": ["Response not valid JSON"]
+                }
+
             score = int(result.get("score", 0))
             decision = "PASS" if score >= 5 else "FAIL"
-            
+
             return {
                 "decision": decision,
                 "score": score,

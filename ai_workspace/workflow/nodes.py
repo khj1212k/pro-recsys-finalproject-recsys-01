@@ -3,12 +3,18 @@ LangGraph Node Functions
 Each function takes state and returns state updates
 """
 from typing import Dict, Any
+import logging
+
 from workflow.state import AgentState
 from workflow.evaluators import ClusterEvaluator, NewsletterEvaluator
 from core.reconstructor import NewsReconstructor, save_news_letter
 from core.clusterer import get_cluster_articles
+from core.tone_converter import ToneConverter
+from core.embedder import NewsEmbedder
 from db.connection import get_connection
 from config.settings import Settings
+
+logger = logging.getLogger(__name__)
 
 
 def initialize_cluster_processing(state: AgentState) -> Dict[str, Any]:
@@ -60,7 +66,7 @@ def evaluate_cluster(state: AgentState) -> Dict[str, Any]:
     
     # print(f"  [Step 1] Evaluating cluster coherence...")
     
-    evaluator = ClusterEvaluator(model=Settings.OPENAI_MODEL)
+    evaluator = ClusterEvaluator()
     result = evaluator.evaluate(articles)
     
     # print(f"    Decision: {result['decision']} (confidence: {result['confidence']:.2f})")
@@ -160,7 +166,7 @@ def generate_newsletter(state: AgentState) -> Dict[str, Any]:
     # if feedback:
     #     print(f"    Previous feedback: {feedback[:100]}...")
     
-    reconstructor = NewsReconstructor(model=Settings.OPENAI_MODEL)
+    reconstructor = NewsReconstructor()
     draft = reconstructor.reconstruct(articles, feedback=feedback)
     
     # if draft:
@@ -194,7 +200,7 @@ def evaluate_newsletter(state: AgentState) -> Dict[str, Any]:
             }
         }
     
-    evaluator = NewsletterEvaluator(model=Settings.OPENAI_MODEL)
+    evaluator = NewsletterEvaluator()
     result = evaluator.evaluate(draft, articles)
     
     # print(f"    Decision: {result['decision']} (score: {result['score']}/10)")
@@ -212,32 +218,148 @@ def evaluate_newsletter(state: AgentState) -> Dict[str, Any]:
     }
 
 
+def embed_newsletter_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Generate embedding from the original (formal) newsletter text.
+    This embedding will be used for the recommendation system.
+    
+    The embedding is created BEFORE tone conversion to ensure
+    consistency with the formal writing style used in training.
+    """
+    draft = state["newsletter_draft"]
+    
+    logger.info("📐 원본 뉴스레터로 임베딩 생성 중...")
+    
+    if not draft:
+        logger.error("❌ 뉴스레터 초안 없음")
+        return {
+            "newsletter_embedding": None,
+            "error_message": "No draft for embedding"
+        }
+    
+    try:
+        # Create embedder instance
+        embedder = NewsEmbedder(force_cpu=False, verbose=False, l2_normalize=True)
+        
+        # Combine title, summary, and content for embedding
+        text_for_embedding = f"{draft.get('title', '')} {draft.get('sentence', '')} {draft.get('content', '')}"
+        
+        # Generate embedding
+        embedding = embedder.generate_embedding(text_for_embedding)
+        
+        if embedding:
+            logger.info(f"✅ 임베딩 생성 완료 (차원: {len(embedding)})")
+        else:
+            logger.warning("⚠️ 임베딩 생성 실패")
+        
+        # Save original newsletter for reference
+        return {
+            "original_newsletter": draft.copy(),  # Save original before conversion
+            "newsletter_embedding": embedding
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ 임베딩 생성 오류: {e}")
+        return {
+            "newsletter_embedding": None,
+            "error_message": f"Embedding failed: {e}"
+        }
+
+
+def convert_tone_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Convert newsletter tone from formal to casual with emojis.
+    This converted version will be stored in the database for users.
+    
+    The original formal version is preserved in 'original_newsletter'
+    and its embedding in 'newsletter_embedding' for the recommendation system.
+    """
+    draft = state["newsletter_draft"]
+    
+    logger.info("🎨 문체 변환 중...")
+    
+    if not draft:
+        logger.error("❌ 뉴스레터 초안 없음")
+        return {
+            "converted_newsletter": None,
+            "error_message": "No draft for conversion"
+        }
+    
+    try:
+        # Create tone converter
+        converter = ToneConverter()
+        
+        # Convert tone
+        converted = converter.convert(draft)
+        
+        if not converted:
+            logger.warning("⚠️ 문체 변환 실패, 원본 사용")
+            return {
+                "converted_newsletter": draft.copy(),  # Fallback to original
+                "conversion_feedback": "Conversion failed, using original"
+            }
+        
+        # Validate conversion
+        is_valid = converter.validate_conversion(draft, converted)
+        
+        if not is_valid:
+            logger.warning("⚠️ 변환 검증 실패, 원본 사용")
+            return {
+                "converted_newsletter": draft.copy(),  # Fallback to original
+                "conversion_feedback": "Validation failed, using original"
+            }
+        
+        logger.info("✅ 문체 변환 완료")
+        
+        return {
+            "converted_newsletter": converted,
+            "conversion_feedback": "Conversion successful"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ 문체 변환 오류: {e}")
+        # Fallback to original on error
+        return {
+            "converted_newsletter": draft.copy(),
+            "conversion_feedback": f"Conversion error: {e}, using original",
+            "error_message": f"Tone conversion failed: {e}"
+        }
+
+
 def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
     """
     Save approved newsletter to database.
+    Uses the CONVERTED (casual tone) newsletter for content
+    and the pre-generated embedding from ORIGINAL (formal tone) text.
     Updates news_raw.news_letter_id for associated articles.
-    Optionally generates newsletter embedding.
     """
-    draft = state["newsletter_draft"]
+    # Use converted newsletter if available, otherwise fall back to draft
+    newsletter_to_save = state.get("converted_newsletter") or state["newsletter_draft"]
+    embedding = state.get("newsletter_embedding")  # Pre-generated from original text
     article_ids = state["current_article_ids"]
     cluster_id = state["current_cluster_id"]
     
-    # print(f"  [Step 4] Saving newsletter to database...")
+    logger.info(f"💾 뉴스레터 저장 중 (Cluster {cluster_id})...")
     
     try:
         conn = get_connection()
-        saved_id = save_news_letter(conn, article_ids, draft)
+        saved_id = save_news_letter(conn, article_ids, newsletter_to_save)
         
-        # print(f"    ✅ Saved as news_letter_id: {saved_id}")
+        logger.info(f"✅ 뉴스레터 저장 완료 (ID: {saved_id})")
         
-        # Try to generate newsletter embedding (optional)
-        try:
-            from core.reconstructor import generate_newsletter_embedding
-            content = f"{draft.get('title', '')} {draft.get('sentence', '')} {draft.get('content', '')}"
-            if generate_newsletter_embedding(conn, saved_id, content):
-                pass # print(f"    📐 Newsletter embedding generated")
-        except Exception as e:
-            pass # print(f"    ⚠️ Embedding skipped: {e}")
+        # Save pre-generated embedding if available
+        if embedding:
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE news_letter SET news_letter_embedding = %s WHERE news_letter_id = %s",
+                    (embedding, saved_id)
+                )
+                conn.commit()
+                cursor.close()
+                logger.info(f"📐 임베딩 저장 완료 (원본 텍스트 기준)")
+            except Exception as e:
+                logger.warning(f"⚠️ 임베딩 저장 실패: {e}")
         
         conn.close()
         
@@ -249,7 +371,7 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
         }
     
     except Exception as e:
-        # print(f"    ❌ Save failed: {e}")
+        logger.error(f"❌ 뉴스레터 저장 실패: {e}")
         failed = list(state.get("failed_clusters", []))
         failed.append(cluster_id)
         

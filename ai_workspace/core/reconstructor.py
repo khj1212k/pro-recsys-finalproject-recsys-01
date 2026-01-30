@@ -1,44 +1,25 @@
 """
-GPT-based news reconstructor
-Ported from news/reconstructor/news_reconstructor.py with feedback loop support
+LLM-based news reconstructor
+Supports Naver HyperCLOVA X and OpenAI
 """
 import os
 import json
 from typing import Dict, List, Optional, Any
 
-try:
-    from openai import OpenAI
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OpenAI = None
-    OPENAI_AVAILABLE = False
+from core.llm_client import get_llm_client, extract_json_from_response, BaseLLMClient
 
 
 class NewsReconstructor:
-    """GPT-based news reconstructor with iterative refinement support"""
+    """LLM-based news reconstructor with iterative refinement support"""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-mini"):
-        if not OPENAI_AVAILABLE:
-            raise ImportError("openai library required: pip install openai")
+    def __init__(self, provider: Optional[str] = None):
+        """
+        Initialize NewsReconstructor
 
-        self.model = model
-        self.client = self._get_client(api_key)
-
-    def _get_client(self, api_key: Optional[str] = None) -> Any:
-        """Create OpenAI client"""
-        if api_key:
-            return OpenAI(api_key=api_key)
-
-        api_key = os.environ.get("OPENAI_API_KEY")
-        if not api_key:
-            from dotenv import load_dotenv
-            load_dotenv()
-            api_key = os.environ.get("OPENAI_API_KEY")
-
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY 환경변수를 설정하세요")
-
-        return OpenAI(api_key=api_key)
+        Args:
+            provider: LLM provider ('naver', 'openai', or None for auto-detect from env)
+        """
+        self.client: BaseLLMClient = get_llm_client(provider)
 
     def reconstruct(self, articles: List[Dict], feedback: Optional[str] = None) -> Optional[Dict]:
         """
@@ -150,9 +131,10 @@ class NewsReconstructor:
      '~로 해석된다', '~라는 평가가 나온다'처럼 구분해 표현하세요.
 
 7. **구조화된 브리핑 형식**:
-   - 제목 (15자 내외):
+   - 제목 (15자 이내, 공백 포함):
      핵심 키워드 + 흐름·변화를 함축 (명사형 또는 '~다' 체)
-     (예: "비트코인, 사상 최고가 경신", "의대 증원 갈등, 파국 치닫나")
+     ⚠️ 제목은 반드시 15자 이내로 작성. 영문/숫자 포함 시 12자 이내.
+     (예: "비트코인, 최고가 경신", "의대 증원 갈등 심화")
    - 한줄요약 (30자 내외):
      **무엇이 왜 주목받는지**가 드러나도록 작성
    - 본문 (500~800자, '~다' 체):
@@ -185,63 +167,92 @@ categories 필드는 반드시 다음 7개 중에서 정확히 1~2개만 선택�
 - "정치"
 - "경제"
 - "사회"
-- "국제"
-- "IT과학"
+- "세계"
+- "IT/과학"
 - "생활/문화"
 - "스포츠"
 
-위 7개 이외의 카테고리는 절대 사용하지 마세요. 띄어쓰기나 특수문자도 정확히 일치시켜야 합니다."""
+위 7개 이외의 카테고리는 절대 사용하지 마세요. 띄어쓰기나 특수문자도 정확히 일치시켜야 합니다.
+
+반드시 위 JSON 형식으로만 응답하세요. 다른 텍스트 없이 JSON만 출력하세요."""
 
         try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "당신은 20년 경력의 뉴스 에디터입니다. 여러 언론사의 기사를 통합하여 객관적이고 사실 중심의 균형 잡힌 기사를 작성합니다. 육하원칙을 준수하고 확인된 사실과 의견을 명확히 구분합니다. 모든 응답은 JSON 형식으로 제공합니다. 카테고리는 반드시 정치/경제/사회/국제/IT과학/문화/스포츠 중에서만 선택해야 합니다."
-                    },
-                    {"role": "user", "content": prompt}
-                ],
+            messages = [
+                {
+                    "role": "system",
+                    "content": "당신은 20년 경력의 뉴스 에디터입니다. 여러 언론사의 기사를 통합하여 객관적이고 사실 중심의 균형 잡힌 기사를 작성합니다. 육하원칙을 준수하고 확인된 사실과 의견을 명확히 구분합니다. 모든 응답은 반드시 JSON 형식으로만 제공합니다. 카테고리는 반드시 정치/경제/사회/국제/IT과학/생활문화/스포츠 중에서만 선택해야 합니다."
+                },
+                {"role": "user", "content": prompt}
+            ]
+
+            response = self.client.chat_completion(
+                messages=messages,
                 temperature=0.2,
-                response_format={"type": "json_object"}
+                max_tokens=4096
             )
 
-            result = json.loads(response.choices[0].message.content)
+            if not response:
+                print("LLM 응답 없음")
+                return None
+
+            result = extract_json_from_response(response)
+            if not result:
+                print(f"JSON 파싱 실패: {response[:200]}...")
+                return None
+
             return result
 
         except Exception as e:
-            print(f"GPT 호출 실패: {e}")
+            print(f"LLM 호출 실패: {e}")
             return None
+
+
+def _sanitize_text(text: str) -> str:
+    """Remove invalid UTF-8 characters and normalize text for database storage"""
+    if not text:
+        return ""
+    # Remove null bytes and other problematic characters
+    text = text.replace('\x00', '')
+    # Encode to UTF-8, ignoring invalid characters, then decode back
+    text = text.encode('utf-8', errors='ignore').decode('utf-8')
+    # Also remove any remaining surrogates
+    text = text.encode('utf-8', errors='surrogatepass').decode('utf-8', errors='ignore')
+    return text
 
 
 def save_news_letter(conn, article_ids: List[int], reconstructed: Dict) -> int:
     """
     Save reconstructed news to news_letter table.
     Updates news_raw.news_letter_id for associated articles.
-    
+
     Args:
         conn: DB connection
         article_ids: Original article IDs
         reconstructed: Reconstructed result dict
-        
+
     Returns:
         saved_id: Saved record ID
     """
     cur = conn.cursor()
 
-    keywords_json = json.dumps(reconstructed.get('keywords', []), ensure_ascii=False)
+    # Sanitize all text fields to prevent UTF-8 encoding errors
+    title = _sanitize_text(reconstructed.get('title', ''))
+    sentence = _sanitize_text(reconstructed.get('sentence', ''))
+    content = _sanitize_text(reconstructed.get('content', ''))
+    keywords = [_sanitize_text(k) for k in reconstructed.get('keywords', [])]
+
+    keywords_json = json.dumps(keywords, ensure_ascii=False)
 
     cur.execute('''
         INSERT INTO news_letter (
             news_letter_title, news_letter_sentence, news_letter_content,
-            news_letter_keywords,
-            raw_news_count
-        ) VALUES (%s, %s, %s, %s, %s)
+            news_letter_keywords, raw_news_count, news_letter_created_at
+        ) VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
         RETURNING news_letter_id
     ''', (
-        reconstructed.get('title', ''),
-        reconstructed.get('sentence', ''),
-        reconstructed.get('content', ''),
+        title,
+        sentence,
+        content,
         keywords_json,
         len(article_ids)
     ))
@@ -260,9 +271,9 @@ def save_news_letter(conn, article_ids: List[int], reconstructed: Dict) -> int:
         'IT/과학': 'IT/과학',
         '과학': 'IT/과학',
         'IT': 'IT/과학',
-        '문화': '생활문화',
-        '생활': '생활문화',
-        '생활문화': '생활문화',
+        '문화': '생활/문화',
+        '생활': '생활/문화',
+        '생활문화': '생활/문화',
         '스포츠': '스포츠',
     }
     

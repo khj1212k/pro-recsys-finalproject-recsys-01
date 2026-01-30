@@ -1,12 +1,6 @@
 """
 본문 추출기
 뉴스 URL에서 본문을 추출하여 news_raw 테이블 업데이트
-+ 약한 정제(lite) + DROP 마킹
-
-✅ 반영 사항
-- 구조/호출/저장 방식 그대로 유지
-- 원문 처리(정제/컷 마커) = FULL 버전 로직 반영
-- Selenium 완전 제거 (import/driver/분기 모두 삭제)
 """
 
 import re
@@ -16,22 +10,17 @@ from db.connection import get_connection
 from config.settings import Settings
 
 
-# =========================
 # 정제 설정
-# =========================
 DROP_LEN = 350          # clean 길이 이 값 미만이면 DROP
 DROP_PHOTO = True       # [포토] 제목이면 DROP
 DROP_LIST = True        # 추천기사/에디터픽 리스트성이면 DROP
 
-# =========================
-# 정제용 정규식 & 마커 (FULL)
-# =========================
+# 정제용 정규식 & 마커 
 _MULTI_SPACE_RE = re.compile(r"\s+")
 
 _END_MARKERS = [
     "댓글을 입력해 주세요",
     "관련기사",
-    # "추천기사",  # ✅ 제거 (매일경제 전용으로 처리)
     "많이 본 기사",
     "저작권자",
     "무단전재",
@@ -46,6 +35,9 @@ _END_MARKERS = [
     "Copyright ⓒ",
     "Copyright ©",
     "ⓒ 세계일보",
+    "GoodNews paper",  # 국민일보
+    "ⓒ 국민일보",      # 국민일보
+    "클릭! 기사는",    # 국민일보 피드백 UI
 ]
 
 # 동아일보: UI 블록
@@ -70,29 +62,24 @@ _DONGA_COPYRIGHT_MARKERS = [
 # 한국경제: 고정 UI 블록
 _HK_UI_BLOCK = " - 기사 스크랩 - 공유 - 댓글 - 클린뷰 - 프린트"
 
-# 기자 이메일 제거용 (모든 신문사 공통) - ✅ 개선사항 추가
+# 기자 이메일 제거용 (모든 신문사 공통)
 _REPORTER_EMAIL_REGEX = re.compile(
     r'[A-Za-z0-9_.+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9-.]+'
 )
 
 # 한국경제: 기자명 + 이메일 이후 컷
 # 다양한 패턴 지원:
-# 1) "장지민 한경닷컴 객원기자 [email]@hankyung.com"
-# 2) "워싱턴=이상은 특파원/최형창/김대훈 기자 [email]@hankyung.com" (복수 기자)
 # 복수 기자 패턴: location=/names with / separators
 _HK_REPORTER_REGEX = re.compile(
     r"(?:[가-힣]{2,10}=[가-힣/\s]+/)?((?:[가-힣]{2,4}\s+)?)(한경닷컴\s*)?(기자|객원기자|특파원|편집위원)\s+[A-Za-z0-9_.+-]+@hankyung\.com"
 )
 
 # 한국경제: 기사 시작 부분의 기자 서명 (이름 + 직함) 패턴
-# 예: "정인설 중소기업부장", "홍길동 기자", "김철수 특파원" 등
 _HK_REPORTER_START_REGEX = re.compile(
     r'^([가-힣]{2,4})\s*([가-힣]{2,10}(?:부장|기자|특파원|편집위원|논설위원|객원기자|객원|팀장|차장|국장|연구원))\s+'
 )
 
 # 한국경제: 문장 끝의 기자 서명 패턴 (이메일 제거 후 남는 부분)
-# 예: "양지윤 기자", "김정아 객원기자", "김정아 객원", "장지민" 등
-# 문장 끝(마침표 등) 뒤에 나오는 2-4자 한글 이름
 _HK_REPORTER_END_REGEX = re.compile(
     r'[.!?]\s+([가-힣]{2,4})(?:\s+([가-힣]{0,10}(?:부장|기자|특파원|편집위원|논설위원|객원기자|객원|팀장|차장|국장|연구원)))?\s*$'
 )
@@ -163,17 +150,55 @@ def _cut_donga_tail(t: str) -> str:
 
 def _remove_reporter_emails(t: str) -> str:
     """
-    ✅ 개선사항: 기자 이메일 주소 제거 (프라이버시 보호)
-    보수적으로 이메일만 제거하고 기자명은 유지
+    기자 이메일 주소 제거
     """
     if not t:
         return ""
     return _REPORTER_EMAIL_REGEX.sub("[이메일]", t)
 
 
+def _remove_reporter_bylines_common(t: str) -> str:
+    """
+    모든 신문사 공통: 이메일 제거 후 남은 기자 서명 패턴 제거
+    패턴:
+    1. "[이메일]" 마커 포함 기자 서명: "이름 기자 [이메일]", "이름 미술전문기자 [이메일]"
+    2. 문장 끝의 "위치=이름 기자" 패턴: "부산=윤일선 기자"
+    3. 문장 끝의 "이름 기자/특파원" 등
+    4. 복수 기자: "정우진 최수진 기자"
+    """
+    if not t or len(t) < 10:
+        return t
+
+    # 1. [이메일] 마커 포함 기자 서명 제거 (복수 기자, 전문기자 등 포함)
+    # 패턴: "이름 이름 기자 [이메일]", "이름 XX전문기자 [이메일]"
+    t = re.sub(
+        r'([가-힣]{2,4}\s+)*[가-힣]{2,4}\s+[가-힣]*(?:기자|특파원|편집위원|논설위원)\s*\[이메일\]',
+        '',
+        t
+    )
+
+    # 2. 문장 끝(마침표 등) 뒤의 위치=이름 기자 패턴 제거
+    # 예: "... 밝혔다. 부산=윤일선 기자"
+    t = re.sub(
+        r'[.!?]\s+[가-힣]{2,10}=[가-힣]{2,4}\s+[가-힣]*(?:기자|특파원|편집위원)\s*$',
+        '.',
+        t
+    )
+
+    # 3. 문장 끝의 복수 기자 서명 제거 (이메일 없이)
+    # 예: "... 밝혔다. 정우진 최수진 기자", "... 말했다. 손영옥 미술전문기자"
+    t = re.sub(
+        r'[.!?]\s+([가-힣]{2,4}\s+)*[가-힣]{2,4}\s+[가-힣]*(?:기자|특파원|편집위원|논설위원)\s*$',
+        '.',
+        t
+    )
+
+    return t.strip()
+
+
 def _remove_duplicate_content(t: str) -> str:
     """
-    ✅ 개선사항: 반복되는 콘텐츠 블록 제거 (동아일보 트렌드뉴스 중복, 한국경제 문단 반복 등)
+     복되는 콘텐츠 블록 제거 (동아일보 트렌드뉴스 중복, 한국경제 문단 반복 등)
     1) 개별 라인 3회 이상 반복 제거
     2) 긴 문장/문단 블록이 2회 이상 반복되면 첫 번째만 남김
     """
@@ -204,8 +229,7 @@ def _remove_duplicate_content(t: str) -> str:
 
     t = '\n'.join(result_lines)
 
-    # 2단계: 문장/문단 블록 중복 제거
-    # 긴 문장 기준으로 split (마침표, 느낌표, 물음표 기준)
+    # 문장/문단 블록 중복 제거
     sentences = re.split(r'([.!?]\s+)', t)
 
     # split 결과를 문장+구분자로 재구성
@@ -237,13 +261,26 @@ def _remove_duplicate_content(t: str) -> str:
 
         result_sentences.append(sent)
 
-    return ''.join(result_sentences).strip()
+    result_text = ''.join(result_sentences).strip()
+
+    # 첫 문장이 끝 문장과 동일하면 끝 문장 제거
+    sentences_final = result_text.split('. ')
+    if len(sentences_final) >= 2:
+        first_sent = sentences_final[0].strip()
+        last_sent = sentences_final[-1].strip()
+
+        # 첫 문장이 30자 이상이고 끝 문장에 포함되어 있으면 제거
+        if len(first_sent) > 30 and (first_sent in last_sent or last_sent in first_sent):
+            result_text = '. '.join(sentences_final[:-1])
+            if not result_text.endswith('.'):
+                result_text += '.'
+
+    return result_text.strip()
 
 
 def _remove_hankyung_reporter_start(t: str) -> str:
     """
-    ✅ 개선사항: 한국경제 기사 시작 부분의 기자 서명(이름+직함) 제거
-    예: "정인설 중소기업부장", "홍길동 기자" 등
+    한국경제 기사 시작 부분의 기자 서명(이름+직함) 제거
     """
     if not t or len(t) < 10:
         return t
@@ -258,9 +295,8 @@ def _remove_hankyung_reporter_start(t: str) -> str:
 
 def _remove_hankyung_reporter_end(t: str) -> str:
     """
-    ✅ 개선사항: 한국경제 기사 끝부분의 기자 서명(이름+직함) 제거
+    한국경제 기사 끝부분의 기자 서명(이름+직함) 제거
     이메일 제거 후 남는 부분 처리
-    예: "양지윤 기자", "김정아 객원" 등
     """
     if not t or len(t) < 10:
         return t
@@ -315,7 +351,7 @@ def cut_mk_editor_pick_and_reco(text: str) -> str:
 
 def clean_text_lite(raw: str, press_name: str = "") -> str:
     """
-    ✅ 임베딩용 1차 약한 정제 (FULL 버전 반영)
+     임베딩용 1차 약한 정제 
     - 언론사별 고정 UI 블록 제거
     - 공통 END 컷 (저작권/댓글/관련기사 등)
     - (동아일보) 트렌드뉴스/좋아요/댓글 꼬리 블록 컷 추가
@@ -352,7 +388,7 @@ def clean_text_lite(raw: str, press_name: str = "") -> str:
             m = re.search(r"\s-\s기사\s스크랩\s-\s공유\s-\s댓글\s-\s클린뷰\s-\s프린트\s", t)
             if m and m.start() < 2000:
                 t = t[m.end():].lstrip()
-        # ✅ 개선사항: UI 블록 제거 후 기자 서명 제거
+        # UI 블록 제거 후 기자 서명 제거
         t = _remove_hankyung_reporter_start(t)
 
     elif pn == "AI타임스":
@@ -378,14 +414,17 @@ def clean_text_lite(raw: str, press_name: str = "") -> str:
     if pn == "한국경제":
         t = _cut_hankyung_reporter_tail(t)
 
-    # ✅ 개선사항: 기자 이메일 제거 (모든 신문사 공통)
+    #  기자 이메일 제거 (모든 신문사 공통)
     t = _remove_reporter_emails(t)
 
-    # ✅ 개선사항: 한국경제 이메일 제거 후 남은 기자 서명 제거
+    # 모든 신문사 이메일 제거 후 남은 기자 서명 패턴 제거
+    t = _remove_reporter_bylines_common(t)
+
+    #  한국경제 이메일 제거 후 남은 기자 서명 제거
     if pn == "한국경제":
         t = _remove_hankyung_reporter_end(t)
 
-    # ✅ 개선사항: 중복 콘텐츠 제거
+    # 중복 콘텐츠 제거
     t = _remove_duplicate_content(t)
 
     return _normalize_spaces(t)
@@ -393,7 +432,7 @@ def clean_text_lite(raw: str, press_name: str = "") -> str:
 
 def is_drop_article(cleaned: str, title: str, press_name: str = "") -> tuple:
     """
-    DROP 판정 (✅ 개선: 보수적으로 완화)
+    DROP 판정
     Returns: (is_drop: bool, reasons: list[str])
     """
     reasons = []
@@ -406,17 +445,16 @@ def is_drop_article(cleaned: str, title: str, press_name: str = "") -> tuple:
         if any(ttl.strip().startswith(p) for p in _KHAN_DROP_TITLE_PREFIXES):
             reasons.append("khan_schedule_title")
 
-    # 1) 포토 기사 (✅ 개선: 텍스트 길이도 함께 고려)
     # 제목에 [포토]가 있어도 본문이 충분히 있으면 유지
     if DROP_PHOTO and _RE_PHOTO_TITLE.search(ttl):
         if len(t.strip()) < 200:  # 200자 미만일 때만 드롭
             reasons.append("photo_title_short")
 
-    # 2) 너무 짧음
+    # 너무 짧으면 drop
     if len(t.strip()) < DROP_LEN:
         reasons.append(f"too_short<{DROP_LEN}")
 
-    # 3) 추천기사/에디터픽 등 리스트성 본문 (✅ 개선: 조건 유지)
+    # 추천기사/에디터픽 등 리스트성 본문
     # 리스트 마커가 있고 텍스트가 짧을 때만 드롭
     if DROP_LIST:
         hit = any(m in t for m in _LIST_MARKERS)
@@ -434,9 +472,6 @@ class ContentExtractor:
         """
         언론사명으로 크롤링 전략(strategy) 조회
         전자신문_* 통합 처리
-
-        ✅ 구조 유지용: Settings.RSS_FEEDS를 그대로 탐색하지만,
-        ✅ Selenium은 이제 사용하지 않으므로 결과가 selenium이어도 direct로 처리됨.
         """
         for source, (strategy, _) in Settings.RSS_FEEDS.items():
             if press_name == '전자신문':
@@ -463,7 +498,7 @@ class ContentExtractor:
         cur = conn.cursor()
 
         try:
-            # ✅ 구조 유지: strategy 조회는 그대로 하되, 실제 크롤링은 항상 direct만 사용
+            
             _ = ContentExtractor.get_strategy_for_press(press_name)
 
             text = None
@@ -487,7 +522,7 @@ class ContentExtractor:
                 # DROP 판정
                 is_drop, reasons = is_drop_article(cleaned, title, press_name=press_name)
 
-                # 저장 (정제된 텍스트 + DROP 마킹)  ✅ 기존 방식 그대로
+                # 저장 
                 if is_drop:
                     cur.execute("""
                         UPDATE news_raw
@@ -506,7 +541,7 @@ class ContentExtractor:
                     return f"✅ {press_name} (raw={len(text)} → clean={len(cleaned)})"
 
             else:
-                # 빈 내용 → DROP 마킹  ✅ 기존 방식 그대로
+                # 빈 내용 → DROP 마킹  
                 cur.execute("""
                     UPDATE news_raw
                     SET raw_news_content = '', news_letter_id = -1

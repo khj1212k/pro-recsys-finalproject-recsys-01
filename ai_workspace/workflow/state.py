@@ -54,6 +54,12 @@ class AgentState(TypedDict):
     newsletter_retry_count: int
     newsletter_feedback: Optional[str]  # Accumulated feedback for regeneration
     
+    # Tone conversion (NEW)
+    original_newsletter: Optional[Dict]  # Original newsletter (formal tone) for embedding
+    newsletter_embedding: Optional[List[float]]  # Embedding from original text
+    converted_newsletter: Optional[Dict]  # Converted newsletter (casual tone) for DB
+    conversion_feedback: Optional[str]  # Feedback for tone conversion
+    
     # Workflow control
     should_continue: bool  # Whether to continue to next cluster
     error_message: Optional[str]
