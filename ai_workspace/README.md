@@ -6,8 +6,11 @@
 
 - **HDBSCAN 클러스터링**: 유사한 뉴스 기사를 자동으로 그룹화
 - **LLM 기반 클러스터 평가**: 클러스터가 단일 이벤트/주제를 대표하는지 검증
-- **뉴스레터 자동 생성**: GPT를 활용한 통합 뉴스 브리핑 생성
+- **뉴스레터 자동 생성**: LLM을 활용한 통합 뉴스 브리핑 생성
 - **품질 평가 및 피드백 루프**: 생성된 뉴스레터의 품질을 평가하고 필요시 재생성
+- **문체 변환**: 공식적인 뉴스를 친근한 톤으로 변환 (이모티콘 포함)
+- **사용자 임베딩**: Time-decay weighted average 알고리즘으로 개인화된 사용자 프로파일 생성
+- **통합 LLM 클라이언트**: Naver HyperCLOVA X 및 OpenAI 지원
 
 ## 설치
 
@@ -19,15 +22,21 @@ pip install -r requirements.txt
 ## 설정
 
 1. `.env.example`을 `.env`로 복사
-2. `OPENAI_API_KEY` 설정
+2. LLM API 키 설정 (Naver HyperCLOVA X 또는 OpenAI)
 3. 데이터베이스 연결 정보 확인
 
 ```bash
 cp .env.example .env
-# .env 파일 편집하여 API 키 설정
+# .env 파일 편집:
+# - LLM_PROVIDER=naver (또는 openai)
+# - NCP_CLOVASTUDIO_API_KEY=your_key (Naver 사용시)
+# - OPENAI_API_KEY=your_key (OpenAI 사용시)
+# - DB 연결 정보
 ```
 
 ## 사용법
+
+### 뉴스레터 파이프라인
 
 ```bash
 # 전체 파이프라인 실행
@@ -41,6 +50,19 @@ python main.py --status
 
 # 클러스터링 파라미터 조정
 python main.py --min-cluster 5 --min-samples 3
+```
+
+### 사용자 임베딩 업데이트
+
+```bash
+# 임베딩이 없는 신규 사용자만 업데이트
+python update_user_embeddings.py --all
+
+# 모든 사용자 강제 업데이트
+python update_user_embeddings.py --all --force-all
+
+# 특정 사용자만 업데이트
+python update_user_embeddings.py --user-ids 1,2,3,4,5
 ```
 
 ## 프로젝트 구조
@@ -101,3 +123,10 @@ ai_workspace/
    │     │                            │
    └─────┴────────────────────────────┘
 ```
+
+## Related Projects
+
+- **recommend-engine/**: 뉴스레터 추천 시스템 엔진 (별도 프로젝트)
+  - 사용자 임베딩 기반 개인화 추천
+  - 다양한 스코어링 알고리즘 (Attention, Max Pooling, Weighted Average)
+  - 자세한 내용은 `recommend-engine/README.md` 참조
