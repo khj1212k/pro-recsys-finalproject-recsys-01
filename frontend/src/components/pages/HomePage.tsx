@@ -3,7 +3,7 @@ import { Sun, Utensils, Moon, Clock, Check, X } from 'lucide-react';
 import { categoryNames, categoryColors } from '@/data/category_constants';
 import { useUserStore } from '@/store/userStore';
 import { NewsArticle } from '@/types';
-import { fetchTodayNews, fetchNewsletterDetail } from '@/lib/api';
+import { fetchTodayNews, fetchNewsletterDetail, sendNewsletterClickLog } from '@/lib/api';
 import { mapCategoryIdToKey, formatDate } from '@/lib/utils';
 import { toast } from "sonner";
 
@@ -85,6 +85,10 @@ const HomePage: React.FC = () => {
   }, [activeSlot]);
 
   const handleCardClick = async (article: NewsArticle) => {
+    sendNewsletterClickLog(parseInt(article.id)).catch(err => {
+      console.error("Failed to log click:", err);
+    });
+
     if (!article.fullContent) {
       try {
         const detail = await fetchNewsletterDetail(parseInt(article.id));
