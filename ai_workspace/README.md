@@ -138,3 +138,33 @@ Note:
 - embed_nl: 원본(공식) 텍스트로 임베딩 생성
 - conv_tone: 친근한 톤으로 변환 (이모티콘 포함)
 - save: 변환된 텍스트 + 원본 임베딩 저장
+
+## 데이터베이스 요구사항
+
+### user_newsletter_ctr_log 테이블
+
+사용자 임베딩 시스템이 작동하려면 백엔드에서 다음 테이블을 생성해야 합니다:
+
+```sql
+CREATE TABLE user_newsletter_ctr_log (
+    log_id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES "user"(user_id) ON DELETE CASCADE,
+    news_letter_id INTEGER NOT NULL REFERENCES news_letter(news_letter_id) ON DELETE CASCADE,
+    read_duration_seconds INTEGER,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+```
+
+**Important**: `interaction_type` 컬럼은 제거되었습니다. 모든 로그는 읽기 이벤트로 간주됩니다.
+
+상세 스키마는 `db/USER_CTR_LOG_SCHEMA.md` 참조
+
+### 사용 가능한 API
+
+`db/user_log_queries.py`에서 제공하는 헬퍼 함수들:
+- `log_newsletter_read()`: 뉴스레터 읽기 로그 기록
+- `get_user_read_history()`: 사용자 읽기 이력 조회
+- `get_newsletter_read_count()`: 뉴스레터 읽기 횟수
+- `get_user_interaction_stats()`: 사용자 통계
+- `get_popular_newsletters()`: 인기 뉴스레터 순위
+- `has_user_read_newsletter()`: 읽기 여부 확인
