@@ -220,7 +220,13 @@ def _sanitize_text(text: str) -> str:
     return text
 
 
-def save_news_letter(conn, article_ids: List[int], reconstructed: Dict) -> int:
+def save_news_letter(
+    conn, 
+    article_ids: List[int], 
+    reconstructed: Dict,
+    run_id: Optional[int] = None,
+    generation_history: Optional[Dict] = None
+) -> int:
     """
     Save reconstructed news to news_letter table.
     Updates news_raw.news_letter_id for associated articles.
@@ -229,6 +235,8 @@ def save_news_letter(conn, article_ids: List[int], reconstructed: Dict) -> int:
         conn: DB connection
         article_ids: Original article IDs
         reconstructed: Reconstructed result dict
+        run_id: Batch ID (optional)
+        generation_history: Generation/evaluation log (optional)
 
     Returns:
         saved_id: Saved record ID
@@ -242,19 +250,23 @@ def save_news_letter(conn, article_ids: List[int], reconstructed: Dict) -> int:
     keywords = [_sanitize_text(k) for k in reconstructed.get('keywords', [])]
 
     keywords_json = json.dumps(keywords, ensure_ascii=False)
+    generation_history_json = json.dumps(generation_history, ensure_ascii=False) if generation_history else None
 
     cur.execute('''
         INSERT INTO news_letter (
             news_letter_title, news_letter_sentence, news_letter_content,
-            news_letter_keywords, raw_news_count, news_letter_created_at
-        ) VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            news_letter_keywords, raw_news_count, news_letter_created_at,
+            run_id, generation_history
+        ) VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP, %s, %s)
         RETURNING news_letter_id
     ''', (
         title,
         sentence,
         content,
         keywords_json,
-        len(article_ids)
+        len(article_ids),
+        run_id,
+        generation_history_json
     ))
 
     saved_id = cur.fetchone()[0]

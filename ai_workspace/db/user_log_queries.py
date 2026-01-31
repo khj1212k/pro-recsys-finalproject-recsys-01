@@ -6,48 +6,50 @@ User Newsletter CTR Log Helper Functions
 from typing import List, Tuple, Optional
 from datetime import datetime, timedelta
 import psycopg2
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def log_newsletter_read(
     conn,
     user_id: int,
-    news_letter_id: int,
-    read_duration_seconds: Optional[int] = None
+    news_letter_id: int
 ) -> bool:
     """
-    사용자 뉴스레터 읽기 로그 기록
+    뉴스레터 읽기 이벤트 로그 기록
     
     Args:
-        conn: PostgreSQL connection
+        conn: DB connection
         user_id: 사용자 ID
         news_letter_id: 뉴스레터 ID
-        read_duration_seconds: 읽은 시간 (초)
         
     Returns:
         성공 여부
     """
+    cursor = conn.cursor()
+    
     try:
-        cursor = conn.cursor()
-        
         sql = """
         INSERT INTO user_newsletter_ctr_log 
-            (user_id, news_letter_id, read_duration_seconds)
-        VALUES (%s, %s, %s)
+            (user_id, news_letter_id)
+        VALUES (%s, %s)
         RETURNING log_id
         """
         
-        cursor.execute(sql, (user_id, news_letter_id, read_duration_seconds))
+        cursor.execute(sql, (user_id, news_letter_id))
         log_id = cursor.fetchone()[0]
         
         conn.commit()
         cursor.close()
         
-        print(f"✅ 로그 기록 완료 (log_id: {log_id})")
+        logger.debug(f"✓ 로그 기록: user={user_id}, newsletter={news_letter_id}, log_id={log_id}")
         return True
         
     except Exception as e:
-        print(f"❌ 로그 기록 실패: {e}")
         conn.rollback()
+        cursor.close()
+        logger.error(f"❌ 로그 기록 실패: {e}")
         return False
 
 

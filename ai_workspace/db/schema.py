@@ -101,9 +101,9 @@ def create_tables():
         CREATE TABLE IF NOT EXISTS news_raw (
             raw_news_id BIGSERIAL PRIMARY KEY,
             press_id INT NOT NULL REFERENCES press(press_id) ON DELETE CASCADE,
-            raw_news_title TEXT NOT NULL,
-            raw_news_content TEXT,
-            raw_news_url TEXT UNIQUE NOT NULL,
+            raw_news_title VARCHAR NOT NULL,
+            raw_news_content VARCHAR,
+            raw_news_url VARCHAR UNIQUE NOT NULL,
             embedding_result vector(1024),
             raw_news_created_at VARCHAR(100),
             raw_news_crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -137,13 +137,15 @@ def create_tables():
     cur.execute("""
         CREATE TABLE IF NOT EXISTS news_letter (
             news_letter_id SERIAL PRIMARY KEY,
-            news_letter_title TEXT NOT NULL,
-            news_letter_sentence TEXT,
-            news_letter_content TEXT NOT NULL,
+            news_letter_title VARCHAR NOT NULL,
+            news_letter_sentence VARCHAR,
+            news_letter_content VARCHAR NOT NULL,
             news_letter_created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             news_letter_embedding vector(1024),
             news_letter_keywords JSONB,
             raw_news_count INT DEFAULT 0,
+            run_id INT,
+            generation_history JSONB,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
     """)
@@ -192,6 +194,23 @@ def create_tables():
         """)
     except Exception as e:
         print(f"\n뉴스레터 임베딩 인덱스 생성 실패 (데이터 부족 시 정상): {e}")
+
+    # ========================================
+    # 7. Cluster_history - 클러스터링 로그 테이블
+    # ========================================
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cluster_history (
+            history_id SERIAL PRIMARY KEY,
+            run_id INTEGER UNIQUE NOT NULL,
+            cluster_log JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+
+    cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_cluster_history_run_id ON cluster_history(run_id);
+        CREATE INDEX IF NOT EXISTS idx_cluster_history_created_at ON cluster_history(created_at);
+    """)
 
     conn.commit()
     conn.close()

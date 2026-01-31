@@ -150,7 +150,6 @@ CREATE TABLE user_newsletter_ctr_log (
     log_id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL REFERENCES "user"(user_id) ON DELETE CASCADE,
     news_letter_id INTEGER NOT NULL REFERENCES news_letter(news_letter_id) ON DELETE CASCADE,
-    read_duration_seconds INTEGER,
     created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 ```
