@@ -78,6 +78,85 @@ def generate_embeddings_for_articles(batch_size: int = None, force_cpu: bool = F
     
     # GPU 메모리 해제
     embedder.cleanup()
+    print("🧹 GPU 메모리 정리 완료")
+    
+    return success_count
+
+
+def generate_embeddings_for_newsletters(batch_size: int = None, force_cpu: bool = False):
+    """
+    임베딩이 없는 뉴스레터에 대해 임베딩 생성 (배치 처리)
+    
+    Args:
+        batch_size: 배치 크기
+        force_cpu: CPU 강제 사용
+    """
+    if batch_size is None:
+        batch_size = Settings.EMBEDDING_BATCH_SIZE
+        
+    # 1. 대상 조회
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT news_letter_id, title, sentence, content
+        FROM news_letter
+        WHERE news_letter_embedding IS NULL
+        ORDER BY news_letter_id
+    """)
+    newsletters = cur.fetchall()
+    conn.close()
+    
+    if not newsletters:
+        print("💤 임베딩 생성할 뉴스레터가 없습니다.")
+        return 0
+        
+    print(f"\n📐 뉴스레터 임베딩 생성 시작! (대상: {len(newsletters)}건)")
+    
+    # 2. 임베더 초기화
+    embedder = NewsEmbedder(force_cpu=force_cpu, verbose=True, l2_normalize=True)
+    
+    # 3. 배치 처리
+    success_count = 0
+    
+    for i in tqdm(range(0, len(newsletters), batch_size), desc="🔢 뉴스레터 임베딩"):
+        batch = newsletters[i:i+batch_size]
+        
+        # 텍스트 준비 (제목 + 요약 + 본문)
+        texts = []
+        ids = []
+        for nl in batch:
+            # nl: (id, title, sentence, content)
+            title = nl[1] or ""
+            sentence = nl[2] or ""
+            content = nl[3] or ""
+            texts.append(f"{title} {sentence} {content}")
+            ids.append(nl[0])
+            
+        # 임베딩 생성
+        embeddings, _ = embedder.generate_embeddings_batch(texts, batch_size=batch_size)
+        
+        # DB 저장
+        conn = get_connection()
+        cur = conn.cursor()
+        
+        for nl_id, embedding in zip(ids, embeddings):
+            if embedding:
+                embedding_str = str(embedding)
+                cur.execute("""
+                    UPDATE news_letter
+                    SET news_letter_embedding = %s
+                    WHERE news_letter_id = %s
+                """, (embedding_str, nl_id))
+                success_count += 1
+                
+        conn.commit()
+        conn.close()
+        
+    print(f"✨ 뉴스레터 임베딩 완료! {success_count}건 성공")
+    
+    # GPU 메모리 해제
+    embedder.cleanup()
+    print("🧹 GPU 메모리 정리 완료")
     
     return success_count
 

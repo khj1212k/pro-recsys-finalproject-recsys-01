@@ -16,6 +16,9 @@ from config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
+# Global shared instances
+_SHARED_EMBEDDER = None
+
 
 def initialize_cluster_processing(state: AgentState) -> Dict[str, Any]:
     """
@@ -258,42 +261,14 @@ def embed_newsletter_node(state: AgentState) -> Dict[str, Any]:
     """
     draft = state["newsletter_draft"]
     
-    logger.info("📐 원본 뉴스레터로 임베딩 생성 중...")
+    # 배치 처리를 위해 워크플로우 내에서는 임베딩 생성을 스킵합니다.
+    # main.py의 마지막 단계에서 일괄 처리합니다.
+    # logger.info("📐 (Skip) 임베딩 생성은 배치 단계로 이관됨")
     
-    if not draft:
-        logger.error("❌ 뉴스레터 초안 없음")
-        return {
-            "newsletter_embedding": None,
-            "error_message": "No draft for embedding"
-        }
-    
-    try:
-        # Create embedder instance
-        embedder = NewsEmbedder(force_cpu=False, verbose=False, l2_normalize=True)
-        
-        # Combine title, summary, and content for embedding
-        text_for_embedding = f"{draft.get('title', '')} {draft.get('sentence', '')} {draft.get('content', '')}"
-        
-        # Generate embedding
-        embedding = embedder.generate_embedding(text_for_embedding)
-        
-        if embedding:
-            logger.info(f"✅ 임베딩 생성 완료 (차원: {len(embedding)})")
-        else:
-            logger.warning("⚠️ 임베딩 생성 실패")
-        
-        # Save original newsletter for reference
-        return {
-            "original_newsletter": draft.copy(),  # Save original before conversion
-            "newsletter_embedding": embedding
-        }
-        
-    except Exception as e:
-        logger.error(f"❌ 임베딩 생성 오류: {e}")
-        return {
-            "newsletter_embedding": None,
-            "error_message": f"Embedding failed: {e}"
-        }
+    return {
+        "original_newsletter": draft,
+        "newsletter_embedding": None
+    }
 
 
 def convert_tone_node(state: AgentState) -> Dict[str, Any]:

@@ -3,7 +3,7 @@ AI Workspace - LangGraph News Pipeline
 Main entry point for the complete news processing workflow
 
 Full Pipeline:
-0. User Embedding -> 1. Collect (RSS) -> 2. Extract (Content) -> 3. Embed -> 4. Cluster -> 5. Newsletter (LangGraph)
+0. User Embedding -> 1. Collect (RSS) -> 2. Extract (Content) -> 3. Embed -> 4. Cluster -> 5. Newsletter (LangGraph) -> 6. Newsletter Embed
 
 테스트 환경에서는 test_db를 사용하며, 기본 실행 시 DB를 초기화합니다.
 """
@@ -241,7 +241,17 @@ def run_newsletter(limit: Optional[int] = None, min_cluster_size: int = 3, min_s
     return total_completed
 
 
-def run_newsletter_adaptive(limit: Optional[int] = None, min_cluster_size: int = 5, min_samples: int = 2, min_target: int = 0) -> int:
+def run_newsletter_embed(force_cpu: bool = False, batch_size: Optional[int] = None) -> int:
+    """Stage 6: 뉴스레터 임베딩 생성"""
+    print("\n" + "=" * 60)
+    print("🔖 Stage 6: 뉴스레터 임베딩 생성")
+    print("=" * 60)
+    
+    from crawler.embedding_generator import generate_embeddings_for_newsletters
+    return generate_embeddings_for_newsletters(force_cpu=force_cpu, batch_size=batch_size)
+    
+    
+def run_newsletter_adaptive(limit: Optional[int] = 15, min_cluster_size: int = 5, min_samples: int = 3, min_target: int = 5) -> int:
     """Run newsletter generation with adaptive cluster sizing to meet minimum target"""
     total_created = 0
     current_min_cluster = min_cluster_size
@@ -305,6 +315,9 @@ def run_full_pipeline(
         min_samples=min_samples, 
         min_target=min_target
     )
+    
+    # 6. 뉴스레터 임베딩 생성
+    run_newsletter_embed(force_cpu=force_cpu, batch_size=batch_size)
 
 
 def print_status() -> None:
