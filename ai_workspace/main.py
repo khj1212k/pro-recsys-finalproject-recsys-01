@@ -148,7 +148,7 @@ def run_newsletter(limit: Optional[int] = None, min_cluster_size: int = 3, min_s
     app = compile_workflow()
     
     # Semaphore to limit concurrency (avoid Rate Limit)
-    semaphore = asyncio.Semaphore(5)
+    semaphore = asyncio.Semaphore(2)  # Reduced from 5 to avoid 429 errors
 
     async def process_single_cluster(cluster_id):
         async with semaphore:
