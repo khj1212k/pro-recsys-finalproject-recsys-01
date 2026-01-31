@@ -155,6 +155,18 @@ class NewsEmbedder:
 
         return results, time.time() - start_time
 
+    def cleanup(self):
+        """명시적으로 모델을 메모리에서 해제하고 GPU 캐시를 비웁니다."""
+        if self.model is not None:
+            del self.model
+            self.model = None
+        
+        if self.device == "cuda":
+            import torch
+            torch.cuda.empty_cache()
+            if self.verbose:
+                print("🧹 GPU 메모리 정리 완료")
+
     def get_device_info(self) -> dict:
         info = {
             "device": self.device,

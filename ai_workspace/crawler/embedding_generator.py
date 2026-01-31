@@ -75,6 +75,10 @@ def generate_embeddings_for_articles(batch_size: int = None, force_cpu: bool = F
         conn.close()
     
     print(f"✨ 임베딩 생성 완료! {success_count}건 성공")
+    
+    # GPU 메모리 해제
+    embedder.cleanup()
+    
     return success_count
 
 
