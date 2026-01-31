@@ -193,6 +193,12 @@ def run_newsletter(limit: Optional[int] = None, min_cluster_size: int = 3, min_s
             
             cid = res.get("current_cluster_id")
             
+            # Handle case where cluster_id is None (error occurred early)
+            if cid is None:
+                error = res.get("error_message") or "Unknown Error"
+                print(f"❌ [Cluster ?] Failed: {error.replace(chr(10), ' ')[:80]}...")
+                continue
+            
             if res.get("completed_newsletters"):
                 draft = res.get("newsletter_draft", {})
                 title = draft.get("title", "No Title")
