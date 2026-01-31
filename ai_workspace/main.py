@@ -3,7 +3,7 @@ AI Workspace - LangGraph News Pipeline
 Main entry point for the complete news processing workflow
 
 Full Pipeline:
-1. Collect (RSS) -> 2. Extract (Content) -> 3. Embed -> 4. Cluster -> 5. Newsletter (LangGraph)
+0. User Embedding -> 1. Collect (RSS) -> 2. Extract (Content) -> 3. Embed -> 4. Cluster -> 5. Newsletter (LangGraph)
 
 테스트 환경에서는 test_db를 사용하며, 기본 실행 시 DB를 초기화합니다.
 """
@@ -56,6 +56,24 @@ def run_extract(num_workers: int = 8) -> int:
     from crawler.content_extractor import ContentExtractor
     extractor = ContentExtractor()
     return extractor.extract_parallel(num_workers=num_workers)
+
+
+def run_user_embedding() -> dict:
+    """Stage 0: 사용자 임베딩 생성"""
+    print("\n" + "=" * 60)
+    print("👤 Stage 0: 사용자 임베딩 생성")
+    print("=" * 60)
+    
+    from core.user_embedder import UserEmbedder
+    
+    embedder = UserEmbedder()
+    result = embedder.batch_update_all_users(only_null=True)
+    
+    print(f"  ✅ 성공: {result.get('success', 0)}명")
+    print(f"  ❌ 실패: {result.get('failed', 0)}명")
+    print(f"  ⏭️  스킵: {result.get('skipped', 0)}명")
+    
+    return result
 
 
 def run_embed(force_cpu: bool = False, batch_size: Optional[int] = None) -> int:
@@ -139,26 +157,24 @@ def run_newsletter(limit: Optional[int] = None, min_cluster_size: int = 3, min_s
     run_id = create_new_batch(cluster_log)
     print(f"  Batch ID (run_id): {run_id}")
     
-    # Step 3: Run LangGraph workflow (Parallel)
-    import asyncio
-    
-    print("\n[3/3] Running LangGraph workflow (Parallel Execution)...")
+    # Step 3: Run LangGraph workflow (Sequential)
+    print("\n[3/3] Running LangGraph workflow (Sequential Execution)...")
     
     # Compile workflow once
     app = compile_workflow()
     
-    # Semaphore to limit concurrency (avoid Rate Limit)
-    semaphore = asyncio.Semaphore(2)  # Reduced from 5 to avoid 429 errors
-
-    async def process_single_cluster(cluster_id):
-        async with semaphore:
-            # Initialize state for this cluster
-            state = {
-                "run_id": run_id,  # Batch ID
-                "all_cluster_groups": cluster_groups,
-                "all_cluster_ids": sorted_cluster_ids,
-                "current_cluster_index": 0, # Unused in parallel mode
-                "current_cluster_id": cluster_id,
+    results = []
+    
+    for idx, cluster_id in enumerate(sorted_cluster_ids):
+        print(f"\n--- Processing cluster {cluster_id} ({idx+1}/{len(sorted_cluster_ids)}) ---")
+        
+        # Initialize state for this cluster
+        state = {
+            "run_id": run_id,
+            "all_cluster_groups": cluster_groups,
+            "all_cluster_ids": sorted_cluster_ids,
+            "current_cluster_index": idx,
+            "current_cluster_id": cluster_id,
             "data": data,
             "completed_newsletters": [],
             "failed_clusters": [],
@@ -177,35 +193,18 @@ def run_newsletter(limit: Optional[int] = None, min_cluster_size: int = 3, min_s
         }
         
         try:
-            # Use ainvoke for async execution
-            return await app.ainvoke(state)
-        except Exception as e:
-            print(f"Error processing cluster {cluster_id}: {e}")
-            return {"failed_clusters": [cluster_id], "error_message": str(e)}
-
-    async def run_parallel():
-        tasks = [process_single_cluster(cid) for cid in sorted_cluster_ids]
-        results = []
-        
-        for future in asyncio.as_completed(tasks):
-            res = await future
+            # Use invoke for sync execution
+            res = app.invoke(state)
             results.append(res)
             
-            cid = res.get("current_cluster_id")
-            
-            # Handle case where cluster_id is None (error occurred early)
-            if cid is None:
-                error = res.get("error_message") or "Unknown Error"
-                print(f"❌ [Cluster ?] Failed: {error.replace(chr(10), ' ')[:80]}...")
-                continue
+            cid = res.get("current_cluster_id", cluster_id)
             
             if res.get("completed_newsletters"):
-                draft = res.get("newsletter_draft", {})
+                draft = res.get("newsletter_draft", {}) or {}
                 title = draft.get("title", "No Title")
                 print(f"✅ [Cluster {cid}] Completed: {title}")
                 
             elif res.get("skipped_clusters"):
-                # Reason extraction
                 reason = "Evaluation Failed"
                 if res.get("cluster_eval") and res["cluster_eval"].get("feedback"):
                     reason = res["cluster_eval"]["feedback"]
@@ -215,10 +214,12 @@ def run_newsletter(limit: Optional[int] = None, min_cluster_size: int = 3, min_s
                 error = res.get("error_message") or "Unknown Error"
                 print(f"❌ [Cluster {cid}] Failed: {error.replace(chr(10), ' ')[:80]}...")
                 
-        return results
-
-    # Execute parallel processing
-    results = asyncio.run(run_parallel())
+        except Exception as e:
+            import traceback
+            error_detail = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
+            print(f"❌ Error processing cluster {cluster_id}:")
+            print(error_detail)  # Full traceback
+            results.append({"current_cluster_id": cluster_id, "failed_clusters": [cluster_id], "error_message": str(e)})
     
     # Aggregate results for summary
     total_completed = 0
@@ -284,6 +285,9 @@ def run_full_pipeline(
     # DB 초기화 (test 모드)
     if reset_db:
         reset_test_db()
+    
+    # 0. 사용자 임베딩 생성
+    run_user_embedding()
     
     # 1. RSS 수집
     run_collect()

@@ -166,7 +166,9 @@ def generate_newsletter(state: AgentState) -> Dict[str, Any]:
     retry_count = state.get("newsletter_retry_count", 0)
     
     # Initialize or get generation_history
-    generation_history = state.get("generation_history", {"attempts": []})
+    generation_history = state.get("generation_history")
+    if generation_history is None:
+        generation_history = {"attempts": []}
     
     # print(f"  [Step 2] Generating newsletter (attempt {retry_count + 1})...")
     # if feedback:
