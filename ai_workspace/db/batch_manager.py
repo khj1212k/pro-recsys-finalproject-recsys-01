@@ -42,12 +42,30 @@ def create_new_batch(cluster_log: dict) -> int:
         """)
         run_id = cursor.fetchone()[0]
         
+        # Convert numpy types to native Python types for JSON serialization
+        def convert_numpy(obj):
+            """Recursively convert numpy types to Python types"""
+            import numpy as np
+            if isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            elif isinstance(obj, dict):
+                return {key: convert_numpy(value) for key, value in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_numpy(item) for item in obj]
+            return obj
+        
+        cluster_log_converted = convert_numpy(cluster_log)
+        
         # Insert cluster_history record
         cursor.execute("""
             INSERT INTO cluster_history (run_id, cluster_log, created_at)
             VALUES (%s, %s, NOW())
             RETURNING history_id
-        """, (run_id, json.dumps(cluster_log)))
+        """, (run_id, json.dumps(cluster_log_converted)))
         
         history_id = cursor.fetchone()[0]
         conn.commit()
