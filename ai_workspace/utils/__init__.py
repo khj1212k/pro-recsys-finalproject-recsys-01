@@ -1,6 +1,6 @@
 """
 AI Workspace Utilities
 """
-from utils.logger import get_logger, setup_logging
+from utils.logger import setup_logger
 
-__all__ = ['get_logger', 'setup_logging']
+__all__ = ['setup_logger']

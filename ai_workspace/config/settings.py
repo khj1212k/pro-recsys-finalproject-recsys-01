@@ -54,7 +54,22 @@ class BaseSettings:
     # ========== Quality Thresholds ==========
     MIN_NEWSLETTER_SCORE: int = 7
     MIN_CLUSTER_CONFIDENCE: float = 0.7
-
+    
+    # ========== Pipeline Stages ==========
+    STAGE_NAMES: Dict[int, str] = {
+        0: "User Embedding",
+        1: "RSS Collection",
+        2: "Content Extraction",
+        3: "Article Embedding",
+        4: "Clustering",
+        5: "Newsletter Generation",
+        6: "Newsletter Embedding",
+    }
+    
+    # ========== Retry Configuration ==========
+    RETRY_EXPONENTIAL_BASE: float = 2.0
+    MAX_RETRY_WAIT_SECONDS: int = 64
+    
     # ========== Crawler Settings ==========
     PARALLEL_WORKERS: int = 8  # 병렬 크롤링 워커
     REQUEST_TIMEOUT: int = 15

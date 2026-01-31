@@ -4,27 +4,28 @@ Each function takes state and returns state updates
 """
 from typing import Dict, Any
 import logging
+from datetime import datetime
 
 from workflow.state import AgentState
 from workflow.evaluators import ClusterEvaluator, NewsletterEvaluator
+from workflow.helpers import (
+    initialize_generation_history,
+    extract_feedback,
+    log_generation_attempt,
+    get_outlier_indices,
+    remove_outliers,
+    format_refine_message,
+)
 from core.reconstructor import NewsReconstructor, save_news_letter
 from core.clusterer import get_cluster_articles
 from core.tone_converter import ToneConverter
-from core.embedder import NewsEmbedder
 from db.connection import get_connection
 from config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
-# Global shared instances
-_SHARED_EMBEDDER = None
-
 
 def initialize_cluster_processing(state: AgentState) -> Dict[str, Any]:
-    """
-    Initialize processing for the current cluster.
-    Loads articles for the current cluster from the data dict.
-    """
     """
     Initialize processing for the current cluster.
     Loads articles for the current cluster from the data dict.
@@ -39,10 +40,6 @@ def initialize_cluster_processing(state: AgentState) -> Dict[str, Any]:
         # Load from all_cluster_groups
         article_ids = state["all_cluster_groups"].get(cluster_id, [])
         articles = get_cluster_articles(cluster_id, article_ids, state["data"])
-    
-    # print(f"\n{'='*60}")
-    # print(f"[Cluster {cluster_id}] Processing {len(articles)} articles...")
-    # print(f"{'='*60}")
     
     return {
         "current_cluster_id": cluster_id,
@@ -68,12 +65,10 @@ def evaluate_cluster(state: AgentState) -> Dict[str, Any]:
     articles = state["current_articles"]
     cluster_id = state["current_cluster_id"]
     
-    # print(f"  [Step 1] Evaluating cluster coherence...")
     
     evaluator = ClusterEvaluator()
     result = evaluator.evaluate(articles)
     
-    # print(f"    Decision: {result['decision']} (confidence: {result['confidence']:.2f})")
     # if result['summary']:
     #     print(f"    Summary: {result['summary']}")
     # if result['feedback']:
@@ -100,14 +95,12 @@ def handle_cluster_eval_failure(state: AgentState) -> Dict[str, Any]:
     if retry_count >= MAX_RETRIES:
         skipped = list(state.get("skipped_clusters", []))
         skipped.append(cluster_id)
-        # print(f"  [!] Cluster {cluster_id} skipped after max refinement retries")
         return {"skipped_clusters": skipped}
         
     # If no outliers identified, cannot refine
     if not outlier_indices:
         skipped = list(state.get("skipped_clusters", []))
         skipped.append(cluster_id)
-        # print(f"  [!] Cluster {cluster_id} skipped (no outliers to remove)")
         return {"skipped_clusters": skipped}
     
     # Remove outliers
@@ -129,7 +122,6 @@ def handle_cluster_eval_failure(state: AgentState) -> Dict[str, Any]:
     if len(new_articles) < 3:
         skipped = list(state.get("skipped_clusters", []))
         skipped.append(cluster_id)
-        # print(f"  [!] Cluster {cluster_id} skipped (too few articles after refinement)")
         return {"skipped_clusters": skipped}
     
     print(f"♻️  [Cluster {cluster_id}] Refining: Removed {len(valid_indices)} outliers, retrying with {len(new_articles)} articles")
@@ -168,31 +160,15 @@ def generate_newsletter(state: AgentState) -> Dict[str, Any]:
     feedback = state.get("newsletter_feedback")
     retry_count = state.get("newsletter_retry_count", 0)
     
-    # Initialize or get generation_history
-    generation_history = state.get("generation_history")
-    if generation_history is None:
-        generation_history = {"attempts": []}
+    # Initialize generation history
+    generation_history = initialize_generation_history(state)
     
-    # print(f"  [Step 2] Generating newsletter (attempt {retry_count + 1})...")
-    # if feedback:
-    #     print(f"    Previous feedback: {feedback[:100]}...")
-    
+    # Generate newsletter draft
     reconstructor = NewsReconstructor()
     draft = reconstructor.reconstruct(articles, feedback=feedback)
     
-    # Log generation attempt
-    attempt_log = {
-        "attempt": retry_count + 1,
-        "action": "generate" if retry_count == 0 else "regenerate",
-        "timestamp": datetime.now().isoformat(),
-        "feedback_applied": feedback if feedback else None
-    }
-    generation_history["attempts"].append(attempt_log)
-    
-    # if draft:
-    #     print(f"    Title: {draft.get('title', '')}")
-    # else:
-    #     print(f"    [!] Newsletter generation failed")
+    # Log this generation attempt
+    log_generation_attempt(generation_history, draft, state)
     
     return {
         "newsletter_draft": draft,
@@ -209,7 +185,6 @@ def evaluate_newsletter(state: AgentState) -> Dict[str, Any]:
     draft = state["newsletter_draft"]
     articles = state["current_articles"]
     
-    # print(f"  [Step 3] Evaluating newsletter quality...")
     
     if not draft:
         return {
@@ -224,7 +199,6 @@ def evaluate_newsletter(state: AgentState) -> Dict[str, Any]:
     evaluator = NewsletterEvaluator()
     result = evaluator.evaluate(draft, articles)
     
-    # print(f"    Decision: {result['decision']} (score: {result['score']}/10)")
     # if result['issues']:
     #     print(f"    Issues: {', '.join(result['issues'][:3])}")
     
@@ -405,7 +379,6 @@ def handle_newsletter_max_retries(state: AgentState) -> Dict[str, Any]:
     failed = list(state.get("failed_clusters", []))
     failed.append(cluster_id)
     
-    # print(f"  [!] Cluster {cluster_id} failed after max retries")
     
     last_feedback = state.get("newsletter_feedback", "No feedback")
     return {
@@ -422,12 +395,6 @@ def finalize_workflow(state: AgentState) -> Dict[str, Any]:
     failed = state.get("failed_clusters", [])
     skipped = state.get("skipped_clusters", [])
     
-    # print(f"\n{'='*60}")
-    # print("WORKFLOW COMPLETE")
-    # print(f"{'='*60}")
-    # print(f"  Completed: {len(completed)} newsletters")
-    # print(f"  Failed: {len(failed)} clusters")
-    # print(f"  Skipped: {len(skipped)} clusters")
     
     return {"should_continue": False}
 

@@ -696,3 +696,46 @@ def apply_split_v2_to_clusters(
             final_groups.append((cluster_ids, cluster_titles))
 
     return final_groups
+
+def run_clustering(
+    min_cluster_size: int = 3, 
+    min_samples: int = 2, 
+    min_target: int = 0
+) -> Tuple[Dict[int, List[int]], List[int], Dict[str, Any]]:
+    """
+    Execute the clustering process using DB embeddings.
+    
+    Args:
+        min_cluster_size: HDBSCAN parameter
+        min_samples: HDBSCAN parameter
+        min_target: Minimum target (unused in this function but kept for compat)
+        
+    Returns:
+        Tuple of (cluster_groups, cluster_ids, data_dict)
+    """
+    from db.connection import get_connection
+    from core.clusterer import NewsClusterer, load_embeddings_from_db, get_cluster_groups
+    
+    conn = get_connection()
+    try:
+        data = load_embeddings_from_db(conn, exclude_clustered=True)
+    finally:
+        conn.close()
+        
+    ids = data['ids']
+    embeddings = data['embeddings']
+    
+    if len(ids) == 0:
+        return {}, [], data
+        
+    clusterer = NewsClusterer(
+        min_cluster_size=min_cluster_size, 
+        min_samples=min_samples
+    )
+    labels = clusterer.fit_predict(embeddings)
+    
+    # Simple grouping by label
+    cluster_groups = get_cluster_groups(ids, labels)
+    sorted_cluster_ids = sorted(cluster_groups.keys())
+    
+    return cluster_groups, sorted_cluster_ids, data
