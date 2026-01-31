@@ -98,7 +98,7 @@ def generate_embeddings_for_newsletters(batch_size: int = None, force_cpu: bool 
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
-        SELECT news_letter_id, title, sentence, content
+        SELECT news_letter_id, news_letter_title, news_letter_sentence, news_letter_content
         FROM news_letter
         WHERE news_letter_embedding IS NULL
         ORDER BY news_letter_id
