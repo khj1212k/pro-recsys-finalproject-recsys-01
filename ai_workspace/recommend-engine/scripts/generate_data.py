@@ -81,7 +81,7 @@ def generate_data():
     print(f">> [ETL] Starting Data Generation & Embedding Process...")
     
     # 1. Config 로드
-    config_path = os.path.join(project_root, "configs", "config.yaml") # 설정 파일 경로
+    config_path = os.path.join(project_root, "config", "config.yaml") # 설정 파일 경로
     config = load_config(config_path) # 설정 딕셔너리
     
     gen_config = config.get('data_generation', {}) # 데이터 생성 관련 설정

@@ -122,6 +122,23 @@ def run_newsletter(limit: Optional[int] = None, min_cluster_size: int = 3, min_s
     
     print(f"  Processing {len(sorted_cluster_ids)} clusters" + (f" (limited to top {limit})" if limit else ""))
     
+    # Create batch and get run_id
+    from db.batch_manager import create_new_batch
+    cluster_log = {
+        "total_articles": len(data['ids']),
+        "total_clusters": len(cluster_groups),
+        "clusters": [
+            {
+                "cluster_id": cid,
+                "article_count": len(cluster_groups[cid]),
+                "articles": cluster_groups[cid]
+            }
+            for cid in sorted_cluster_ids
+        ]
+    }
+    run_id = create_new_batch(cluster_log)
+    print(f"  Batch ID (run_id): {run_id}")
+    
     # Step 3: Run LangGraph workflow (Parallel)
     import asyncio
     
@@ -137,6 +154,7 @@ def run_newsletter(limit: Optional[int] = None, min_cluster_size: int = 3, min_s
         async with semaphore:
             # Initialize state for this cluster
             state = {
+                "run_id": run_id,  # Batch ID
                 "all_cluster_groups": cluster_groups,
                 "all_cluster_ids": sorted_cluster_ids,
                 "current_cluster_index": 0, # Unused in parallel mode
@@ -153,6 +171,7 @@ def run_newsletter(limit: Optional[int] = None, min_cluster_size: int = 3, min_s
             "newsletter_eval": None,
             "newsletter_retry_count": 0,
             "newsletter_feedback": None,
+            "generation_history": None,
             "should_continue": True,
             "error_message": None
         }

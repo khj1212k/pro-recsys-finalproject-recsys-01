@@ -51,6 +51,7 @@ def initialize_cluster_processing(state: AgentState) -> Dict[str, Any]:
         "newsletter_eval": None,
         "newsletter_retry_count": 0,
         "newsletter_feedback": None,
+        "generation_history": None,  # Reset for each cluster
         "should_continue": True,
         "error_message": None
     }
@@ -158,9 +159,14 @@ def generate_newsletter(state: AgentState) -> Dict[str, Any]:
     Generate newsletter draft from cluster articles.
     Includes feedback from previous evaluation if available.
     """
+    from datetime import datetime
+    
     articles = state["current_articles"]
     feedback = state.get("newsletter_feedback")
     retry_count = state.get("newsletter_retry_count", 0)
+    
+    # Initialize or get generation_history
+    generation_history = state.get("generation_history", {"attempts": []})
     
     # print(f"  [Step 2] Generating newsletter (attempt {retry_count + 1})...")
     # if feedback:
@@ -169,6 +175,15 @@ def generate_newsletter(state: AgentState) -> Dict[str, Any]:
     reconstructor = NewsReconstructor()
     draft = reconstructor.reconstruct(articles, feedback=feedback)
     
+    # Log generation attempt
+    attempt_log = {
+        "attempt": retry_count + 1,
+        "action": "generate" if retry_count == 0 else "regenerate",
+        "timestamp": datetime.now().isoformat(),
+        "feedback_applied": feedback if feedback else None
+    }
+    generation_history["attempts"].append(attempt_log)
+    
     # if draft:
     #     print(f"    Title: {draft.get('title', '')}")
     # else:
@@ -176,7 +191,8 @@ def generate_newsletter(state: AgentState) -> Dict[str, Any]:
     
     return {
         "newsletter_draft": draft,
-        "newsletter_retry_count": retry_count + 1
+        "newsletter_retry_count": retry_count + 1,
+        "generation_history": generation_history
     }
 
 
@@ -212,9 +228,21 @@ def evaluate_newsletter(state: AgentState) -> Dict[str, Any]:
     if result["decision"] == "FAIL" and result["feedback"]:
         new_feedback = f"{new_feedback}\n\nAttempt {state['newsletter_retry_count']} feedback:\n{result['feedback']}"
     
+    # Update generation_history with evaluation results
+    generation_history = state.get("generation_history", {"attempts": []})
+    if generation_history.get("attempts"):
+        # Update the last attempt with evaluation results
+        generation_history["attempts"][-1].update({
+            "evaluation_score": result["score"],
+            "evaluation_result": result["decision"].lower(),
+            "evaluation_feedback": result["feedback"],
+            "evaluation_issues": result.get("issues", [])
+        })
+    
     return {
         "newsletter_eval": result,
-        "newsletter_feedback": new_feedback if result["decision"] == "FAIL" else None
+        "newsletter_feedback": new_feedback if result["decision"] == "FAIL" else None,
+        "generation_history": generation_history
     }
 
 
@@ -343,7 +371,18 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
     
     try:
         conn = get_connection()
-        saved_id = save_news_letter(conn, article_ids, newsletter_to_save)
+        
+        # Get run_id and generation_history from state
+        run_id = state.get("run_id")
+        generation_history = state.get("generation_history")
+        
+        saved_id = save_news_letter(
+            conn, 
+            article_ids, 
+            newsletter_to_save,
+            run_id=run_id,
+            generation_history=generation_history
+        )
         
         logger.info(f"✅ 뉴스레터 저장 완료 (ID: {saved_id})")
         

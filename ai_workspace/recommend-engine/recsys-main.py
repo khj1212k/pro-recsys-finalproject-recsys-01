@@ -51,7 +51,7 @@ def main():
             sys.stdout = result_file 
 
             # 1. config.yaml로부터 설정값 불러오기
-            config = load_config("configs/config.yaml") # 전체 설정 딕셔너리
+            config = load_config("config/config.yaml") # 전체 설정 딕셔너리
             rec_cfg = config['recommendation'] # 추천 관련 설정 부분만 추출
             
             method = rec_cfg.get('method', 'weighted_avg') # content 기반 추천 방법. 기본값: 'weighted_avg'
