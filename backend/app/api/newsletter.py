@@ -75,7 +75,7 @@ def get_today_news(
                 category_name=cat.category_name
             ))
             
-            if len(response_list) >= 40:
+            if len(response_list) >= 20: # 화면에 출력되는 뉴스레터 개수
                 break
                 
     return response_list

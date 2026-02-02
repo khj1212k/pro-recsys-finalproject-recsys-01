@@ -152,8 +152,8 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
       <div className="w-full max-w-2xl">
         {/* Header */}
         <div className="text-center mb-8 animate-fade-in">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-primary rounded-3xl mb-4">
-            <Newspaper className="w-8 h-8 text-primary-foreground" />
+          <div className="inline-flex items-center justify-center w-20 h-20 rounded-[2rem] mb-5 overflow-hidden">
+            <img src="/favicon.ico" alt="Logo" className="w-full h-full object-cover scale-105" />
           </div>
           {step === 'categories' ? (
             <>
