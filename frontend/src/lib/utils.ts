@@ -6,7 +6,7 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
-export function mapCategoryIdToKey(id: number): any { // Return type 'Category' but easy to use 'any' to avoid circular dependency if types not imported
+export function mapCategoryIdToKey(id: number): any {
   const map: Record<number, string> = {
     100: 'politics',
     200: 'economy',
@@ -16,7 +16,7 @@ export function mapCategoryIdToKey(id: number): any { // Return type 'Category' 
     600: 'sports',
     700: 'world'
   };
-  return map[id] || 'society'; // Default fallback
+  return map[id] || 'society'; // default
 }
 
 export const formatDate = (date: Date): string => {
@@ -27,14 +27,14 @@ export const formatDate = (date: Date): string => {
 };
 
 export function mapCategoryKeyToCode(key: string): number {
-    const map: Record<string, number> = {
-        'politics': 100,
-        'economy': 200,
-        'it': 300,
-        'society': 400,
-        'culture': 500,
-        'sports': 600,
-        'world': 700
-    };
-    return map[key] || 400;
+  const map: Record<string, number> = {
+    'politics': 100,
+    'economy': 200,
+    'it': 300,
+    'society': 400,
+    'culture': 500,
+    'sports': 600,
+    'world': 700
+  };
+  return map[key] || 400;
 }

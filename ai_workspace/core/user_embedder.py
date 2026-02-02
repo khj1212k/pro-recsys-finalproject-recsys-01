@@ -139,7 +139,6 @@ class UserEmbedder:
         FROM user_newsletter_ctr_log
         WHERE user_id = %s 
           AND created_at >= %s
-          AND interaction_type = 'read'
         ORDER BY created_at DESC
         """
         

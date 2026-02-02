@@ -6,58 +6,57 @@ User Newsletter CTR Log Helper Functions
 from typing import List, Tuple, Optional
 from datetime import datetime, timedelta
 import psycopg2
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 def log_newsletter_read(
     conn,
     user_id: int,
-    news_letter_id: int,
-    interaction_type: str = "read",
-    read_duration_seconds: Optional[int] = None
+    news_letter_id: int
 ) -> bool:
     """
-    사용자 뉴스레터 읽기 로그 기록
+    뉴스레터 읽기 이벤트 로그 기록
     
     Args:
-        conn: PostgreSQL connection
+        conn: DB connection
         user_id: 사용자 ID
         news_letter_id: 뉴스레터 ID
-        interaction_type: 상호작용 유형 (read, click, bookmark, share)
-        read_duration_seconds: 읽은 시간 (초)
         
     Returns:
         성공 여부
     """
+    cursor = conn.cursor()
+    
     try:
-        cursor = conn.cursor()
-        
         sql = """
         INSERT INTO user_newsletter_ctr_log 
-            (user_id, news_letter_id, interaction_type, read_duration_seconds)
-        VALUES (%s, %s, %s, %s)
+            (user_id, news_letter_id)
+        VALUES (%s, %s)
         RETURNING log_id
         """
         
-        cursor.execute(sql, (user_id, news_letter_id, interaction_type, read_duration_seconds))
+        cursor.execute(sql, (user_id, news_letter_id))
         log_id = cursor.fetchone()[0]
         
         conn.commit()
         cursor.close()
         
-        print(f"✅ 로그 기록 완료 (log_id: {log_id})")
+        logger.debug(f"✓ 로그 기록: user={user_id}, newsletter={news_letter_id}, log_id={log_id}")
         return True
         
     except Exception as e:
-        print(f"❌ 로그 기록 실패: {e}")
         conn.rollback()
+        cursor.close()
+        logger.error(f"❌ 로그 기록 실패: {e}")
         return False
 
 
 def get_user_read_history(
     conn,
     user_id: int,
-    lookback_days: int = 90,
-    interaction_type: Optional[str] = None
+    lookback_days: int = 90
 ) -> List[Tuple[int, datetime]]:
     """
     사용자의 뉴스레터 읽기 이력 조회
@@ -66,7 +65,6 @@ def get_user_read_history(
         conn: PostgreSQL connection
         user_id: 사용자 ID
         lookback_days: 조회 기간 (일)
-        interaction_type: 필터링할 상호작용 유형 (None이면 전체)
         
     Returns:
         [(news_letter_id, created_at), ...]
@@ -75,25 +73,14 @@ def get_user_read_history(
     
     cutoff_date = datetime.now() - timedelta(days=lookback_days)
     
-    if interaction_type:
-        sql = """
-        SELECT news_letter_id, created_at
-        FROM user_newsletter_ctr_log
-        WHERE user_id = %s 
-          AND created_at >= %s
-          AND interaction_type = %s
-        ORDER BY created_at DESC
-        """
-        cursor.execute(sql, (user_id, cutoff_date, interaction_type))
-    else:
-        sql = """
-        SELECT news_letter_id, created_at
-        FROM user_newsletter_ctr_log
-        WHERE user_id = %s 
-          AND created_at >= %s
-        ORDER BY created_at DESC
-        """
-        cursor.execute(sql, (user_id, cutoff_date))
+    sql = """
+    SELECT news_letter_id, created_at
+    FROM user_newsletter_ctr_log
+    WHERE user_id = %s 
+      AND created_at >= %s
+    ORDER BY created_at DESC
+    """
+    cursor.execute(sql, (user_id, cutoff_date))
     
     results = cursor.fetchall()
     cursor.close()
@@ -126,7 +113,6 @@ def get_newsletter_read_count(
         FROM user_newsletter_ctr_log
         WHERE news_letter_id = %s
           AND created_at >= %s
-          AND interaction_type = 'read'
         """
         cursor.execute(sql, (news_letter_id, cutoff_date))
     else:
@@ -134,7 +120,6 @@ def get_newsletter_read_count(
         SELECT COUNT(DISTINCT user_id)
         FROM user_newsletter_ctr_log
         WHERE news_letter_id = %s
-          AND interaction_type = 'read'
         """
         cursor.execute(sql, (news_letter_id,))
     
@@ -154,8 +139,7 @@ def get_user_interaction_stats(conn, user_id: int) -> dict:
         
     Returns:
         {
-            'total_reads': int,
-            'total_clicks': int,
+            'total_interactions': int,
             'avg_read_duration': float,
             'last_activity': datetime
         }
@@ -164,8 +148,7 @@ def get_user_interaction_stats(conn, user_id: int) -> dict:
     
     sql = """
     SELECT 
-        COUNT(CASE WHEN interaction_type = 'read' THEN 1 END) as total_reads,
-        COUNT(CASE WHEN interaction_type = 'click' THEN 1 END) as total_clicks,
+        COUNT(*) as total_interactions,
         AVG(read_duration_seconds) as avg_read_duration,
         MAX(created_at) as last_activity
     FROM user_newsletter_ctr_log
@@ -177,10 +160,9 @@ def get_user_interaction_stats(conn, user_id: int) -> dict:
     cursor.close()
     
     return {
-        'total_reads': result[0] or 0,
-        'total_clicks': result[1] or 0,
-        'avg_read_duration': float(result[2]) if result[2] else 0.0,
-        'last_activity': result[3]
+        'total_interactions': result[0] or 0,
+        'avg_read_duration': float(result[1]) if result[1] else 0.0,
+        'last_activity': result[2]
     }
 
 
@@ -210,7 +192,6 @@ def get_popular_newsletters(
         COUNT(DISTINCT user_id) as read_count
     FROM user_newsletter_ctr_log
     WHERE created_at >= %s
-      AND interaction_type = 'read'
     GROUP BY news_letter_id
     ORDER BY read_count DESC
     LIMIT %s
@@ -247,7 +228,6 @@ def has_user_read_newsletter(
         FROM user_newsletter_ctr_log
         WHERE user_id = %s 
           AND news_letter_id = %s
-          AND interaction_type = 'read'
     )
     """
     

@@ -26,6 +26,9 @@ class AgentState(TypedDict):
     """Main state for the LangGraph workflow"""
     
     # ========== Global State ==========
+    # Batch tracking
+    run_id: Optional[int]  # Batch ID from cluster_history
+    
     # All clusters to process
     all_cluster_groups: Dict[int, List[int]]  # {cluster_id: [article_ids]}
     all_cluster_ids: List[int]  # List of cluster IDs to process
@@ -53,6 +56,7 @@ class AgentState(TypedDict):
     newsletter_eval: Optional[NewsletterEvaluation]
     newsletter_retry_count: int
     newsletter_feedback: Optional[str]  # Accumulated feedback for regeneration
+    generation_history: Optional[Dict]  # Log of generation attempts and evaluations
     
     # Tone conversion (NEW)
     original_newsletter: Optional[Dict]  # Original newsletter (formal tone) for embedding

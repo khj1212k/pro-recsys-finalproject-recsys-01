@@ -47,7 +47,7 @@ export const useUserStore = create<UserState>()(
               isLoggedIn: true,
             }));
 
-            // Fetch full profile including interests
+            // 사용자 프로필 조회
             await get().fetchUser();
 
             const user = get().user;
@@ -229,7 +229,7 @@ export const useUserStore = create<UserState>()(
       },
 
       updateCategories: async (categories: Category[]) => {
-        // 1. Optimistic Update
+        // 1. 사용자 확인 및 관심 카테고리 업데이트
         set((state) => {
           if (!state.user || !state.currentUserEmail) return state;
           const updatedUser = { ...state.user, interests: categories };
@@ -239,7 +239,7 @@ export const useUserStore = create<UserState>()(
           };
         });
 
-        // 2. API Sync
+        // 2. JWT 토큰 기반 사용자 관심 카테고리 업데이트
         const { accessToken } = get();
         if (accessToken) {
           const codes = categories.map(c => mapCategoryKeyToCode(c));
@@ -257,7 +257,7 @@ export const useUserStore = create<UserState>()(
 
         try {
           const profile = await fetchUserProfile(accessToken);
-          // Convert codes (100) to keys ('politics')
+          // 카테고리 코드-키 매핑
           const interests = profile.interests.map((code) => mapCategoryIdToKey(code));
 
           set((state) => ({
