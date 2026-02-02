@@ -103,11 +103,10 @@ def evaluate_cluster(state: AgentState) -> Dict[str, Any]:
     eval_result = evaluator.evaluate(articles)
     
     if eval_result["decision"] == "FAIL":
-        logger.info(f"🟡 [Cluster {cluster_id}] 평가 실패 (Conf: {eval_result.get('confidence')}): {eval_result.get('feedback')}")
-        # Force pass to keep pipeline moving (quality may be low, but generation should proceed)
-        eval_result["forced_pass"] = True
-        eval_result["decision"] = "PASS"
-    logger.info(f"✅ [Cluster {cluster_id}] 평가 통과 (Conf: {eval_result.get('confidence')})")
+        # 평가 실패는 정상적인 흐름(필터링)으로 처리
+        logger.info(f"⛔ [Cluster {cluster_id}] 평가 실패 (Conf: {eval_result.get('confidence')}): {eval_result.get('feedback')}")
+    else:
+        logger.info(f"✅ [Cluster {cluster_id}] 평가 통과 (Conf: {eval_result.get('confidence')})")
         
     return {"cluster_eval": eval_result}
 

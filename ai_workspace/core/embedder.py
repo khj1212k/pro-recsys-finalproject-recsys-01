@@ -130,7 +130,7 @@ class NewsEmbedder:
                 all_embeddings.extend(embeddings)
                 
             except Exception as e:
-                logger.info(f"ℹ️ Batch embedding failed: {e}")
+                logger.error(f"❌ Batch embedding failed: {e}")
                 raise e
 
         # Explicit GPU Cache Cleanup

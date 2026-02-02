@@ -83,7 +83,7 @@ def create_new_batch(cluster_log: dict) -> int:
         
     except Exception as e:
         conn.rollback()
-        logger.info(f"ℹ️ Failed to create batch: {e}")
+        logger.error(f"Failed to create batch: {e}")
         raise
     finally:
         cursor.close()
@@ -176,7 +176,7 @@ def update_cluster_log(run_id: int, cluster_log: dict) -> bool:
         
     except Exception as e:
         conn.rollback()
-        logger.info(f"ℹ️ Failed to update cluster_log: {e}")
+        logger.error(f"Failed to update cluster_log: {e}")
         return False
     finally:
         cursor.close()
@@ -281,7 +281,7 @@ def save_news_letter(
         
     except Exception as e:
         conn.rollback()
-        logger.info(f"ℹ️ Failed to save newsletter: {e}")
+        logger.error(f"Failed to save newsletter: {e}")
         raise
     finally:
         cur.close()

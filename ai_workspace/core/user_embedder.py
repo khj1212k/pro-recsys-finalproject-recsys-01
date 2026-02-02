@@ -108,7 +108,7 @@ class UserEmbedder:
 
         except Exception as e:
             conn.rollback() # 롤백: 변경사항 취소
-            logger.info(f"ℹ️ User embedding error: {e}")
+            logger.error(f"Error: {e}")
             stats = {'success': 0, 
                      'failed': len(targets) if 'targets' in locals() else 0, 
                      'skipped': 0}

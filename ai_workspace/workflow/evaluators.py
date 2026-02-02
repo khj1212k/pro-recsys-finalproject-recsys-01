@@ -92,44 +92,30 @@ Content Preview: {content_preview}...
             articles_text=articles_text
         )
 
-        try:
-            messages = [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
-            ]
+        messages = [
+            {"role": "system", "content": self.SYSTEM_PROMPT},
+            {"role": "user", "content": prompt}
+        ]
 
+        max_retries = 5
+        last_response = None
+        for _ in range(max_retries):
             response = self.client.chat_completion(
                 messages=messages,
                 temperature=0.1,
-                max_tokens=2048
+                max_tokens=2048,
+                response_format={"type": "json_object"}
             )
-
             if not response:
-                return {
-                    "decision": "PASS",
-                    "confidence": 0.1,
-                    "summary": "",
-                    "feedback": "LLM response empty",
-                    "outlier_indices": [],
-                    "sub_groups": []
-                }
-
+                continue
+            last_response = response
             result = extract_json_from_response(response)
-
             if not result:
-                return {
-                    "decision": "PASS",
-                    "confidence": 0.1,
-                    "summary": "",
-                    "feedback": "JSON parsing failed",
-                    "outlier_indices": [],
-                    "sub_groups": []
-                }
+                continue
 
-            # Ensure all required fields exist
-            decision = (result.get("decision") or "PASS").upper()
+            decision = (result.get("decision") or "FAIL").upper()
             if decision not in ("PASS", "FAIL"):
-                decision = "PASS"
+                decision = "FAIL"
             return {
                 "decision": decision,
                 "confidence": float(result.get("confidence", 0.0)),
@@ -139,15 +125,28 @@ Content Preview: {content_preview}...
                 "sub_groups": result.get("sub_groups", []) or []
             }
 
-        except Exception as e:
+        # Fallback if parsing still fails
+        if last_response:
+            # Heuristic fallback: detect PASS/FAIL tokens
+            upper = last_response.upper()
+            decision = "FAIL" if "FAIL" in upper and "PASS" not in upper else "PASS" if "PASS" in upper else "FAIL"
             return {
-                "decision": "PASS",
+                "decision": decision,
                 "confidence": 0.1,
                 "summary": "",
-                "feedback": f"Evaluation error: {str(e)}",
+                "feedback": "JSON parsing failed",
                 "outlier_indices": [],
                 "sub_groups": []
             }
+
+        return {
+            "decision": "FAIL",
+            "confidence": 0.0,
+            "summary": "",
+            "feedback": "LLM response empty",
+            "outlier_indices": [],
+            "sub_groups": []
+        }
 
 
 class NewsletterEvaluator:
@@ -227,39 +226,29 @@ Only output valid JSON. No other text."""
             content=newsletter.get('content', '')
         )
 
-        try:
-            messages = [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
-            ]
+        messages = [
+            {"role": "system", "content": self.SYSTEM_PROMPT},
+            {"role": "user", "content": prompt}
+        ]
 
+        max_retries = 5
+        last_response = None
+        for _ in range(max_retries):
             response = self.client.chat_completion(
                 messages=messages,
                 temperature=0.1,
-                max_tokens=2048
+                max_tokens=2048,
+                response_format={"type": "json_object"}
             )
-
             if not response:
-                return {
-                    "decision": "PASS",
-                    "score": 5,
-                    "feedback": "LLM response empty",
-                    "issues": []
-                }
-
+                continue
+            last_response = response
             result = extract_json_from_response(response)
-
             if not result:
-                return {
-                    "decision": "PASS",
-                    "score": 5,
-                    "feedback": "JSON parsing failed",
-                    "issues": []
-                }
+                continue
 
             score = int(result.get("score", 0))
             decision = "PASS" if score >= 5 else "FAIL"
-
             return {
                 "decision": decision,
                 "score": score,
@@ -267,10 +256,19 @@ Only output valid JSON. No other text."""
                 "issues": result.get("issues", [])
             }
 
-        except Exception as e:
+        if last_response:
+            upper = last_response.upper()
+            decision = "PASS" if "PASS" in upper and "FAIL" not in upper else "FAIL"
             return {
-                "decision": "PASS",
-                "score": 5,
-                "feedback": f"Evaluation error: {str(e)}",
+                "decision": decision,
+                "score": 5 if decision == "PASS" else 0,
+                "feedback": "JSON parsing failed",
                 "issues": []
             }
+
+        return {
+            "decision": "FAIL",
+            "score": 0,
+            "feedback": "LLM response empty",
+            "issues": ["API call returned empty"]
+        }

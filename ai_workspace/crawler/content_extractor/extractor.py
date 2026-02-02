@@ -68,7 +68,7 @@ class ContentExtractor:
 
         except Exception as e:
             conn.rollback()
-            return f"ERR {press_name}: {str(e)[:50]}"
+            return f"❌ {press_name} 에러: {str(e)[:50]}"
 
         finally:
             conn.close()
@@ -111,6 +111,9 @@ class ContentExtractor:
                     empty_count += 1
                 else:
                     error_count += 1
+                    # 첫 5개 에러는 상세 출력하여 디버깅
+                    if error_count <= 5:
+                        print(f"   [Error] {result}")
 
-        print(f"🏁 전체 작업 종료. 성공: {success_count}, 내용없음: {empty_count}, 문제: {error_count}")
+        print(f"🏁 전체 작업 종료. 성공: {success_count}, 내용없음: {empty_count}, 에러: {error_count}")
         return success_count

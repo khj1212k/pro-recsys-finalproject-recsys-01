@@ -6,6 +6,7 @@ import os
 import json
 import time
 import logging
+import threading
 import requests
 from typing import Dict, List, Optional, Any
 from abc import ABC, abstractmethod
@@ -18,6 +19,24 @@ MAX_RETRIES = 10  # Maximum retry attempts
 INITIAL_BACKOFF = 1.0  # Initial wait time in seconds
 MAX_BACKOFF = 60.0  # Maximum wait time between retries
 BACKOFF_MULTIPLIER = 2.0  # Exponential backoff multiplier
+
+
+class SimpleRateLimiter:
+    """Simple process-wide rate limiter (min interval between requests)."""
+    def __init__(self, min_interval: float = 0.0):
+        self.min_interval = max(0.0, float(min_interval or 0.0))
+        self._lock = threading.Lock()
+        self._last_ts = 0.0
+
+    def wait(self):
+        if self.min_interval <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last_ts
+            if elapsed < self.min_interval:
+                time.sleep(self.min_interval - elapsed)
+            self._last_ts = time.monotonic()
 
 
 class BaseLLMClient(ABC):
@@ -63,6 +82,9 @@ class NaverHyperCLOVAClient(BaseLLMClient):
         self.api_key = api_key or os.getenv("NCP_CLOVASTUDIO_API_KEY")
         self.apigw_key = apigw_key or os.getenv("NCP_APIGW_API_KEY")
         self.model = model or os.getenv("HYPERCLOVA_MODEL", "HCX-003")
+        self.rate_limiter = SimpleRateLimiter(
+            float(os.getenv("NAVER_LLM_MIN_INTERVAL", os.getenv("LLM_MIN_INTERVAL", "1.0")))
+        )
 
         if not self.api_key:
             raise ValueError("NCP_CLOVASTUDIO_API_KEY 환경변수를 설정하세요")
@@ -150,6 +172,7 @@ class NaverHyperCLOVAClient(BaseLLMClient):
         while True:  # 무한 재시도
             attempt += 1
             try:
+                self.rate_limiter.wait()
                 response = requests.post(
                     url,
                     headers=headers,
@@ -161,7 +184,7 @@ class NaverHyperCLOVAClient(BaseLLMClient):
                 if response.status_code == 429:
                     retry_after = response.headers.get('Retry-After')
                     wait_time = float(retry_after) if retry_after else backoff
-                    logger.debug("Rate limited (429). Waiting %.1fs before retry #%s", wait_time, attempt)
+                    logger.warning("Rate limited (429). Waiting %.1fs before retry #%s", wait_time, attempt)
                     time.sleep(wait_time)
                     backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                     continue
@@ -179,17 +202,17 @@ class NaverHyperCLOVAClient(BaseLLMClient):
 
                     # Retry on server errors (5xx) - 무한 재시도
                     if error_code.startswith("5"):
-                        logger.debug("Server error (%s): %s. Retrying #%s...", error_code, error_msg, attempt)
+                        logger.warning("Server error (%s): %s. Retrying #%s...", error_code, error_msg, attempt)
                         time.sleep(backoff)
                         backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                         continue
 
                     # Client errors (4xx except 429) - give up
-                    logger.debug("HyperCLOVA API client error (%s): %s", error_code, error_msg)
+                    logger.error("HyperCLOVA API client error (%s): %s", error_code, error_msg)
                     return None
 
             except requests.exceptions.Timeout:
-                logger.debug("Request timeout. Retrying #%s...", attempt)
+                logger.warning("Request timeout. Retrying #%s...", attempt)
                 time.sleep(backoff)
                 backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                 continue
@@ -199,26 +222,26 @@ class NaverHyperCLOVAClient(BaseLLMClient):
                 if hasattr(e, 'response') and e.response is not None:
                     status_code = e.response.status_code
                     if status_code == 429 or status_code >= 500:
-                        logger.debug("HTTP %s. Retrying #%s...", status_code, attempt)
+                        logger.warning("HTTP %s. Retrying #%s...", status_code, attempt)
                         time.sleep(backoff)
                         backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                         continue
                     # Client errors - give up
-                    logger.debug("HTTP %s error. Response body: %s", status_code, e.response.text[:500])
+                    logger.error("HTTP %s error. Response body: %s", status_code, e.response.text[:500])
                     return None
 
                 # Connection errors are retryable - 무한 재시도
                 if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError)):
-                    logger.debug("Connection error. Retrying #%s...", attempt)
+                    logger.warning("Connection error. Retrying #%s...", attempt)
                     time.sleep(backoff)
                     backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                     continue
 
-                logger.debug("HyperCLOVA API request failed: %s", e)
+                logger.error("HyperCLOVA API request failed: %s", e)
                 return None
 
             except Exception as e:
-                logger.debug("HyperCLOVA API unexpected error: %s", e)
+                logger.error("HyperCLOVA API unexpected error: %s", e)
                 return None
 
 
@@ -238,6 +261,9 @@ class OpenAIClient(BaseLLMClient):
             raise ValueError("OPENAI_API_KEY 환경변수를 설정하세요")
 
         self.client = OpenAI(api_key=api_key)
+        self.rate_limiter = SimpleRateLimiter(
+            float(os.getenv("OPENAI_LLM_MIN_INTERVAL", os.getenv("LLM_MIN_INTERVAL", "0.3")))
+        )
 
     def chat_completion(
         self,
@@ -262,6 +288,7 @@ class OpenAIClient(BaseLLMClient):
 
         for attempt in range(MAX_RETRIES):
             try:
+                self.rate_limiter.wait()
                 response = self.client.chat.completions.create(**kwargs)
                 return response.choices[0].message.content
 
@@ -271,15 +298,15 @@ class OpenAIClient(BaseLLMClient):
 
                 # Retry on rate limit or server errors
                 if "rate_limit" in error_str or "429" in error_str or "500" in error_str or "503" in error_str:
-                    logger.debug("OpenAI API error. Retrying %s/%s...", attempt + 1, MAX_RETRIES)
+                    logger.warning("OpenAI API error. Retrying %s/%s...", attempt + 1, MAX_RETRIES)
                     time.sleep(backoff)
                     backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                     continue
 
-                logger.debug("OpenAI API error: %s", e)
+                logger.error("OpenAI API error: %s", e)
                 return None
 
-        logger.debug("Max retries (%s) exhausted. Last error: %s", MAX_RETRIES, last_error)
+        logger.error("Max retries (%s) exhausted. Last error: %s", MAX_RETRIES, last_error)
         return None
 
 

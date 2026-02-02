@@ -70,7 +70,7 @@ def main():
             logger.info(f"🗑️  데이터베이스 초기화 진행: {db_name}")
             full_reset()
         else:
-            logger.info(f"ℹ️  전체 리셋 건너뜀 (DB_NAME={db_name} != test_db)")
+            logger.warning(f"⚠️  전체 리셋 건너뜀 (DB_NAME={db_name} != test_db)")
     
     # 파이프라인 러너 초기화 및 실행
     # Runner는 모든 단계(유저 임베딩 -> 수집 -> 추출 -> 기사 임베딩 -> 뉴스레터 생성)를 조율합니다.
@@ -92,10 +92,10 @@ def main():
         logger.info("✨ Pipeline completed successfully!")
         
     except KeyboardInterrupt:
-        logger.info("\nℹ️ Pipeline interrupted by user")
+        logger.warning("\n⚠️ Pipeline interrupted by user")
         sys.exit(130)
     except Exception as e:
-        logger.info(f"ℹ️ Pipeline failed: {e}")
+        logger.error(f"❌ Pipeline failed: {e}", exc_info=True)
         sys.exit(1)
 
 

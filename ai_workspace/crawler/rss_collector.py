@@ -25,7 +25,7 @@ def collect_rss(hours: int = 100) -> int:
                                        (press_name,))
                     row = cur.fetchone()
                     if not row:
-                        logger.info(f"ℹ️ {press_name} press_id 없음 - 스킵")
+                        logger.error(f"❌ {press_name} press_id 없음 - 스킵")
                         continue
                     pid = row[0]
                     feed = feedparser.parse(url) # rss XML 테그 파싱
@@ -67,11 +67,11 @@ def collect_rss(hours: int = 100) -> int:
                         logger.info(f"✅ {press_name}: {len(new_items)}건 추가")
                         
                 except Exception as e:
-                    logger.info(f"ℹ️ {press_name} 처리 중 오류: {e}")
+                    logger.error(f"❌ {press_name} 오류: {e}")
         conn.commit() # 변경사항 저장
     except Exception as e:
         conn.rollback() # 오류시 롤백
-        logger.info(f"ℹ️ RSS 수집 중 오류: {e}")
+        logger.error(f"Global Error: {e}")
     finally:
         conn.close() # 연결 종료
 

@@ -67,7 +67,7 @@ class Stage3_NewsEmbedding(PipelineStage):
                         try:
                             embeddings, _ = embedder.generate_embeddings_batch(texts, batch_size)
                         except Exception as e:
-                            logger.info(f"ℹ️ 임베딩 배치 실패 (batch {i//batch_size + 1}): {e}")
+                            logger.error(f"❌ 임베딩 배치 실패 (batch {i//batch_size + 1}): {e}")
                             conn.rollback()
                             continue
 
@@ -84,7 +84,7 @@ class Stage3_NewsEmbedding(PipelineStage):
 
             except Exception as e:
                 conn.rollback()
-                logger.info(f"ℹ️ 임베딩 실패: {e}")
+                logger.error(f"임베딩 실패: {e}")
             finally:
                 conn.close()
                 
@@ -134,7 +134,7 @@ class Stage5_NewsletterGeneration(PipelineStage):
                 if final.get("completed_newsletters"):
                     count += 1
             except Exception as e:
-                logger.info(f"ℹ️ Cluster {cid} 처리 중 문제: {e}")
+                logger.error(f"Cluster {cid} 처리 중 에러: {e}")
 
         logger.info(f"✨ 뉴스레터 생성 완료: {count}건")
         return count
