@@ -14,24 +14,28 @@ class AttentionScorer(BaseScorer):
     """
 
     def score(self, user_vectors, candidate_vectors, weights=None):
+        """
+        Query-Based Attention 방식으로 추천 점수 계산.
+        1. Attention Score 계산 (Query x Key^T)
+        2. Softmax로 가중치 정규화
+        3. User Representation 동적 생성 (Weighted Sum)
+        4. 최종 유사도 계산
+        
+        반환: 각 후보 뉴스에 대한 점수 Tensor (shape: (M,))
+        """
         # user_vectors: (N, Dim) -> Key & Value
         # candidate_vectors: (M, Dim) -> Query
         
-        # 1. Attention Score 계산 (Query x Key)
-        # Shape: (M, N) - M개 후보 각각에 대해 N개 이력과의 유사도 산출
-        attn_scores = torch.matmul(candidate_vectors, user_vectors.T)
+        # 1. Attention Score 계산 (Query x Key^T)
+        attn_scores = torch.matmul(candidate_vectors, user_vectors.T) # Attention Score 행렬 (shape: (M, N))
         
         # 2. Softmax를 통해 확률값(가중치)으로 변환
-        # 각 후보(row)별로 이력들의 합이 1이 되도록 정규화
-        attn_weights = F.softmax(attn_scores, dim=1)  # (M, N)
+        attn_weights = F.softmax(attn_scores, dim=1) # Attention 가중치 (shape: (M, N))
 
         # 3. User Representation 동적 생성 (Weighted Sum of Values)
-        # 각 후보 뉴스에 맞춤형으로 생성된 유저 벡터
-        # (M, N) x (N, Dim) -> (M, Dim)
-        dynamic_user_reps = torch.matmul(attn_weights, user_vectors)
+        dynamic_user_reps = torch.matmul(attn_weights, user_vectors) # 동적 유저 표현 벡터 (shape: (M, Dim))
 
-        # 4. 최종 유사도 계산
-        # (M, Dim) * (M, Dim) -> element-wise multiplication & sum
-        final_scores = torch.sum(dynamic_user_reps * candidate_vectors, dim=1) # (M, )
+        # 4. 최종 유사도 계산 (Element-wise multiplication 후 합산)
+        final_scores = torch.sum(dynamic_user_reps * candidate_vectors, dim=1) # 최종 점수 (shape: (M,))
 
         return final_scores

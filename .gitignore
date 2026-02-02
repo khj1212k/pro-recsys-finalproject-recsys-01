@@ -75,6 +75,7 @@ ai_workspace/recommend-engine/results
 # 크롤링 결과물 등
 ai_workspace/data/
 ai_workspace/output/
+ai_workspace/logs/
 
 # ==========================
 # 5. Frontend (React/Node)
@@ -109,3 +110,26 @@ frontend/node_modules/
 # ==========================
 backend/airflow/*
 !backend/airflow/dags/
+ai_workspace/airflow_home/
+ai_workspace/dags/__pycache__/
+
+# ==========================
+# 8. AI Workspace Test & Temp Files
+# ==========================
+# Test files
+ai_workspace/test_*.py
+ai_workspace/*_test.py
+
+# Generated data and outputs
+ai_workspace/*.json
+ai_workspace/*.txt
+ai_workspace/*.md
+!ai_workspace/README.md
+!ai_workspace/PROJECT_OVERVIEW.md
+
+# Backup files
+ai_workspace/.env.backup
+ai_workspace/*.backup
+
+# Pytest
+ai_workspace/.pytest_cache/
