@@ -45,6 +45,7 @@ build/
 
 # Jupyter Notebook (AI 팀용)
 .ipynb_checkpoints/
+*.ipynb
 
 # 로그
 *.log

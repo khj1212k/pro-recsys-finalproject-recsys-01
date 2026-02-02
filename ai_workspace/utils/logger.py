@@ -1,33 +1,31 @@
 """
-Standardized logging utilities for AI Workspace
+AI Workspace를 위한 표준 로깅 유틸리티
 """
 import logging
 import sys
-from typing import Optional
 
 def setup_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     """
-    Setup a standardized logger with consistent formatting.
+    일관된 포맷을 갖춘 표준 로거를 설정합니다.
     
     Args:
-        name: Logger name
-        level: Logging level
+        name: 로거 이름
+        level: 로깅 레벨
         
     Returns:
-        Configured logger instance
+        설정된 로거 인스턴스
     """
     logger = logging.getLogger(name)
     
-    # Avoid adding duplicate handlers
+    # 중복 핸들러 추가 방지
     if not logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
+        handler = logging.StreamHandler(sys.stdout) # 표준 출력(터미널)으로 로그를 보냄
         
-        # Consistent format: Timestamp | Level | Message
-        # We omit the name in the message for cleaner output if desired, 
-        # or include it for debugging.
+        # 일관된 포맷: 타임스탬프 | 레벨 | 메시지
+        # 깔끔한 출력을 위해 메시지에서 로거 이름은 생략 ( %(name)s ) 
         formatter = logging.Formatter(
-            '%(asctime)s | %(levelname)s | %(message)s',
-            datefmt='%H:%M:%S'
+                                fmt='%(asctime)s | %(levelname)s | %(message)s',
+                                datefmt='%H:%M:%S'
         )
         handler.setFormatter(formatter)
         logger.addHandler(handler)

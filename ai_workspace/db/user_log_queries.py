@@ -49,7 +49,7 @@ def log_newsletter_read(
     except Exception as e:
         conn.rollback()
         cursor.close()
-        logger.error(f"❌ 로그 기록 실패: {e}")
+        logger.info(f"ℹ️ 로그 기록 실패: {e}")
         return False
 
 

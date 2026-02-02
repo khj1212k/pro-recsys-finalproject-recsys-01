@@ -1,270 +1,140 @@
-"""
-Pipeline Stage Implementations
-
-This module defines the abstract base class for pipeline stages and implementations
-for all stages of the news processing pipeline.
-"""
-from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, List
+"""Pipeline Stages: 간소화된 파이프라인 단계 정의"""
 import logging
-
-from config.settings import Settings
+from abc import ABC, abstractmethod
+from typing import Any, Dict
 
 logger = logging.getLogger(__name__)
 
-
 class PipelineStage(ABC):
-    """Abstract base class for all pipeline stages"""
-    
-    def __init__(self, settings: Settings):
+    """파이프라인 단계 기본 클래스"""
+    def __init__(self, settings):
         self.settings = settings
-        self.name = self.__class__.__name__
-    
-    @abstractmethod
-    def execute(self, *args, **kwargs) -> Any:
-        """Execute the stage logic"""
-        pass
 
+    # 추상 메소드: 하위 클래스에서 구현, 실행함수이름 execute로 통일
+    @abstractmethod
+    def execute(self, **kwargs) -> Any:
+        pass
 
 class Stage0_UserEmbedding(PipelineStage):
-    """Stage 0: User Embedding Generation"""
-    
-    def execute(self) -> Dict[str, int]:
-        logger.info("=" * 60)
-        logger.info("👤 Stage 0: User Embedding Generation")
-        logger.info("=" * 60)
-        
+    """UserEmbedding 생성"""
+    def execute(self, **kwargs) -> Dict[str, int]:
         from core.user_embedder import UserEmbedder
-        
-        embedder = UserEmbedder()
-        result = embedder.batch_update_all_users(only_null=True)
-        
-        logger.info(f"  ✅ Success: {result.get('success', 0)}")
-        logger.info(f"  ❌ Failed: {result.get('failed', 0)}")
-        logger.info(f"  ⏭️  Skipped: {result.get('skipped', 0)}")
-        
-        return result
-
+        return UserEmbedder().batch_update_all_users()
 
 class Stage1_RSSCollection(PipelineStage):
-    """Stage 1: RSS News Collection"""
-    
-    def execute(self) -> int:
-        logger.info("\n" + "=" * 60)
-        logger.info("📡 Stage 1: RSS News Collection")
-        logger.info("=" * 60)
-        
-        from crawler.rss_collector import RssCollector
-        collector = RssCollector()
-        return collector.collect_rss()
-
+    """RSS 수집"""
+    def execute(self, **kwargs) -> int:
+        from crawler.rss_collector import collect_rss
+        return collect_rss()
 
 class Stage2_ContentExtraction(PipelineStage):
-    """Stage 2: Article Content Extraction"""
-    
-    def execute(self, num_workers: int = 8) -> int:
-        logger.info("\n" + "=" * 60)
-        logger.info("📰 Stage 2: Content Extraction")
-        logger.info("=" * 60)
-        
-        from crawler.content_extractor import ContentExtractor
-        extractor = ContentExtractor()
-        return extractor.extract_parallel(num_workers=num_workers)
-
+    """본문 추출"""
+    def execute(self, num_workers=None, **kwargs) -> int:
+        from crawler.content_extractor.extractor import ContentExtractor
+        return ContentExtractor().extract_parallel(num_workers)
 
 class Stage3_NewsEmbedding(PipelineStage):
-    """Stage 3: Article Embedding Generation"""
-    
-    def execute(self, force_cpu: bool = False, batch_size: Optional[int] = None) -> int:
-        logger.info("\n" + "=" * 60)
-        logger.info("🔢 Stage 3: Article Embedding Generation")
-        logger.info("=" * 60)
+    """기사 임베딩 (NewsEmbedder -> news_raw 테이블에 저장)"""
+    def execute(self, force_cpu=False, batch_size=None, **kwargs) -> int:
+        from core.embedder import NewsEmbedder
+        from db.connection import get_connection
+        from tqdm import tqdm
         
-        from crawler.embedding_generator import generate_embeddings_for_articles
-        return generate_embeddings_for_articles(force_cpu=force_cpu, batch_size=batch_size)
+        batch_size = batch_size or self.settings.EMBEDDING_BATCH_SIZE
+        count = 0
+        
+        # 임베딩 모델을 마지막에 VRAM에서 확실히 제거하기 위해 with문 사용
+        with NewsEmbedder(force_cpu=force_cpu, verbose=True) as embedder:
+            conn = get_connection()
+            try:
+                with conn.cursor() as cur:
+                    # 임베딩 없는 기사 조회
+                    cur.execute("SELECT raw_news_id, raw_news_title, raw_news_content \
+                                 FROM news_raw \
+                                 WHERE embedding_result IS NULL")
+                    rows = cur.fetchall() # 임베딩 없는 기사 목록
 
+                    if not rows:
+                        logger.info("건너뜀: 임베딩할 새로운 기사가 없습니다.")
+                        return 0
 
-class Stage4_Clustering(PipelineStage):
-    """Stage 4: Clustering (Part of the adaptive loop logic)"""
-    
-    def execute(self, min_cluster_size: int = 3, min_samples: int = 2, min_target: int = 0) -> Any:
-        # Note: In the original main.py, clustering and newsletter generation are tightly coupled
-        # in run_newsletter_adaptive. We might keep them coupled or separate them here.
-        # For now, we will likely call this as part of the combined stage or helper.
-        pass
+                    logger.info(f"🚀 기사 {len(rows)}건 임베딩 시작 (Batch: {batch_size})...")
 
+                    # 배치 처리
+                    for i in tqdm(range(0, len(rows), batch_size), desc="embedding"):
+                        batch = rows[i:i+batch_size]
+                        texts = [f"{r[1]} {r[2]}"[:8000] for r in batch]
+                        try:
+                            embeddings, _ = embedder.generate_embeddings_batch(texts, batch_size)
+                        except Exception as e:
+                            logger.info(f"ℹ️ 임베딩 배치 실패 (batch {i//batch_size + 1}): {e}")
+                            conn.rollback()
+                            continue
+
+                        if not embeddings:
+                            continue
+
+                        updates = [(emb, r[0]) for emb, r in zip(embeddings, batch)]
+                        if updates:
+                            cur.executemany("UPDATE news_raw \
+                                             SET embedding_result=%s \
+                                             WHERE raw_news_id=%s", updates)
+                            count += len(updates)
+                            conn.commit()
+
+            except Exception as e:
+                conn.rollback()
+                logger.info(f"ℹ️ 임베딩 실패: {e}")
+            finally:
+                conn.close()
+                
+        return count
 
 class Stage5_NewsletterGeneration(PipelineStage):
-    """Stage 4-5: Clustering + Newsletter Generation (Adaptive Loop)"""
-    
-    def execute(
-        self, 
-        limit: Optional[int] = None, 
-        min_cluster_size: int = 3, 
-        min_samples: int = 2,
-        min_target: int = 5,
-        force_cpu: bool = False,
-        batch_size: Optional[int] = None
-    ) -> int:
-        logger.info("\n" + "=" * 60)
-        logger.info("🚀 Stage 4-5: Clustering + Newsletter Generation")
-        logger.info("=" * 60)
-        
-        # We implementation the logic from run_newsletter_adaptive here
-        
-        total_created = 0
-        current_min_cluster = min_cluster_size
-        current_min_samples = min_samples
-        
-        # Iteration limits
-        MAX_ITERATIONS = 3
-        iteration = 0
-        
-        while iteration < MAX_ITERATIONS:
-            iteration += 1
-            logger.info(f"\n🔄 Iteration {iteration}/{MAX_ITERATIONS} (min_features={current_min_cluster})")
-            
-            created_count = self._run_single_pass(
-                limit=limit,
-                min_cluster_size=current_min_cluster,
-                min_samples=current_min_samples
-            )
-            
-            total_created += created_count
-            logger.info(f"   Created {created_count} newsletters in this pass. Total: {total_created}")
-            
-            # Check target
-            if total_created >= min_target:
-                logger.info(f"✨ Target reached ({total_created} >= {min_target}). Stopping.")
-                break
-                
-            if created_count == 0:
-                logger.info("⚠️  No newsletters created in this pass. Relaxing constraints...")
-                if current_min_cluster > 3:
-                    current_min_cluster = max(3, current_min_cluster - 1)
-                    current_min_samples = max(2, current_min_samples - 1)
-                else:
-                    logger.info("   Cannot relax further. Stopping.")
-                    break
-        
-        return total_created
-
-    def _run_single_pass(
-        self,
-        limit: Optional[int] = None,
-        min_cluster_size: int = 3,
-        min_samples: int = 2
-    ) -> int:
-        """Run a single pass of clustering and generation"""
-        from core.clusterer import run_clustering, get_cluster_groups
+    """뉴스레터 생성 (Clustering + Workflow)"""
+    def execute(self, limit=None, min_cluster_size=3, min_samples=2, min_target=0, **kwargs) -> int:
+        from core.clusterer import NewsClusterer
         from workflow.graph import compile_workflow
-        from sklearn.metrics import silhouette_score
-        import traceback
+        from tqdm import tqdm
         
-        logger.info("\n[4/5] Performing HDBSCAN clustering...")
+        # 1. 클러스터링
+        logger.info("🧩 뉴스 클러스터링 수행 중...")
+        clusterer = NewsClusterer()
+        clusters = clusterer.cluster_news(min_cluster_size=min_cluster_size, min_samples=min_samples)
         
-        # Load embeddings and cluster
-        cluster_groups, cluster_ids, data = run_clustering(
-            min_cluster_size=min_cluster_size,
-            min_samples=min_samples,
-            min_target=0, # Not used inside run_clustering logic mostly
-        )
-        
-        # Check if any clusters were found
-        if not cluster_ids:
-            logger.info("  No clusters found. Skipping newsletter generation.")
+        if not clusters:
+            logger.info("생성된 클러스터가 없습니다.")
             return 0
             
-        sorted_cluster_ids = sorted(cluster_ids)
-        logger.info(f"  Clusters found: {len(sorted_cluster_ids)}")
-        
-        # Calculate silhouette score
-        try:
-            score = silhouette_score(cluster_groups, data)
-            logger.info(f"  Silhouette score: {score:.3f}")
-        except Exception:
-            logger.warning("  Could not calculate silhouette score.")
-            
-        logger.info(f"  Processing {len(sorted_cluster_ids)} clusters")
-        
-        # Apply limit if specified
-        if limit and len(sorted_cluster_ids) > limit:
-            sorted_cluster_ids = sorted_cluster_ids[:limit]
-            logger.info(f"  Limiting to {limit} clusters")
-            
-        # Get batch ID
-        from db.batch_manager import ClusterLog, create_new_batch
-        cluster_log = ClusterLog.get_latest()
-        run_id = create_new_batch(cluster_log)
-        logger.info(f"  Batch ID (run_id): {run_id}")
-        
-        logger.info("\n[3/3] Running LangGraph workflow (Sequential Execution)...")
-        
-        # Compile workflow once
+        # 2. 워크플로우 실행 (뉴스레터 생성)
         app = compile_workflow()
+        count = 0
+        total = len(clusters) if not limit else min(len(clusters), limit)
         
-        completed_count = 0
+        logger.info(f"🚀 뉴스레터 생성 워크플로우 시작 (대상 클러스터: {total}개)")
+
+        # 데이터 준비 (한 번에 로드)
+        data = clusterer.get_clustered_articles(list(clusters.keys()))
         
-        for idx, cluster_id in enumerate(sorted_cluster_ids):
-            logger.info(f"\n--- Processing cluster {cluster_id} ({idx+1}/{len(sorted_cluster_ids)}) ---")
-            
-            # Initialize state
+        all_ids = sorted(list(clusters.keys()), reverse=True) # 최신순? (ID가 크면 최신이라 가정)
+        if limit: all_ids = all_ids[:limit]
+
+        for i, cid in enumerate(tqdm(all_ids, desc="generating newsletter")):
             state = {
-                "run_id": run_id,
-                "all_cluster_groups": cluster_groups,
-                "all_cluster_ids": sorted_cluster_ids,
-                "current_cluster_index": idx,
-                "current_cluster_id": cluster_id,
+                "current_cluster_id": cid,
+                "current_cluster_index": i,
+                "all_cluster_ids": all_ids,
+                "all_cluster_groups": clusters,
                 "data": data,
-                "completed_newsletters": [],
-                "failed_clusters": [],
-                "skipped_clusters": [],
-                "current_article_ids": [],
-                "current_articles": [],
-                "cluster_eval": None,
-                "cluster_retry_count": 0,
-                "newsletter_draft": None,
-                "newsletter_eval": None,
-                "newsletter_retry_count": 0,
-                "newsletter_feedback": None,
-                "generation_history": None,
-                "should_continue": True,
-                "error_message": None
+                "run_id": int(logging.getLogger().name) if logging.getLogger().name.isdigit() else 0 # 임시 run_id
             }
             
             try:
-                # Use invoke for sync execution
-                res = app.invoke(state)
-                
-                if res.get("completed_newsletters"):
-                    draft = res.get("newsletter_draft", {}) or {}
-                    title = draft.get("title", "No Title")
-                    logger.info(f"✅ [Cluster {cluster_id}] Completed: {title}")
-                    completed_count += 1
-                elif res.get("skipped_clusters"):
-                    reason = "Evaluation Failed"
-                    if res.get("cluster_eval") and res["cluster_eval"].get("feedback"):
-                        reason = res["cluster_eval"]["feedback"]
-                    logger.info(f"⏭️  [Cluster {cluster_id}] Skipped: {str(reason)[:60]}...")
-                elif res.get("failed_clusters"):
-                    error = res.get("error_message") or "Unknown Error"
-                    logger.info(f"❌ [Cluster {cluster_id}] Failed: {str(error)[:80]}...")
-                    
+                final = app.invoke(state)
+                if final.get("completed_newsletters"):
+                    count += 1
             except Exception as e:
-                error_detail = ''.join(traceback.format_exception(type(e), e, e.__traceback__))
-                logger.error(f"❌ Error processing cluster {cluster_id}:")
-                logger.error(error_detail)
-        
-        return completed_count
+                logger.info(f"ℹ️ Cluster {cid} 처리 중 문제: {e}")
 
-
-class Stage6_NewsletterEmbedding(PipelineStage):
-    """Stage 6: Batch Newsletter Embedding Generation"""
-    
-    def execute(self, force_cpu: bool = False, batch_size: Optional[int] = None) -> int:
-        logger.info("\n" + "=" * 60)
-        logger.info("🔖 Stage 6: Newsletter Embedding Generation (Batch)")
-        logger.info("=" * 60)
-        
-        from crawler.embedding_generator import generate_embeddings_for_newsletters
-        return generate_embeddings_for_newsletters(force_cpu=force_cpu, batch_size=batch_size)
+        logger.info(f"✨ 뉴스레터 생성 완료: {count}건")
+        return count

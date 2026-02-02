@@ -1,6 +1,6 @@
 """
-Database connection management for ai_workspace
-Supports Connection Pool for better performance
+ai_workspace를 위한 데이터베이스 연결 관리
+성능 향상을 위한 커넥션 풀(Connection Pool) 지원
 """
 import os
 import threading
@@ -18,8 +18,8 @@ load_dotenv()
 
 class DatabasePool:
     """
-    Thread-safe database connection pool singleton.
-    Uses ThreadedConnectionPool for concurrent access.
+    스레드 안전한(Thread-safe) DB 커넥션 풀 싱글톤 클래스.
+    동시성 제어를 위해 ThreadedConnectionPool을 사용합니다.
     """
     _instance: Optional['DatabasePool'] = None
     _lock = threading.Lock()
@@ -37,7 +37,7 @@ class DatabasePool:
             self._initialize_pool()
 
     def _initialize_pool(self) -> None:
-        """Initialize the connection pool"""
+        """커넥션 풀 초기화"""
         config = {
             "host": os.getenv("DB_HOST", "localhost"),
             "port": os.getenv("DB_PORT", "5432"),
@@ -63,8 +63,8 @@ class DatabasePool:
 
     def get_connection(self) -> Connection:
         """
-        Get a connection from the pool.
-        Falls back to direct connection if pool is unavailable.
+        풀에서 커넥션을 가져옵니다.
+        풀이 고갈되거나 사용 불가능할 경우 직접 연결(Fallback)을 시도합니다.
         """
         if self._pool:
             try:
@@ -77,7 +77,7 @@ class DatabasePool:
         return self._create_direct_connection()
 
     def release_connection(self, conn: Connection) -> None:
-        """Release a connection back to the pool"""
+        """커넥션을 풀로 반환합니다"""
         if self._pool and conn:
             try:
                 self._pool.putconn(conn)
@@ -96,7 +96,7 @@ class DatabasePool:
 
     @staticmethod
     def _create_direct_connection() -> Connection:
-        """Create a direct database connection (fallback)"""
+        """직접 DB 연결 생성 (Fallback용)"""
         config = {
             "host": os.getenv("DB_HOST", "localhost"),
             "port": os.getenv("DB_PORT", "5432"),
@@ -113,7 +113,7 @@ _db_pool: Optional[DatabasePool] = None
 
 
 def get_pool() -> DatabasePool:
-    """Get the database pool singleton"""
+    """DB 커넥션 풀 싱글톤 인스턴스를 반환합니다"""
     global _db_pool
     if _db_pool is None:
         _db_pool = DatabasePool()
@@ -122,11 +122,11 @@ def get_pool() -> DatabasePool:
 
 def get_connection() -> Connection:
     """
-    Get database connection.
-    Uses pool if available, otherwise creates direct connection.
+    DB 커넥션을 획득합니다.
+    가능한 경우 풀을 사용하고, 그렇지 않으면 직접 연결을 생성합니다.
 
-    Note: Caller is responsible for closing the connection.
-    For automatic management, use get_db_connection() context manager.
+    Note: 호출자는 반드시 커넥션을 닫거나 반환해야 합니다.
+    자동 관리를 위해서는 get_db_connection() 컨텍스트 매니저를 사용하세요.
     """
     return get_pool().get_connection()
 
@@ -139,8 +139,8 @@ def release_connection(conn: Connection) -> None:
 @contextmanager
 def get_db_connection() -> Generator[Connection, None, None]:
     """
-    Context manager for database connections.
-    Automatically releases connection back to pool.
+    DB 연결을 위한 컨텍스트 매니저.
+    사용 후 자동으로 커넥션을 풀로 반환합니다.
 
     Usage:
         with get_db_connection() as conn:

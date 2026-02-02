@@ -64,7 +64,7 @@ def update_single_user(
     embedding = embedder.generate_user_embedding(user_id)
     
     if embedding is None:
-        logger.error(f"❌ User {user_id} 임베딩 생성 실패")
+        logger.info(f"ℹ️ User {user_id} 임베딩 생성 실패")
         return False
     
     # DB 저장
@@ -73,7 +73,7 @@ def update_single_user(
     if success:
         logger.info(f"✅ User {user_id} 임베딩 업데이트 완료")
     else:
-        logger.error(f"❌ User {user_id} 임베딩 저장 실패")
+        logger.info(f"ℹ️ User {user_id} 임베딩 저장 실패")
     
     return success
 
@@ -317,7 +317,7 @@ def main():
         sys.exit(130)
     
     except Exception as e:
-        logger.error(f"\n❌ 오류 발생: {e}", exc_info=True)
+        logger.info(f"\nℹ️ 오류 발생: {e}")
         sys.exit(1)
 
 

@@ -1,0 +1,167 @@
+import numpy as np
+import warnings
+from collections import Counter
+from typing import Dict, List, Tuple
+from .split_v2 import decide_split_v2
+
+try:
+    import hdbscan
+    HDBSCAN_AVAILABLE = True
+except ImportError:
+    HDBSCAN_AVAILABLE = False
+
+class NewsClusterer:
+    def __init__(self, min_cluster_size: int = 3, min_samples: int = 2):
+        if not HDBSCAN_AVAILABLE:
+            raise ImportError("hdbscan library required: pip install hdbscan")
+        self.min_cluster_size = min_cluster_size
+        self.min_samples = min_samples
+        self.labels_ = None
+        self.data = None
+
+    def fit_predict(self, embeddings: np.ndarray) -> np.ndarray:
+        clusterer = hdbscan.HDBSCAN(
+            min_cluster_size=self.min_cluster_size,
+            min_samples=self.min_samples,
+            metric='euclidean',
+            cluster_selection_method='eom'
+        )
+        self.labels_ = clusterer.fit_predict(embeddings)
+        return self.labels_
+
+    def cluster_with_split(self, data: Dict) -> List[Tuple[List[int], List[str]]]:
+        embeddings = data['embeddings']
+        if len(embeddings) == 0: return []
+
+        # 1차 cluster
+        labels = self.fit_predict(embeddings)
+        cluster_idx_groups = {}
+        for news_idx, cluster_label in enumerate(labels):
+            if cluster_label != -1:
+                cluster_idx_groups.setdefault(int(cluster_label), []).append(news_idx)
+
+        # 2차 cluster
+        final_groups = []
+        from tqdm import tqdm
+        for idxs in tqdm(cluster_idx_groups.values(), desc="Splitting clusters"):
+            c_titles = [data['titles'][i] for i in idxs]
+            c_ids = [int(data['ids'][i]) for i in idxs]
+            c_X = embeddings[idxs]
+            
+            # 1차 클러스터들 중에 또 split이 가능한지 판단
+            dec = decide_split_v2(c_X, c_titles)
+            if dec.should_split and dec.debug.get('idx0'):
+                for split_idx in ['idx0', 'idx1']:
+                    sub_idxs = dec.debug[split_idx]
+                    final_groups.append(([c_ids[j] for j in sub_idxs], [c_titles[j] for j in sub_idxs]))
+            else:
+                final_groups.append((c_ids, c_titles))
+        return final_groups
+
+    def _load_data_from_db(self, exclude_clustered: bool = True) -> Dict:
+        from db.connection import get_connection
+        print("📥 DB에서 뉴스 데이터 로딩 중...", end="", flush=True)
+        conn = get_connection()
+        try:
+            cur = conn.cursor()
+            clustered_filter = "AND news_letter_id IS NULL" if exclude_clustered else ""
+            
+            # 쿼리: 임베딩과 본문이 있는 기사만 조회
+            cur.execute(f"""
+                SELECT N.raw_news_id, N.raw_news_title, N.embedding_result, P.press_name, N.raw_news_content
+                FROM news_raw N 
+                JOIN press P ON N.press_id = P.press_id
+                WHERE N.embedding_result IS NOT NULL
+                  AND N.raw_news_content IS NOT NULL
+                  AND N.raw_news_content != ''
+                  AND DATE(N.raw_news_crawled_at) = CURRENT_DATE
+                  {clustered_filter}
+                ORDER BY N.raw_news_id
+            """)
+            
+            rows = cur.fetchall()
+            ids, titles, embeddings, press_names, contents = [], [], [], [], []
+            
+            for r in rows:
+                if not r[2]: continue
+                # 임베딩 파싱
+                emb = np.array(eval(r[2])) if isinstance(r[2], str) else np.array(r[2])
+                
+                ids.append(r[0])
+                titles.append(r[1])
+                embeddings.append(emb)
+                press_names.append(r[3])
+                contents.append(r[4])
+                
+            print(f" 완료 ({len(ids)}건)")
+            return {
+                'ids': np.array(ids),
+                'titles': titles,
+                'embeddings': np.vstack(embeddings) if embeddings else np.array([]),
+                'press_names': press_names,
+                'contents': contents
+            }
+        finally:
+            conn.close()
+
+    def _update_outliers(self, outlier_ids: List[int]):
+        """클러스터링 되지 않은 아웃라이어 기사들의 news_letter_id를 -1로 업데이트"""
+        from db.connection import get_connection
+        if not outlier_ids:
+            return
+        # psycopg2는 numpy 타입을 직접 처리하지 못하므로 Python int로 변환
+        outlier_ids = [int(x) for x in outlier_ids]
+
+        try:
+            conn = get_connection()
+            cur = conn.cursor()
+            # Prefer sentinel -1, but fall back to NULL when FK constraints block it.
+            try:
+                cur.execute("""
+                    UPDATE news_raw
+                    SET news_letter_id = -1
+                    WHERE raw_news_id = ANY(%s)
+                      AND news_letter_id IS NULL
+                """, (outlier_ids,))
+                conn.commit()
+                print(f"🧹 아웃라이어 {len(outlier_ids)}개 처리 완료 (-1 설정)")
+            except Exception as e:
+                conn.rollback()
+                cur.execute("""
+                    UPDATE news_raw
+                    SET news_letter_id = NULL
+                    WHERE raw_news_id = ANY(%s)
+                      AND news_letter_id IS NULL
+                """, (outlier_ids,))
+                conn.commit()
+                print(f"🧹 아웃라이어 {len(outlier_ids)}개 처리 (NULL 유지, FK 제약): {e}")
+            conn.close()
+        except Exception as e:
+            print(f"아웃라이어 업데이트 실패: {e}")
+
+    def cluster_news(self, min_cluster_size=None, min_samples=None) -> Dict[int, List[int]]:
+        # Pipeline 연동용
+        self.data = self._load_data_from_db()
+        if not self.data or len(self.data['ids']) == 0:
+            return {}
+            
+        groups = self.cluster_with_split(self.data)
+        
+        # 아웃라이어 처리: 전체 로드된 ID 중 그룹에 속하지 않은 ID 식별
+        all_ids = set(self.data['ids'])
+        clustered_ids = set()
+        for g_ids, _ in groups:
+            clustered_ids.update(g_ids)
+            
+        outlier_ids = list(all_ids - clustered_ids)
+        if outlier_ids:
+            self._update_outliers(outlier_ids)
+        
+        return {idx: g_ids for idx, (g_ids, _) in enumerate(groups)}
+
+    def get_clustered_articles(self, cluster_ids: List[int] = None) -> Dict:
+        """
+        클러스터링된 기사 데이터 반환
+        pipeline/stages.py에서 사용됨
+        """
+        return self.data

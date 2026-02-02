@@ -1,6 +1,6 @@
 """
-Configuration settings for ai_workspace
-Supports environment-based configuration (dev/staging/prod)
+ai_workspace를 위한 환경 설정
+환경 기반 설정 지원 (dev/staging/prod)
 """
 import os
 from typing import Dict, Tuple
@@ -10,19 +10,19 @@ load_dotenv(override=True)
 
 
 class Environment:
-    """Environment constants"""
+    """환경 상수 정의"""
     DEV = "dev"
     STAGING = "staging"
     PROD = "prod"
 
 
 def get_environment() -> str:
-    """Get current environment from ENV variable"""
+    """ENV 환경변수로부터 현재 환경을 조회합니다"""
     return os.getenv("ENV", Environment.DEV).lower()
 
 
 class BaseSettings:
-    """Base settings shared across all environments"""
+    """모든 환경에서 공유되는 기본 설정"""
 
     # ========== LLM Provider ==========
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "naver")  # 'naver' or 'openai'
@@ -45,7 +45,7 @@ class BaseSettings:
     HDBSCAN_MIN_SAMPLES: int = 2
 
     # ========== Embedder ==========
-    EMBEDDING_BATCH_SIZE: int = 20  # GPU 메모리 고려
+    EMBEDDING_BATCH_SIZE: int = 32  # GPU 메모리 고려
     EMBEDDING_DIM: int = 1024
 
     # ========== Pipeline ==========
@@ -112,7 +112,7 @@ class BaseSettings:
 
 
 class DevSettings(BaseSettings):
-    """Development environment settings"""
+    """지정된 개발 환경 설정"""
     LOG_LEVEL: str = "DEBUG"
     LOG_TO_FILE: bool = False
     SSL_VERIFY: bool = False  # Disable SSL verification in dev
@@ -130,7 +130,7 @@ class StagingSettings(BaseSettings):
 
 
 class ProdSettings(BaseSettings):
-    """Production environment settings"""
+    """운영(Production) 환경 설정"""
     LOG_LEVEL: str = "WARNING"
     LOG_TO_FILE: bool = True
     SSL_VERIFY: bool = True
@@ -140,7 +140,7 @@ class ProdSettings(BaseSettings):
 
 
 def get_settings() -> BaseSettings:
-    """Get settings for current environment"""
+    """현재 환경에 맞는 설정 객체를 반환합니다"""
     env = get_environment()
     settings_map = {
         Environment.DEV: DevSettings,

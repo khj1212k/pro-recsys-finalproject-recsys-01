@@ -15,31 +15,39 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
 
 # Standard logger
-from utils.logger import setup_logger
-logger = setup_logger(__name__, logging.INFO)
+# from utils.logger import setup_logger
+# logger = setup_logger(__name__, logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Suppress external logs
 logging.getLogger("transformers").setLevel(logging.ERROR)
 logging.getLogger("datasets").setLevel(logging.ERROR)
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
-from FlagEmbedding import BGEM3FlagModel
+# from FlagEmbedding import BGEM3FlagModel
+# Lazy import in __init__
+
 
 
 class NewsEmbedder:
     """
-    BGE-M3 based text embedder (1024 dimensions)
-    Supports Context Manager pattern for automatic resource cleanup.
+    BGE-M3 기반 텍스트 임베딩 모델 (1024차원)
+    
+    GPU 가속을 지원하며, 컨텍스트 매니저(with 문) 패턴을 통해 
+    자동으로 리소스(GPU 메모리)를 정리합니다.
     """
 
     def __init__(self, force_cpu: bool = False, verbose: bool = True, l2_normalize: bool = True):
         self.verbose = verbose
         self.l2_normalize = l2_normalize
         self.device = self._get_device(force_cpu)
-        self.model: Optional[BGEM3FlagModel] = None
+        self.model: Any = None
         
         if self.verbose:
-            logger.info(f"🔌 BGE-M3 model loading... (Device: {self.device})")
+            logger.info(f"🔌 BGE-M3 모델 로딩 중... (장치: {self.device})")
+        
+        # Lazy import (모듈 임포트 지연)
+        from FlagEmbedding import BGEM3FlagModel
         
         start_time = time.time()
         self.model = BGEM3FlagModel(
@@ -50,14 +58,14 @@ class NewsEmbedder:
         load_time = time.time() - start_time
         
         if self.verbose:
-            logger.info(f"✅ Model loaded! ({load_time:.2f}s) | L2 Norm: {'ON' if l2_normalize else 'OFF'}")
+            logger.info(f"✅ 모델 로드 완료! ({load_time:.2f}s) | L2 정규화: {'ON' if l2_normalize else 'OFF'}")
 
     def __enter__(self):
-        """Context manager entry"""
+        """컨텍스트 매니저 진입"""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit - automatic cleanup"""
+        """컨텍스트 매니저 종료 - 자동 리소스 정리"""
         self.cleanup()
         return False
 
@@ -95,10 +103,9 @@ class NewsEmbedder:
         for i in range(0, total_texts, batch_size):
             batch_texts = texts[i : i + batch_size]
             try:
-                # BGE-M3 encode returns a dict with 'dense_vecs', 'colbert_vecs', 'sparse_vecs'
-                # But FlagEmbedding wrapper encode usually returns dense vectors directly 
-                # OR dict if return_dense=True etc.
-                # Let's check original usage. It seemed to call self.model.encode(..., return_dense=True)
+                # BGE-M3 모델은 'dense', 'sparse', 'colbert' 3가지 임베딩을 딕셔너리로 반환함
+                # 여기서 우리는 'dense_vecs'만 필요하므로 추출해서 사용
+                # (FlagEmbedding 래퍼 내부 로직에 따라 반환 타입이 다를 수 있어 확인 필요)
                 
                 # We use the standard API for BGEM3FlagModel
                 output = self.model.encode(
@@ -115,17 +122,15 @@ class NewsEmbedder:
                 
                 if self.l2_normalize:
                     embeddings = torch.tensor(embeddings)
-                    embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1)
-                    embeddings = embeddings.cpu().numpy().tolist()
+                    embeddings = torch.nn.functional.normalize(embeddings, p=2, dim=1) # p: 2-norm, dim: 1차원
+                    embeddings = embeddings.cpu().numpy().tolist() # DB에 저장하기위해 list로 변환
                 else:
-                    if hasattr(embeddings, 'tolist'):
-                        embeddings = embeddings.tolist()
+                    embeddings = embeddings.tolist()
                 
                 all_embeddings.extend(embeddings)
                 
             except Exception as e:
-                logger.error(f"❌ Batch embedding failed: {e}")
-                # Append None or zeros? For now, re-raise to handle upstream
+                logger.info(f"ℹ️ Batch embedding failed: {e}")
                 raise e
 
         # Explicit GPU Cache Cleanup

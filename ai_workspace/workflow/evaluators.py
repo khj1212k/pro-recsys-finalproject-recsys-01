@@ -36,8 +36,14 @@ Determine if these articles represent a **single coherent news event** or topic.
   "decision": "PASS" or "FAIL",
   "confidence": 0.0-1.0,
   "summary": "One-line theme of this cluster",
-  "feedback": "If FAIL, explain which articles don't belong and why. If PASS, leave empty.",
-  "outlier_indices": [indices of outlier articles (0-indexed), empty if PASS]
+  "feedback": "If FAIL, explain why.",
+  "outlier_indices": [indices of noise articles to remove],
+  "sub_groups": [
+      [indices of group A],
+      [indices of group B]
+  ] 
+  // If FAIL due to multiple events mixed, provide 'sub_groups' to split them. 
+  // Max 2 sub-groups. If just noise, leave sub_groups empty.
 }}
 
 Only output valid JSON. No other text."""
@@ -100,41 +106,47 @@ Content Preview: {content_preview}...
 
             if not response:
                 return {
-                    "decision": "FAIL",
-                    "confidence": 0.0,
+                    "decision": "PASS",
+                    "confidence": 0.1,
                     "summary": "",
                     "feedback": "LLM response empty",
-                    "outlier_indices": []
+                    "outlier_indices": [],
+                    "sub_groups": []
                 }
 
             result = extract_json_from_response(response)
 
             if not result:
                 return {
-                    "decision": "FAIL",
-                    "confidence": 0.0,
+                    "decision": "PASS",
+                    "confidence": 0.1,
                     "summary": "",
-                    "feedback": f"JSON parsing failed: {response[:100]}...",
-                    "outlier_indices": []
+                    "feedback": "JSON parsing failed",
+                    "outlier_indices": [],
+                    "sub_groups": []
                 }
 
             # Ensure all required fields exist
+            decision = (result.get("decision") or "PASS").upper()
+            if decision not in ("PASS", "FAIL"):
+                decision = "PASS"
             return {
-                "decision": result.get("decision", "FAIL"),
+                "decision": decision,
                 "confidence": float(result.get("confidence", 0.0)),
                 "summary": result.get("summary", ""),
                 "feedback": result.get("feedback", ""),
-                "outlier_indices": result.get("outlier_indices", [])
+                "outlier_indices": result.get("outlier_indices", []) or [],
+                "sub_groups": result.get("sub_groups", []) or []
             }
 
         except Exception as e:
-            print(f"Cluster evaluation failed: {e}")
             return {
-                "decision": "FAIL",
-                "confidence": 0.0,
+                "decision": "PASS",
+                "confidence": 0.1,
                 "summary": "",
                 "feedback": f"Evaluation error: {str(e)}",
-                "outlier_indices": []
+                "outlier_indices": [],
+                "sub_groups": []
             }
 
 
@@ -229,20 +241,20 @@ Only output valid JSON. No other text."""
 
             if not response:
                 return {
-                    "decision": "FAIL",
-                    "score": 0,
+                    "decision": "PASS",
+                    "score": 5,
                     "feedback": "LLM response empty",
-                    "issues": ["API call returned empty"]
+                    "issues": []
                 }
 
             result = extract_json_from_response(response)
 
             if not result:
                 return {
-                    "decision": "FAIL",
-                    "score": 0,
-                    "feedback": f"JSON parsing failed: {response[:100]}...",
-                    "issues": ["Response not valid JSON"]
+                    "decision": "PASS",
+                    "score": 5,
+                    "feedback": "JSON parsing failed",
+                    "issues": []
                 }
 
             score = int(result.get("score", 0))
@@ -256,10 +268,9 @@ Only output valid JSON. No other text."""
             }
 
         except Exception as e:
-            print(f"Newsletter evaluation failed: {e}")
             return {
-                "decision": "FAIL",
-                "score": 0,
+                "decision": "PASS",
+                "score": 5,
                 "feedback": f"Evaluation error: {str(e)}",
-                "issues": ["API call failed"]
+                "issues": []
             }

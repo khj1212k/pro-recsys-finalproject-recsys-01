@@ -20,8 +20,7 @@ ai_workspace/
 │
 ├── crawler/             # Data collection & processing
 │   ├── rss_collector.py        # RSS feed crawler
-│   ├── content_extractor.py    # Article content extraction
-│   └── embedding_generator.py  # Batch embedding generation
+│   └── content_extractor/      # Article content extraction
 │
 ├── db/                  # Database layer
 │   ├── schema.py        # PostgreSQL schema definitions
@@ -49,8 +48,6 @@ ai_workspace/
 │   ├── test_evaluators.py
 │   ├── test_reconstructor.py
 │   └── test_workflow.py
-│
-├── recommend-engine/    # Recommendation system (separate module)
 │
 ├── main.py              # Main pipeline entry point
 ├── requirements.txt     # Python dependencies
@@ -169,7 +166,7 @@ Access Airflow UI: `http://localhost:8080`
 
 ## 📊 Database Schema
 
-See `db/schema.py` for full schema definitions. Key tables:
+Data reset helpers live in `db/schema.py`. Key tables:
 - `news_raw` - Raw news articles with embeddings
 - `news_letter` - Generated newsletters
 - `user` - User profiles with preference embeddings

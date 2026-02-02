@@ -1,11 +1,11 @@
 import re
 
-#  정제 설정 상수의 
+# === 정제 설정 상수의 ===
 DROP_LEN = 350          # 본문 길이가 이 값 미만이면 DROP
 DROP_PHOTO = True       # 제목에 [포토]가 포함된 경우 처리 기준
 DROP_LIST = True        # 리스트성 기사(추천기사 등) 처리 기준
 
-#  공통 정규식 
+# === 공통 정규식 ===
 _MULTI_SPACE_RE = re.compile(r"\s+")
 _REPORTER_EMAIL_REGEX = re.compile(r'[A-Za-z0-9_.+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9-.]+')
 _RE_PHOTO_TITLE = re.compile(r"\[\s*포토\s*\]", re.IGNORECASE)
@@ -21,7 +21,7 @@ _END_MARKERS = [
 
 _LIST_MARKERS = ["추천기사", "에디터 픽", "에디터픽", "Editor's Pick", "추천 기사", "많이 본 기사", "실시간", "랭킹"]
 
-#  언론사별 특정 패턴/마커 
+# === 언론사별 특정 패턴/마커 ===
 
 # 동아일보
 _DONGA_START_MARKERS = ["본문으로 바로가기"]
