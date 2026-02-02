@@ -1,15 +1,11 @@
-import { NewsDetailResponse, TodayNewsResponse, OnboardingNewsResponse, SignupRequest, AuthResponse, LoginRequest, LoginResponse, UserProfileResponse } from "@/types";
+import { NewsDetailResponse, TodayNewsResponse, OnboardingNewsResponse, SignupRequest, AuthResponse, LoginRequest, LoginResponse, UserProfileResponse, LogResponse } from "@/types";
 
-// Base URL handled by Vite Proxy (/api -> backend)
+// Base URL
 const BASE_URL = "/api";
 
-// Temporary User ID for Dev/Demo
+// 임시 유저 ID
 const TEMP_USER_ID = "1";
 
-/**
- * Common headers with Auth injection
- * // TODO: Replace x-user-id with Authorization: Bearer <token> later
- */
 const getToken = (): string | null => {
   try {
     const storage = localStorage.getItem('news-grow-user-v3');
@@ -33,9 +29,9 @@ const getHeaders = (token?: string) => {
   return headers;
 };
 
-// --- API Functions ---
+// --- API ---
 
-// 1. Get Today's Personalized News
+// 1. 오늘의 뉴스레터
 export async function fetchTodayNews(): Promise<TodayNewsResponse[]> {
   const response = await fetch(`${BASE_URL}/newsletters/today`, {
     method: "GET",
@@ -49,7 +45,7 @@ export async function fetchTodayNews(): Promise<TodayNewsResponse[]> {
   return response.json();
 }
 
-// 2. Get Newsletter Detail
+// 2. 뉴스레터 상세
 export async function fetchNewsletterDetail(id: number): Promise<NewsDetailResponse> {
   const response = await fetch(`${BASE_URL}/newsletters/${id}`, {
     method: "GET",
@@ -63,8 +59,8 @@ export async function fetchNewsletterDetail(id: number): Promise<NewsDetailRespo
   return response.json();
 }
 
-// 3. Get Onboarding News by Category
-// categoryCode: 100(Politics), 200(Economy), etc.
+// 3. 온보딩 뉴스레터
+// categoryCode: 100(Politics), 200(Economy), ...
 export async function fetchOnboardingNews(categoryCode: number): Promise<OnboardingNewsResponse[]> {
   const response = await fetch(`${BASE_URL}/onboarding/news?category=${categoryCode}`, {
     method: "GET",
@@ -78,7 +74,7 @@ export async function fetchOnboardingNews(categoryCode: number): Promise<Onboard
   return response.json();
 }
 
-// 4. User Signup
+// 4. 회원가입
 export async function registerUser(data: SignupRequest): Promise<AuthResponse> {
   const response = await fetch(`${BASE_URL}/auth/signup`, {
     method: "POST",
@@ -102,7 +98,7 @@ export async function registerUser(data: SignupRequest): Promise<AuthResponse> {
   return response.json();
 }
 
-// 5. User Login
+// 5. 로그인
 export async function loginUser(data: LoginRequest): Promise<LoginResponse> {
   const response = await fetch(`${BASE_URL}/auth/login`, {
     method: "POST",
@@ -126,7 +122,7 @@ export async function loginUser(data: LoginRequest): Promise<LoginResponse> {
   return response.json();
 }
 
-// 6. Update User Categories
+// 6. 관심 카테고리 업데이트
 export async function updateUserCategories(categories: number[], token: string): Promise<any> {
   const response = await fetch(`${BASE_URL}/users/me/categories`, {
     method: "PUT",
@@ -141,7 +137,7 @@ export async function updateUserCategories(categories: number[], token: string):
   return response.json();
 }
 
-// 7. Get User Profile
+// 7. 유저 프로필 조회
 export async function fetchUserProfile(token: string): Promise<UserProfileResponse> {
   const response = await fetch(`${BASE_URL}/users/me`, {
     method: "GET",
@@ -155,7 +151,7 @@ export async function fetchUserProfile(token: string): Promise<UserProfileRespon
   return response.json();
 }
 
-// 8. Update User Newsletters
+// 8. 회원가입 - 관심 뉴스레터 선택
 export async function updateUserNewsletters(newsLetterIds: number[], token: string): Promise<any> {
   const response = await fetch(`${BASE_URL}/users/me/newsletters`, {
     method: "PUT",
@@ -165,6 +161,27 @@ export async function updateUserNewsletters(newsLetterIds: number[], token: stri
 
   if (!response.ok) {
     throw new Error(`Failed to update newsletters: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+// 9. 뉴스레터 클릭 로그 전송
+export async function sendNewsletterClickLog(newsLetterId: number): Promise<LogResponse> {
+  const token = getToken();
+  // 로그인은 필수지만, 토큰이 없으면 전송하지 않음 (Silent Fail)
+  if (!token) {
+    return { status: "fail", log_id: -1 };
+  }
+
+  const response = await fetch(`${BASE_URL}/logs/newsletter/click`, {
+    method: "POST",
+    headers: getHeaders(token),
+    body: JSON.stringify({ news_letter_id: newsLetterId }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to send log: ${response.status}`);
   }
 
   return response.json();

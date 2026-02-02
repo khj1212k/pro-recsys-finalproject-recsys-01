@@ -108,9 +108,10 @@ frontend/node_modules/
 # ==========================
 # 7. Airflow
 # ==========================
+backend/airflow/*
+!backend/airflow/dags/
 ai_workspace/airflow_home/
 ai_workspace/dags/__pycache__/
-backend/airflow/
 
 # ==========================
 # 8. AI Workspace Test & Temp Files

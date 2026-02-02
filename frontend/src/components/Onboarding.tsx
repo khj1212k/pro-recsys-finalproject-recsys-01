@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Newspaper, Check, ArrowRight, ArrowLeft, Loader2 } from 'lucide-react';
-import { categoryNames, categoryColors } from '@/data/mockData';
+import { categoryNames, categoryColors } from '@/data/category_constants';
 import { useUserStore } from '@/store/userStore';
 import { Category, NewsArticle } from '@/types';
 import { fetchOnboardingNews, updateUserNewsletters } from '@/lib/api';
@@ -19,7 +19,6 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
   const [selectedArticles, setSelectedArticles] = useState<Record<Category, string[]>>({} as Record<Category, string[]>);
   const { completeOnboarding, accessToken } = useUserStore();
 
-  // New State for API Data
   const [loadedArticles, setLoadedArticles] = useState<Record<string, NewsArticle[]>>({});
   const [isLoading, setIsLoading] = useState(false);
 
@@ -33,7 +32,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
 
   const handleCategoryNext = () => {
     if (selectedCategories.length > 0) {
-      // Initialize selected articles for each category
+      // 카테고리 별 뉴스레터
       const initialArticles: Record<Category, string[]> = {} as Record<Category, string[]>;
       selectedCategories.forEach((cat) => {
         initialArticles[cat] = [];
@@ -43,7 +42,6 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
     }
   };
 
-  // Fetch Articles when step changes to 'articles' or category index changes
   useEffect(() => {
     const fetchArticles = async () => {
       if (step !== 'articles') return;
@@ -51,7 +49,6 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
       const currentCategory = selectedCategories[currentCategoryIndex];
       if (!currentCategory) return;
 
-      // Return if already loaded
       if (loadedArticles[currentCategory]) return;
 
       setIsLoading(true);
@@ -62,7 +59,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
         const mapped: NewsArticle[] = data.map(item => ({
           id: item.news_letter_id.toString(),
           title: item.news_letter_title,
-          summary: item.news_letter_sentence, // Assuming hooking sentence is good summary
+          summary: item.news_letter_sentence,
           context: "context",
           facts: [],
           category: currentCategory,
@@ -110,7 +107,6 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
     if (currentCategoryIndex < selectedCategories.length - 1) {
       setCurrentCategoryIndex((prev) => prev + 1);
     } else {
-      // Finish onboarding
       const allSelectedNewsletterIds = Object.values(selectedArticles)
         .flat()
         .map(id => parseInt(id, 10))
@@ -125,8 +121,6 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
           .catch(err => {
             console.error("Failed to save newsletters", err);
             toast.error("뉴스레터 저장 중 오류가 발생했습니다.");
-            // Still complete even if newsletter save fails? 
-            // Maybe better to block or just proceed. Let's proceed.
             completeOnboarding(selectedCategories);
             onComplete();
           });
@@ -146,7 +140,6 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
   };
 
   const getArticlesForCategory = (category: Category): NewsArticle[] => {
-    // Only return API loaded info
     return loadedArticles[category] || [];
   };
 
@@ -184,7 +177,6 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
           )}
         </div>
 
-        {/* Progress */}
         {step === 'articles' && (
           <div className="flex gap-2 mb-6">
             {selectedCategories.map((_, index) => (
@@ -197,7 +189,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
           </div>
         )}
 
-        {/* Step 1: Category Selection */}
+        {/* 1: 관심 분야 선택 */}
         {step === 'categories' && (
           <div className="animate-fade-in">
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-8">
@@ -243,7 +235,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ onComplete }) => {
           </div>
         )}
 
-        {/* Step 2: Article Selection per Category */}
+        {/* 2: 관심 분야 뉴스레터 선택 */}
         {step === 'articles' && currentCategory && (
           <div className="animate-fade-in">
             <div className="mb-8">

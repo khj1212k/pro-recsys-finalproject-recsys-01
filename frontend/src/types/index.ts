@@ -37,9 +37,9 @@ export interface NewsArticle {
   sourceUrl: string;
   publishedAt: Date;
   imageUrl?: string;
-  fullContent?: string; // 뉴스 레터 형식의 상세 내용
-  hookingSentence?: string; // 사용자 흥미 유발 문장
-  popularity?: number; // 토픽 인기도 (관련 기사 수 등)
+  fullContent?: string;
+  hookingSentence?: string;
+  popularity?: number;
 }
 
 export interface IssueBundle {
@@ -79,7 +79,7 @@ export interface CategoryStats {
   date: Date;
 }
 
-// --- Backend API Response Types (DTOs) ---
+// --- Backend API (DTOs) ---
 
 export interface NewsResponse {
   news_letter_id: number;
@@ -139,7 +139,10 @@ export interface UserProfileResponse {
   user_nickname: string;
   user_gender_code?: number;
   user_birth_year?: number;
-  interests: number[]; // Category Codes
+  interests: number[];
 }
 
-
+export interface LogResponse {
+  status: string;
+  log_id: number;
+}

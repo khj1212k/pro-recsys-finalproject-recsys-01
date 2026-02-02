@@ -14,7 +14,7 @@ def read_user_me(
     session: Session = Depends(get_session),
     current_user: User = Depends(get_current_user)
 ):
-    # Query categories
+    # 1. 사용자별 관심 카테고리 코드 조회
     statement = (
         select(Category.category_code)
         .join(UserPreferredCategories, UserPreferredCategories.category_id == Category.category_id)
