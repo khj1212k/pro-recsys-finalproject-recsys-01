@@ -9,3 +9,4 @@
 | **`newsletter.py`** | `/newsletters/today`, `/newsletters/{id}` |
 | **`onboarding.py`** | `/onboarding/news` |
 | **`user_check.py`** | `get_current_user` (JWT 기반 인증) |
+| **`logs.py`** | `/logs/newsletter/click` |
