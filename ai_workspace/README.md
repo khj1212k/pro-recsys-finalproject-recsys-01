@@ -8,7 +8,6 @@ A production-ready AI system for automated news aggregation, clustering, and new
 ai_workspace/
 ├── config/              # Configuration files
 │   ├── settings.py      # Application settings
-│   └── llm_config.json  # LLM provider configurations
 │
 ├── core/                # Core business logic
 │   ├── clusterer.py     # HDBSCAN clustering
@@ -81,8 +80,7 @@ ai_workspace/
   - Database persistence
 
 ### **Stage 6: Newsletter Embedding**
-- Batch embedding generation for newsletters
-- Used by recommendation system
+- (Currently disabled) Batch embedding generation for newsletters
 
 ## 📦 Installation
 
@@ -149,11 +147,6 @@ python scripts/update_user_embeddings.py --all
 python scripts/update_user_embeddings.py --user-id 123
 ```
 
-### Run Tests
-```bash
-pytest tests/
-```
-
 ## 🔄 Airflow Integration
 
 Start Airflow scheduler and webserver:
@@ -175,13 +168,7 @@ Data reset helpers live in `db/schema.py`. Key tables:
 
 ## 🧪 Testing
 
-Test files are organized in `tests/`:
-- `test_clusterer.py` - Clustering logic
-- `test_evaluators.py` - LLM evaluators
-- `test_reconstructor.py` - Newsletter generation
-- `test_workflow.py` - LangGraph workflow
-
-Run with: `pytest tests/ -v`
+Local tests live under `tests/` but are ignored in production.
 
 ## 🔐 Security
 
@@ -206,7 +193,7 @@ Run with: `pytest tests/ -v`
 ### Rate Limiting (429 errors)
 - Pipeline uses sequential execution by default
 - Exponential backoff implemented
-- Adjust semaphore in `main.py` if needed
+- Adjust LLM_MIN_INTERVAL in `.env` if needed
 
 ### Database Connection Issues
 - Verify credentials in `.env`

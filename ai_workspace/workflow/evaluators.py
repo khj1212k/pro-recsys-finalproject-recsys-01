@@ -14,7 +14,7 @@ class ClusterEvaluator:
 
     SYSTEM_PROMPT = """You are an expert news analyst evaluating clusters of news articles.
 Your job is to determine if articles in a cluster represent a single coherent news event or topic.
-Always respond in valid JSON format only. No other text."""
+Return ONLY valid JSON. No extra text, no code blocks, no markdown."""
 
     USER_PROMPT_TEMPLATE = """You are evaluating a cluster of {n_articles} news articles.
 Determine if these articles represent a **single coherent news event** or topic.
@@ -46,7 +46,8 @@ Determine if these articles represent a **single coherent news event** or topic.
   // Max 2 sub-groups. If just noise, leave sub_groups empty.
 }}
 
-Only output valid JSON. No other text."""
+Only output valid JSON. No other text.
+If unsure, still return valid JSON with empty strings/lists."""
 
     def __init__(self, provider: Optional[str] = None):
         """
@@ -97,7 +98,7 @@ Content Preview: {content_preview}...
             {"role": "user", "content": prompt}
         ]
 
-        max_retries = 5
+        max_retries = 1000000  # effectively until parse succeeds
         last_response = None
         for _ in range(max_retries):
             response = self.client.chat_completion(
@@ -116,13 +117,32 @@ Content Preview: {content_preview}...
             decision = (result.get("decision") or "FAIL").upper()
             if decision not in ("PASS", "FAIL"):
                 decision = "FAIL"
+            def _to_int_list(items):
+                out = []
+                for x in items or []:
+                    try:
+                        out.append(int(x))
+                    except Exception:
+                        continue
+                return out
+
+            def _to_int_groups(groups):
+                out = []
+                for g in groups or []:
+                    if not isinstance(g, list):
+                        continue
+                    converted = _to_int_list(g)
+                    if converted:
+                        out.append(converted)
+                return out
+
             return {
                 "decision": decision,
                 "confidence": float(result.get("confidence", 0.0)),
                 "summary": result.get("summary", ""),
                 "feedback": result.get("feedback", ""),
-                "outlier_indices": result.get("outlier_indices", []) or [],
-                "sub_groups": result.get("sub_groups", []) or []
+                "outlier_indices": _to_int_list(result.get("outlier_indices", [])),
+                "sub_groups": _to_int_groups(result.get("sub_groups", []))
             }
 
         # Fallback if parsing still fails
@@ -154,7 +174,7 @@ class NewsletterEvaluator:
 
     SYSTEM_PROMPT = """You are an expert news editor evaluating newsletter drafts.
 Your job is to ensure the newsletter meets quality standards for publication.
-Always respond in valid JSON format only. No other text."""
+Return ONLY valid JSON. No extra text, no code blocks, no markdown."""
 
     USER_PROMPT_TEMPLATE = """You are evaluating a generated newsletter draft.
 
@@ -184,7 +204,8 @@ Content:
   "issues": ["list", "of", "specific", "problems"]
 }}
 
-Only output valid JSON. No other text."""
+Only output valid JSON. No other text.
+If unsure, still return valid JSON with empty strings/lists."""
 
     def __init__(self, provider: Optional[str] = None):
         """
@@ -231,7 +252,7 @@ Only output valid JSON. No other text."""
             {"role": "user", "content": prompt}
         ]
 
-        max_retries = 5
+        max_retries = 1000000  # effectively until parse succeeds
         last_response = None
         for _ in range(max_retries):
             response = self.client.chat_completion(

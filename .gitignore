@@ -134,3 +134,10 @@ ai_workspace/*.backup
 
 # Pytest
 ai_workspace/.pytest_cache/
+
+# ==========================
+# 9. Non-production (keep local, don't track)
+# ==========================
+ai_workspace/newsletter_audit.md
+ai_workspace/tests/
+ai_workspace/scripts/
