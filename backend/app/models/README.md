@@ -19,3 +19,6 @@
 #### `batch.py`
 - **`NewsLettersCategory`**: 카테고리별 인기/추천 뉴스레터 배치 결과 저장
 - **`NewsLetterTodayBatch`**: 사용자별 "오늘의 추천" 뉴스레터 배치 결과 저장
+
+#### `log.py`
+- **`UserNewsLetterCTRLog`**: 사용자 - 뉴스레터 클릭 로그 저장

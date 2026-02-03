@@ -61,8 +61,8 @@ export async function fetchNewsletterDetail(id: number): Promise<NewsDetailRespo
 
 // 3. 온보딩 뉴스레터
 // categoryCode: 100(Politics), 200(Economy), ...
-export async function fetchOnboardingNews(categoryCode: number): Promise<OnboardingNewsResponse[]> {
-  const response = await fetch(`${BASE_URL}/onboarding/news?category=${categoryCode}`, {
+export async function fetchOnboardingNews(categoryCode: number, limit: number = 6): Promise<OnboardingNewsResponse[]> {
+  const response = await fetch(`${BASE_URL}/onboarding/news?category=${categoryCode}&limit=${limit}`, {
     method: "GET",
     headers: getHeaders(),
   });

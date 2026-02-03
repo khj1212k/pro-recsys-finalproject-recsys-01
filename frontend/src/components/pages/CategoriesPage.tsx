@@ -48,7 +48,7 @@ const CategoriesPage: React.FC = () => {
       setIsLoading(true);
       try {
         const code = mapCategoryKeyToCode(activeCategory);
-        const data = await fetchOnboardingNews(code);
+        const data = await fetchOnboardingNews(code, 20);
         const mapped: NewsArticle[] = data.map(item => ({
           id: item.news_letter_id.toString(),
           title: item.news_letter_title,

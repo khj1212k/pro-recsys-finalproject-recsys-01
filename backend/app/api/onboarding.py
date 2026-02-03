@@ -19,8 +19,10 @@ class OnboardingNewsResponse(SQLModel):
 @router.get("/news", response_model=List[OnboardingNewsResponse])
 def get_onboarding_news(
     category: int = Query(..., description="Category Code (e.g., 100, 200)"),
+    limit: int = Query(6, description="Number of items to return"),
     session: Session = Depends(get_session)
 ):
+    print(f"DEBUG: get_onboarding_news called with category={category}, limit={limit}")
     # 1. 카테고리 코드 기반 ID 조회
 
     category_obj = session.exec(
@@ -52,14 +54,14 @@ def get_onboarding_news(
     
     candidates = session.exec(statement).all()
     
-    # 4. 결과 생성 (6개 제한)
+    # 4. 결과 생성 (limit 제한)
     candidates_map = {newsletter.news_letter_id: newsletter for newsletter in candidates}
     
     result = []
     for nid in ranked_ids:
         if nid in candidates_map:
             result.append(candidates_map[nid])
-            if len(result) >= 6:
+            if len(result) >= limit:
                 break
                 
     return result
