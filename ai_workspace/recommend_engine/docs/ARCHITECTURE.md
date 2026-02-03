@@ -1,8 +1,8 @@
 # 🏗️ System Architecture & Logic Detail
 
-> **버전:** 0.4.0
-> **작성일:** 2026-02-02
-> **기술 스택:** Python, LightGBM, PostgreSQL, NumPy, Pandas
+> **버전:** 0.6.1
+> **작성일:** 2026-02-03
+> **기술 스택:** Python, LightGBM, PostgreSQL (pgvector), NumPy, Pandas
 
 이 문서는 뉴스레터 추천 시스템의 내부 동작 원리, 데이터 파이프라인, 그리고 모델링 전략을 상세히 기술합니다.
 
@@ -11,40 +11,49 @@
 ## 1. 아키텍처 오버뷰 (The Big Picture)
 
 우리의 시스템은 **2-Stage Recommendation Pipeline**을 따릅니다.
-수많은 뉴스 중에서 후보를 추리고(Retrieval/Ranking), 그 중에서 최적의 조합을 재배열(Ordering/Reranking)하는 구조입니다.
+LightGBM을 이용한 정교한 랭킹 후, MMR 알고리즘으로 다양성을 확보하여 재배열하는 구조입니다.
 
 ```mermaid
 graph TD
-    subgraph "Data Layer"
-        DB[(PostgreSQL)] -->|Log/User/News| DataLoader
-        Emb[("BGE-M3 Embedding")] -->|Vector| DataLoader
+    subgraph "Data Layer (PostgreSQL)"
+        Logs[(User Activity Logs)] -->|Sliding Window (28d)| DataLoader
+        News[(Newsletter Metadata)] -->|Full Load| DataLoader
+        Emb[("pgvector Embeddings")] -->|BGE-M3 Vectors| DataLoader
     end
 
-    subgraph "Feature Layer (Engineering)"
+    subgraph "Preprocessing Layer"
         DataLoader -->|Raw Data| FeatureEng[Feature Engineer]
-        FeatureEng -->|Dense/Sparse Features| LGBM_Input
+        FeatureEng -->|Time-Decayed User Vector| UserProfile
+        FeatureEng -->|Feature Generation| LGBM_Input
     end
 
     subgraph "Stage 1: Ranking (LightGBM)"
         LGBM_Input --> Ranker[LightGBM Ranker]
-        Ranker -->|Top-80 Candidates| Candidates
+        Ranker -->|Predict Score (CTR)| Scored_List
     end
 
     subgraph "Stage 2: Reranking (MMR)"
-        Candidates --> Reranker[MMR Reranker]
-        Reranker -->|Diversity Filtering| Final_Top20
+        Scored_List --> Reranker[MMR Reranker]
+        Reranker -->|Diversity Filtering (Adaptive Lambda)| Final_Top20
+    end
+    
+    subgraph "Output Layer"
+        Final_Top20 -->|Insert| DB_Batch_Table[(news_letter_today_batch)]
     end
 ```
 
 ---
 
-## 2. 핵심 전략: Why LightGBM?
+## 2. 핵심 전략: Why LightGBM with DB-Centric?
 
-초기에는 Two-Tower(Deep Learning) 모델을 고려했으나, **User 100명 / Daily News 200건**이라는 "Small Data" 환경에서는 딥러닝 모델이 과적합(Overfitting) 되기 쉽다는 한계가 있었습니다.
+### 2.1 Modeling Strategy
+**"Feature Engineering 기반의 GBDT(LightGBM)"** 방식을 채택했습니다.
+- **Small Data 대응:** User 100명 / Daily News 200건 환경에서 딥러닝보다 과적합 위험이 적음.
+- **Interpretability:** 피처 중요도 분석을 통해 추천 이유를 설명 가능.
 
-이에 따라 우리는 **"Feature Engineering 기반의 GBDT(LightGBM)"** 방식으로 전환했습니다.
-- **장점:** 적은 데이터로도 높은 성능, 빠른 학습/추론 속도, 피처 중요도(Feature Importance) 해석 가능.
-- **전략:** 딥러닝이 스스로 학습하지 못하는 패턴(최신성, 유사도 등)을 사람이 직접 수치화하여 입력값으로 넣어줍니다.
+### 2.2 Data Strategy
+- **DB-First:** 모든 데이터(임베딩 포함)는 PostgreSQL에서 관리하며, `pgvector`를 활용합니다.
+- **Strict Time Splitting:** 학습 시 `_timestamp`를 기준으로 Train/Valid를 칼같이 나누어 미래 정보가 학습에 새어 나가는(Data Leakage) 것을 원천 차단했습니다.
 
 ---
 
@@ -54,65 +63,44 @@ graph TD
 
 | 카테고리 | 피처 이름 | 데이터 타입 | 설명 및 의도 |
 | :--- | :--- | :--- | :--- |
-| **최신성**<br>(Recency) | `hours_since_published` | Float | 뉴스 발행 후 경과 시간. **시간이 지날수록 클릭 확률이 낮아짐**을 모델이 학습하도록 유도합니다. |
-| | `is_fresh_24h` | Binary | 24시간 이내 발행된 '따끈따끈한' 뉴스인지 여부. |
-| **유사도**<br>(Similarity) | `history_cosine_similarity` | Float | **(Core)** 유저가 과거에 읽은 뉴스들의 평균 벡터와 타겟 뉴스 벡터 간의 **Cosine Similarity**. 유저의 취향과 얼마나 가까운지를 나타냅니다. |
-| **관심사**<br>(Explicit) | `category_match_count` | Int | 유저가 가입 시 선택한 관심 카테고리(예: 경제, IT)와 뉴스의 카테고리가 몇 개나 일치하는지. |
-| | `is_category_match` | Binary | 하나라도 일치하면 1, 아니면 0. |
-| **유저 속성** | `user_age_band` | Categorical | 연령대 (10대~60대). 연령별 뉴스 소비 패턴 반영. |
+| **최신성**<br>(Recency) | `hours_since_published` | Float | 기준 시간(가상/실제 현재) 대비 뉴스 발행 경과 시간. **최신 뉴스일수록 높은 점수**를 받도록 유도. |
+| | `is_fresh_24h` | Binary | 24시간 이내 발행 여부. |
+| **유사도**<br>(Similarity) | `history_cosine_similarity` | Float | **(Core)** 유저 히스토리 벡터와 뉴스 벡터 간의 **Cosine Similarity**. 유저 벡터는 시간 감쇠(Time Decay)가 적용된 평균 벡터임. |
+| **관심사**<br>(Explicit) | `category_match_count` | Int | 유저가 가입 시 선택한 관심 카테고리와 뉴스의 카테고리 일치 개수. |
+| **유저 속성** | `user_onboarding_cnt` | Int | 유저가 선택한 카테고리 총 개수 (헤비/라이트 유저 구분). |
 
 ---
 
 ## 4. Stage 1: Candidate Generation (Ranking)
 
-LightGBM을 사용하여 모든 뉴스레터에 대해 **CTR(Click-Through Rate)**을 예측합니다.
+LightGBM을 사용하여 (User, News) 쌍에 대해 **클릭 확률(CTR)**을 예측합니다.
 
-- **학습 목표 (Objective):** Binary Classification (1: 클릭, 0: 미클릭)
-- **Negative Sampling Strategy:**
-    - 클릭 로그(Positive)는 DB에 존재하지만, "클릭하지 않은 로그(Negative)"는 없습니다.
-    - 학습 시, **Positive 1개당 랜덤한 Negative 5개**를 생성하여 모델이 "무엇을 좋아하지 않는지"도 학습시킵니다.
-    - *Ratio:* 1 : 5
+- **Objective:** Binary Classification
+- **Negative Sampling:**
+    - Positive(클릭) : Negative(랜덤 추출 미클릭) = **1 : 5**
+    - **Point-in-Time Correctness:** Negative 샘플 생성 시, Positive 샘플이 발생한 그 시점(`timestamp`)을 그대로 복사하여 할당. (당시의 맥락 유지)
 
 ---
 
 ## 5. Stage 2: Diversity Reranking (MMR)
 
-LightGBM 점수만으로 상위 20개를 자르면, 점수가 높은 특정 카테고리(예: 경제 뉴스)만 도배되는 **Filter Bubble** 현상이 발생합니다. 이를 해결하기 위해 MMR 알고리즘을 적용합니다.
+**Filter Bubble** 방지를 위해 MMR(Maximal Marginal Relevance)을 적용합니다.
 
-### 5.1 MMR 공식
-$$ MMR = \lambda \cdot \text{Score}(i) - (1-\lambda) \cdot \max_{j \in S} \text{Sim}(i, j) $$
+### 5.1 Adaptive Lambda (적응형 파라미터)
+유저가 선택한 관심 카테고리 수(`num_preferred_categories`)에 따라 $\lambda$(다양성 조절 계수)를 동적으로 변경합니다.
 
-- $\text{Score}(i)$: LightGBM이 예측한 아이템 $i$의 점수 (관련성)
-- $\text{Sim}(i, j)$: 이미 선택된 아이템 집합 $S$ 내의 아이템 $j$와 후보 아이템 $i$ 간의 임베딩 유사도 (다양성 패널티)
-- $\lambda$: 관련성과 다양성 사이의 균형 파라미터 ($0 \le \lambda \le 1$)
-
-### 5.2 Adaptive Lambda (적응형 파라미터)
-모든 유저에게 같은 $\lambda$를 쓰지 않고, 유저 성향에 따라 동적으로 조절합니다.
-
-- **관심사가 좁은 유저 (카테고리 1~2개):** $\lambda = 0.8$
-    - 다양성보다는 본인이 좋아하는 주제를 깊게 보여줍니다.
-- **관심사가 넓은 유저 (카테고리 5개 이상):** $\lambda = 0.6$
-    - 다양한 주제를 골고루 섞어서 보여줍니다.
+- **관심사 좁음 (<=2개):** $\lambda = 0.8$ (관련성 위주 추천)
+- **관심사 보통 (3~4개):** $\lambda = 0.7$
+- **관심사 넓음 (>=5개):** $\lambda = 0.6$ (다양성 위주 추천)
 
 ---
 
-## 6. Cold Start 대응 전략
+## 6. Cold Start & Fallback
 
-개인화 추천이 불가능한 상황에 대한 Fallback 로직입니다.
+**User Cold Start (로그 없음):**
+    - `DailyStatsAggregator` (`src/statistics`)를 이용해 통계 기반 추천 제공.
+    - Global Top-K (전체 인기) 및 Age Group Top-K (연령별 인기) 뉴스 혼합.
 
-**신규 뉴스 (Item Cold Start):**
-    - 로그가 없어도 `is_fresh` 등 메타 데이터 피처를 통해 추천 가능.
-    - 시스템은 기본적으로 최신 뉴스에 가산점을 주도록 설계됨.
-
-
----
-
-## 7. 데이터 파이프라인 요약
-
-1.  **수집:** 17:00 크롤링 완료 -> DB 적재.
-2.  **전처리:** `main_lgbm.py --inference` 실행.
-    - DB에서 데이터 로드.
-    - Feature Vector 생성.
-3.  **랭킹:** LightGBM으로 전체 뉴스 스코어링 -> 상위 80개 추출.
-4.  **리랭킹:** MMR로 최종 20개 선별.
-5.  **적재:** `scripts/upload_to_db.py`로 서비스 DB `User_Preferred_Newsletter` 테이블에 Insert.
+**Item Cold Start (신규 뉴스):**
+    - 로그가 없어도 `is_fresh` 및 `category_match` 피처를 통해 추천 가능.
+    - 시스템적으로 최신 뉴스에 가산점이 부여됨.
