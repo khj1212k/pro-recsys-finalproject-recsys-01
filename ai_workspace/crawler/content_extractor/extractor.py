@@ -3,14 +3,14 @@ from multiprocessing import Pool
 from tqdm import tqdm
 from db.connection import get_connection
 from config.settings import Settings
-from .cleaners import clean_text_lite  # is_drop_article 임포트 제거
+from .cleaners import clean_text_lite  
 
 class ContentExtractor:
-    """기사 본문 추출기 (news_raw 테이블 사용)"""
+    # 기사 본문 추출기 (news_raw 테이블 사용)
 
     @staticmethod
     def get_strategy_for_press(press_name: str) -> str:
-        """언론사명으로 크롤링 전략(strategy) 조회"""
+        # 언론사명으로 크롤링 전략 조회 
         for source, (strategy, _) in Settings.RSS_FEEDS.items():
             if press_name == '전자신문':
                 if source.startswith('전자신문'):
@@ -22,7 +22,7 @@ class ContentExtractor:
     @staticmethod
     def process_single_article(article_data):
         """
-        개별 기사 처리 (병렬 처리용 워커 함수)
+        개별 기사 처리 (병렬 처리)
         Args: article_data (raw_news_id, url, press_name)
         """
         raw_news_id, url, press_name = article_data
@@ -74,11 +74,11 @@ class ContentExtractor:
             conn.close()
 
     def extract_parallel(self, num_workers=None):
-        """병렬 본문 추출 실행"""
+        # 병렬 본문 추출 실행
         if num_workers is None:
             num_workers = Settings.PARALLEL_WORKERS
 
-        # 1. 대상 조회
+        # 1. 대상 조회 - 아직 본문이 추출되지 않은 기사
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("""

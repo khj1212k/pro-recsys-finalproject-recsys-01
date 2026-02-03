@@ -2,21 +2,20 @@
 from typing import Dict, List, Optional
 from core.llm_client import get_llm_client, extract_json_from_response, BaseLLMClient
 
-# 분리된 프롬프트와 유틸리티 임포트
+
 from .prompts import SYSTEM_EDITOR_ROLE, SYSTEM_META_ROLE, CONTENT_GEN_PROMPT, META_GEN_PROMPT
 from .validator import cleanup_content_text, normalize_meta
 
 
 class NewsReconstructor:
     """
-    LLM 기반 뉴스 재구성기 (News Reconstructor)
+    LLM 기반 뉴스 재구성기
 
-    여러 개의 뉴스를 종합하여 하나의 뉴스레터로 재구성합니다.
-    피드백을 반영한 반복적인 개선(Iterative Refinement)을 지원합니다.
+    여러 개의 뉴스를 종합하여 하나의 뉴스레터로 재구성
 
-    2-call 방식으로 토큰 초과 문제 해결:
-    - Call #1: content만 생성 (긴 출력, plain text)
-    - Call #2: meta만 생성 (짧은 출력, JSON)
+    2-call 방식(토큰 초과 문제 완화)
+    - Call #1: content만 생성
+    - Call #2: meta만 생성 (title, keyword, sentence, category)
     """
 
     def __init__(self, provider: Optional[str] = None):
@@ -24,13 +23,13 @@ class NewsReconstructor:
         초기화
 
         Args:
-            provider: 사용할 LLM 공급자 ('naver', 'openai', 또는 None이면 환경 변수에서 자동 감지)
+            provider: 사용할 LLM 공급자 
         """
         self.client: BaseLLMClient = get_llm_client(provider)
 
     def reconstruct(self, articles: List[Dict], feedback: Optional[str] = None) -> Optional[Dict]:
         """
-        여러 기사를 통합하여 하나의 뉴스레터로 재구성합니다.
+        여러 기사를 통합하여 하나의 뉴스레터로 재구성
         """
         if not articles:
             return None
@@ -45,20 +44,20 @@ class NewsReconstructor:
         articles_text = self._build_articles_text(articles)
 
         # -------------------------
-        # Call #1: content only (plain text)
+        # Call #1: 본문 생성기
         # -------------------------
         content_text = self._generate_content(articles_text, feedback)
         if not content_text:
             return None
 
         # -------------------------
-        # Call #2: meta only (JSON)
+        # Call #2: title, category, keyword, sentence
         # -------------------------
         meta = self._generate_meta(content_text)
         if not meta:
             return None
 
-        # 최종 결과 합치기
+        # 1 call, 2 call 결과 합치기
         result = {
             "title": (meta.get("title") or "").strip(),
             "sentence": (meta.get("sentence") or "").strip(),
@@ -67,7 +66,7 @@ class NewsReconstructor:
             "categories": meta.get("categories") or [],
         }
 
-        # 최소 검증 (Validator 모듈 사용)
+        # 최소 검증 
         result = normalize_meta(result)
         if not result:
             return None
@@ -91,7 +90,7 @@ class NewsReconstructor:
         return articles_text
 
     def _generate_content(self, articles_text: str, feedback: Optional[str] = None) -> Optional[str]:
-        """Call #1: 본문(content)만 생성"""
+        # Call 1: 본문만 생성
 
         # Feedback 문자열 구성
         feedback_instruction = ""
@@ -103,7 +102,7 @@ class NewsReconstructor:
 위 피드백을 반영하여 수정된 본문을 작성하세요.
 """
 
-        # Prompts 모듈의 템플릿 사용 (.format으로 변수 주입)
+        # Prompts 모듈의 템플릿 사용 
         prompt = CONTENT_GEN_PROMPT.format(
             feedback_instruction=feedback_instruction,
             articles_text=articles_text
@@ -140,7 +139,7 @@ class NewsReconstructor:
         return fallback_content()
 
     def _generate_meta(self, content_text: str) -> Optional[Dict]:
-        """Call #2: 메타데이터(title/sentence/keywords/categories)만 생성"""
+        # Call 2: 메타데이터(title/sentence/keywords/categories)만 생성
 
         # Prompts 모듈의 템플릿 사용
         prompt = META_GEN_PROMPT.format(content_text=content_text)

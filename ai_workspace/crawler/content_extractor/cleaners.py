@@ -7,13 +7,13 @@ from .patterns import (
     DROP_LEN, DROP_PHOTO, DROP_LIST
 )
 
-# === 공통 보조 함수 ===
+#  공통 보조 함수 
 def _normalize_spaces(t: str) -> str:
-    """공백/개행 정리"""
+    # 공백/개행 정리
     return _MULTI_SPACE_RE.sub(" ", (t or "")).strip()
 
 def _cut_end(text: str) -> str:
-    """댓글/저작권/모바일버전 이후를 잘라냄"""
+    # 댓글/저작권/모바일버전 이후를 잘라냄
     if not text:
         return ""
     idxs = [text.find(m) for m in _END_MARKERS if text.find(m) != -1]
@@ -24,13 +24,13 @@ def _cut_end(text: str) -> str:
     return text
 
 def _remove_reporter_emails(t: str) -> str:
-    """기자 이메일 주소 제거"""
+    # 기자 이메일 주소 제거
     if not t:
         return ""
     return _REPORTER_EMAIL_REGEX.sub("[이메일]", t)
 
 def _remove_reporter_bylines_common(t: str) -> str:
-    """모든 신문사 공통: 이메일 제거 후 남은 기자 서명 패턴 제거"""
+    # 모든 신문사 공통: 이메일 제거 후 남은 기자 서명 패턴 제거
     if not t or len(t) < 10:
         return t
 
@@ -52,7 +52,7 @@ def _remove_reporter_bylines_common(t: str) -> str:
     return t.strip()
 
 def _remove_duplicate_content(t: str) -> str:
-    """중복 콘텐츠 블록 제거"""
+    # 중복 콘텐츠 블록 제거
     if not t or len(t) < 100:
         return t
 
@@ -91,7 +91,7 @@ def _remove_duplicate_content(t: str) -> str:
     
     return ''.join(result_sents).strip()
 
-# === 언론사별 전용 정제 함수 ===
+#  언론사별 전용 정제 함수 
 def _clean_donga(t: str) -> str:
     # 시작 마커 제거
     for m in _DONGA_START_MARKERS:
@@ -171,7 +171,7 @@ def _clean_aitimes(t: str) -> str:
         t = t[j:].lstrip()
     return t
 
-# === 메인 오케스트레이터 ===
+#  메인 
 def clean_text_lite(raw: str, press_name: str = "") -> str:
     if not raw: return ""
     t = raw.strip()
