@@ -10,7 +10,9 @@ from pipeline.stages import (
     Stage1_RSSCollection,
     Stage2_ContentExtraction,
     Stage3_NewsEmbedding,
+    # Stage4_Clustering,
     Stage5_NewsletterGeneration,
+    # Stage6_NewsletterEmbedding,
 )
 from pipeline.runner import PipelineRunner
 
@@ -20,6 +22,8 @@ __all__ = [
     "Stage1_RSSCollection",
     "Stage2_ContentExtraction",
     "Stage3_NewsEmbedding",
+    "Stage4_Clustering",
     "Stage5_NewsletterGeneration",
+    "Stage6_NewsletterEmbedding",
     "PipelineRunner",
 ]

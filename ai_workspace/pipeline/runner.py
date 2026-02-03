@@ -104,6 +104,7 @@ class PipelineRunner:
         #     batch_size=batch_size or self.settings.EMBEDDING_BATCH_SIZE
         # )
         
+        
         self._print_summary(results)
         
         return results

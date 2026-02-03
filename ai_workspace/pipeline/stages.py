@@ -30,7 +30,7 @@ class Stage1_RSSCollection(PipelineStage):
 class Stage2_ContentExtraction(PipelineStage):
     """본문 추출"""
     def execute(self, num_workers=None, **kwargs) -> int:
-        from crawler.content_extractor.extractor import ContentExtractor
+        from crawler.content_extractor import ContentExtractor
         return ContentExtractor().extract_parallel(num_workers)
 
 class Stage3_NewsEmbedding(PipelineStage):
@@ -38,7 +38,6 @@ class Stage3_NewsEmbedding(PipelineStage):
     def execute(self, force_cpu=False, batch_size=None, **kwargs) -> int:
         from core.embedder import NewsEmbedder
         from db.connection import get_connection
-        from tqdm import tqdm
         
         batch_size = batch_size or self.settings.EMBEDDING_BATCH_SIZE
         count = 0
@@ -53,35 +52,30 @@ class Stage3_NewsEmbedding(PipelineStage):
                                  FROM news_raw \
                                  WHERE embedding_result IS NULL")
                     rows = cur.fetchall() # 임베딩 없는 기사 목록
-
+                    
                     if not rows:
                         logger.info("건너뜀: 임베딩할 새로운 기사가 없습니다.")
                         return 0
 
                     logger.info(f"🚀 기사 {len(rows)}건 임베딩 시작 (Batch: {batch_size})...")
-
+                    
                     # 배치 처리
-                    for i in tqdm(range(0, len(rows), batch_size), desc="embedding"):
+                    for i in range(0, len(rows), batch_size):
                         batch = rows[i:i+batch_size]
-                        texts = [f"{r[1]} {r[2]}"[:8000] for r in batch]
-                        try:
-                            embeddings, _ = embedder.generate_embeddings_batch(texts, batch_size)
-                        except Exception as e:
-                            logger.error(f"❌ 임베딩 배치 실패 (batch {i//batch_size + 1}): {e}")
-                            conn.rollback()
-                            continue
-
-                        if not embeddings:
-                            continue
-
+                        # 제목 + 본문 결합
+                        texts = [f"{r[1]} {r[2]}"[:8000] for r in batch] 
+                        embeddings, elapsed = embedder.generate_embeddings_batch(texts, batch_size)
+                        logger.info(f"   - 소요시간: {elapsed:.2f}초")
+                        
+                        # 저장
                         updates = [(emb, r[0]) for emb, r in zip(embeddings, batch)]
-                        if updates:
-                            cur.executemany("UPDATE news_raw \
-                                             SET embedding_result=%s \
-                                             WHERE raw_news_id=%s", updates)
-                            count += len(updates)
-                            conn.commit()
-
+                        cur.executemany("UPDATE news_raw \
+                                         SET embedding_result=%s \
+                                         WHERE raw_news_id=%s", updates) # (emb, raw_news_id)
+                        count += len(updates)
+                        conn.commit()
+                        logger.info(f"   - {count}/{len(rows)} 완료")
+                        
             except Exception as e:
                 conn.rollback()
                 logger.error(f"임베딩 실패: {e}")
@@ -95,10 +89,8 @@ class Stage5_NewsletterGeneration(PipelineStage):
     def execute(self, limit=None, min_cluster_size=3, min_samples=2, min_target=0, **kwargs) -> int:
         from core.clusterer import NewsClusterer
         from workflow.graph import compile_workflow
-        from tqdm import tqdm
         
         # 1. 클러스터링
-        logger.info("🧩 뉴스 클러스터링 수행 중...")
         clusterer = NewsClusterer()
         clusters = clusterer.cluster_news(min_cluster_size=min_cluster_size, min_samples=min_samples)
         
@@ -119,7 +111,7 @@ class Stage5_NewsletterGeneration(PipelineStage):
         all_ids = sorted(list(clusters.keys()), reverse=True) # 최신순? (ID가 크면 최신이라 가정)
         if limit: all_ids = all_ids[:limit]
 
-        for i, cid in enumerate(tqdm(all_ids, desc="generating newsletter")):
+        for i, cid in enumerate(all_ids):
             state = {
                 "current_cluster_id": cid,
                 "current_cluster_index": i,
@@ -134,7 +126,7 @@ class Stage5_NewsletterGeneration(PipelineStage):
                 if final.get("completed_newsletters"):
                     count += 1
             except Exception as e:
-                logger.error(f"Cluster {cid} 처리 중 에러: {e}")
+                logger.error(f"Clubster {cid} 처리 중 에러: {e}")
 
         logger.info(f"✨ 뉴스레터 생성 완료: {count}건")
         return count

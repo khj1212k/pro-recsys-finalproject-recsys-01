@@ -74,7 +74,7 @@ class NewsClusterer:
                 WHERE N.embedding_result IS NOT NULL
                   AND N.raw_news_content IS NOT NULL
                   AND N.raw_news_content != ''
-                  AND DATE(N.raw_news_crawled_at) = CURRENT_DATE
+                  AND N.raw_news_crawled_at >= NOW() - INTERVAL '24 hours'
                   {clustered_filter}
                 ORDER BY N.raw_news_id
             """)
@@ -104,41 +104,6 @@ class NewsClusterer:
         finally:
             conn.close()
 
-    def _update_outliers(self, outlier_ids: List[int]):
-        """클러스터링 되지 않은 아웃라이어 기사들의 news_letter_id를 -1로 업데이트"""
-        from db.connection import get_connection
-        if not outlier_ids:
-            return
-        # psycopg2는 numpy 타입을 직접 처리하지 못하므로 Python int로 변환
-        outlier_ids = [int(x) for x in outlier_ids]
-
-        try:
-            conn = get_connection()
-            cur = conn.cursor()
-            # Prefer sentinel -1, but fall back to NULL when FK constraints block it.
-            try:
-                cur.execute("""
-                    UPDATE news_raw
-                    SET news_letter_id = -1
-                    WHERE raw_news_id = ANY(%s)
-                      AND news_letter_id IS NULL
-                """, (outlier_ids,))
-                conn.commit()
-                print(f"🧹 아웃라이어 {len(outlier_ids)}개 처리 완료 (-1 설정)")
-            except Exception as e:
-                conn.rollback()
-                cur.execute("""
-                    UPDATE news_raw
-                    SET news_letter_id = NULL
-                    WHERE raw_news_id = ANY(%s)
-                      AND news_letter_id IS NULL
-                """, (outlier_ids,))
-                conn.commit()
-                print(f"🧹 아웃라이어 {len(outlier_ids)}개 처리 (NULL 유지, FK 제약): {e}")
-            conn.close()
-        except Exception as e:
-            print(f"아웃라이어 업데이트 실패: {e}")
-
     def cluster_news(self, min_cluster_size=None, min_samples=None) -> Dict[int, List[int]]:
         # Pipeline 연동용
         self.data = self._load_data_from_db()
@@ -147,15 +112,6 @@ class NewsClusterer:
             
         groups = self.cluster_with_split(self.data)
         
-        # 아웃라이어 처리: 전체 로드된 ID 중 그룹에 속하지 않은 ID 식별
-        all_ids = set(self.data['ids'])
-        clustered_ids = set()
-        for g_ids, _ in groups:
-            clustered_ids.update(g_ids)
-            
-        outlier_ids = list(all_ids - clustered_ids)
-        if outlier_ids:
-            self._update_outliers(outlier_ids)
         
         return {idx: g_ids for idx, (g_ids, _) in enumerate(groups)}
 
