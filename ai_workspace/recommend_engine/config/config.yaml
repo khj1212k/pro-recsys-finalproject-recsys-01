@@ -1,8 +1,13 @@
 # config/config.yaml
 
 # =============================================================================
-# 뉴스레터 추천 시스템 설정 파일 (v0.4.0 - LightGBM)
+# 뉴스레터 추천 시스템 설정 파일 (v0.6.1 - Final Spec)
 # =============================================================================
+
+# 시스템 환경 설정 (결과물 출력 방식 제어)
+# "debug"      -> 결과물을 로컬 .csv 파일로 저장
+# "production" -> 결과물을 서버 DB (news_letter_today_batch)에 직접 업로드
+execution_env: "production"
 
 # 임베딩 모델 설정 (BGE-M3)
 embedding:
@@ -11,28 +16,20 @@ embedding:
   batch_size: 32
   dimension: 1024
 
-# 데이터 경로 설정 (File 모드 대비용 + 임베딩 파일)
+# 데이터 경로 설정 (DB 모드이므로 로컬 파일 경로 제거, 임베딩 캐시만 유지)
 data:
-  base_path: "data"
+  base_path: "data" # 임베딩 PKL 저장용 (캐싱)
+  
+  # 1. 데이터 소스 (무조건 DB)
+  data_source: "db"
 
-  # 1. 파일 모드('file')일 때 사용되는 경로들 (DB 모드에선 무시됨)
-  users: "synthetic_user.csv"
-  user_preferred_categories: "synthetic_user_preferred_categories.csv"
-  user_preferred_newsletters: "synthetic_user_preferred_newsletters.csv"
-  ctr_logs_train: "ctr_logs_train.csv"
-  ctr_logs_valid: "ctr_logs_valid.csv"
-  newsletter_categories_map: "newsletter_categories_map.csv"
-    
-  # 2. 공통 필수 파일 (DB에 벡터가 없으므로 항상 필요)
-  embedded_news: "embedded_news.pkl"
+  # 2. 데이터 필터링 (DB 쿼리 옵션)
+  # 학습 속도 유지를 위해 최근 N일치 로그만 DB에서 가져옴 (Sliding Window)
+  max_history_days: 28         
 
-  # 3. 데이터 분할 설정 (DB 모드용)
-  validation_threshold_date: "2026-01-29"  # 현재 로그정보가 업데이트 되지 않으므로 해당 날짜부터 검증 데이터셋으로.
-
-# 데이터 소스 설정 ('file' 또는 'db')
-# "db"   -> PostgreSQL에서 로드 (위의 csv 경로 무시됨)
-# "file" -> 위의 csv 파일들에서 로드
-data_source: "db"
+  # 3. 데이터 분할 (Ratio 기반 동적 분할)
+  # 시간순 정렬 후 최신 20%를 검증용으로 사용 (날짜 하드코딩 제거)
+  validation_ratio: 0.2        
 
 # DB 연결 설정 (PostgreSQL)
 database:
@@ -53,9 +50,9 @@ categories:
   7: "세계"
 
 # Time Decay 설정 (Feature Engineering용)
+# [변경] 카테고리 반감기 삭제 (사용자 UI 설정값 그대로 사용)
 time_decay:
-  news_half_life_days: 7       # 뉴스 신선도 반감기
-  category_half_life_days: 28  # 취향 변화 반감기
+  news_half_life_days: 7       # 뉴스 신선도 및 히스토리 가중치 반감기
   min_weight: 0.01
 
 # LightGBM 모델 하이퍼파라미터
@@ -92,7 +89,7 @@ recommendation:
 
 # 출력 및 로깅
 output:
-  results_dir: "results" # 모델 inference 결과 저장
+  results_dir: "results" # 모델 inference 결과 저장 (Debug 모드용)
   checkpoint_dir: "checkpoints" # 모델 저장
 
 logging:

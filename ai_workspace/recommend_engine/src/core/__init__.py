@@ -3,13 +3,8 @@
 Core 패키지
 """
 
-# Trainer는 딥러닝 학습용이므로 제거
-# Recommender는 Two-Tower용이므로 제거
-
-from .evaluator import (
-    Evaluator,
-    RankingEvaluator
-)
+# RankingEvaluator는 더 이상 사용하지 않으므로 제거함
+from .evaluator import Evaluator
 
 from .reranker import (
     MMRReranker,
@@ -19,7 +14,6 @@ from .reranker import (
 
 __all__ = [
     'Evaluator',
-    'RankingEvaluator',
     'MMRReranker',
     'CategoryBasedMMRReranker',
     'create_reranker_from_config',

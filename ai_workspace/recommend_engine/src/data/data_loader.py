@@ -1,75 +1,30 @@
 # src/data/data_loader.py
 import os
 import pickle
-import math
+import json
 import pandas as pd
 import numpy as np
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Any
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
-from ..utils.common import get_project_root, load_config
+from sqlalchemy import create_engine, text
 
-# DB 연동 (선택적)
-try:
-    from sqlalchemy import create_engine, text
-    HAS_SQLALCHEMY = True
-except ImportError:
-    HAS_SQLALCHEMY = False
+from ..utils.common import get_project_root, load_config, get_logger
+
+# 로거 설정
+logger = get_logger("DataLoader")
 
 # =============================================================================
-# 1. 전역 상수 정의 (Module Level Constants)
+# 데이터 클래스 정의
 # =============================================================================
-
-CATEGORY_ID_TO_NAME = {
-    1: "정치", 2: "경제", 3: "IT/과학", 4: "사회",
-    5: "생활/문화", 6: "스포츠", 7: "세계"
-}
-
-CATEGORY_NAME_TO_ID = {v: k for k, v in CATEGORY_ID_TO_NAME.items()}
-
-NUM_CATEGORIES = 7
-
-# 레거시 호환용
-AGE_BAND_TO_IDX = {
-    'S1_18_24': 0, 'S2_25_34': 1, 'S3_35_44': 2, 
-    'S4_45_54': 3, 'S5_55_64': 4, 'S6_65_': 5
-}
-GENDER_STR_TO_IDX = {'U': 0, 'M': 1, 'F': 2}
-
-
-# =============================================================================
-# 2. 유틸리티 함수
-# =============================================================================
-
-def compute_time_decay(days_ago: float, half_life: float = 7.0, min_weight: float = 0.01) -> float:
-    """시간 감쇠 가중치 계산 (지수 감쇠)"""
-    if days_ago < 0: return 1.0
-    weight = math.pow(0.5, days_ago / half_life)
-    return max(weight, min_weight)
-
-
-# =============================================================================
-# 3. 데이터 클래스 정의
-# =============================================================================
-
-@dataclass
-class ClickEvent:
-    """사용자 클릭 로그 이벤트"""
-    user_id: int
-    news_id: int
-    timestamp: datetime = None
 
 @dataclass
 class UserProfile:
     """사용자 프로필 데이터 클래스"""
     user_id: int
-    age_band_idx: int       # 0-5
-    gender_idx: int         # 0-2
-    
-    # 온보딩 정보
+    age_band_idx: int       # (현재 DB에 없으면 기본값 처리)
+    gender_idx: int         # (현재 DB에 없으면 기본값 처리)
     onboarding_categories: List[int] = field(default_factory=list)
-    
-    # [New] 계산된 히스토리 임베딩 (Time-decayed average)
     history_embedding: np.ndarray = None 
 
 @dataclass
@@ -82,274 +37,201 @@ class NewsItem:
     embedding: np.ndarray   # BGE-M3 Vector (1024d)
     timestamp: datetime     # 발행 시각
 
-
 # =============================================================================
-# 4. DataLoader 클래스
+# DataLoader 클래스
 # =============================================================================
 
 class DataLoader:
     
-    def __init__(self, base_path: str = None, config: Dict = None):
+    def __init__(self, config: Dict = None):
         if config is None:
-            config = load_config()
-        self.config = config
+            self.config = load_config()
+        else:
+            self.config = config
+            
+        # DB 연결 설정
+        db_conf = self.config['database']
+        # URL 끝에 client_encoding 추가
+        url = f"postgresql://{db_conf['user']}:{db_conf['password']}@{db_conf['host']}:{db_conf['port']}/{db_conf['dbname']}?client_encoding=utf8"
         
-        # 데이터 소스 설정
-        self.data_source = config.get('data_source', 'file')
-        self.use_db = (self.data_source == 'db')
-
-        if self.use_db and not HAS_SQLALCHEMY:
-            print("⚠️ SQLAlchemy가 없습니다. 'file' 모드로 전환합니다.")
-            self.use_db = False
-
-        # DB 엔진 초기화
-        self.engine = None
-        if self.use_db:
-            db_conf = config['database']
-            # [수정] URL 끝에 ?client_encoding=utf8 추가하여 한글 깨짐 방지
-            url = f"postgresql://{db_conf['user']}:{db_conf['password']}@{db_conf['host']}:{db_conf['port']}/{db_conf['dbname']}?client_encoding=utf8"
+        try:
             self.engine = create_engine(url)
-            print(f"🔌 DB 연결 설정됨: {url.split('@')[-1]}")
+            logger.info(f"🔌 DB 연결 초기화됨: {db_conf['host']}/{db_conf['dbname']}")
+        except Exception as e:
+            logger.error(f"❌ DB 연결 실패: {e}")
+            raise e
 
-        # 경로 설정
-        self.base_path = base_path if base_path else config['data']['base_path']
-        if not os.path.isabs(self.base_path):
-            self.base_path = os.path.join(get_project_root(), self.base_path)
-
-        # Time Decay 설정
-        time_decay_config = config.get('time_decay', {})
-        self.news_half_life = time_decay_config.get('news_half_life_days', 7)
-        self.min_weight = time_decay_config.get('min_weight', 0.01)
-
-        # 캐시
-        self._users_df = None
-        self._user_categories_df = None
+        # 캐시 변수
         self._news_dict = None
-        self._ctr_train_df = None
         self._user_profiles = None
 
-    def _get_path(self, filename: str) -> str:
-        return os.path.join(self.base_path, filename)
+    def _parse_pgvector(self, vector_str: str) -> np.ndarray:
+        """
+        PostgreSQL vector/text 타입의 문자열을 numpy array로 변환
+        예: "[0.1, 0.2, ...]" -> np.array([0.1, 0.2, ...])
+        """
+        if not vector_str:
+            return np.zeros(1024, dtype=np.float32)
+        
+        try:
+            # 1. 불필요한 괄호 및 공백 제거
+            clean_str = vector_str.replace('[', '').replace(']', '').replace('{', '').replace('}', '').strip()
+            
+            # 2. 쉼표로 분리
+            if ',' in clean_str:
+                parts = clean_str.split(',')
+            else:
+                # 쉼표가 없는 경우 (공백 구분일 수도 있음)
+                parts = clean_str.split()
+                
+            # 3. float 변환
+            return np.array([float(x) for x in parts if x], dtype=np.float32)
+            
+        except Exception as e:
+            logger.warning(f"⚠️ 벡터 파싱 실패: {e} (Zero vector 반환)")
+            return np.zeros(1024, dtype=np.float32)
 
     def _load_from_db(self, query: str, params: dict = None) -> pd.DataFrame:
-        if not self.engine:
-            raise ConnectionError("DB Engine not initialized")
         with self.engine.connect() as conn:
             return pd.read_sql(text(query), conn, params=params)
 
     # -------------------------------------------------------------------------
-    # 1. Basic Loaders (테이블 이름 소문자 & 인코딩 처리)
+    # 1. Data Loaders (Core)
     # -------------------------------------------------------------------------
 
-    def load_users(self) -> pd.DataFrame:
-        if self._users_df is not None: return self._users_df
-        
-        if self.use_db:
-            # user는 예약어이므로 "user"
-            query = 'SELECT user_id, user_gender_code, user_birth_year FROM "user"'
-            self._users_df = self._load_from_db(query)
-        else:
-            path = self._get_path(self.config['data']['users'])
-            self._users_df = pd.read_csv(path)
-            
-        return self._users_df
-
-    def load_user_preferred_categories(self) -> pd.DataFrame:
-        if self._user_categories_df is not None: return self._user_categories_df
-        
-        if self.use_db:
-            query = 'SELECT user_id, category_id FROM user_preferred_categories'
-            self._user_categories_df = self._load_from_db(query)
-        else:
-            path = self._get_path(self.config['data']['user_preferred_categories'])
-            self._user_categories_df = pd.read_csv(path)
-            
-        return self._user_categories_df
-
     def load_embedded_news(self) -> Dict[int, NewsItem]:
-        if self._news_dict is not None: return self._news_dict
+        """
+        뉴스레터 메타데이터 + 임베딩 + 카테고리를 DB에서 로드하여 NewsItem 객체로 반환
+        """
+        if self._news_dict is not None: 
+            return self._news_dict
         
-        # 1. 임베딩 로드 (PKL)
-        pkl_path = self._get_path(self.config['data']['embedded_news'])
-        with open(pkl_path, 'rb') as f:
-            pkl_data = pickle.load(f)
-
+        logger.info("📡 뉴스레터 데이터 로딩 중 (메타데이터 + 임베딩)...")
+        
+        # 1. 뉴스 메타데이터 및 임베딩 조회 (JOIN 없이 단일 테이블 조회)
+        # 안정성을 위해 날짜 필터 없이 로드 (Log에 있는 과거 뉴스 대응)
+        news_query = """
+            SELECT 
+                news_letter_id, 
+                news_letter_title, 
+                news_letter_content, 
+                news_letter_embedding, 
+                news_letter_created_at 
+            FROM news_letter
+        """
+        news_df = self._load_from_db(news_query)
+        
+        # 2. 뉴스 카테고리 매핑 조회
+        cat_query = "SELECT news_letter_id, category_id FROM news_letter_categories"
+        cat_df = self._load_from_db(cat_query)
+        
+        # 메모리 상에서 매핑 (뉴스 ID -> 카테고리 ID 리스트)
+        cat_map = cat_df.groupby('news_letter_id')['category_id'].apply(list).to_dict()
+        
         self._news_dict = {}
+        for _, row in news_df.iterrows():
+            nid = int(row['news_letter_id'])
+            
+            # 임베딩 파싱
+            emb_vec = self._parse_pgvector(str(row['news_letter_embedding']))
+            
+            # 카테고리 매핑
+            cats = cat_map.get(nid, [])
+            
+            self._news_dict[nid] = NewsItem(
+                news_id=nid,
+                title=row['news_letter_title'],
+                content=row['news_letter_content'],
+                category_ids=cats,
+                embedding=emb_vec,
+                timestamp=pd.to_datetime(row['news_letter_created_at'])
+            )
+            
+        logger.info(f"✅ 뉴스 데이터 로드 완료: {len(self._news_dict)}건")
         
-        if self.use_db:
-            # 2. 메타데이터 로드 (DB)
-            query = """
-                SELECT news_letter_id, news_letter_title, news_letter_content, news_letter_created_at 
-                FROM news_letter
-            """
-            meta_df = self._load_from_db(query)
-            
-            # 카테고리 로드
-            cat_query = 'SELECT news_letter_id, category_id FROM news_letter_categories'
-            cat_df = self._load_from_db(cat_query)
-            cat_map = cat_df.groupby('news_letter_id')['category_id'].apply(list).to_dict()
-            
-            for _, row in meta_df.iterrows():
-                nid = int(row['news_letter_id'])
-                
-                # 임베딩 매핑
-                if nid in pkl_data:
-                    emb = pkl_data[nid].get('embedding', np.zeros(1024))
-                else:
-                    emb = np.zeros(1024)
-                
-                if isinstance(emb, list): emb = np.array(emb, dtype=np.float32)
-
-                self._news_dict[nid] = NewsItem(
-                    news_id=nid,
-                    title=row['news_letter_title'],
-                    content=row['news_letter_content'],
-                    category_ids=cat_map.get(nid, []),
-                    embedding=emb,
-                    timestamp=pd.to_datetime(row['news_letter_created_at'])
-                )
-        else:
-            # File 모드
-            cat_path = self._get_path(self.config['data']['newsletter_categories_map'])
-            cat_df = pd.read_csv(cat_path)
-            cat_map = cat_df.groupby('news_letter_id')['category_id'].apply(list).to_dict()
-            
-            for nid, item_dict in pkl_data.items():
-                emb = np.array(item_dict.get('embedding', np.zeros(1024)), dtype=np.float32)
-                self._news_dict[nid] = NewsItem(
-                    news_id=nid,
-                    title=item_dict.get('title', ''),
-                    content=item_dict.get('content', ''),
-                    category_ids=cat_map.get(nid, []),
-                    embedding=emb,
-                    timestamp=pd.to_datetime(item_dict.get('created_at', datetime.now()))
-                )
-                
+        # (선택) pkl 캐싱 로직은 필요하다면 유지, 여기서는 DB 우선이므로 생략 가능하나
+        # 피처 엔지니어링 속도를 위해 로컬 캐싱을 원하면 유지. 일단은 DB Direct로 구현.
         return self._news_dict
 
-    def load_ctr_logs(self, split: str = 'train') -> pd.DataFrame:
-        if split == 'train' and self._ctr_train_df is not None:
-            return self._ctr_train_df
+    def load_ctr_logs(self, split: str = None) -> pd.DataFrame:
+        """
+        사용자 클릭 로그 로드 (최근 N일치만)
+        split 인자는 호환성을 위해 유지하지만, 실제 분할은 main_lgbm.py에서 수행함.
+        여기서는 '전체 유효 기간'의 로그를 다 가져옴.
+        """
+        days = self.config['data'].get('max_history_days', 28)
+        
+        logger.info(f"📡 최근 {days}일간의 클릭 로그 조회 중...")
+        
+        # PostgreSQL Interval 문법 사용
+        query = f"""
+            SELECT 
+                l.user_id, 
+                l.news_letter_id, 
+                l.created_at as timestamp
+            FROM user_newsletter_ctr_log l
+            WHERE l.created_at >= NOW() - INTERVAL '{days} DAY'
+        """
+        
+        df = self._load_from_db(query)
+        
+        # timestamp 변환
+        if not df.empty:
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
             
-        if self.use_db:
-            # JOIN 쿼리: 로그와 뉴스레터 발행일을 함께 조회
-            query = """
-                SELECT 
-                    l.user_id, 
-                    l.news_letter_id, 
-                    l.created_at as log_timestamp,
-                    n.news_letter_created_at as pub_date
-                FROM user_newsletter_ctr_log l
-                JOIN news_letter n ON l.news_letter_id = n.news_letter_id
-            """
-            
-            print(f"🔍 [Debug] DB에서 로그 조회 시작 ({split})...")
-            df = self._load_from_db(query)
-            print(f"🔍 [Debug] Raw Logs Loaded: {len(df)} rows")
-            
-            if df.empty:
-                print("❌ [Error] DB에서 가져온 로그가 0건입니다! JOIN 조건을 만족하는 데이터가 없거나 테이블이 비어있습니다.")
-                return pd.DataFrame(columns=['user_id', 'news_letter_id', 'timestamp', 'is_clicked', 'pub_date'])
+        logger.info(f"✅ 로그 로드 완료: {len(df)}건")
+        return df
 
-            df['is_clicked'] = 1 
-            df['timestamp'] = pd.to_datetime(df['log_timestamp'])
-            df['pub_date'] = pd.to_datetime(df['pub_date'])
-            
-            # [디버깅] 실제 데이터의 날짜 범위 출력
-            min_date = df['pub_date'].min()
-            max_date = df['pub_date'].max()
-            print(f"📅 [Data Check] 뉴스 발행일 범위: {min_date} ~ {max_date}")
-
-            threshold_str = self.config.get('data', {}).get('validation_threshold_date', None)
-            
-            if threshold_str:
-                threshold_date = pd.to_datetime(threshold_str)
-                print(f"✂️ [Filter] 기준 날짜: {threshold_date}")
-                
-                if split == 'train':
-                    # 기준일 미만
-                    filtered_df = df[df['pub_date'] < threshold_date].copy()
-                    print(f"   👉 Train Set (< {threshold_date}): {len(filtered_df)} rows selected")
-                    self._ctr_train_df = filtered_df
-                    return filtered_df
-                else:
-                    # 기준일 이상
-                    filtered_df = df[df['pub_date'] >= threshold_date].copy()
-                    print(f"   👉 Valid Set (>= {threshold_date}): {len(filtered_df)} rows selected")
-                    return filtered_df
-            
-            else:
-                # Fallback: 날짜 설정 없음
-                print("⚠️ 날짜 설정이 없어 비율(80:20)로 분할합니다.")
-                df = df.sort_values('timestamp')
-                split_idx = int(len(df) * 0.8)
-                
-                if split == 'train':
-                    self._ctr_train_df = df.iloc[:split_idx].copy()
-                    return self._ctr_train_df
-                else:
-                    return df.iloc[split_idx:].copy()
-
-        else:
-            # File 모드
-            filename = self.config['data'].get(f'ctr_logs_{split}', f'ctr_logs_{split}.csv')
-            df = pd.read_csv(self._get_path(filename))
-            if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-            return df
-            
-
-    def load_newsletter_categories_map(self) -> pd.DataFrame:
-        if self.use_db:
-            query = 'SELECT news_letter_id, category_id FROM news_letter_categories'
-            return self._load_from_db(query)
-        else:
-            path = self._get_path(self.config['data']['newsletter_categories_map'])
-            return pd.read_csv(path)
+    def load_user_preferred_categories(self) -> pd.DataFrame:
+        """사용자 선호 카테고리 (Static Snapshot)"""
+        query = "SELECT user_id, category_id FROM user_preferred_categories"
+        return self._load_from_db(query)
 
     # -------------------------------------------------------------------------
     # 2. User Profile Builder
     # -------------------------------------------------------------------------
 
     def build_user_profiles(self) -> Dict[int, UserProfile]:
+        """
+        유저 프로필 생성
+        (참고: category_half_life_days 로직은 여기서 제거됨 - Todo 1번 반영)
+        """
         if self._user_profiles is not None: return self._user_profiles
             
-        print("👤 사용자 프로필 빌드 중 (History Embedding 계산 포함)...")
+        logger.info("👤 사용자 프로필 빌드 중...")
         
-        users_df = self.load_users()
+        # 유저 목록 조회 (메타데이터가 있다면)
+        user_query = 'SELECT user_id FROM "user"' # user는 예약어
+        users_df = self._load_from_db(user_query)
+        
+        # 선호 카테고리
         pref_cat_df = self.load_user_preferred_categories()
-        news_dict = self.load_embedded_news()
-        logs_df = self.load_ctr_logs('train')
+        user_cat_map = pref_cat_df.groupby('user_id')['category_id'].apply(list).to_dict()
         
-        # logs_df가 비었을 때 {} 대신 None 할당 (GroupBy 객체와 구분)
+        # 뉴스 임베딩 (히스토리 계산용)
+        news_dict = self.load_embedded_news()
+        
+        # 로그 (히스토리 계산용 - 전체 로드)
+        logs_df = self.load_ctr_logs()
+        
+        # 로그가 있으면 히스토리 임베딩 계산
         user_logs_map = None
         if not logs_df.empty:
             user_logs_map = logs_df.groupby('user_id')
-        
-        user_cat_map = pref_cat_df.groupby('user_id')['category_id'].apply(list).to_dict()
-        
+            
         profiles = {}
-        now = datetime.now()
         
+        # Time Decay 설정
+        news_half_life = self.config['time_decay']['news_half_life_days']
+        min_weight = self.config['time_decay']['min_weight']
+        now = datetime.now()
+
         for _, row in users_df.iterrows():
             uid = int(row['user_id'])
             
-            # Age
-            age = now.year - int(row['user_birth_year'])
-            if age < 18: age_band = 0
-            elif age <= 24: age_band = 1
-            elif age <= 34: age_band = 2
-            elif age <= 44: age_band = 3
-            elif age <= 54: age_band = 4
-            else: age_band = 5
+            # History Embedding Calculation
+            hist_emb = np.zeros(1024, dtype=np.float32)
             
-            # Gender
-            gender_idx = int(row['user_gender_code']) if 'user_gender_code' in row else 0
-            
-            # History Embedding
-            hist_emb = np.zeros(1024)
-            
-            # user_logs_map이 None이 아니고, 해당 유저 그룹이 있을 때만 접근
             if user_logs_map is not None and uid in user_logs_map.groups:
                 u_logs = user_logs_map.get_group(uid)
                 vectors = []
@@ -360,11 +242,11 @@ class DataLoader:
                     if nid in news_dict:
                         vec = news_dict[nid].embedding
                         
-                        days_ago = 0
-                        if 'timestamp' in log and pd.notnull(log['timestamp']):
-                            days_ago = (now - log['timestamp']).days
-                        
-                        w = compute_time_decay(days_ago, self.news_half_life, self.min_weight)
+                        # [뉴스 신선도 반감기 적용]
+                        # 로그 발생 시점이 아니라 '현재 시점' 기준 과거 클릭의 가중치 감소
+                        days_ago = (now - log['timestamp']).days
+                        w = pow(0.5, days_ago / news_half_life)
+                        w = max(w, min_weight)
                         
                         vectors.append(vec)
                         weights.append(w)
@@ -372,29 +254,87 @@ class DataLoader:
                 if vectors:
                     hist_emb = np.average(vectors, axis=0, weights=weights)
 
+            # [수정] category_half_life_days 관련 로직 제거됨.
+            # DB에 있는 onboarding_categories를 그대로 사용.
+            
             profiles[uid] = UserProfile(
                 user_id=uid,
-                age_band_idx=age_band,
-                gender_idx=gender_idx,
+                # 현재 DB "user" 테이블에 age/gender 컬럼이 명시되지 않아 기본값(0) 처리
+                # 필요 시 쿼리에 추가해야 함
+                age_band_idx=0, 
+                gender_idx=0,
                 onboarding_categories=user_cat_map.get(uid, []),
                 history_embedding=hist_emb
             )
             
         self._user_profiles = profiles
-        print(f"✅ 프로필 생성 완료: {len(profiles)}명")
+        logger.info(f"✅ 프로필 생성 완료: {len(profiles)}명")
         return self._user_profiles
 
-    # Helper methods for LGBMDataset
+    # -------------------------------------------------------------------------
+    # 3. Output Handler
+    # -------------------------------------------------------------------------
+
+    def save_inference_results(self, results_df: pd.DataFrame):
+        """
+        추론 결과를 저장 (Debug: CSV / Prod: DB Insert)
+        """
+        mode = self.config.get('execution_env', 'debug')
+        
+        # 1. Debug Mode (CSV 저장)
+        if mode == 'debug':
+            res_dir = self.config['output']['results_dir']
+            os.makedirs(res_dir, exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = os.path.join(res_dir, f"rec_{timestamp}.csv")
+            
+            results_df.to_csv(path, index=False)
+            logger.info(f"💾 [Debug] 결과 CSV 저장 완료: {path}")
+            
+        # 2. Production Mode (DB Insert)
+        elif mode == 'production':
+            logger.info("💾 [Production] DB에 결과 업로드 시작...")
+            
+            # user_id 별로 news_letter_ids 리스트 묶기
+            # 가정: results_df는 ['user_id', 'news_letter_id'] 컬럼을 가짐
+            grouped = results_df.groupby('user_id')['news_letter_id'].apply(list).reset_index()
+            
+            # DB Insert를 위한 데이터 준비
+            insert_data = []
+            for _, row in grouped.iterrows():
+                insert_data.append({
+                    'uid': int(row['user_id']),
+                    'nids': json.dumps([int(x) for x in row['news_letter_id']]), # JSON array string
+                })
+                
+            if not insert_data:
+                logger.warning("⚠️ 저장할 추론 결과가 없습니다.")
+                return
+
+            # Bulk Insert Query
+            # created_at은 DB의 NOW() 사용
+            insert_query = text("""
+                INSERT INTO news_letter_today_batch (user_id, news_letter_ids, created_at)
+                VALUES (:uid, :nids, NOW())
+            """)
+            
+            try:
+                with self.engine.begin() as conn: # Transaction
+                    conn.execute(insert_query, insert_data)
+                logger.info(f"✅ DB 업로드 완료: {len(insert_data)}명 유저")
+            except Exception as e:
+                logger.error(f"❌ DB 업로드 실패: {e}")
+                raise e
+
+    # -------------------------------------------------------------------------
+    # 4. Helpers
+    # -------------------------------------------------------------------------
+    
     def get_all_news_ids(self) -> List[int]:
         return list(self.load_embedded_news().keys())
 
     def get_all_user_ids(self) -> List[int]:
-        return self.load_users()['user_id'].tolist()
-    
-    def get_user_history_embedding(self, user_id: int) -> np.ndarray:
-        if self._user_profiles is None:
-            self.build_user_profiles()
-        profile = self._user_profiles.get(user_id)
-        if profile and profile.history_embedding is not None:
-            return profile.history_embedding
-        return np.zeros(1024)
+        # User 테이블 조회
+        query = 'SELECT user_id FROM "user"'
+        df = self._load_from_db(query)
+        return df['user_id'].tolist()

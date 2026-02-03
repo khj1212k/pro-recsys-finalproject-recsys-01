@@ -1,17 +1,23 @@
 # src/models/lgbm_ranker.py
-import os
 import lightgbm as lgb
 import pandas as pd
-import joblib
 from typing import Dict, Any
+from ..utils.common import get_logger
+
+# 로거 설정
+logger = get_logger("LGBMRanker")
 
 class LGBMRanker:
-    def __init__(self, model_path: str = "checkpoints/lgbm_model.pkl", config: Dict[str, Any] = None):
-        self.model_path = model_path
+    def __init__(self, params: Dict[str, Any] = None):
+        """
+        LightGBM Ranker Wrapper
+        Args:
+            params: LightGBM 모델 파라미터 (main_lgbm.py에서 전달받음)
+        """
         self.model = None
         
-        # 기본 파라미터 (Config가 없을 경우 대비)
-        default_params = {
+        # 기본 파라미터
+        self.params = {
             'objective': 'binary',
             'metric': 'auc',
             'boosting_type': 'gbdt',
@@ -21,33 +27,32 @@ class LGBMRanker:
             'random_state': 42,
             'verbose': -1
         }
+        
+        # 전달받은 파라미터로 덮어쓰기
+        if params:
+            self.params.update(params)
+            
+        # Early Stopping 등 학습 제어 파라미터는 params에서 분리하거나 별도 관리 가능하지만,
+        # 여기서는 params 내부에 섞여있다고 가정하거나 기본값 사용
         self.num_boost_round = 1000
         self.early_stopping_rounds = 50
         
-        # Config 적용
-        if config and 'lightgbm' in config:
-            lgbm_conf = config['lightgbm']
-            # 파라미터 덮어쓰기
-            if 'params' in lgbm_conf:
-                default_params.update(lgbm_conf['params'])
-            
-            self.num_boost_round = lgbm_conf.get('num_boost_round', 1000)
-            self.early_stopping_rounds = lgbm_conf.get('early_stopping_rounds', 50)
-            print(f"⚙️ LightGBM 설정 로드 완료 (LR: {default_params['learning_rate']}, Leaves: {default_params['num_leaves']})")
-            
-        self.params = default_params
+        logger.info(f"⚙️ LightGBM 설정: LR={self.params.get('learning_rate')}, Leaves={self.params.get('num_leaves')}")
 
     def train(self, train_df: pd.DataFrame, valid_df: pd.DataFrame = None):
-        """모델 학습"""
+        """
+        모델 학습 (저장은 main_lgbm.py에서 수행)
+        """
         # Feature와 Label 분리
+        # (주의: _timestamp 컬럼은 main_lgbm.py에서 이미 drop 되었으므로 걱정 X)
         drop_cols = ['user_id', 'news_id', 'label']
         features = [c for c in train_df.columns if c not in drop_cols]
         
         X_train = train_df[features]
         y_train = train_df['label']
         
-        print(f"🏋️ LightGBM 학습 시작 (Features: {len(features)}개)")
-        print(f"   목록: {features}")
+        logger.info(f"🏋️ 학습 시작 (Features: {len(features)}개)")
+        # logger.info(f"   Feature List: {features}") # 너무 길면 주석 처리
 
         lgb_train = lgb.Dataset(X_train, y_train)
         
@@ -60,12 +65,13 @@ class LGBMRanker:
             lgb_valid = lgb.Dataset(X_valid, y_valid, reference=lgb_train)
             eval_set = [lgb_valid]
             
-            # Early Stopping 적용
+            # Early Stopping
             callbacks.append(lgb.early_stopping(stopping_rounds=self.early_stopping_rounds))
-            print(f"   ✅ 검증 데이터 감지: Early Stopping 활성화 (Patience: {self.early_stopping_rounds})")
+            logger.info(f"   ✅ 검증 데이터 감지: Early Stopping 활성화 (Patience: {self.early_stopping_rounds})")
         else:
-            print("   ⚠️ 검증 데이터 없음: Early Stopping 비활성화")
+            logger.info("   ⚠️ 검증 데이터 없음: Early Stopping 비활성화")
 
+        # 학습 수행
         self.model = lgb.train(
             self.params,
             lgb_train,
@@ -73,29 +79,27 @@ class LGBMRanker:
             valid_sets=eval_set,
             callbacks=callbacks
         )
-        
-        os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
-        joblib.dump(self.model, self.model_path)
-        print(f"💾 모델 저장 완료: {self.model_path}")
+        logger.info("✅ 모델 학습 완료")
 
     def predict(self, inference_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        예측 수행 (스코어링)
+        """
         if self.model is None:
-            self.load()
+            raise ValueError("모델이 로드되지 않았습니다.")
 
-        drop_cols = ['user_id', 'news_id', 'label']
+        drop_cols = ['user_id', 'news_id', 'label', 'score'] # score가 혹시 있으면 제외
         features = [c for c in inference_df.columns if c not in drop_cols]
         
+        # 예측
         X_test = inference_df[features]
         scores = self.model.predict(X_test)
         
+        # 결과 정리
         result_df = inference_df.copy()
         result_df['score'] = scores
+        
+        # User별, 점수별 정렬
         result_df = result_df.sort_values(['user_id', 'score'], ascending=[True, False])
+        
         return result_df
-
-    def load(self):
-        if os.path.exists(self.model_path):
-            self.model = joblib.load(self.model_path)
-            print(f"📂 모델 로드 완료: {self.model_path}")
-        else:
-            raise FileNotFoundError(f"모델 파일이 없습니다: {self.model_path}")

@@ -4,33 +4,36 @@ from sqlalchemy import create_engine, text
 from typing import Dict, List
 import json
 import os
+import sys
 from datetime import datetime
 
 # 프로젝트 루트 경로 추가
-import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from src.utils.common import load_config
-from src.utils.logger import setup_logger
 
-logger = setup_logger("StatsAggregator")
+# [수정] logger.py 삭제 및 common.py 통합 반영
+from src.utils.common import load_config, get_logger
+
+# [수정] setup_logger -> get_logger
+logger = get_logger("StatsAggregator")
 
 class DailyStatsAggregator:
     """
     Cold Start 유저를 위한 통계 기반 추천 생성기
     - 전체 인기 뉴스
     - 나이대별 인기 뉴스
-    - 성별 인기 뉴스
     """
     
     def __init__(self):
         config = load_config()
         db_conf = config['database']
+        # URL 생성
         url = f"postgresql://{db_conf['user']}:{db_conf['password']}@{db_conf['host']}:{db_conf['port']}/{db_conf['dbname']}?client_encoding=utf8"
         self.engine = create_engine(url)
         self.top_k = config['recommendation'].get('top_k', 20)
         
     def get_global_top_k(self, days_ago: int = 1) -> List[int]:
         """전체 인기 뉴스 (최근 N일 기준)"""
+        logger.info(f"📊 Global Top-K 집계 중 (최근 {days_ago}일)...")
         query = text(f"""
             SELECT news_letter_id, COUNT(*) as click_cnt
             FROM user_newsletter_ctr_log
@@ -47,8 +50,8 @@ class DailyStatsAggregator:
 
     def get_age_group_top_k(self, days_ago: int = 1) -> Dict[int, List[int]]:
         """나이대별 인기 뉴스"""
+        logger.info(f"📊 Age Group Top-K 집계 중 (최근 {days_ago}일)...")
         # User 테이블과 조인하여 나이대 계산 후 그룹핑
-        # (PostgreSQL EXTRACT YEAR 사용 가정)
         query = text(f"""
             SELECT 
                 CASE 
@@ -76,7 +79,7 @@ class DailyStatsAggregator:
         return result
 
     def save_stats_to_json(self):
-        """계산 결과를 JSON으로 저장 (API 서버 서빙용)"""
+        """계산 결과를 JSON으로 저장"""
         stats = {
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "global_top": self.get_global_top_k(),
@@ -89,7 +92,7 @@ class DailyStatsAggregator:
         with open(save_path, "w", encoding='utf-8') as f:
             json.dump(stats, f, ensure_ascii=False, indent=2)
             
-        logger.info(f"📊 통계 데이터 저장 완료: {save_path}")
+        logger.info(f"✅ 통계 데이터 저장 완료: {save_path}")
         return stats
 
 if __name__ == "__main__":

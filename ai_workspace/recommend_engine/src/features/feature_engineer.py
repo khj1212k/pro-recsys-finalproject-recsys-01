@@ -2,27 +2,29 @@
 import pandas as pd
 import numpy as np
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
 from ..data.data_loader import DataLoader
+from ..utils.common import get_logger
+
+logger = get_logger("FeatureEngineer")
 
 class FeatureEngineer:
     def __init__(self, data_loader: DataLoader):
         self.data_loader = data_loader
         self.config = data_loader.config
         
-        print("🛠️ Feature Engineer 초기화 중...")
-        # 속도 향상을 위해 데이터 미리 로드 (Memory Caching)
+        logger.info("🛠️ Feature Engineer 초기화 중...")
+        
+        # 데이터 미리 로드 (Memory Caching)
+        # NewsItem 객체 내에 category_ids와 embedding이 이미 포함되어 있음
         self.news_dict = self.data_loader.load_embedded_news()
+        
+        # 유저 프로필 로드 (카테고리 정보 포함)
         self.user_profiles = self.data_loader.build_user_profiles()
         
-        # 카테고리 매핑 로드
-        self.newsletter_categories = self.data_loader.load_newsletter_categories_map()
-        # 뉴스 ID별 카테고리 리스트 딕셔너리 변환
-        self.news_cat_map = self.newsletter_categories.groupby('news_letter_id')['category_id'].apply(list).to_dict()
-
     def _calculate_cosine_sim(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
         """코사인 유사도 안전하게 계산"""
         if vec1 is None or vec2 is None:
@@ -46,17 +48,28 @@ class FeatureEngineer:
                 return datetime.strptime(dt_val, "%Y-%m-%d %H:%M:%S")
         return dt_val
 
-    def create_features(self, user_ids: List[int], news_ids: List[int], labels: List[int] = None) -> pd.DataFrame:
+    def create_features(self, 
+                        user_ids: List[int], 
+                        news_ids: List[int], 
+                        labels: List[int] = None, 
+                        timestamps: List[datetime] = None) -> pd.DataFrame:
         """
         (User, News) 쌍 리스트를 받아 Feature DataFrame 반환
+        
+        Args:
+            user_ids: 유저 ID 리스트
+            news_ids: 뉴스 ID 리스트
+            labels: 정답 레이블 (Optional)
+            timestamps: [New] 피처 계산의 기준이 되는 시간 리스트 (로그 발생 시점 또는 가상 시점)
         """
         if len(user_ids) != len(news_ids):
             raise ValueError("User IDs and News IDs must have the same length")
 
         features = []
-        now = datetime.now()
+        # timestamps가 없을 경우를 대비한 기본값 (현재 시간)
+        default_now = datetime.now()
 
-        # 진행률 표시와 함께 루프
+        # tqdm 설정
         iterator = zip(user_ids, news_ids)
         if len(user_ids) > 1000:
             iterator = tqdm(iterator, total=len(user_ids), desc="Generating Features", ncols=80)
@@ -65,7 +78,7 @@ class FeatureEngineer:
             user_profile = self.user_profiles.get(uid)
             news_item = self.news_dict.get(nid)
             
-            # Cold Start 방어 로직 (데이터가 없으면 스킵)
+            # Cold Start / 데이터 누락 방어 로직
             if not user_profile or not news_item:
                 continue
 
@@ -77,12 +90,21 @@ class FeatureEngineer:
                 row['label'] = labels[i]
 
             # ---------------------------------------------------------
-            # 1. Recency Features (Time Decay 핵심)
+            # 1. Recency Features (Point-in-Time Correctness 적용)
             # ---------------------------------------------------------
+            # 시스템 시간이 아니라, 전달받은 '기준 시간(timestamps[i])' 사용
+            ref_time = timestamps[i] if timestamps is not None else default_now
+            
+            # [New] 정렬을 위해 원본 시간도 잠시 저장 (모델 입력 전 반드시 삭제해야 함)
+            row['_timestamp'] = ref_time
+
+            # 뉴스 발행 시간
             news_time = self._parse_datetime(news_item.timestamp)
-            # 시간 차이 (시간 단위)
-            diff_hours = (now - news_time).total_seconds() / 3600.0
-            diff_hours = max(0, diff_hours)
+            
+            # 시간 차이 계산 (기준 시간 - 발행 시간)
+            # 미래 데이터(음수)가 나올 경우 0으로 처리 (로그 시간 오차 등 방어)
+            diff_hours = (ref_time - news_time).total_seconds() / 3600.0
+            diff_hours = max(0.0, diff_hours) 
             
             row['hours_since_published'] = diff_hours
             row['is_fresh_24h'] = 1 if diff_hours <= 24 else 0
@@ -91,23 +113,24 @@ class FeatureEngineer:
             # ---------------------------------------------------------
             # 2. Semantic Features (Embedding Similarity)
             # ---------------------------------------------------------
-            # user_profile.history_embedding은 이미 Time Decay가 적용된 Weighted Average 벡터임
             sim_score = self._calculate_cosine_sim(user_profile.history_embedding, news_item.embedding)
             row['history_cosine_similarity'] = sim_score
 
             # ---------------------------------------------------------
-            # 3. Explicit Match Features (Category)
+            # 3. Explicit Match Features (Category) - [Logic Simplified]
             # ---------------------------------------------------------
+            # 시간 감쇠 없이 단순 집합(Set) 연산 수행
             user_cats = set(user_profile.onboarding_categories)
-            news_cats = set(self.news_cat_map.get(nid, []))
+            news_cats = set(news_item.category_ids) if news_item.category_ids else set()
             
             # 교집합 개수
             match_cnt = len(user_cats.intersection(news_cats))
+            
             row['category_match_count'] = match_cnt
             row['is_category_match'] = 1 if match_cnt > 0 else 0
             
-            # 뉴스 카테고리 (대표 카테고리 하나만 Feature로 사용 - 모델이 카테고리 편향 학습)
-            row['news_category_repr'] = list(news_cats)[0] if news_cats else 0
+            # 뉴스 카테고리 (대표 카테고리 하나만 Feature로 사용)
+            row['news_category_repr'] = list(news_cats)[0] if news_cats else 1
 
             # ---------------------------------------------------------
             # 4. User Meta Features

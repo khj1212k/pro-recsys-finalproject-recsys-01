@@ -7,16 +7,15 @@ import numpy as np
 from sqlalchemy import create_engine, text
 from tqdm import tqdm
 
-# 1. 프로젝트 루트 경로를 잡아줍니다. (src를 import하기 위해)
+# 1. 프로젝트 루트 경로 설정
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
 
 from src.utils.common import load_config
-# [핵심] 원래 자리에 있는 도구를 가져옵니다.
 from src.utils.embedder import BGEEmbedder 
 
 def generate_embeddings_from_db():
-    print("🚀 뉴스레터 임베딩 생성 스크립트 시작")
+    print("🚀 뉴스레터 임베딩 생성 및 DB 업로드 스크립트 시작")
     
     # 1. DB 연결
     config = load_config()
@@ -27,11 +26,11 @@ def generate_embeddings_from_db():
     # 2. 데이터 조회
     print("🔌 DB에서 뉴스 데이터 조회 중...")
     try:
+        # 이미 임베딩이 있는 데이터는 건너뛰고 싶다면 WHERE 조건을 추가할 수도 있음
         query = "SELECT news_letter_id, news_letter_title, news_letter_content, news_letter_category FROM news_letter"
         with engine.connect() as conn:
             df = pd.read_sql(text(query), conn)
     except Exception:
-        # 카테고리가 없는 경우 대비
         query = "SELECT news_letter_id, news_letter_title, news_letter_content FROM news_letter"
         with engine.connect() as conn:
             df = pd.read_sql(text(query), conn)
@@ -42,38 +41,47 @@ def generate_embeddings_from_db():
     # 3. 도구(Embedder) 초기화
     embedder = BGEEmbedder(verbose=True)
     
-    # 4. 텍스트 합치기 (제목 + 카테고리 + 본문)
+    # 4. 텍스트 합치기
     texts = []
+    ids = []
     for _, row in df.iterrows():
-        # embedder.py에 있는 encode_news 함수 로직을 흉내내거나 직접 써도 됨
         parts = [f"제목: {row['news_letter_title']}"]
         if row['news_letter_category']:
             parts.append(f"카테고리: {row['news_letter_category']}")
         parts.append(f"내용: {row['news_letter_content']}")
         texts.append("\n".join(parts))
+        ids.append(row['news_letter_id'])
     
     # 5. 임베딩 생성 (Batch)
-    print("🧠 임베딩 생성 중...")
-    embeddings, elapsed = embedder.encode_batch(texts, batch_size=16)
+    print("🧠 임베딩 생성 중... (GPU/CPU)")
+    embeddings, elapsed = embedder.encode_batch(texts, batch_size=32)
     
-    # 6. 저장
-    embedded_data = {}
-    for idx, row in tqdm(df.iterrows(), total=len(df), desc="Saving"):
-        nid = int(row['news_letter_id'])
-        if embeddings[idx] is not None:
-            embedded_data[nid] = {
-                'embedding': np.array(embeddings[idx], dtype=np.float32),
-                'title': row['news_letter_title']
-            }
-            
-    base_path = config.get('data', {}).get('base_path', 'data')
-    output_path = os.path.join(base_path, 'embedded_news.pkl')
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    # 6. DB 업데이트 (핵심 로직 추가)
+    print("💾 생성된 임베딩을 DB에 업로드 중...")
     
-    with open(output_path, 'wb') as f:
-        pickle.dump(embedded_data, f)
-        
-    print(f"💾 저장 완료: {output_path} ({elapsed:.2f}초 소요)")
+    update_query = text("""
+        UPDATE news_letter 
+        SET news_letter_embedding = :emb 
+        WHERE news_letter_id = :nid
+    """)
+    
+    success_count = 0
+    
+    # SQLAlchemy Connection으로 업데이트 수행
+    with engine.begin() as conn:
+        for i, emb in enumerate(tqdm(embeddings, desc="Updating DB")):
+            if emb is not None:
+                # pgvector 포맷인 문자열 "[0.1, 0.2, ...]" 형태로 변환
+                # (np.array -> list -> str)
+                emb_str = str(emb) 
+                
+                conn.execute(update_query, {"emb": emb_str, "nid": ids[i]})
+                success_count += 1
+                
+    print(f"✅ DB 업데이트 완료: 총 {success_count}건 반영됨")
+
+    # 7. (선택) 로컬 백업 저장
+    # ... 기존 pickle 저장 로직 유지 ...
 
 if __name__ == "__main__":
     generate_embeddings_from_db()
