@@ -5,11 +5,13 @@ Database maintenance helpers.
 from db.connection import get_connection
 
 
-def _safe_delete(cur, table: str):
+
+def _safe_truncate(cur, table: str):
     try:
-        cur.execute(f"DELETE FROM {table}")
-    except Exception:
-        pass
+        cur.execute(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE")
+    except Exception as e:
+        print(f"Warning: Failed to truncate {table}: {e}")
+
 
 
 def insert_initial_press_data():
@@ -34,12 +36,12 @@ def insert_initial_press_data():
 
     for press_name in press_list:
         try:
-            cur.execute("""
-                INSERT INTO press (press_name)
-                VALUES (%s)
-                ON CONFLICT (press_name) DO NOTHING;
-            """, (press_name,))
-            print(f"  ✓ {press_name}")
+            cur.execute("SELECT 1 FROM press WHERE press_name = %s", (press_name,))
+            if not cur.fetchone():
+                cur.execute("INSERT INTO press (press_name) VALUES (%s)", (press_name,))
+                print(f"  ✓ {press_name}")
+            else:
+                print(f"  - {press_name} (이미 존재)")
         except Exception as e:
             print(f"  ✗ {press_name} 삽입 실패: {e}")
 
@@ -79,12 +81,13 @@ def insert_initial_rss_url_data():
 
             if result:
                 press_id = result[0]
-                cur.execute("""
-                    INSERT INTO rss_url (press_id, uri)
-                    VALUES (%s, %s)
-                    ON CONFLICT (press_id, uri) DO NOTHING;
-                """, (press_id, uri))
-                print(f"  ✓ {press_name}: {uri}")
+                # rss_uri 테이블 확인 (테이블명 수정: rss_url -> rss_uri)
+                cur.execute("SELECT 1 FROM rss_uri WHERE press_id = %s AND uri = %s", (press_id, uri))
+                if not cur.fetchone():
+                    cur.execute("INSERT INTO rss_uri (press_id, uri) VALUES (%s, %s)", (press_id, uri))
+                    print(f"  ✓ {press_name}: {uri}")
+                else:
+                    print(f"  - {press_name}: {uri} (이미 존재)")
             else:
                 print(f"  ✗ {press_name} 언론사를 찾을 수 없습니다.")
         except Exception as e:
@@ -116,16 +119,16 @@ def insert_initial_category_data():
 
     for name, code in categories:
         try:
-            cur.execute("""
-                INSERT INTO category (category_name, category_code)
-                VALUES (%s, %s)
-                ON CONFLICT (category_name) DO NOTHING;
-            """, (name, code))
-            print(f"  ✓ {name}({code})")
+            cur.execute("SELECT 1 FROM category WHERE category_name = %s", (name,))
+            if not cur.fetchone():
+                cur.execute("INSERT INTO category (category_name, category_code) VALUES (%s, %s)", (name, code))
+                print(f"  ✓ {name}({code})")
+            else:
+                print(f"  - {name}({code}) (이미 존재)")
         except Exception as e:
             # UNIQUE 제약조건(category_code) 위반 시 에러 처리
             conn.rollback()
-            print(f"  ! {name}({code}) 삽입 건너뜀 (이미 존재하거나 코드 중복): {e}")
+            print(f"  ! {name}({code}) 삽입 건너뜀 (에러): {e}")
 
     conn.commit()
     conn.close()
@@ -142,20 +145,19 @@ def full_reset():
     conn = get_connection()
     cur = conn.cursor()
     try:
-        # 뉴스레터 관련 데이터만 초기화
-        # FK 제약을 피하기 위해 매핑 테이블부터 삭제
-        _safe_delete(cur, "news_letter_categories")
-        _safe_delete(cur, "news_letters_category")
-        _safe_delete(cur, "news_letter_today_batch")
-        _safe_delete(cur, "user_newsletter_ctr_log")
-        _safe_delete(cur, "cluster_history")
-        _safe_delete(cur, "news_letter")
-
-        # 기존 뉴스 원문은 유지하되 매핑만 제거
-        try:
-            cur.execute("UPDATE news_raw SET news_letter_id = NULL")
-        except Exception:
-            pass
+        # 뉴스 원문 및 뉴스레터 관련 데이터 초기화 (TRUNCATE로 ID 초기화 포함)
+        # CASCADE 옵션으로 연관된 자식 테이블(summary, news_letter_categories 등)도 함께 삭제됨
+        
+        # 1. 뉴스레터 테이블 (부모)
+        _safe_truncate(cur, "news_letter")
+        
+        # 2. 뉴스 원문 테이블 (부모)
+        _safe_truncate(cur, "news_raw")
+        
+        # 3. 그 외 로그성 테이블 (CASCADE에 포함되지 않았을 경우를 대비해 명시)
+        _safe_truncate(cur, "user_preferred_newsletter")
+        _safe_truncate(cur, "user_newsletter_ctr_log")
+        _safe_truncate(cur, "cluster_history")
 
         conn.commit()
     except Exception as e:

@@ -2,6 +2,7 @@
 import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -60,21 +61,19 @@ class Stage3_NewsEmbedding(PipelineStage):
                     logger.info(f"🚀 기사 {len(rows)}건 임베딩 시작 (Batch: {batch_size})...")
                     
                     # 배치 처리
-                    for i in range(0, len(rows), batch_size):
+                    for i in tqdm(range(0, len(rows), batch_size), desc="🚀 Embedding Articles", unit="batch"):
                         batch = rows[i:i+batch_size]
                         # 제목 + 본문 결합
                         texts = [f"{r[1]} {r[2]}"[:8000] for r in batch] 
-                        embeddings, elapsed = embedder.generate_embeddings_batch(texts, batch_size)
-                        logger.info(f"   - 소요시간: {elapsed:.2f}초")
+                        embeddings, _ = embedder.generate_embeddings_batch(texts, batch_size)
                         
                         # 저장
                         updates = [(emb, r[0]) for emb, r in zip(embeddings, batch)]
                         cur.executemany("UPDATE news_raw \
                                          SET embedding_result=%s \
                                          WHERE raw_news_id=%s", updates) # (emb, raw_news_id)
-                        count += len(updates)
                         conn.commit()
-                        logger.info(f"   - {count}/{len(rows)} 완료")
+                        count += len(updates)
                         
             except Exception as e:
                 conn.rollback()

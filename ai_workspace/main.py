@@ -16,7 +16,7 @@ from pipeline.runner import PipelineRunner
 from db.schema import full_reset
 from utils.logger import setup_logger
 
-load_dotenv(override=True) # .env 파일 로드, os.getenv()로 환경 변수 접근
+load_dotenv(override=False) # .env 파일 로드 (시스템 환경변수 우선)
 
 # 루트 로거 설정 (전역 로깅 설정 초기화)
 # - 이름("")을 비워두면 모든 로거의 부모인 Root Logger를 설정
@@ -30,7 +30,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="AI Workspace News Pipeline")
     
     # Execution options
-    parser.add_argument("--no-reset",   action="store_true",       help="Skip DB reset")
+    parser.add_argument("--reset",      action="store_true",       help="Reset test_db (schema kept, data cleared)")
     parser.add_argument("--workers",    type=int, default=8,       help="Number of workers for extraction")
     parser.add_argument("--limit",      type=int, default=None,    help="Limit number of clusters to process")
     parser.add_argument("--min-target", type=int, default=0,       help="Minimum target number of newsletters")
@@ -64,10 +64,15 @@ def main():
     logger.info(f"파이프라인 시작 (대상 DB: {os.getenv('DB_NAME')})")
     
     # DB 리셋 로직: 운영 DB 실수 방지를 위한 안전 확인
-    if not args.no_reset:
+    if args.reset:
+        cur_env = os.getenv("ENV", "dev")
+        if cur_env == "prod":
+            logger.error(f"🚫 [CRITICAL] 운영(prod) 환경에서는 DB 리셋이 절대 불가능합니다.")
+            sys.exit(1)
+
         db_name = os.getenv("DB_NAME", "")
         if db_name == 'test_db':
-            logger.info(f"🗑️  데이터베이스 초기화 진행: {db_name}")
+            logger.info(f"🗑️  데이터베이스 초기화 진행: {db_name} (ENV={cur_env})")
             full_reset()
         else:
             logger.warning(f"⚠️  전체 리셋 건너뜀 (DB_NAME={db_name} != test_db)")
@@ -78,7 +83,7 @@ def main():
     
     try:
         runner.run_full_pipeline(
-            reset_db=not args.no_reset,
+            reset_db=args.reset,
             num_workers=args.workers,
             force_cpu=args.force_cpu,
             limit=args.limit,

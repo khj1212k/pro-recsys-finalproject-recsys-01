@@ -22,7 +22,7 @@ tqdm
 FlagEmbedding==1.2.5
 transformers==4.36.0
 sentence-transformers==2.2.2
-torch
+# torch
 lxml_html_clean
 apache-airflow
 apache-airflow-providers-standard

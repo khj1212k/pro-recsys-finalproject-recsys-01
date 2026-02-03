@@ -6,7 +6,7 @@ import os
 from typing import Dict, Tuple
 from dotenv import load_dotenv
 
-load_dotenv(override=True)
+load_dotenv(override=False)
 
 
 class Environment:
