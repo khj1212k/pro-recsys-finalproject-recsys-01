@@ -1,169 +1,219 @@
-# AI Workspace - LangGraph News Pipeline
+# AI Workspace - Newsletter Generation Pipeline
 
-뉴스 클러스터링 및 뉴스레터 생성을 위한 LangGraph 기반 파이프라인입니다.
+A production-ready AI system for automated news aggregation, clustering, and newsletter generation.
 
-## 주요 기능
-
-- **HDBSCAN 클러스터링**: 유사한 뉴스 기사를 자동으로 그룹화
-- **LLM 기반 클러스터 평가**: 클러스터가 단일 이벤트/주제를 대표하는지 검증
-- **뉴스레터 자동 생성**: LLM을 활용한 통합 뉴스 브리핑 생성
-- **품질 평가 및 피드백 루프**: 생성된 뉴스레터의 품질을 평가하고 필요시 재생성
-- **문체 변환**: 공식적인 뉴스를 친근한 톤으로 변환 (이모티콘 포함)
-- **사용자 임베딩**: Time-decay weighted average 알고리즘으로 개인화된 사용자 프로파일 생성
-- **통합 LLM 클라이언트**: Naver HyperCLOVA X 및 OpenAI 지원
-
-## 설치
-
-```bash
-cd pro-recsys/ai_workspace
-pip install -r requirements.txt
-```
-
-## 설정
-
-1. `.env.example`을 `.env`로 복사
-2. LLM API 키 설정 (Naver HyperCLOVA X 또는 OpenAI)
-3. 데이터베이스 연결 정보 확인
-
-```bash
-cp .env.example .env
-# .env 파일 편집:
-# - LLM_PROVIDER=naver (또는 openai)
-# - NCP_CLOVASTUDIO_API_KEY=your_key (Naver 사용시)
-# - OPENAI_API_KEY=your_key (OpenAI 사용시)
-# - DB 연결 정보
-```
-
-## 사용법
-
-### 뉴스레터 파이프라인
-
-```bash
-# 전체 파이프라인 실행
-python main.py
-
-# 상위 5개 클러스터만 처리
-python main.py --limit 5
-
-# 데이터베이스 상태 확인
-python main.py --status
-
-# 클러스터링 파라미터 조정
-python main.py --min-cluster 5 --min-samples 3
-```
-
-### 사용자 임베딩 업데이트
-
-```bash
-# 임베딩이 없는 신규 사용자만 업데이트
-python update_user_embeddings.py --all
-
-# 모든 사용자 강제 업데이트
-python update_user_embeddings.py --all --force-all
-
-# 특정 사용자만 업데이트
-python update_user_embeddings.py --user-ids 1,2,3,4,5
-```
-
-## 프로젝트 구조
+## 📁 Project Structure
 
 ```
 ai_workspace/
-├── main.py              # 메인 진입점
-├── requirements.txt     # 의존성
-├── .env.example         # 환경변수 템플릿
-├── config/
-│   └── settings.py      # 설정값
-├── db/
-│   └── connection.py    # DB 연결
-├── core/
-│   ├── clusterer.py     # HDBSCAN 클러스터링
-│   └── reconstructor.py # GPT 뉴스레터 생성
-└── workflow/
-    ├── state.py         # LangGraph 상태 정의
-    ├── nodes.py         # 노드 함수들
-    ├── evaluators.py    # LLM 평가자
-    └── graph.py         # 워크플로우 그래프
+├── config/              # Configuration files
+│   ├── settings.py      # Application settings
+│
+├── core/                # Core business logic
+│   ├── clusterer.py     # HDBSCAN clustering
+│   ├── embedder.py      # BGE-M3 embedding generation
+│   ├── llm_client.py    # LLM API client (Naver/OpenAI)
+│   ├── reconstructor.py # Newsletter content generation
+│   ├── tone_converter.py # Tone style conversion
+│   └── user_embedder.py # User preference embedding
+│
+├── crawler/             # Data collection & processing
+│   ├── rss_collector.py        # RSS feed crawler
+│   └── content_extractor/      # Article content extraction
+│
+├── db/                  # Database layer
+│   ├── schema.py        # PostgreSQL schema definitions
+│   ├── connection.py    # Database connection management
+│   ├── batch_manager.py # Batch job logging
+│   └── user_log_queries.py # User interaction queries
+│
+├── workflow/            # LangGraph workflow
+│   ├── graph.py         # Workflow graph definition
+│   ├── nodes.py         # Workflow node functions
+│   ├── state.py         # State schema
+│   └── evaluators.py    # LLM-based evaluators
+│
+├── dags/                # Airflow DAG definitions
+│   └── daily_newsletter_dag.py
+│
+├── scripts/             # Utility scripts
+│   ├── update_user_embeddings.py  # User embedding updater
+│   ├── migrate_db_1024.py         # DB migration script
+│   ├── start_airflow_daemon.sh    # Airflow scheduler
+│   └── start_airflow_webserver.sh # Airflow webserver
+│
+├── tests/               # Unit tests (pytest)
+│   ├── test_clusterer.py
+│   ├── test_evaluators.py
+│   ├── test_reconstructor.py
+│   └── test_workflow.py
+│
+├── main.py              # Main pipeline entry point
+├── requirements.txt     # Python dependencies
+└── README.md            # This file
 ```
 
-## LangGraph 워크플로우
+## 🚀 Pipeline Stages
 
-```
-┌─────────────────┐
-│  init_cluster   │◄──────────────────┐
-└────────┬────────┘                   │
-         │                            │
-         ▼                            │
-┌─────────────────┐                   │
-│  eval_cluster   │                   │
-└────────┬────────┘                   │
-         │                            │
-    ┌────┴────┐                       │
-    │         │                       │
-  PASS      FAIL                      │
-    │         │                       │
-    ▼         ▼                       │
-┌─────────┐ ┌──────────────┐          │
-│gen_news │ │handle_c_fail │──────────┤
-└────┬────┘ └──────────────┘          │
-     │                                │
-     ▼                                │
-┌─────────────────┐                   │
-│  eval_news      │                   │
-└────────┬────────┘                   │
-         │                            │
-    ┌────┼────┐                       │
-    │    │    │                       │
-  PASS RETRY MAX                      │
-    │    │    │                       │
-    ▼    │    ▼                       │
-┌─────────┐│ ┌────────────┐           │
-│embed_nl ││ │max_retries │───────────┤
-└────┬────┘│ └────────────┘           │
-     │     │                          │
-     ▼     │                          │
-┌─────────┐│                          │
-│conv_tone││                          │
-└────┬────┘│                          │
-     │     │                          │
-     ▼     │                          │
-┌─────────┐│                          │
-│  save   ││                          │
-└────┬────┘│                          │
-     │     │                          │
-     └─────┴──────────────────────────┘
+### **Stage 0: User Embedding**
+- Generate user preference embeddings from interaction history
+
+### **Stage 1: RSS Collection**
+- Collect news articles from configured RSS feeds
+- Filter by recency (configurable time window)
+
+### **Stage 2: Content Extraction**
+- Extract full article content using Trafilatura
+- Validate and clean text data
+
+### **Stage 3: News Embedding**
+- Generate BGE-M3 embeddings for articles
+- Batch processing with GPU support
+
+### **Stage 4-5: Clustering & Newsletter Generation**
+- HDBSCAN clustering to group related articles
+- LangGraph workflow for newsletter creation:
+  - Cluster evaluation (coherence check)
+  - Newsletter draft generation
+  - Quality evaluation
+  - Tone conversion (optional)
+  - Database persistence
+
+### **Stage 6: Newsletter Embedding**
+- (Currently disabled) Batch embedding generation for newsletters
+
+## 📦 Installation
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+
+# Copy and configure environment
+cp .env.example .env
+# Edit .env with your API keys and database credentials
 ```
 
-Note: 
-- embed_nl: 원본(공식) 텍스트로 임베딩 생성
-- conv_tone: 친근한 톤으로 변환 (이모티콘 포함)
-- save: 변환된 텍스트 + 원본 임베딩 저장
+## 🔧 Configuration
 
-## 데이터베이스 요구사항
+### Environment Variables (`.env`)
+```bash
+# Database
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=your_db
+DB_USER=your_user
+DB_PASSWORD=your_password
 
-### user_newsletter_ctr_log 테이블
+# LLM API (Naver HyperCLOVA X or OpenAI)
+NAVER_API_KEY=your_naver_key
+NAVER_API_KEY_PRIMARY=your_primary_key
+NAVER_REQUEST_ID=your_request_id
 
-사용자 임베딩 시스템이 작동하려면 백엔드에서 다음 테이블을 생성해야 합니다:
-
-```sql
-CREATE TABLE user_newsletter_ctr_log (
-    log_id SERIAL PRIMARY KEY,
-    user_id INTEGER NOT NULL REFERENCES "user"(user_id) ON DELETE CASCADE,
-    news_letter_id INTEGER NOT NULL REFERENCES news_letter(news_letter_id) ON DELETE CASCADE,
-    created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
+# Optional: OpenAI
+OPENAI_API_KEY=your_openai_key
 ```
 
-**Important**: `interaction_type` 컬럼은 제거되었습니다. 모든 로그는 읽기 이벤트로 간주됩니다.
+### Settings (`config/settings.py`)
+- Embedding batch size
+- Clustering parameters
+- LLM temperature and token limits
 
-상세 스키마는 `db/USER_CTR_LOG_SCHEMA.md` 참조
+## 🏃 Usage
 
-### 사용 가능한 API
+### Run Full Pipeline
+```bash
+cd ai_workspace
+python main.py
+```
 
-`db/user_log_queries.py`에서 제공하는 헬퍼 함수들:
-- `log_newsletter_read()`: 뉴스레터 읽기 로그 기록
-- `get_user_read_history()`: 사용자 읽기 이력 조회
-- `get_newsletter_read_count()`: 뉴스레터 읽기 횟수
-- `get_user_interaction_stats()`: 사용자 통계
-- `get_popular_newsletters()`: 인기 뉴스레터 순위
-- `has_user_read_newsletter()`: 읽기 여부 확인
+### Run with Options
+```bash
+# Skip DB reset
+python main.py --no-reset
+
+# Set minimum newsletter target
+python main.py --min-target 10
+
+# Use CPU for embeddings (no GPU)
+python main.py --force-cpu
+
+# Set worker count
+python main.py --workers 8
+```
+
+### Update User Embeddings (Standalone)
+```bash
+python scripts/update_user_embeddings.py --all
+python scripts/update_user_embeddings.py --user-id 123
+```
+
+## 🔄 Airflow Integration
+
+Start Airflow scheduler and webserver:
+```bash
+bash scripts/start_airflow_daemon.sh
+bash scripts/start_airflow_webserver.sh
+```
+
+Access Airflow UI: `http://localhost:8080`
+
+## 📊 Database Schema
+
+Data reset helpers live in `db/schema.py`. Key tables:
+- `news_raw` - Raw news articles with embeddings
+- `news_letter` - Generated newsletters
+- `user` - User profiles with preference embeddings
+- `user_newsletter_ctr_log` - User interaction logs
+- `cluster_history` - Clustering batch logs
+
+## 🧪 Testing
+
+Local tests live under `tests/` but are ignored in production.
+
+## 🔐 Security
+
+- API keys stored in `.env` (not committed to git)
+- Database credentials managed via environment variables
+- Input validation and sanitization in extractors
+
+## 📝 Notes
+
+- GPU recommended for embedding generation (Tesla V100 or better)
+- Rate limiting handled automatically for LLM APIs
+- Sequential execution mode prevents API throttling
+- Batch embedding in Stage 6 optimizes GPU usage
+
+## 🐛 Troubleshooting
+
+### OOM (Out of Memory)
+- Reduce batch size in `config/settings.py`
+- Use `--force-cpu` flag
+- Ensure GPU cleanup is enabled
+
+### Rate Limiting (429 errors)
+- Pipeline uses sequential execution by default
+- Exponential backoff implemented
+- Adjust LLM_MIN_INTERVAL in `.env` if needed
+
+### Database Connection Issues
+- Verify credentials in `.env`
+- Check PostgreSQL is running
+- Ensure `pgvector` extension is installed
+
+## 📚 Dependencies
+
+See `requirements.txt` for full list. Key dependencies:
+- `langgraph` - Workflow orchestration
+- `FlagEmbedding` - BGE-M3 embeddings
+- `hdbscan` - Clustering
+- `psycopg2` - PostgreSQL adapter
+- `trafilatura` - Content extraction
+- `apache-airflow` - Workflow scheduling
+
+## 📄 License
+
+[Your License Here]
+
+## 👥 Authors
+
+[Your Team/Name Here]

@@ -1,220 +1,15 @@
 """
-Database schema definitions
-리팩토링된 스키마: 4개 테이블 (Press, RSS_URL, News_Raw, News_Letter)
+Database maintenance helpers.
+스키마 변경 없이 데이터만 초기화하는 안전한 리셋을 제공합니다.
 """
 from db.connection import get_connection
 
 
-def drop_all_tables():
-    """
-    기존 테이블 모두 삭제
-    주의: 모든 데이터가 삭제됩니다!
-    """
-    print("기존 테이블 삭제 중...")
-
-    conn = get_connection()
-    cur = conn.cursor()
-
-    # 기존 테이블들 삭제
-    tables_to_drop = [
-        'news_event_article',
-        'news_event',
-        'news_reconstructed_article',
-        'reconstructed_news',
-        'news_article',
-        'raw_rss_item',
-        'news_letter_categories',
-        'news_letter',
-        'news_raw',
-        'category',
-        'rss_url',
-        'press'
-    ]
-
-    for table in tables_to_drop:
-        try:
-            cur.execute(f"DROP TABLE IF EXISTS {table} CASCADE;")
-            print(f"  ✓ {table} 삭제")
-        except Exception as e:
-            print(f"  ✗ {table} 삭제 실패: {e}")
-
-    conn.commit()
-    conn.close()
-    print("기존 테이블 삭제 완료!\n")
-
-
-def create_tables():
-    """
-    새로운 테이블 생성
-    1. Press - 언론사 정보
-    2. RSS_URL - RSS 피드 주소
-    3. News_Raw - 원문 기사
-    4. News_Letter - 재구성 뉴스레터
-    """
-    print("새 테이블 생성 중...", end="")
-
-    conn = get_connection()
-    cur = conn.cursor()
-
-    # pgvector 확장 활성화
+def _safe_delete(cur, table: str):
     try:
-        cur.execute("CREATE EXTENSION IF NOT EXISTS vector;")
-    except Exception as e:
-        print(f"\npgvector 확장 설치 실패: {e}")
-
-    # ========================================
-    # 1. Press - 언론사 정보 테이블
-    # ========================================
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS press (
-            press_id SERIAL PRIMARY KEY,
-            press_name VARCHAR(100) UNIQUE NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_press_name ON press(press_name);
-    """)
-
-    # ========================================
-    # 2. RSS_URL - 언론사 RSS 주소 테이블
-    # ========================================
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS rss_url (
-            rss_raw_id SERIAL PRIMARY KEY,
-            press_id INT NOT NULL REFERENCES press(press_id) ON DELETE CASCADE,
-            uri VARCHAR(500) NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(press_id, uri)
-        );
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_rss_url_press_id ON rss_url(press_id);
-    """)
-
-    # ========================================
-    # 3. News_Raw - 원문 기사 저장 테이블
-    # ========================================
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS news_raw (
-            raw_news_id BIGSERIAL PRIMARY KEY,
-            press_id INT NOT NULL REFERENCES press(press_id) ON DELETE CASCADE,
-            raw_news_title VARCHAR NOT NULL,
-            raw_news_content VARCHAR,
-            raw_news_url VARCHAR UNIQUE NOT NULL,
-            embedding_result vector(1024),
-            raw_news_created_at VARCHAR(100),
-            raw_news_crawled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            news_letter_id INT DEFAULT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_news_raw_press_id ON news_raw(press_id);
-        CREATE INDEX IF NOT EXISTS idx_news_raw_url ON news_raw(raw_news_url);
-        CREATE INDEX IF NOT EXISTS idx_news_raw_news_letter_id ON news_raw(news_letter_id);
-        CREATE INDEX IF NOT EXISTS idx_news_raw_created_at ON news_raw(raw_news_created_at);
-        CREATE INDEX IF NOT EXISTS idx_news_raw_crawled_at ON news_raw(raw_news_crawled_at);
-    """)
-
-    # 임베딩 인덱스 추가 (코사인 유사도 검색용)
-    try:
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_news_raw_embedding
-            ON news_raw USING ivfflat (embedding_result vector_cosine_ops)
-            WITH (lists = 100);
-        """)
-    except Exception as e:
-        print(f"\n임베딩 인덱스 생성 실패 (데이터 부족 시 정상): {e}")
-
-    # ========================================
-    # 4. News_Letter - 생성된 뉴스레터 테이블
-    # ========================================
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS news_letter (
-            news_letter_id SERIAL PRIMARY KEY,
-            news_letter_title VARCHAR NOT NULL,
-            news_letter_sentence VARCHAR,
-            news_letter_content VARCHAR NOT NULL,
-            news_letter_created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            news_letter_embedding vector(1024),
-            news_letter_keywords JSONB,
-            raw_news_count INT DEFAULT 0,
-            run_id INT,
-            generation_history JSONB,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_news_letter_created_at ON news_letter(news_letter_created_at);
-    """)
-
-    # ========================================
-    # 5. Category - 뉴스 카테고리 테이블
-    # ========================================
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS category (
-            category_id SERIAL PRIMARY KEY,
-            category_name VARCHAR(100) UNIQUE NOT NULL,
-            category_code SMALLINT UNIQUE NOT NULL
-        );
-    """)
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_category_code ON category(category_code);
-    """)
-
-    # ========================================
-    # 6. News_Letter_Categories - 뉴스레터 카테고리 매핑 테이블 (M:N)
-    # ========================================
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS news_letter_categories (
-            id SERIAL PRIMARY KEY,
-            news_letter_id INT NOT NULL REFERENCES news_letter(news_letter_id) ON DELETE CASCADE,
-            category_id INT NOT NULL REFERENCES category(category_id) ON DELETE CASCADE,
-            UNIQUE(news_letter_id, category_id)
-        );
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_news_letter_categories_letter_id ON news_letter_categories(news_letter_id);
-        CREATE INDEX IF NOT EXISTS idx_news_letter_categories_category_id ON news_letter_categories(category_id);
-    """)
-
-    # 임베딩 인덱스 추가
-    try:
-        cur.execute("""
-            CREATE INDEX IF NOT EXISTS idx_news_letter_embedding
-            ON news_letter USING ivfflat (news_letter_embedding vector_cosine_ops)
-            WITH (lists = 100);
-        """)
-    except Exception as e:
-        print(f"\n뉴스레터 임베딩 인덱스 생성 실패 (데이터 부족 시 정상): {e}")
-
-    # ========================================
-    # 7. Cluster_history - 클러스터링 로그 테이블
-    # ========================================
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS cluster_history (
-            history_id SERIAL PRIMARY KEY,
-            run_id INTEGER UNIQUE NOT NULL,
-            cluster_log JSONB,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-
-    cur.execute("""
-        CREATE INDEX IF NOT EXISTS idx_cluster_history_run_id ON cluster_history(run_id);
-        CREATE INDEX IF NOT EXISTS idx_cluster_history_created_at ON cluster_history(created_at);
-    """)
-
-    conn.commit()
-    conn.close()
-    print(" 완료!")
+        cur.execute(f"DELETE FROM {table}")
+    except Exception:
+        pass
 
 
 def insert_initial_press_data():
@@ -314,7 +109,7 @@ def insert_initial_category_data():
         ('사회', 2),
         ('경제', 3),
         ('IT/과학', 4),
-        ('생활문화', 5),
+        ('생활/문화', 5),  # 프롬프트와 일치하도록 '/' 추가
         ('스포츠', 6),
         ('세계', 7)
     ]
@@ -339,18 +134,41 @@ def insert_initial_category_data():
 
 def full_reset():
     """
-    전체 DB 리셋 (테이블 삭제 -> 생성 -> 초기 데이터 삽입)
+    데이터만 초기화 (스키마 변경 없음)
     """
     print("=" * 60)
-    print("DB 전체 리셋 시작")
+    print("DB 데이터 리셋 시작 (스키마 유지)")
     print("=" * 60 + "\n")
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        # 뉴스레터 관련 데이터만 초기화
+        # FK 제약을 피하기 위해 매핑 테이블부터 삭제
+        _safe_delete(cur, "news_letter_categories")
+        _safe_delete(cur, "news_letters_category")
+        _safe_delete(cur, "news_letter_today_batch")
+        _safe_delete(cur, "user_newsletter_ctr_log")
+        _safe_delete(cur, "cluster_history")
+        _safe_delete(cur, "news_letter")
 
-    drop_all_tables()
-    create_tables()
+        # 기존 뉴스 원문은 유지하되 매핑만 제거
+        try:
+            cur.execute("UPDATE news_raw SET news_letter_id = NULL")
+        except Exception:
+            pass
+
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"데이터 리셋 실패: {e}")
+    finally:
+        conn.close()
+
+    # 초기 참조 데이터 보장
     insert_initial_press_data()
     insert_initial_category_data()
     insert_initial_rss_url_data()
 
     print("=" * 60)
-    print("DB 전체 리셋 완료!")
+    print("DB 데이터 리셋 완료!")
     print("=" * 60)

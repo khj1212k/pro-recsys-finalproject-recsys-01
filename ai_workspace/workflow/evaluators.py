@@ -14,7 +14,7 @@ class ClusterEvaluator:
 
     SYSTEM_PROMPT = """You are an expert news analyst evaluating clusters of news articles.
 Your job is to determine if articles in a cluster represent a single coherent news event or topic.
-Always respond in valid JSON format only. No other text."""
+Return ONLY valid JSON. No extra text, no code blocks, no markdown."""
 
     USER_PROMPT_TEMPLATE = """You are evaluating a cluster of {n_articles} news articles.
 Determine if these articles represent a **single coherent news event** or topic.
@@ -36,11 +36,18 @@ Determine if these articles represent a **single coherent news event** or topic.
   "decision": "PASS" or "FAIL",
   "confidence": 0.0-1.0,
   "summary": "One-line theme of this cluster",
-  "feedback": "If FAIL, explain which articles don't belong and why. If PASS, leave empty.",
-  "outlier_indices": [indices of outlier articles (0-indexed), empty if PASS]
+  "feedback": "If FAIL, explain why.",
+  "outlier_indices": [indices of noise articles to remove],
+  "sub_groups": [
+      [indices of group A],
+      [indices of group B]
+  ] 
+  // If FAIL due to multiple events mixed, provide 'sub_groups' to split them. 
+  // Max 2 sub-groups. If just noise, leave sub_groups empty.
 }}
 
-Only output valid JSON. No other text."""
+Only output valid JSON. No other text.
+If unsure, still return valid JSON with empty strings/lists."""
 
     def __init__(self, provider: Optional[str] = None):
         """
@@ -86,56 +93,80 @@ Content Preview: {content_preview}...
             articles_text=articles_text
         )
 
-        try:
-            messages = [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
-            ]
+        messages = [
+            {"role": "system", "content": self.SYSTEM_PROMPT},
+            {"role": "user", "content": prompt}
+        ]
 
+        max_retries = 1000000  # effectively until parse succeeds
+        last_response = None
+        for _ in range(max_retries):
             response = self.client.chat_completion(
                 messages=messages,
                 temperature=0.1,
-                max_tokens=2048
+                max_tokens=2048,
+                response_format={"type": "json_object"}
             )
-
             if not response:
-                return {
-                    "decision": "FAIL",
-                    "confidence": 0.0,
-                    "summary": "",
-                    "feedback": "LLM response empty",
-                    "outlier_indices": []
-                }
-
+                continue
+            last_response = response
             result = extract_json_from_response(response)
-
             if not result:
-                return {
-                    "decision": "FAIL",
-                    "confidence": 0.0,
-                    "summary": "",
-                    "feedback": f"JSON parsing failed: {response[:100]}...",
-                    "outlier_indices": []
-                }
+                continue
 
-            # Ensure all required fields exist
+            decision = (result.get("decision") or "FAIL").upper()
+            if decision not in ("PASS", "FAIL"):
+                decision = "FAIL"
+            def _to_int_list(items):
+                out = []
+                for x in items or []:
+                    try:
+                        out.append(int(x))
+                    except Exception:
+                        continue
+                return out
+
+            def _to_int_groups(groups):
+                out = []
+                for g in groups or []:
+                    if not isinstance(g, list):
+                        continue
+                    converted = _to_int_list(g)
+                    if converted:
+                        out.append(converted)
+                return out
+
             return {
-                "decision": result.get("decision", "FAIL"),
+                "decision": decision,
                 "confidence": float(result.get("confidence", 0.0)),
                 "summary": result.get("summary", ""),
                 "feedback": result.get("feedback", ""),
-                "outlier_indices": result.get("outlier_indices", [])
+                "outlier_indices": _to_int_list(result.get("outlier_indices", [])),
+                "sub_groups": _to_int_groups(result.get("sub_groups", []))
             }
 
-        except Exception as e:
-            print(f"Cluster evaluation failed: {e}")
+        # Fallback if parsing still fails
+        if last_response:
+            # Heuristic fallback: detect PASS/FAIL tokens
+            upper = last_response.upper()
+            decision = "FAIL" if "FAIL" in upper and "PASS" not in upper else "PASS" if "PASS" in upper else "FAIL"
             return {
-                "decision": "FAIL",
-                "confidence": 0.0,
+                "decision": decision,
+                "confidence": 0.1,
                 "summary": "",
-                "feedback": f"Evaluation error: {str(e)}",
-                "outlier_indices": []
+                "feedback": "JSON parsing failed",
+                "outlier_indices": [],
+                "sub_groups": []
             }
+
+        return {
+            "decision": "FAIL",
+            "confidence": 0.0,
+            "summary": "",
+            "feedback": "LLM response empty",
+            "outlier_indices": [],
+            "sub_groups": []
+        }
 
 
 class NewsletterEvaluator:
@@ -143,7 +174,7 @@ class NewsletterEvaluator:
 
     SYSTEM_PROMPT = """You are an expert news editor evaluating newsletter drafts.
 Your job is to ensure the newsletter meets quality standards for publication.
-Always respond in valid JSON format only. No other text."""
+Return ONLY valid JSON. No extra text, no code blocks, no markdown."""
 
     USER_PROMPT_TEMPLATE = """You are evaluating a generated newsletter draft.
 
@@ -173,7 +204,8 @@ Content:
   "issues": ["list", "of", "specific", "problems"]
 }}
 
-Only output valid JSON. No other text."""
+Only output valid JSON. No other text.
+If unsure, still return valid JSON with empty strings/lists."""
 
     def __init__(self, provider: Optional[str] = None):
         """
@@ -215,39 +247,29 @@ Only output valid JSON. No other text."""
             content=newsletter.get('content', '')
         )
 
-        try:
-            messages = [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
-                {"role": "user", "content": prompt}
-            ]
+        messages = [
+            {"role": "system", "content": self.SYSTEM_PROMPT},
+            {"role": "user", "content": prompt}
+        ]
 
+        max_retries = 1000000  # effectively until parse succeeds
+        last_response = None
+        for _ in range(max_retries):
             response = self.client.chat_completion(
                 messages=messages,
                 temperature=0.1,
-                max_tokens=2048
+                max_tokens=2048,
+                response_format={"type": "json_object"}
             )
-
             if not response:
-                return {
-                    "decision": "FAIL",
-                    "score": 0,
-                    "feedback": "LLM response empty",
-                    "issues": ["API call returned empty"]
-                }
-
+                continue
+            last_response = response
             result = extract_json_from_response(response)
-
             if not result:
-                return {
-                    "decision": "FAIL",
-                    "score": 0,
-                    "feedback": f"JSON parsing failed: {response[:100]}...",
-                    "issues": ["Response not valid JSON"]
-                }
+                continue
 
             score = int(result.get("score", 0))
             decision = "PASS" if score >= 5 else "FAIL"
-
             return {
                 "decision": decision,
                 "score": score,
@@ -255,11 +277,19 @@ Only output valid JSON. No other text."""
                 "issues": result.get("issues", [])
             }
 
-        except Exception as e:
-            print(f"Newsletter evaluation failed: {e}")
+        if last_response:
+            upper = last_response.upper()
+            decision = "PASS" if "PASS" in upper and "FAIL" not in upper else "FAIL"
             return {
-                "decision": "FAIL",
-                "score": 0,
-                "feedback": f"Evaluation error: {str(e)}",
-                "issues": ["API call failed"]
+                "decision": decision,
+                "score": 5 if decision == "PASS" else 0,
+                "feedback": "JSON parsing failed",
+                "issues": []
             }
+
+        return {
+            "decision": "FAIL",
+            "score": 0,
+            "feedback": "LLM response empty",
+            "issues": ["API call returned empty"]
+        }

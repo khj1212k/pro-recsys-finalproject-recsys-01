@@ -1,14 +1,18 @@
 """
-Unified LLM Client for multiple providers
-Supports: OpenAI, Naver HyperCLOVA X
+다중 제공자를 위한 통합 LLM 클라이언트
+지원: OpenAI, Naver HyperCLOVA X
 """
 import os
 import json
 import time
+import logging
+import threading
 import requests
 from typing import Dict, List, Optional, Any
 from abc import ABC, abstractmethod
 
+
+logger = logging.getLogger(__name__)
 
 # Retry configuration
 MAX_RETRIES = 10  # Maximum retry attempts
@@ -17,8 +21,26 @@ MAX_BACKOFF = 60.0  # Maximum wait time between retries
 BACKOFF_MULTIPLIER = 2.0  # Exponential backoff multiplier
 
 
+class SimpleRateLimiter:
+    """Simple process-wide rate limiter (min interval between requests)."""
+    def __init__(self, min_interval: float = 0.0):
+        self.min_interval = max(0.0, float(min_interval or 0.0))
+        self._lock = threading.Lock()
+        self._last_ts = 0.0
+
+    def wait(self):
+        if self.min_interval <= 0:
+            return
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last_ts
+            if elapsed < self.min_interval:
+                time.sleep(self.min_interval - elapsed)
+            self._last_ts = time.monotonic()
+
+
 class BaseLLMClient(ABC):
-    """Base class for LLM clients"""
+    """LLM 클라이언트를 위한 추상 기본 클래스"""
 
     @abstractmethod
     def chat_completion(
@@ -28,7 +50,7 @@ class BaseLLMClient(ABC):
         max_tokens: int = 4096,
         response_format: Optional[Dict] = None
     ) -> Optional[str]:
-        """Generate chat completion"""
+        """채팅 응답 생성"""
         pass
 
 
@@ -40,15 +62,15 @@ V1_MODELS = {"HCX-003", "HCX-DASH-001", "HCX-002"}
 
 class NaverHyperCLOVAClient(BaseLLMClient):
     """
-    Naver HyperCLOVA X API Client
+    네이버 하이퍼클로바 X (HyperCLOVA X) API 클라이언트
 
-    Supports:
+    지원 모델:
     - v1 API: HCX-003, HCX-DASH-001
     - v3 API: HCX-005, HCX-007, HCX-DASH-002
 
-    Authentication:
-    - Apps method (nv- prefix): Bearer token
-    - Legacy method: X-NCP-CLOVASTUDIO-API-KEY + X-NCP-APIGW-API-KEY
+    인증 방식:
+    - Apps 인증 (nv- 접두사): Bearer 토큰
+    - Legacy 인증: X-NCP-CLOVASTUDIO-API-KEY + X-NCP-APIGW-API-KEY
     """
 
     def __init__(
@@ -60,6 +82,9 @@ class NaverHyperCLOVAClient(BaseLLMClient):
         self.api_key = api_key or os.getenv("NCP_CLOVASTUDIO_API_KEY")
         self.apigw_key = apigw_key or os.getenv("NCP_APIGW_API_KEY")
         self.model = model or os.getenv("HYPERCLOVA_MODEL", "HCX-003")
+        self.rate_limiter = SimpleRateLimiter(
+            float(os.getenv("NAVER_LLM_MIN_INTERVAL", os.getenv("LLM_MIN_INTERVAL", "1.0")))
+        )
 
         if not self.api_key:
             raise ValueError("NCP_CLOVASTUDIO_API_KEY 환경변수를 설정하세요")
@@ -147,6 +172,7 @@ class NaverHyperCLOVAClient(BaseLLMClient):
         while True:  # 무한 재시도
             attempt += 1
             try:
+                self.rate_limiter.wait()
                 response = requests.post(
                     url,
                     headers=headers,
@@ -158,7 +184,7 @@ class NaverHyperCLOVAClient(BaseLLMClient):
                 if response.status_code == 429:
                     retry_after = response.headers.get('Retry-After')
                     wait_time = float(retry_after) if retry_after else backoff
-                    print(f"⏳ Rate limited (429). Waiting {wait_time:.1f}s before retry #{attempt}...")
+                    logger.warning("Rate limited (429). Waiting %.1fs before retry #%s", wait_time, attempt)
                     time.sleep(wait_time)
                     backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                     continue
@@ -176,17 +202,17 @@ class NaverHyperCLOVAClient(BaseLLMClient):
 
                     # Retry on server errors (5xx) - 무한 재시도
                     if error_code.startswith("5"):
-                        print(f"⚠️ Server error ({error_code}): {error_msg}. Retrying #{attempt}...")
+                        logger.warning("Server error (%s): %s. Retrying #%s...", error_code, error_msg, attempt)
                         time.sleep(backoff)
                         backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                         continue
 
                     # Client errors (4xx except 429) - give up
-                    print(f"❌ HyperCLOVA API client error ({error_code}): {error_msg}")
+                    logger.error("HyperCLOVA API client error (%s): %s", error_code, error_msg)
                     return None
 
             except requests.exceptions.Timeout:
-                print(f"⏰ Request timeout. Retrying #{attempt}...")
+                logger.warning("Request timeout. Retrying #%s...", attempt)
                 time.sleep(backoff)
                 backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                 continue
@@ -196,32 +222,31 @@ class NaverHyperCLOVAClient(BaseLLMClient):
                 if hasattr(e, 'response') and e.response is not None:
                     status_code = e.response.status_code
                     if status_code == 429 or status_code >= 500:
-                        print(f"⚠️ HTTP {status_code}. Retrying #{attempt}...")
+                        logger.warning("HTTP %s. Retrying #%s...", status_code, attempt)
                         time.sleep(backoff)
                         backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                         continue
                     # Client errors - give up
-                    print(f"❌ HTTP {status_code} error")
-                    print(f"Response body: {e.response.text[:500]}")
+                    logger.error("HTTP %s error. Response body: %s", status_code, e.response.text[:500])
                     return None
 
                 # Connection errors are retryable - 무한 재시도
                 if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError)):
-                    print(f"🔌 Connection error. Retrying #{attempt}...")
+                    logger.warning("Connection error. Retrying #%s...", attempt)
                     time.sleep(backoff)
                     backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                     continue
 
-                print(f"❌ HyperCLOVA API request failed: {e}")
+                logger.error("HyperCLOVA API request failed: %s", e)
                 return None
 
             except Exception as e:
-                print(f"❌ HyperCLOVA API unexpected error: {e}")
+                logger.error("HyperCLOVA API unexpected error: %s", e)
                 return None
 
 
 class OpenAIClient(BaseLLMClient):
-    """OpenAI API Client (for fallback or comparison)"""
+    """OpenAI API 클라이언트 (Fallback 또는 비교용)"""
 
     def __init__(self, api_key: Optional[str] = None, model: str = "gpt-4o-mini"):
         try:
@@ -236,6 +261,9 @@ class OpenAIClient(BaseLLMClient):
             raise ValueError("OPENAI_API_KEY 환경변수를 설정하세요")
 
         self.client = OpenAI(api_key=api_key)
+        self.rate_limiter = SimpleRateLimiter(
+            float(os.getenv("OPENAI_LLM_MIN_INTERVAL", os.getenv("LLM_MIN_INTERVAL", "0.3")))
+        )
 
     def chat_completion(
         self,
@@ -260,6 +288,7 @@ class OpenAIClient(BaseLLMClient):
 
         for attempt in range(MAX_RETRIES):
             try:
+                self.rate_limiter.wait()
                 response = self.client.chat.completions.create(**kwargs)
                 return response.choices[0].message.content
 
@@ -269,27 +298,27 @@ class OpenAIClient(BaseLLMClient):
 
                 # Retry on rate limit or server errors
                 if "rate_limit" in error_str or "429" in error_str or "500" in error_str or "503" in error_str:
-                    print(f"⏳ OpenAI API error. Retrying {attempt + 1}/{MAX_RETRIES}...")
+                    logger.warning("OpenAI API error. Retrying %s/%s...", attempt + 1, MAX_RETRIES)
                     time.sleep(backoff)
                     backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                     continue
 
-                print(f"OpenAI API error: {e}")
+                logger.error("OpenAI API error: %s", e)
                 return None
 
-        print(f"❌ Max retries ({MAX_RETRIES}) exhausted. Last error: {last_error}")
+        logger.error("Max retries (%s) exhausted. Last error: %s", MAX_RETRIES, last_error)
         return None
 
 
 def get_llm_client(provider: Optional[str] = None) -> BaseLLMClient:
     """
-    Factory function to get appropriate LLM client
+    적절한 LLM 클라이언트를 반환하는 팩토리 함수
 
     Args:
-        provider: 'naver', 'openai', or None (auto-detect from env)
+        provider: 'naver', 'openai', 또는 None (환경변수에서 자동 감지)
 
     Returns:
-        LLM client instance
+        LLM 클라이언트 인스턴스
     """
     if provider is None:
         provider = os.getenv("LLM_PROVIDER", "naver").lower()
@@ -305,40 +334,162 @@ def get_llm_client(provider: Optional[str] = None) -> BaseLLMClient:
 
 def extract_json_from_response(content: str) -> Optional[Dict]:
     """
-    Extract JSON from LLM response (handles markdown code blocks)
-
-    Args:
-        content: Raw LLM response content
-
-    Returns:
-        Parsed JSON dict or None
+    LLM 응답에서 JSON 추출 (복구 시도 포함)
+    - 마크다운 코드블록 처리
+    - 문자열 내부 개행/따옴표 복구 시도
+    - 단일따옴표/파이썬 dict 형태 보정 시도
     """
+    import re
+    import ast
+
     if not content:
         return None
 
-    # Try direct JSON parse first
+    def _clean(s: str) -> str:
+        return s.strip().lstrip("\ufeff")
+
+    def _repair_json_string(s: str) -> str:
+        # trailing commas
+        s = re.sub(r',\s*}', '}', s)
+        s = re.sub(r',\s*]', ']', s)
+        out = []
+        in_str = False
+        escape = False
+        i = 0
+        while i < len(s):
+            ch = s[i]
+            if in_str:
+                if escape:
+                    out.append(ch)
+                    escape = False
+                    i += 1
+                    continue
+                if ch == '\\\\':
+                    out.append(ch)
+                    escape = True
+                    i += 1
+                    continue
+                if ch == '"':
+                    j = i + 1
+                    while j < len(s) and s[j] in ' \t\r\n':
+                        j += 1
+                    if j < len(s) and s[j] not in [',', '}', ']', ':']:
+                        out.append('\\\"')
+                    else:
+                        out.append(ch)
+                        in_str = False
+                    i += 1
+                    continue
+                if ch == '\n':
+                    out.append('\\n')
+                    i += 1
+                    continue
+                if ch == '\r':
+                    out.append('\\r')
+                    i += 1
+                    continue
+                if ch == '\t':
+                    out.append('\\t')
+                    i += 1
+                    continue
+                out.append(ch)
+                i += 1
+                continue
+            if ch == '"':
+                in_str = True
+            out.append(ch)
+            i += 1
+        return ''.join(out)
+
+    def _find_balanced_json(text: str) -> Optional[str]:
+        start = text.find("{")
+        if start == -1:
+            return None
+        depth = 0
+        in_str = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if escape:
+                    escape = False
+                elif ch == '\\\\':
+                    escape = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+                continue
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+        return None
+
+    candidates = []
+
+    # 1) direct parse
     try:
         return json.loads(content)
-    except json.JSONDecodeError:
-        pass
+    except Exception:
+        candidates.append(content)
 
-    # Try to extract from markdown code block
-    import re
-
-    # Match ```json ... ``` or ``` ... ```
+    # 2) markdown code blocks
     patterns = [
         r'```json\s*([\s\S]*?)\s*```',
         r'```\s*([\s\S]*?)\s*```',
-        r'\{[\s\S]*\}'  # Raw JSON object
     ]
-
     for pattern in patterns:
-        match = re.search(pattern, content)
-        if match:
-            try:
-                json_str = match.group(1) if '```' in pattern else match.group(0)
-                return json.loads(json_str)
-            except (json.JSONDecodeError, IndexError):
-                continue
+        for match in re.finditer(pattern, content):
+            candidates.append(match.group(1))
+
+    # 3) balanced brace block
+    balanced = _find_balanced_json(content)
+    if balanced:
+        candidates.append(balanced)
+
+    # 4) simple brace fallback
+    brace_match = re.search(r'\{[\s\S]*\}', content)
+    if brace_match:
+        candidates.append(brace_match.group(0))
+
+    for raw in candidates:
+        if not raw:
+            continue
+        s = _clean(raw)
+        if not s:
+            continue
+        # Try strict JSON
+        try:
+            return json.loads(s)
+        except Exception:
+            pass
+
+        # Try repaired JSON
+        try:
+            repaired = _repair_json_string(s)
+            return json.loads(repaired)
+        except Exception:
+            pass
+
+        # Try python literal (single quotes, etc.)
+        try:
+            obj = ast.literal_eval(s)
+            if isinstance(obj, (dict, list)):
+                return obj if isinstance(obj, dict) else {"value": obj}
+        except Exception:
+            pass
+
+        # Try python literal after repair
+        try:
+            repaired = _repair_json_string(s)
+            obj = ast.literal_eval(repaired)
+            if isinstance(obj, (dict, list)):
+                return obj if isinstance(obj, dict) else {"value": obj}
+        except Exception:
+            continue
 
     return None

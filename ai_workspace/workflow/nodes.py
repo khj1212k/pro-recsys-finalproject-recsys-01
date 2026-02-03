@@ -4,115 +4,160 @@ Each function takes state and returns state updates
 """
 from typing import Dict, Any
 import logging
+from datetime import datetime
+import json
 
 from workflow.state import AgentState
-from workflow.evaluators import ClusterEvaluator, NewsletterEvaluator
-from core.reconstructor import NewsReconstructor, save_news_letter
-from core.clusterer import get_cluster_articles
+from core.reconstructor import NewsReconstructor
 from core.tone_converter import ToneConverter
-from core.embedder import NewsEmbedder
 from db.connection import get_connection
+from db.batch_manager import save_news_letter
+from workflow.helpers import initialize_generation_history, log_generation_attempt
+from workflow.evaluators import ClusterEvaluator, NewsletterEvaluator
 from config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
-# Global shared instances
-_SHARED_EMBEDDER = None
-
 
 def initialize_cluster_processing(state: AgentState) -> Dict[str, Any]:
     """
-    Initialize processing for the current cluster.
-    Loads articles for the current cluster from the data dict.
-    """
-    """
-    Initialize processing for the current cluster.
-    Loads articles for the current cluster from the data dict.
-    """
-    cluster_id = state["current_cluster_id"]
+    클러스터 처리 초기화 노드
     
-    # If articles are already provided (e.g. from main), use them
-    if state.get("current_articles"):
-        articles = state["current_articles"]
-        article_ids = state["current_article_ids"]
-    else:
-        # Load from all_cluster_groups
-        article_ids = state["all_cluster_groups"].get(cluster_id, [])
-        articles = get_cluster_articles(cluster_id, article_ids, state["data"])
+    현재 순서의 클러스터 ID와 관련 기사들을 State에 로드합니다.
+    """
+    idx = state.get("current_cluster_index", 0)
+    all_ids = state.get("all_cluster_ids", [])
     
-    # print(f"\n{'='*60}")
-    # print(f"[Cluster {cluster_id}] Processing {len(articles)} articles...")
-    # print(f"{'='*60}")
+    if idx >= len(all_ids):
+        return {"should_continue": False}
+        
+    cluster_id = all_ids[idx]
+    
+    # 클러스터 데이터 로드
+    cluster_groups = state["all_cluster_groups"]
+    article_ids = cluster_groups.get(cluster_id, [])
+    
+    # 기사 내용 로드 (제목, 본문 등)
+    data = state.get("data", {})
+    articles = []
+    
+    for aid in article_ids:
+        try:
+            import numpy as np
+            if isinstance(data['ids'], np.ndarray):
+                matches = np.where(data['ids'] == aid)[0]
+                if len(matches) == 0: raise ValueError
+                position = matches[0]
+            else:
+                position = data['ids'].index(aid)
+            articles.append({
+                "id": aid,
+                "title": data['titles'][position],
+                "content": data['contents'][position]
+            })
+        except ValueError:
+            logger.info(f"ℹ️ 기사 ID {aid}를 데이터에서 찾을 수 없습니다.")
+            continue
+            
+    logger.info(f"🚀 [Cluster {cluster_id}] 처리 시작 (기사 {len(articles)}개)")
     
     return {
         "current_cluster_id": cluster_id,
         "current_article_ids": article_ids,
         "current_articles": articles,
-        "cluster_eval": None,
-        "cluster_retry_count": 0,
         "newsletter_draft": None,
+        "cluster_eval": None,
         "newsletter_eval": None,
+        "cluster_retry_count": 0,
         "newsletter_retry_count": 0,
-        "newsletter_feedback": None,
-        "generation_history": None,  # Reset for each cluster
-        "should_continue": True,
         "error_message": None
     }
 
 
 def evaluate_cluster(state: AgentState) -> Dict[str, Any]:
     """
-    Evaluate if the current cluster represents a coherent news event.
-    Uses LLM to analyze article titles and content.
+    클러스터 평가 노드
+    
+    군집화된 기사들이 하나의 뉴스레터로 묶이기에 적절한지 평가합니다.
+    (주제 일관성, 기사 개수 등)
     """
     articles = state["current_articles"]
     cluster_id = state["current_cluster_id"]
     
-    # print(f"  [Step 1] Evaluating cluster coherence...")
+    # 기본 검사: 기사 개수 부족
+    if len(articles) < 2:
+        logger.info(f"⏭️ [Cluster {cluster_id}] 기사 수 부족으로 패스 (기사 {len(articles)}개)")
+        return {
+            "cluster_eval": {
+                "decision": "FAIL",
+                "reason": "Not enough articles",
+                "feedback": "Need at least 2 articles"
+            }
+        }
     
-    evaluator = ClusterEvaluator()
-    result = evaluator.evaluate(articles)
+    # 평가 수행 (LLM 사용)
+    from workflow.evaluators import ClusterEvaluator
     
-    # print(f"    Decision: {result['decision']} (confidence: {result['confidence']:.2f})")
-    # if result['summary']:
-    #     print(f"    Summary: {result['summary']}")
-    # if result['feedback']:
-    #     print(f"    Feedback: {result['feedback']}")
+    # Provider 설정 (None이면 환경변수나 기본값 사용)
+    evaluator = ClusterEvaluator(provider=None)
+    eval_result = evaluator.evaluate(articles)
     
-    return {
-        "cluster_eval": result,
-        "cluster_retry_count": state["cluster_retry_count"] + 1
-    }
+    if eval_result["decision"] == "FAIL":
+        # 평가 실패는 정상적인 흐름(필터링)으로 처리
+        logger.info(f"⛔ [Cluster {cluster_id}] 평가 실패 (Conf: {eval_result.get('confidence')}): {eval_result.get('feedback')}")
+    else:
+        logger.info(f"✅ [Cluster {cluster_id}] 평가 통과 (Conf: {eval_result.get('confidence')})")
+        
+    return {"cluster_eval": eval_result}
 
 
 def handle_cluster_eval_failure(state: AgentState) -> Dict[str, Any]:
     """
-    Handle cluster evaluation failure by removing outliers and retrying.
     If no outliers or max retries reached, skip the cluster.
     """
     cluster_id = state["current_cluster_id"]
     eval_result = state.get("cluster_eval", {})
     outlier_indices = eval_result.get("outlier_indices", [])
+    sub_groups = eval_result.get("sub_groups", [])
+    
     retry_count = state.get("cluster_retry_count", 0)
     
-    # Constraint: limit retries (e.g. 2 times)
+    # 1. LLM이 서브 그룹(쪼개기)을 제안한 경우
+    if sub_groups and len(sub_groups) >= 2:
+        # 가장 큰 서브 그룹을 선택하여 진행 (현재 1:1 구조상 대표 그룹 1개만 살림)
+        # TODO: 아키텍처 개선 시 서브 그룹 모두를 병렬 처리하도록 확장 가능
+        sub_groups.sort(key=len, reverse=True)
+        best_indices = sub_groups[0]
+        
+        current_articles = state["current_articles"]
+        valid_indices = [i for i in best_indices if 0 <= i < len(current_articles)]
+        
+        if len(valid_indices) >= 3:
+            new_articles = [current_articles[i] for i in valid_indices]
+            logger.info(f"♻️  [Cluster {cluster_id}] LLM 제안으로 그룹 쪼개기: Top 그룹({len(new_articles)}개)으로 재시도")
+            
+            return {
+                "current_articles": new_articles,
+                # 재시도 횟수 증가 (무한 루프 방지)
+                # "cluster_retry_count": retry_count + 1 
+            }
+
+    # 2. Constraint: limit retries (e.g. 2 times)
     MAX_RETRIES = 2
     if retry_count >= MAX_RETRIES:
         skipped = list(state.get("skipped_clusters", []))
         skipped.append(cluster_id)
-        # print(f"  [!] Cluster {cluster_id} skipped after max refinement retries")
         return {"skipped_clusters": skipped}
         
-    # If no outliers identified, cannot refine
+    # 3. 아웃라이어 제거 로직 (기존)
     if not outlier_indices:
+        # 아웃라이어도 없고 서브그룹도 없는데 FAIL이면 스킵
         skipped = list(state.get("skipped_clusters", []))
         skipped.append(cluster_id)
-        # print(f"  [!] Cluster {cluster_id} skipped (no outliers to remove)")
         return {"skipped_clusters": skipped}
     
     # Remove outliers
     current_articles = state["current_articles"]
-    # Filter valid indices
     valid_indices = [i for i in outlier_indices if 0 <= i < len(current_articles)]
     
     if not valid_indices:
@@ -121,7 +166,6 @@ def handle_cluster_eval_failure(state: AgentState) -> Dict[str, Any]:
         return {"skipped_clusters": skipped}
 
     # Create new article list
-    # Use set for faster lookups if many
     outlier_set = set(valid_indices)
     new_articles = [art for i, art in enumerate(current_articles) if i not in outlier_set]
     
@@ -129,21 +173,12 @@ def handle_cluster_eval_failure(state: AgentState) -> Dict[str, Any]:
     if len(new_articles) < 3:
         skipped = list(state.get("skipped_clusters", []))
         skipped.append(cluster_id)
-        # print(f"  [!] Cluster {cluster_id} skipped (too few articles after refinement)")
         return {"skipped_clusters": skipped}
     
-    print(f"♻️  [Cluster {cluster_id}] Refining: Removed {len(valid_indices)} outliers, retrying with {len(new_articles)} articles")
+    logger.info(f"♻️  [Cluster {cluster_id}] Refining: Removed {len(valid_indices)} outliers, retrying with {len(new_articles)} articles")
     
     return {
-        "current_articles": new_articles,
-        # "cluster_retry_count": retry_count + 1 # Update this in eval_cluster or here? 
-        # eval_cluster increments it, but we need to track *refinement* count vs *eval call* count.
-        # state's cluster_retry_count is incremented in eval_cluster. 
-        # But here we want to retry. Let's rely on state. 
-        # Actually eval_cluster increments it blindly. 
-        # If we return normally, flow goes to route.
-        # We need a way to signal "Retry" to the router.
-        # The router will check if we still have the cluster (not skipped).
+        "current_articles": new_articles
     }
 
 
@@ -168,31 +203,15 @@ def generate_newsletter(state: AgentState) -> Dict[str, Any]:
     feedback = state.get("newsletter_feedback")
     retry_count = state.get("newsletter_retry_count", 0)
     
-    # Initialize or get generation_history
-    generation_history = state.get("generation_history")
-    if generation_history is None:
-        generation_history = {"attempts": []}
+    # Initialize generation history
+    generation_history = initialize_generation_history(state)
     
-    # print(f"  [Step 2] Generating newsletter (attempt {retry_count + 1})...")
-    # if feedback:
-    #     print(f"    Previous feedback: {feedback[:100]}...")
-    
+    # Generate newsletter draft
     reconstructor = NewsReconstructor()
     draft = reconstructor.reconstruct(articles, feedback=feedback)
     
-    # Log generation attempt
-    attempt_log = {
-        "attempt": retry_count + 1,
-        "action": "generate" if retry_count == 0 else "regenerate",
-        "timestamp": datetime.now().isoformat(),
-        "feedback_applied": feedback if feedback else None
-    }
-    generation_history["attempts"].append(attempt_log)
-    
-    # if draft:
-    #     print(f"    Title: {draft.get('title', '')}")
-    # else:
-    #     print(f"    [!] Newsletter generation failed")
+    # Log this generation attempt
+    log_generation_attempt(generation_history, draft, state)
     
     return {
         "newsletter_draft": draft,
@@ -209,7 +228,6 @@ def evaluate_newsletter(state: AgentState) -> Dict[str, Any]:
     draft = state["newsletter_draft"]
     articles = state["current_articles"]
     
-    # print(f"  [Step 3] Evaluating newsletter quality...")
     
     if not draft:
         return {
@@ -224,7 +242,6 @@ def evaluate_newsletter(state: AgentState) -> Dict[str, Any]:
     evaluator = NewsletterEvaluator()
     result = evaluator.evaluate(draft, articles)
     
-    # print(f"    Decision: {result['decision']} (score: {result['score']}/10)")
     # if result['issues']:
     #     print(f"    Issues: {', '.join(result['issues'][:3])}")
     
@@ -251,45 +268,90 @@ def evaluate_newsletter(state: AgentState) -> Dict[str, Any]:
     }
 
 
+
+# Global cached embedder
+_CACHED_EMBEDDER = None
+
+def get_shared_embedder():
+    global _CACHED_EMBEDDER
+    if _CACHED_EMBEDDER is None:
+        logger.info("🔌 Loading shared NewsEmbedder for workflow...")
+        from core.embedder import NewsEmbedder
+        _CACHED_EMBEDDER = NewsEmbedder(l2_normalize=True)
+    return _CACHED_EMBEDDER
+
+def cleanup_workflow_embedder():
+    """Cleanup the shared embedder"""
+    global _CACHED_EMBEDDER
+    if _CACHED_EMBEDDER:
+        logger.info("🧹 Cleaning up shared NewsEmbedder...")
+        _CACHED_EMBEDDER.cleanup()
+        _CACHED_EMBEDDER = None
+
+
 def embed_newsletter_node(state: AgentState) -> Dict[str, Any]:
     """
-    Generate embedding from the original (formal) newsletter text.
-    This embedding will be used for the recommendation system.
+    뉴스레터 임베딩 생성 노드
     
-    The embedding is created BEFORE tone conversion to ensure
-    consistency with the formal writing style used in training.
+    원본(딱딱한 문체, Formal) 뉴스레터 초안을 기반으로 임베딩을 생성합니다.
+    이 임베딩은 추천 시스템에서 사용됩니다. 문체 변환(Casual) 전에 생성함으로써
+    학습 데이터와의 일관성을 유지합니다.
     """
     draft = state["newsletter_draft"]
     
-    # 배치 처리를 위해 워크플로우 내에서는 임베딩 생성을 스킵합니다.
-    # main.py의 마지막 단계에서 일괄 처리합니다.
-    # logger.info("📐 (Skip) 임베딩 생성은 배치 단계로 이관됨")
+    # DEBUG PRINT removed
+    # logger.info("📐 embed_newsletter_node called!")
     
-    return {
-        "original_newsletter": draft,
-        "newsletter_embedding": None
-    }
+    if not draft or not draft.get("content"):
+        logger.info("ℹ️ 임베딩을 위한 초안 내용이 없습니다.")
+        return {
+            "original_newsletter": draft,
+            "newsletter_embedding": None
+        }
+    
+    try:
+        # 공유된 임베더 인스턴스 가져오기
+        embedder = get_shared_embedder()
+        
+        # 제목과 본문을 결합하여 임베딩 생성
+        text_to_embed = f"{draft.get('title', '')} {draft.get('content', '')}"
+        
+        # 단일 문자열 임베딩 (배치 함수 재사용)
+        embeddings, _ = embedder.generate_embeddings_batch([text_to_embed])
+        
+        if not embeddings:
+            raise ValueError("임베딩 반환값 없음")
+            
+        embedding = embeddings[0]
+        
+        logger.info("✅ 원본 초안(Formal) 기반 임베딩 생성 완료")
+        
+        return {
+            "original_newsletter": draft,
+            "newsletter_embedding": embedding # 리스트 형태
+        }
+        
+    except Exception as e:
+        logger.info(f"ℹ️ 임베딩 생성 실패: {e}")
+        return {
+            "original_newsletter": draft,
+            "newsletter_embedding": None
+        }
 
 
 def convert_tone_node(state: AgentState) -> Dict[str, Any]:
     """
-    Convert newsletter tone from formal to casual with emojis.
-    This converted version will be stored in the database for users.
+    문체 변환 노드
     
-    The original formal version is preserved in 'original_newsletter'
-    and its embedding in 'newsletter_embedding' for the recommendation system.
+    작성된 뉴스레터(딱딱한 문체)를 사용자 친화적인 '부드러운 문체(Casual)' + 이모지로 변환합니다.
+    실패 시 원본을 그대로 사용(Fallback)합니다.
     """
     draft = state["newsletter_draft"]
     
-    logger.info("🎨 문체 변환 중...")
-    
-    if not draft:
-        logger.error("❌ 뉴스레터 초안 없음")
-        return {
-            "converted_newsletter": None,
-            "error_message": "No draft for conversion"
-        }
-    
+    # 이미 변환된 것이 있다면 스킵 (재시도 로직 등)
+    if state.get("converted_newsletter"):
+        return {}
+        
     try:
         # Create tone converter
         converter = ToneConverter()
@@ -298,20 +360,10 @@ def convert_tone_node(state: AgentState) -> Dict[str, Any]:
         converted = converter.convert(draft)
         
         if not converted:
-            logger.warning("⚠️ 문체 변환 실패, 원본 사용")
+            logger.info("ℹ️ 문체 변환 실패, 원본 사용")
             return {
                 "converted_newsletter": draft.copy(),  # Fallback to original
                 "conversion_feedback": "Conversion failed, using original"
-            }
-        
-        # Validate conversion
-        is_valid = converter.validate_conversion(draft, converted)
-        
-        if not is_valid:
-            logger.warning("⚠️ 변환 검증 실패, 원본 사용")
-            return {
-                "converted_newsletter": draft.copy(),  # Fallback to original
-                "conversion_feedback": "Validation failed, using original"
             }
         
         logger.info("✅ 문체 변환 완료")
@@ -322,7 +374,7 @@ def convert_tone_node(state: AgentState) -> Dict[str, Any]:
         }
         
     except Exception as e:
-        logger.error(f"❌ 문체 변환 오류: {e}")
+        logger.info(f"ℹ️ 문체 변환 오류: {e}")
         # Fallback to original on error
         return {
             "converted_newsletter": draft.copy(),
@@ -333,14 +385,30 @@ def convert_tone_node(state: AgentState) -> Dict[str, Any]:
 
 def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
     """
-    Save approved newsletter to database.
-    Uses the CONVERTED (casual tone) newsletter for content
-    and the pre-generated embedding from ORIGINAL (formal tone) text.
-    Updates news_raw.news_letter_id for associated articles.
+    뉴스레터 DB 저장 노드
+    
+    완성된 뉴스레터를 데이터베이스에 저장합니다.
+    - 내용(Content): 변환된 부드러운 문체(Casual)
+    - 임베딩(Embedding): 원본 딱딱한 문체(Formal) 기반
     """
-    # Use converted newsletter if available, otherwise fall back to draft
-    newsletter_to_save = state.get("converted_newsletter") or state["newsletter_draft"]
-    embedding = state.get("newsletter_embedding")  # Pre-generated from original text
+    # 변환된 뉴스레터 우선 사용, 없으면 원본 사용
+    draft = state.get("newsletter_draft") or {}
+    converted = state.get("converted_newsletter") or {}
+    # Merge converted onto draft so required fields are never lost
+    newsletter_to_save = {**draft, **converted} if converted else draft.copy()
+    # Tone converter uses "summary"; map to "sentence" if missing
+    if not newsletter_to_save.get("sentence"):
+        newsletter_to_save["sentence"] = (
+            newsletter_to_save.get("summary")
+            or draft.get("sentence")
+            or (newsletter_to_save.get("content", "").split("\n")[0].strip() if newsletter_to_save.get("content") else "")
+        )
+    # Ensure title/content are present (DB has NOT NULL constraints in final_db)
+    if not newsletter_to_save.get("title"):
+        newsletter_to_save["title"] = draft.get("title") or "뉴스 요약"
+    if not newsletter_to_save.get("content"):
+        newsletter_to_save["content"] = draft.get("content") or ""
+    embedding = state.get("newsletter_embedding")  # 원본 기반 임베딩
     article_ids = state["current_article_ids"]
     cluster_id = state["current_cluster_id"]
     
@@ -349,7 +417,7 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
     try:
         conn = get_connection()
         
-        # Get run_id and generation_history from state
+        # 실행 ID 및 생성 이력 가져오기
         run_id = state.get("run_id")
         generation_history = state.get("generation_history")
         
@@ -363,19 +431,21 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
         
         logger.info(f"✅ 뉴스레터 저장 완료 (ID: {saved_id})")
         
-        # Save pre-generated embedding if available
+        # 미리 생성된 임베딩이 있으면 업데이트
         if embedding:
             try:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "UPDATE news_letter SET news_letter_embedding = %s WHERE news_letter_id = %s",
+                    "UPDATE news_letter \
+                     SET news_letter_embedding = %s \
+                     WHERE news_letter_id = %s",
                     (embedding, saved_id)
                 )
                 conn.commit()
                 cursor.close()
                 logger.info(f"📐 임베딩 저장 완료 (원본 텍스트 기준)")
             except Exception as e:
-                logger.warning(f"⚠️ 임베딩 저장 실패: {e}")
+                logger.info(f"ℹ️ 임베딩 저장 실패: {e}")
         
         conn.close()
         
@@ -387,7 +457,7 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
         }
     
     except Exception as e:
-        logger.error(f"❌ 뉴스레터 저장 실패: {e}")
+        logger.info(f"ℹ️ 뉴스레터 저장 실패: {e}")
         failed = list(state.get("failed_clusters", []))
         failed.append(cluster_id)
         
@@ -405,7 +475,6 @@ def handle_newsletter_max_retries(state: AgentState) -> Dict[str, Any]:
     failed = list(state.get("failed_clusters", []))
     failed.append(cluster_id)
     
-    # print(f"  [!] Cluster {cluster_id} failed after max retries")
     
     last_feedback = state.get("newsletter_feedback", "No feedback")
     return {
@@ -422,12 +491,6 @@ def finalize_workflow(state: AgentState) -> Dict[str, Any]:
     failed = state.get("failed_clusters", [])
     skipped = state.get("skipped_clusters", [])
     
-    # print(f"\n{'='*60}")
-    # print("WORKFLOW COMPLETE")
-    # print(f"{'='*60}")
-    # print(f"  Completed: {len(completed)} newsletters")
-    # print(f"  Failed: {len(failed)} clusters")
-    # print(f"  Skipped: {len(skipped)} clusters")
     
     return {"should_continue": False}
 
