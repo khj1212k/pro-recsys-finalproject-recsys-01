@@ -50,7 +50,7 @@ def parse_args():
 
 def main():
     """
-    AI 작업공간(Workspace) 파이프라인의 메인 진입점(Entry Point)입니다.
+    AI 작업공간(Workspace) 파이프라인의 메인 진입점(Entry Point)
     
     실행 흐름 (Flow):
     1. CLI 인자(Arguments) 파싱: 사용자가 입력한 옵션 확인
@@ -67,7 +67,7 @@ def main():
     if args.reset:
         cur_env = os.getenv("ENV", "dev")
         if cur_env == "prod":
-            logger.error(f"🚫 [CRITICAL] 운영(prod) 환경에서는 DB 리셋이 절대 불가능합니다.")
+            logger.error(f"🚫 [CRITICAL] 운영(prod) 환경에서는 DB 리셋이 절대 불가능.")
             sys.exit(1)
 
         db_name = os.getenv("DB_NAME", "")
@@ -78,7 +78,7 @@ def main():
             logger.warning(f"⚠️  전체 리셋 건너뜀 (DB_NAME={db_name} != test_db)")
     
     # 파이프라인 러너 초기화 및 실행
-    # Runner는 모든 단계(유저 임베딩 -> 수집 -> 추출 -> 기사 임베딩 -> 뉴스레터 생성)를 조율합니다.
+    # Runner는 모든 단계(유저 임베딩 -> 수집 -> 추출 -> 기사 임베딩 -> 뉴스레터 생성)를 조율
     runner = PipelineRunner(Settings)
     
     try:

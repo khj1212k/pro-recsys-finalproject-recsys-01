@@ -1,7 +1,4 @@
-"""
-User Newsletter CTR Log Helper Functions
-사용자 뉴스레터 읽기 로그 관련 유틸리티 함수들
-"""
+# 사용자 뉴스레터 읽기 로그 관련 쿼리 함수들
 
 from typing import List, Tuple, Optional
 from datetime import datetime, timedelta

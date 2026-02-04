@@ -1,7 +1,3 @@
-"""
-Database maintenance helpers.
-스키마 변경 없이 데이터만 초기화하는 안전한 리셋을 제공합니다.
-"""
 from db.connection import get_connection
 
 
@@ -15,9 +11,7 @@ def _safe_truncate(cur, table: str):
 
 
 def insert_initial_press_data():
-    """
-    Press 테이블에 초기 언론사 데이터 삽입
-    """
+    # Press 테이블에 초기 언론사 데이터 삽입
     print("언론사 초기 데이터 삽입 중...")
 
     conn = get_connection()
@@ -51,9 +45,7 @@ def insert_initial_press_data():
 
 
 def insert_initial_rss_url_data():
-    """
-    RSS_URL 테이블에 초기 RSS 주소 데이터 삽입
-    """
+    # RSS_URL 테이블에 초기 RSS 주소 데이터 삽입
     print("RSS URL 초기 데이터 삽입 중...")
 
     conn = get_connection()
@@ -99,9 +91,7 @@ def insert_initial_rss_url_data():
 
 
 def insert_initial_category_data():
-    """
-    Category 테이블에 초기 카테고리 데이터 삽입
-    """
+    # Category 테이블에 초기 카테고리 데이터 삽입
     print("카테고리 초기 데이터 삽입 중...")
 
     conn = get_connection()
@@ -136,9 +126,7 @@ def insert_initial_category_data():
 
 
 def full_reset():
-    """
-    데이터만 초기화 (스키마 변경 없음)
-    """
+    # 데이터만 초기화 (스키마 변경 없음)
     print("=" * 60)
     print("DB 데이터 리셋 시작 (스키마 유지)")
     print("=" * 60 + "\n")

@@ -1,14 +1,14 @@
-# core/reconstruction/prompts.py
+# 뉴스레터 생성용 프롬프트 템플릿
+# - 본문 생성 프롬프트, 메타데이터 생성 프롬프트
 
-# Call 1 System Message
+# Call 1 
 SYSTEM_EDITOR_ROLE = """당신은 20년 경력의 뉴스 에디터입니다.
 여러 언론사의 기사를 통합하여 객관적이고 사실 중심의 균형 잡힌 기사를 작성합니다.
 
 ⛔ 중요 규칙: 본문 첫 문장을 "최근", "요즘", "오늘날"로 시작하지 마세요.
 반드시 핵심 주체나 이슈로 바로 시작해야 합니다."""
 
-# Call 1 User Message Template
-# {feedback_instruction} 과 {articles_text} 는 generator에서 채워넣습니다.
+# Call Template
 
 CONTENT_GEN_PROMPT = """당신은 여러 언론사의 기사를 큐레이션해
 독자가 한눈에 이 이슈가 '무엇에 관한 이야기이고,
@@ -92,8 +92,7 @@ SYSTEM_META_ROLE = """당신은 뉴스레터 메타데이터 편집자입니다.
 "정치", "경제", "사회", "세계", "IT/과학", "생활/문화", "스포츠"
 """
 
-# Call 2 User Message Template
-# {content_text} 는 generator에서 채워넣습니다.
+# Call 2 Template
 META_GEN_PROMPT = """당신은 뉴스레터 메타데이터 전문 편집자입니다.
 
 아래에 이미 작성된 뉴스레터 본문(content)이 있습니다.

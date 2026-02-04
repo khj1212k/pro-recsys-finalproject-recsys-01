@@ -1,4 +1,6 @@
-# core/reconstruction/repository.py
+# 뉴스레터 DB 저장 로직
+# - 카테고리 매핑, 기사 연결 처리
+
 import json
 from typing import List, Dict, Optional
 from .validator import sanitize_text
@@ -56,7 +58,7 @@ def save_news_letter(
 
     saved_id = cur.fetchone()[0]
 
-    # Save categories
+    # 카테고리
     categories = reconstructed.get('categories', [])
     for category in categories:
         if category:
@@ -70,7 +72,7 @@ def save_news_letter(
                     ON CONFLICT DO NOTHING
                 ''', (saved_id, cat_row[0]))
 
-    # Update associated articles
+    # 연관된 기사 업데이트
     for article_id in article_ids:
         cur.execute('''
             UPDATE news_raw

@@ -1,8 +1,5 @@
-"""
-LangGraph Graph Construction (LangGraph 그래프 구축)
-
-뉴스레터 생성을 위한 워크플로우 그래프(Node와 Edge)를 정의합니다.
-"""
+# Stage5: 뉴스레터 생성 워크플로우 그래프 정의
+# - 클러스터 평가 → 뉴스레터 생성 → 품질 평가 → 임베딩 → 문체 변환 → 저장
 from langgraph.graph import StateGraph, END
 
 from workflow.state import AgentState

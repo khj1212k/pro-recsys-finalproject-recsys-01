@@ -1,3 +1,7 @@
+# HDBSCAN 기반 뉴스 클러스터링
+# - 임베딩 벡터 유사도로 기사 그룹화
+# - 1차 클러스터링 후 필요시 2차 분할
+
 import numpy as np
 import warnings
 from collections import Counter
@@ -48,7 +52,7 @@ class NewsClusterer:
             c_ids = [int(data['ids'][i]) for i in idxs]
             c_X = embeddings[idxs]
             
-            # 1차 클러스터들 중에 또 split이 가능한지 판단
+            # 1차 클러스터들 중에 또 split이 필요한지 판단
             dec = decide_split_v2(c_X, c_titles)
             if dec.should_split and dec.debug.get('idx0'):
                 for split_idx in ['idx0', 'idx1']:
