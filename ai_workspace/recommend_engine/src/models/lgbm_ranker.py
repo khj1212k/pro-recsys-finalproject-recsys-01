@@ -9,11 +9,7 @@ logger = get_logger("LGBMRanker")
 
 class LGBMRanker:
     def __init__(self, params: Dict[str, Any] = None):
-        """
-        LightGBM Ranker Wrapper
-        Args:
-            params: LightGBM 모델 파라미터 (main_lgbm.py에서 전달받음)
-        """
+        """LightGBM 랭커 초기화 및 하이퍼파라미터 설정"""
         self.model = None
         
         # 기본 파라미터
@@ -40,9 +36,7 @@ class LGBMRanker:
         logger.info(f"⚙️ LightGBM 설정: LR={self.params.get('learning_rate')}, Leaves={self.params.get('num_leaves')}")
 
     def train(self, train_df: pd.DataFrame, valid_df: pd.DataFrame = None):
-        """
-        모델 학습 (저장은 main_lgbm.py에서 수행)
-        """
+        """LightGBM 모델 학습 (Train/Valid 및 Early Stopping 지원)"""
         # Feature와 Label 분리
         # (주의: _timestamp 컬럼은 main_lgbm.py에서 이미 drop 되었으므로 걱정 X)
         drop_cols = ['user_id', 'news_id', 'label']
@@ -82,9 +76,7 @@ class LGBMRanker:
         logger.info("✅ 모델 학습 완료")
 
     def predict(self, inference_df: pd.DataFrame) -> pd.DataFrame:
-        """
-        예측 수행 (스코어링)
-        """
+        """추론 데이터에 대한 클릭 확률(Score) 예측 수행"""
         if self.model is None:
             raise ValueError("모델이 로드되지 않았습니다.")
 

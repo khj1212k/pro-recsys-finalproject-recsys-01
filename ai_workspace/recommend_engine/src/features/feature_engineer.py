@@ -117,7 +117,7 @@ class FeatureEngineer:
             row['history_cosine_similarity'] = sim_score
 
             # ---------------------------------------------------------
-            # 3. Explicit Match Features (Category) - [Logic Simplified]
+            # 3. Explicit Match Features (Category)
             # ---------------------------------------------------------
             # 시간 감쇠 없이 단순 집합(Set) 연산 수행
             user_cats = set(user_profile.onboarding_categories)

@@ -15,10 +15,12 @@ class Evaluator:
     """
     
     def __init__(self, k_values: List[int] = [5, 10, 20]):
+        """평가 기준 K값 리스트 초기화"""
         self.k_values = k_values
     
     @staticmethod
     def precision_at_k(recommended: List[int], relevant: Set[int], k: int) -> float:
+        """추천된 아이템(Top-K) 중 사용자가 실제로 선호하는 아이템(Positive)의 비율"""
         if k <= 0 or not recommended: return 0.0
         top_k = recommended[:k]
         hits = sum(1 for item in top_k if item in relevant)
@@ -26,6 +28,7 @@ class Evaluator:
     
     @staticmethod
     def recall_at_k(recommended: List[int], relevant: Set[int], k: int) -> float:
+        """실제 사용자가 선호하는 전체 아이템 중 추천된 아이템(Top-K)이 차지하는 비율"""
         if not relevant or k <= 0: return 0.0
         top_k = recommended[:k]
         hits = sum(1 for item in top_k if item in relevant)
@@ -33,6 +36,7 @@ class Evaluator:
     
     @staticmethod
     def mrr(recommended: List[int], relevant: Set[int]) -> float:
+        """추천 리스트에서 처음으로 등장하는 정답 아이템 순위의 역수 (1/rank)"""
         for i, item in enumerate(recommended):
             if item in relevant:
                 return 1.0 / (i + 1)
@@ -40,6 +44,7 @@ class Evaluator:
     
     @staticmethod
     def dcg_at_k(recommended: List[int], relevant: Set[int], k: int) -> float:
+        """추천된 아이템의 순위에 따라 가중치를 두어 관련도를 합산한 점수 (Rank 기반 감쇠)"""
         if k <= 0: return 0.0
         dcg = 0.0
         for i, item in enumerate(recommended[:k]):
@@ -49,6 +54,7 @@ class Evaluator:
     
     @staticmethod
     def ndcg_at_k(recommended: List[int], relevant: Set[int], k: int) -> float:
+        """DCG를 이상적인 결과(IDCG)로 나누어 0~1 사이 값으로 정규화한 지표"""
         if not relevant or k <= 0: return 0.0
         dcg = Evaluator.dcg_at_k(recommended, relevant, k)
         ideal_relevant = list(relevant)[:k]
@@ -61,6 +67,7 @@ class Evaluator:
         item_categories: Dict[int, List[int]],
         total_categories: int = 7
     ) -> float:
+        """추천된 아이템들이 전체 카테고리를 얼마나 다양하게 커버하는지 측정"""
         covered = set()
         for item_id in recommended:
             if item_id in item_categories:
@@ -73,6 +80,7 @@ class Evaluator:
         relevant: Set[int],
         item_categories: Dict[int, List[int]] = None
     ) -> Dict[str, float]:
+        """단일 유저에 대한 모든 평가 지표 계산"""
         metrics = {}
         metrics['mrr'] = self.mrr(recommended, relevant)
         
@@ -90,6 +98,7 @@ class Evaluator:
         ground_truth: Dict[int, Set[int]],
         item_categories: Dict[int, List[int]] = None
     ) -> Dict[str, float]:
+        """전체 유저 대상 평가 지표 평균 계산"""
         all_metrics = defaultdict(list)
         
         for user_id, recommended in recommendations.items():
@@ -106,6 +115,7 @@ class Evaluator:
         return avg_metrics
     
     def format_metrics(self, metrics: Dict[str, float], decimal: int = 4) -> str:
+        """평가 결과를 보기 좋은 문자열 포맷으로 변환"""
         lines = []
         if 'mrr' in metrics:
             lines.append(f"MRR: {metrics['mrr']:.{decimal}f}")

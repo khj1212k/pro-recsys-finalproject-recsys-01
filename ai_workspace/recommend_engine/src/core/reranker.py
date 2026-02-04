@@ -9,25 +9,16 @@ from typing import Dict, List, Tuple, Optional, Any
 
 
 class MMRReranker:
-    """
-    Maximal Marginal Relevance 재정렬기
-    
+    """관련성-다양성 균형 조절을 위한 MMR(Maximal Marginal Relevance) reranker
     MMR = λ * Relevance(item) - (1-λ) * max_sim(item, selected_items)
-    
-    - λ가 높을수록 관련성 우선
-    - λ가 낮을수록 다양성 강화
-    """
+    λ가 높을수록 관련성을, 낮을수록 다양성을 우선시"""
     
     def __init__(
         self,
         lambda_param: float = 0.7,
         pool_multiplier: int = 4
     ):
-        """
-        Args:
-            lambda_param: λ 파라미터 (0~1)
-            pool_multiplier: top_k * pool_multiplier 개를 MMR 후보로 사용
-        """
+        """reranking 가중치(lambda)와 후보군 배수(pool_multiplier) 값 설정"""
         self.lambda_param = lambda_param
         self.pool_multiplier = pool_multiplier
     
@@ -37,17 +28,7 @@ class MMRReranker:
         embeddings: np.ndarray,
         top_k: int
     ) -> List[Tuple[int, float]]:
-        """
-        MMR 재정렬 수행
-        
-        Args:
-            scores: [N] 각 아이템의 관련성 점수
-            embeddings: [N, D] 각 아이템의 임베딩
-            top_k: 최종 선택할 아이템 수
-            
-        Returns:
-            [(item_idx, mmr_score), ...] top_k개
-        """
+        """임베딩 유사도 & mmr 점수를 기반으로 MMR 정렬을 수행하여 상위 Top-K 리스트 반환"""
         n_items = len(scores)
         
         if n_items <= top_k:
@@ -115,12 +96,7 @@ class MMRReranker:
 
 
 class CategoryBasedMMRReranker:
-    """
-    카테고리 개수 기반 적응형 MMR 재정렬기
-    
-    선호 카테고리가 적을수록 관련성 우선 (높은 λ)
-    선호 카테고리가 많을수록 다양성 강화 (낮은 λ)
-    """
+    """사용자의 선호 카테고리 수에 따라 다양성 가중치(lambda)를 동적으로 조절하는 reranker"""
     
     def __init__(
         self,
@@ -130,14 +106,7 @@ class CategoryBasedMMRReranker:
         lambda_default: float = 0.7,
         pool_multiplier: int = 4
     ):
-        """
-        Args:
-            lambda_few: 카테고리 1~2개일 때 λ
-            lambda_medium: 카테고리 3~4개일 때 λ
-            lambda_many: 카테고리 5개 이상일 때 λ
-            lambda_default: 기본 λ
-            pool_multiplier: top_k * pool_multiplier 개를 MMR 후보로 사용
-        """
+        """카테고리 개수 구간별 lambda 값과 후보군 배수 설정"""
         self.lambda_few = lambda_few
         self.lambda_medium = lambda_medium
         self.lambda_many = lambda_many
@@ -145,7 +114,7 @@ class CategoryBasedMMRReranker:
         self.pool_multiplier = pool_multiplier
     
     def get_lambda_for_category_count(self, num_categories: int) -> float:
-        """카테고리 개수에 따른 λ 반환"""
+        """사용자 선호 카테고리 개수에 따른 최적의 lambda 값 반환"""
         if num_categories <= 0:
             return self.lambda_default
         elif num_categories <= 2:
@@ -162,18 +131,7 @@ class CategoryBasedMMRReranker:
         top_k: int,
         num_preferred_categories: int
     ) -> List[Tuple[int, float]]:
-        """
-        사용자의 선호 카테고리 수에 맞춰 MMR 재정렬
-        
-        Args:
-            scores: [N] 각 아이템의 관련성 점수
-            embeddings: [N, D] 각 아이템의 임베딩
-            top_k: 최종 선택할 아이템 수
-            num_preferred_categories: 사용자의 선호 카테고리 개수
-            
-        Returns:
-            [(item_idx, mmr_score), ...] top_k개
-        """
+        """사용자 선호 카테고리 개수를 고려해 동적 Lambda를 적용하여 MMR 재정렬 수행"""
         lambda_param = self.get_lambda_for_category_count(num_preferred_categories)
         
         reranker = MMRReranker(
@@ -185,15 +143,7 @@ class CategoryBasedMMRReranker:
 
 
 def create_reranker_from_config(config: Dict[str, Any]) -> CategoryBasedMMRReranker:
-    """
-    설정에서 MMR Reranker 생성
-    
-    Args:
-        config: 설정 딕셔너리
-        
-    Returns:
-        CategoryBasedMMRReranker 인스턴스
-    """
+    """설정 객체(Config)로부터 파라미터를 불러와 CategoryBasedMMRReranker 인스턴스 생성"""
     rec_config = config.get('recommendation', {})
     mmr_config = rec_config.get('mmr_lambda', {})
     

@@ -134,7 +134,8 @@ def inference_pipeline(config: dict, loader: DataLoader):
         return
 
     # 4. 예측 (Scoring)
-    # [핵심] 추론 데이터에서도 _timestamp 컬럼 제거
+    
+    # 추론 데이터에서도 _timestamp 컬럼 제거
     if '_timestamp' in inference_df.columns:
         inference_df.drop(columns=['_timestamp'], inplace=True)
 

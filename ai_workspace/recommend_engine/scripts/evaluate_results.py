@@ -49,7 +49,7 @@ def evaluate():
     days_ago = 6 
     logger.info(f"🔍 정답 데이터 로드 중 (최근 {days_ago}일 - Validation Set 근사)")
     
-    # [수정 반영] is_clicked 컬럼 없음. 존재하는 모든 로그가 Positive.
+    # 최근 "days_ago"일치 유저-뉴스레터 클릭 로그 로드
     gt_query = text(f"""
         SELECT user_id, news_letter_id
         FROM user_newsletter_ctr_log
@@ -66,7 +66,7 @@ def evaluate():
     ground_truth = gt_df.groupby('user_id')['news_letter_id'].apply(set).to_dict()
     logger.info(f"✅ 정답 데이터 로드 완료: {len(gt_df)}건 (유저 {len(ground_truth)}명)")
 
-    # 3. 메타데이터 로드 (Coverage 계산용)
+    # 3. 메타데이터 로드 (추천 결과 Coverage 계산용)
     logger.info("📚 카테고리 정보 로드 중...")
     news_items = loader.load_embedded_news()
     item_categories = {nid: item.category_ids for nid, item in news_items.items()}

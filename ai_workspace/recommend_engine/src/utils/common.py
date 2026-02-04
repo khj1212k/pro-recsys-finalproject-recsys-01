@@ -7,7 +7,7 @@
 import os
 import sys
 import yaml
-import json
+
 import logging
 from datetime import datetime
 from typing import Dict, Any, Optional
@@ -37,40 +37,12 @@ def load_config(config_path: str = None) -> Dict[str, Any]:
         return yaml.safe_load(f)
 
 
-def get_data_path(filename: str, config: Dict = None) -> str:
-    """데이터 파일의 전체 경로 반환"""
-    if config is None:
-        config = load_config()
-    return os.path.join(get_project_root(), config['data']['base_path'], filename)
-
-
 def ensure_dir(path: str) -> str:
     """디렉토리 생성 후 경로 반환"""
     if not os.path.isabs(path):
         path = os.path.join(get_project_root(), path)
     os.makedirs(path, exist_ok=True)
     return path
-
-
-# =============================================================================
-# JSON Utils
-# =============================================================================
-
-def save_json(data: Any, filepath: str, indent: int = 2):
-    """JSON 파일 저장"""
-    if not os.path.isabs(filepath):
-        filepath = os.path.join(get_project_root(), filepath)
-    ensure_dir(os.path.dirname(filepath))
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=indent)
-
-
-def load_json(filepath: str) -> Any:
-    """JSON 파일 로딩"""
-    if not os.path.isabs(filepath):
-        filepath = os.path.join(get_project_root(), filepath)
-    with open(filepath, 'r', encoding='utf-8') as f:
-        return json.load(f)
 
 
 # =============================================================================

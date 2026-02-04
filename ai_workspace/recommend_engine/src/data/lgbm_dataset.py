@@ -20,8 +20,7 @@ class LGBMDataset:
     def create_train_dataset(self, neg_ratio: int = 5) -> pd.DataFrame:
         """
         학습용 데이터셋 생성 (Negative Sampling + Time Correctness 적용)
-        Args:
-            neg_ratio: Positive 1개당 생성할 Negative 샘플 개수
+        neg_ratio: Positive Log 1개당 생성할 Negative 샘플 개수
         """
         logger.info(f"📊 학습 데이터 생성 시작 (Negative Ratio 1:{neg_ratio})")
         
@@ -47,7 +46,7 @@ class LGBMDataset:
         users_list = []
         news_list = []
         labels_list = []
-        timestamps_list = [] # [New] 시간 정보 리스트
+        timestamps_list = [] # 시간 정보 리스트
 
         # 2. 샘플링 진행
         logger.info("⚡ Negative Sampling 및 데이터 구성 중...")
@@ -56,7 +55,7 @@ class LGBMDataset:
             users_list.append(uid)
             news_list.append(nid)
             labels_list.append(1)
-            timestamps_list.append(ts) # [New] 로그 발생 시간 그대로 사용
+            timestamps_list.append(ts) # 로그 발생 시간 그대로 사용
             
             # (2) Negative Sample (Random)
             # 해당 유저가 본 적 없는 뉴스 중에서 k개 뽑기
@@ -69,18 +68,19 @@ class LGBMDataset:
                     users_list.append(uid)
                     news_list.append(rand_nid)
                     labels_list.append(0)
-                    timestamps_list.append(ts) # [New] Positive와 '동일한 시간' 부여 (Point-in-Time)
+                    timestamps_list.append(ts) # Positive와 '동일한 시간' 부여 (Point-in-Time)
                     count += 1
                 safety_break += 1
 
         logger.info(f"✅ 샘플링 완료: Positive {len(pos_data)}개, Total {len(labels_list)}개")
         
-        # 3. 피처 생성 호출 (timestamps 전달)
+        # 3. 피처 생성 호출
+        # timestamps: 피처 엔지니어링(Recency) 및 Time-based Split(Train/Valid 분리)에 사용
         train_df = self.fe.create_features(
             user_ids=users_list, 
             news_ids=news_list, 
             labels=labels_list, 
-            timestamps=timestamps_list # [New] 핵심 수정 사항
+            timestamps=timestamps_list
         )
         return train_df
 

@@ -20,11 +20,12 @@ except ImportError:
 
 
 class BGEEmbedder:
-    """BGE-M3 기반 임베딩 생성기 (1024d 고정)"""
+    """BGE-M3 기반 1024차원 임베딩 생성 클래스"""
     
     EMBEDDING_DIM = 1024
     
     def __init__(self, force_cpu: bool = False, verbose: bool = True):
+        """임베딩 모델 로드 및 디바이스 설정"""
         if not HAS_FLAG_EMBEDDING:
             raise ImportError("FlagEmbedding not installed")
         
@@ -45,20 +46,16 @@ class BGEEmbedder:
             print(f"✅ 모델 로딩 완료! ({time.time() - load_start:.2f}초)")
     
     def _l2_normalize(self, vec: List[float]) -> List[float]:
+        """벡터 L2 정규화 수행"""
         norm = math.sqrt(sum(x * x for x in vec))
-        return [x / norm for x in vec] if norm > 0 else vec
-    
-    def encode_single(self, text: str) -> Optional[List[float]]:
-        if not text or not text.strip():
-            return None
-        results, _ = self.encode_batch([text])
-        return results[0] if results else None
+        return [x / norm for x in vec] if norm > 0 else vec 
     
     def encode_batch(
         self, 
         texts: List[str], 
         batch_size: int = 16
     ) -> Tuple[List[Optional[List[float]]], float]:
+        """배치 단위 텍스트 임베딩 생성 및 소요 시간 반환"""
         if not texts:
             return [], 0.0
         
@@ -87,26 +84,3 @@ class BGEEmbedder:
                 print(f"⚠️ 배치 임베딩 실패: {e}")
             return [None] * len(texts), 0.0
     
-    def encode_news(self, title: str, content: str, category: str = "") -> Optional[List[float]]:
-        parts = [f"제목: {title}"]
-        if category:
-            parts.append(f"카테고리: {category}")
-        if content:
-            parts.append(f"내용: {content}")
-        return self.encode_single("\n".join(parts))
-
-
-_embedder_instance = None
-
-def get_embedder(force_cpu: bool = False, verbose: bool = True) -> BGEEmbedder:
-    global _embedder_instance
-    if _embedder_instance is None:
-        _embedder_instance = BGEEmbedder(force_cpu=force_cpu, verbose=verbose)
-    return _embedder_instance
-
-def embed_text(text: str) -> Optional[List[float]]:
-    return get_embedder(verbose=False).encode_single(text)
-
-def embed_texts(texts: List[str], batch_size: int = 16) -> List[Optional[List[float]]]:
-    results, _ = get_embedder(verbose=False).encode_batch(texts, batch_size)
-    return results

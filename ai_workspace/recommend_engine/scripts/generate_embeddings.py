@@ -14,6 +14,7 @@ sys.path.insert(0, PROJECT_ROOT)
 from src.utils.common import load_config
 from src.utils.embedder import BGEEmbedder 
 
+# DB에서 뉴스레터 로드 후 임베딩 생성 및 DB에 임베딩 업로드
 def generate_embeddings_from_db():
     print("🚀 뉴스레터 임베딩 생성 및 DB 업로드 스크립트 시작")
     
@@ -79,9 +80,6 @@ def generate_embeddings_from_db():
                 success_count += 1
                 
     print(f"✅ DB 업데이트 완료: 총 {success_count}건 반영됨")
-
-    # 7. (선택) 로컬 백업 저장
-    # ... 기존 pickle 저장 로직 유지 ...
 
 if __name__ == "__main__":
     generate_embeddings_from_db()

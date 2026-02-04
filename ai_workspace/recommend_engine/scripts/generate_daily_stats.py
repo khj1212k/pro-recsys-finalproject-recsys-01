@@ -1,4 +1,4 @@
-# src/statistics/daily_aggregator.py
+# scripts/generate_daily_stats.py
 import pandas as pd
 from sqlalchemy import create_engine, text
 from typing import Dict, List
@@ -8,7 +8,7 @@ import sys
 from datetime import datetime
 
 # 프로젝트 루트 경로 추가
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # [수정] logger.py 삭제 및 common.py 통합 반영
 from src.utils.common import load_config, get_logger

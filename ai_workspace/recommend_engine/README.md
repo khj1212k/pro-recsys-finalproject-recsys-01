@@ -25,16 +25,15 @@ uv run python main_lgbm.py --train
 
 ### 3. 추천 생성 (Inference)
 전체 유저에 대해 개인화된 Top-20 뉴스레터 목록을 생성합니다.
+- **Production Mode:** 생성된 결과를 DB (`news_letter_today_batch`)에 자동 적재합니다.
+- **Debug Mode:** 결과를 `results/` 디렉토리에 CSV로 저장합니다. `results/rec_YYYYMMDD_HHmmss.csv`
 ```bash
 uv run python main_lgbm.py --inference
 ```
-- **Output:** `results/recs_YYYYMMDD_HHMMSS.json` (DB 적재용)
 
-### 4. DB 적재
-생성된 추천 결과를 서비스 DB에 업로드합니다.
-```bash
-uv run python scripts/upload_to_db.py --file results/recs_....json
-```
+### 4. 유틸리티 실행
+임베딩 생성, 통계 집계, 모델 평가 등 다양한 보조 작업은 `scripts/` 내의 스크립트를 사용합니다.
+자세한 내용은 [scripts/README.md](scripts/README.md)를 참고하세요.
 
 ---
 
@@ -48,9 +47,8 @@ recommend_engine/
 │   ├── features/        # 피처 엔지니어링 (핵심 로직)
 │   ├── models/          # LightGBM 모델 래퍼
 │   ├── core/            # 추천(Inference) 및 평가(Evaluation) 로직
-│   ├── statistics/      # Cold Start용 통계 모듈
 │   └── utils/           # 로깅 및 공통 유틸리티
-├── scripts/             # DB 업로드 등 보조 스크립트
+├── scripts/             # 데이터 생성, 통계, 평가 등 유틸리티
 ├── main_lgbm.py         # 메인 실행 파일
 └── README.md
 ```

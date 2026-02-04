@@ -18,7 +18,6 @@ embedding:
 
 # 데이터 경로 설정 (DB 모드이므로 로컬 파일 경로 제거, 임베딩 캐시만 유지)
 data:
-  base_path: "data" # 임베딩 PKL 저장용 (캐싱)
   
   # 1. 데이터 소스 (무조건 DB)
   data_source: "db"

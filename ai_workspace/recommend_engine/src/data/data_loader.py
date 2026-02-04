@@ -81,7 +81,7 @@ class DataLoader:
             if ',' in clean_str:
                 parts = clean_str.split(',')
             else:
-                # 쉼표가 없는 경우 (공백 구분일 수도 있음)
+                # 구분자가 쉼표가 아닌 경우(ex. 공백)
                 parts = clean_str.split()
                 
             # 3. float 변환
