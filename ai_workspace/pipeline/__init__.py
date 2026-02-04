@@ -1,8 +1,5 @@
 """
-Pipeline module
-
-Provides modular, class-based implementation of each pipeline stage
-for better separation of concerns and testability.
+Pipeline 모듈러
 """
 from pipeline.stages import (
     PipelineStage,

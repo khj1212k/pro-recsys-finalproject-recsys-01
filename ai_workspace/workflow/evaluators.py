@@ -1,7 +1,5 @@
-"""
-LLM-based Evaluators for LangGraph workflow
-Supports Naver HyperCLOVA X and OpenAI
-"""
+# LLM 기반 평가기
+# - 클러스터 품질 평가, 뉴스레터 품질 평가
 import os
 import json
 from typing import Dict, List, Optional
@@ -10,7 +8,6 @@ from core.llm_client import get_llm_client, extract_json_from_response, BaseLLMC
 
 
 class ClusterEvaluator:
-    """Evaluates if a cluster represents a single coherent news event"""
 
     SYSTEM_PROMPT = """You are an expert news analyst evaluating clusters of news articles.
 Your job is to determine if articles in a cluster represent a single coherent news event or topic.
@@ -145,9 +142,7 @@ Content Preview: {content_preview}...
                 "sub_groups": _to_int_groups(result.get("sub_groups", []))
             }
 
-        # Fallback if parsing still fails
         if last_response:
-            # Heuristic fallback: detect PASS/FAIL tokens
             upper = last_response.upper()
             decision = "FAIL" if "FAIL" in upper and "PASS" not in upper else "PASS" if "PASS" in upper else "FAIL"
             return {
@@ -170,7 +165,6 @@ Content Preview: {content_preview}...
 
 
 class NewsletterEvaluator:
-    """Evaluates newsletter quality against defined criteria"""
 
     SYSTEM_PROMPT = """You are an expert news editor evaluating newsletter drafts.
 Your job is to ensure the newsletter meets quality standards for publication.
@@ -208,25 +202,9 @@ Only output valid JSON. No other text.
 If unsure, still return valid JSON with empty strings/lists."""
 
     def __init__(self, provider: Optional[str] = None):
-        """
-        Initialize NewsletterEvaluator
-
-        Args:
-            provider: LLM provider ('naver', 'openai', or None for auto-detect)
-        """
         self.client: BaseLLMClient = get_llm_client(provider)
 
     def evaluate(self, newsletter: Dict, source_articles: List[Dict]) -> Dict:
-        """
-        Evaluate a newsletter draft.
-
-        Args:
-            newsletter: Dict with title, sentence, content, keywords, categories
-            source_articles: Original articles used to generate the newsletter
-
-        Returns:
-            Evaluation result dict with decision, score, feedback, issues
-        """
         if not newsletter:
             return {
                 "decision": "FAIL",
@@ -235,9 +213,8 @@ If unsure, still return valid JSON with empty strings/lists."""
                 "issues": ["No content to evaluate"]
             }
 
-        # Build source summary
         source_summary = ""
-        for i, art in enumerate(source_articles[:5]):  # Limit to 5 for token efficiency
+        for i, art in enumerate(source_articles[:5]):
             source_summary += f"- [{art.get('press_name', '')}] {art.get('title', '')}\n"
 
         prompt = self.USER_PROMPT_TEMPLATE.format(
@@ -252,7 +229,7 @@ If unsure, still return valid JSON with empty strings/lists."""
             {"role": "user", "content": prompt}
         ]
 
-        max_retries = 1000000  # effectively until parse succeeds
+        max_retries = 1000000
         last_response = None
         for _ in range(max_retries):
             response = self.client.chat_completion(

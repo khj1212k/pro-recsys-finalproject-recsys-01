@@ -1,3 +1,7 @@
+# 클러스터 분할 판단 로직
+# - 1차 클러스터가 서로 다른 주제를 포함하는지 검사
+# - Jaccard 유사도, Silhouette 점수 등으로 분할 여부 결정
+
 import re
 import numpy as np
 from collections import Counter, defaultdict
@@ -6,37 +10,38 @@ from typing import Dict, List, Optional, Any, Tuple
 from sklearn.metrics import silhouette_score
 from sklearn.cluster import KMeans
 
-# ========================================
-# Split V2 Constants
-# ========================================
+# 제목에서 키워드 추출 시 제외할 불용어
 STOPWORDS = {
     "있다","없다","했다","한다","됐다","된다","이번","오늘","내일","어제","관련","대한","통해","위해","기준",
     "가능","필요","전망","확대","강화","추진","논란","갈등","문제","발표","공개","확인","진행","조치","대응","검토","주목",
     "정부","국회","대통령","위원회","당국","업계","시장","증가","감소","상승","하락",
 }
 
-OUTLIER_RATIO_TH = 1.35
-OUTLIER_DELTA_TH = 0.20
-SIZE3_JACCARD_TH = 0.18
-SIZE3_DIST_RATIO_TH = 1.20
+# 3개짜리 클러스터 아웃라이어 판단 임계값
+OUTLIER_RATIO_TH = 1.35      
+OUTLIER_DELTA_TH = 0.20      
+SIZE3_JACCARD_TH = 0.18      
+SIZE3_DIST_RATIO_TH = 1.20   
 
-VETO_JACCARD_TH = 0.55
-VETO_DUP_TITLE_RATIO = 0.50
-FORCE_JACCARD_TH = 0.12
-FORCE_SIL_TH = 0.18
-FORCE_MIN_N = 5
+# 분할 거부/강제 조건 =
+VETO_JACCARD_TH = 0.55     
+VETO_DUP_TITLE_RATIO = 0.50  
+FORCE_JACCARD_TH = 0.12     
+FORCE_SIL_TH = 0.18      
+FORCE_MIN_N = 5           
 
-SPLIT_SCORE_TH = 1.80
-SIL_MIN = 0.10
-DIST_RATIO_GOOD = 1.20
+# 점수 기반 분할 판단 기준
+SPLIT_SCORE_TH = 1.80        
+SIL_MIN = 0.10              
+DIST_RATIO_GOOD = 1.20       
 
 @dataclass
 class SplitDecision:
-    should_split: bool
-    reason: str
-    debug: Dict[str, Any] = field(default_factory=dict)
+    should_split: bool                           
+    reason: str                                 
+    debug: Dict[str, Any] = field(default_factory=dict)  
 
-# Global Kiwi instance
+# 한글 형태소 분석기 (Kiwi)
 _KIWI = None
 
 def _get_kiwi():

@@ -1,7 +1,4 @@
-"""
-Embedding Generator Module
-Generates BGE-M3 embeddings for articles and newsletters in batches.
-"""
+# 기사/뉴스레터 임베딩 배치 생성 모듈
 from typing import List, Tuple, Any
 import logging
 from tqdm import tqdm
@@ -18,20 +15,10 @@ from db.batch_manager import convert_numpy
 
 
 def generate_embeddings_for_articles(batch_size: int = None, force_cpu: bool = False) -> int:
-    """
-    Generate embeddings for raw articles that don't have them yet.
-    
-    Args:
-        batch_size: Batch size (default: Settings.EMBEDDING_BATCH_SIZE)
-        force_cpu: Force CPU usage
-        
-    Returns:
-        Number of successfully updated articles
-    """
     if batch_size is None:
         batch_size = Settings.EMBEDDING_BATCH_SIZE
     
-    # 1. Fetch target articles
+    # 1. 대상 기사 조회
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -56,21 +43,21 @@ def generate_embeddings_for_articles(batch_size: int = None, force_cpu: bool = F
     
     success_count = 0
     
-    # 2. Process in batches using Context Manager
+    # 2. 배치 처리
     with NewsEmbedder(force_cpu=force_cpu, verbose=True) as embedder:
         with tqdm(total=len(articles), desc="Processing Articles") as pbar:
             for i in range(0, len(articles), batch_size):
                 batch = articles[i : i + batch_size]
                 
-                # Prepare texts (Title + \n\n + Content)
+                # 텍스트 준비 (제목 + \n\n + 본문)
                 texts = [f"{art[1]}\n\n{art[2]}" for art in batch]
                 ids = [art[0] for art in batch]
                 
-                # Generate embeddings
+                # 임베딩 생성
                 try:
                     embeddings, _ = embedder.generate_embeddings_batch(texts, batch_size=batch_size)
                     
-                    # Update DB
+                    # DB 업데이트
                     _update_embeddings_batch(ids, embeddings, is_newsletter=False)
                     success_count += len(embeddings)
                     pbar.update(len(batch))
@@ -84,20 +71,10 @@ def generate_embeddings_for_articles(batch_size: int = None, force_cpu: bool = F
 
 
 def generate_embeddings_for_newsletters(batch_size: int = None, force_cpu: bool = False) -> int:
-    """
-    Generate embeddings for newsletters that don't have them yet.
-    
-    Args:
-        batch_size: Batch size
-        force_cpu: Force CPU usage
-        
-    Returns:
-        Number of successfully updated newsletters
-    """
     if batch_size is None:
         batch_size = Settings.EMBEDDING_BATCH_SIZE
         
-    # 1. Fetch target newsletters
+    # 1. 대상 뉴스레터 조회
     conn = get_connection()
     try:
         cur = conn.cursor()
@@ -119,13 +96,13 @@ def generate_embeddings_for_newsletters(batch_size: int = None, force_cpu: bool 
     
     success_count = 0
     
-    # 2. Process using Context Manager
+    # 2. 배치 처리
     with NewsEmbedder(force_cpu=force_cpu, verbose=True, l2_normalize=True) as embedder:
         with tqdm(total=len(newsletters), desc="Processing Newsletters") as pbar:
             for i in range(0, len(newsletters), batch_size):
                 batch = newsletters[i : i + batch_size]
                 
-                # Prepare texts: Title + Sentence + Content
+                # 텍스트 준비: 제목 + 문장 + 본문
                 texts = []
                 ids = []
                 for nl in batch:
@@ -151,7 +128,6 @@ def generate_embeddings_for_newsletters(batch_size: int = None, force_cpu: bool 
 
 
 def _update_embeddings_batch(ids: List[int], embeddings: List[Any], is_newsletter: bool):
-    """Internal helper to update embeddings in DB"""
     if not embeddings:
         return
 

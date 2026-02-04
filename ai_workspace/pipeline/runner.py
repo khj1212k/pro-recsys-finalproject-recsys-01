@@ -1,7 +1,5 @@
 """
 Pipeline Runner (파이프라인 실행기)
-
-파이프라인의 각 단계(Stage)를 순차적으로 실행하고 관리하는 오케스트레이터입니다.
 """
 from typing import Dict, Any, Optional
 import logging
@@ -19,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class PipelineRunner:
-    """전체 파이프라인 실행을 조율하는 클래스입니다."""
+    """전체 파이프라인 실행을 조율하는 클래스"""
     
     def __init__(self, Settings):
         self.settings = Settings
@@ -38,7 +36,7 @@ class PipelineRunner:
         end_stage: int = 5
     ) -> Dict[str, Any]:
         """
-        전체 파이프라인을 처음부터 끝까지 실행합니다.
+        전체 파이프라인을 처음부터 끝까지 실행
         
         Args:
             reset_db: 데이터베이스 초기화 여부 (test_db 전용)
@@ -110,7 +108,6 @@ class PipelineRunner:
         return results
 
     def _print_summary(self, results: Dict[str, Any]) -> None:
-        """Print execution summary"""
         logger.info("\n" + "=" * 60)
         logger.info("📊 Pipeline Execution Summary")
         logger.info("=" * 60)

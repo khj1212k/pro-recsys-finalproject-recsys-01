@@ -1,3 +1,7 @@
+# 기사 본문 정제 모듈
+# - 언론사별 UI/광고/기자 서명 등 노이즈 제거
+# - 중복 콘텐츠 필터링
+
 import re
 from .patterns import (
     _MULTI_SPACE_RE, _REPORTER_EMAIL_REGEX, _RE_PHOTO_TITLE, _END_MARKERS, _LIST_MARKERS,

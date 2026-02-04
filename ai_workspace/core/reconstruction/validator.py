@@ -1,4 +1,6 @@
-# core/reconstruction/validator.py
+# 뉴스레터 검증/정제 유틸
+# - 본문 정리, 메타데이터 검증, 텍스트 정규화
+
 import re
 from typing import Dict, Optional
 
@@ -65,13 +67,9 @@ def normalize_meta(result: Dict) -> Optional[Dict]:
 
 
 def sanitize_text(text: str) -> str:
-    """Remove invalid UTF-8 characters and normalize text for database storage"""
     if not text:
         return ""
-    # Remove null bytes and other problematic characters
     text = text.replace('\x00', '')
-    # Encode to UTF-8, ignoring invalid characters, then decode back
     text = text.encode('utf-8', errors='ignore').decode('utf-8')
-    # Also remove any remaining surrogates
     text = text.encode('utf-8', errors='surrogatepass').decode('utf-8', errors='ignore')
     return text

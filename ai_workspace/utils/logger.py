@@ -1,6 +1,4 @@
-"""
-AI Workspace를 위한 표준 로깅 유틸리티
-"""
+# 표준 로깅 설정 유틸리티
 import logging
 import sys
 

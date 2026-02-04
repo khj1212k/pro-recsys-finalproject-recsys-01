@@ -1,6 +1,9 @@
+# 언론사별 본문 정제용 정규식/마커 모음
+# - cleaners.py에서 사용
+
 import re
 
-#  정제 설정 상수의 
+#  정제 설정 상수
 DROP_LEN = 350          # 본문 길이가 이 값 미만이면 DROP
 DROP_PHOTO = True       # 제목에 [포토]가 포함된 경우 처리 기준
 DROP_LIST = True        # 리스트성 기사(추천기사 등) 처리 기준
@@ -10,7 +13,7 @@ _MULTI_SPACE_RE = re.compile(r"\s+")
 _REPORTER_EMAIL_REGEX = re.compile(r'[A-Za-z0-9_.+-]+@[A-Za-z0-9-]+\.[A-Za-z0-9-.]+')
 _RE_PHOTO_TITLE = re.compile(r"\[\s*포토\s*\]", re.IGNORECASE)
 
-# === 공통 마커 ===
+#  공통 마커 
 _END_MARKERS = [
     "댓글을 입력해 주세요", "관련기사", "많이 본 기사", "저작권자", "무단전재", 
     "재배포 금지", "AI학습 및 활용 금지", "모바일버전", "트렌드뉴스", 

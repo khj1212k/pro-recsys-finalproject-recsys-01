@@ -1,4 +1,7 @@
-# core/reconstruction/generator.py
+# 뉴스레터 본문 생성기
+# - 여러 기사를 통합하여 하나의 뉴스레터로 재구성
+# - 2-call 방식: 본문 생성 → 메타데이터 생성
+
 from typing import Dict, List, Optional
 from core.llm_client import get_llm_client, extract_json_from_response, BaseLLMClient
 
@@ -9,22 +12,14 @@ from .validator import cleanup_content_text, normalize_meta
 
 class NewsReconstructor:
     """
-    LLM 기반 뉴스 재구성기
-
     여러 개의 뉴스를 종합하여 하나의 뉴스레터로 재구성
 
     2-call 방식(토큰 초과 문제 완화)
-    - Call #1: content만 생성
-    - Call #2: meta만 생성 (title, keyword, sentence, category)
+    - Call 1: content만 생성
+    - Call 2: meta만 생성 (title, keyword, sentence, category)
     """
 
     def __init__(self, provider: Optional[str] = None):
-        """
-        초기화
-
-        Args:
-            provider: 사용할 LLM 공급자 
-        """
         self.client: BaseLLMClient = get_llm_client(provider)
 
     def reconstruct(self, articles: List[Dict], feedback: Optional[str] = None) -> Optional[Dict]:

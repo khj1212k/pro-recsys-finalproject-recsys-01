@@ -1,11 +1,6 @@
-"""
-Tone Converter Module
-Converts formal newsletter tone to casual, accessible tone with emojis
-
-This module handles the transformation of formally-written newsletters
-into a more casual, friendly tone that's easier to read while preserving
-the core information and meaning.
-"""
+# 문체 변환기
+# - 딱딱한 뉴스 문체를 부드러운 대화체로 변환
+# - 이모지 추가
 
 from typing import Dict, Optional
 import json
@@ -17,7 +12,6 @@ from config.settings import BaseSettings, Settings
 logger = logging.getLogger(__name__)
 
 
-# Tone conversion prompt template
 TONE_CONVERSION_PROMPT = """당신은 뉴스를 대중에게 쉽고 친근하게 전달하는 전문 에디터입니다.
 
 **목표**: 딱딱한 신문 문체를 부드럽고 읽기 쉬운 문체로 변환하세요.
@@ -75,32 +69,12 @@ TONE_CONVERSION_PROMPT = """당신은 뉴스를 대중에게 쉽고 친근하게
 
 
 class ToneConverter:
-    """
-    문체 변환기 (Tone Converter)
-    
-    딱딱한 문체(Formal)의 뉴스레터를 친근하고 쉬운 문체(Casual) + 이모지 포함 형태로 변환합니다.
-    """
     
     def __init__(self, settings: Optional[BaseSettings] = None):
-        """
-        초기화
-        
-        Args:
-            settings: 설정 객체 (None이면 기본 Settings 사용)
-        """
         self.settings = settings if settings is not None else Settings
         self.llm_client = get_llm_client(self.settings)
         
     def create_prompt(self, newsletter: Dict) -> str:
-        """
-        문체 변환을 위한 프롬프트 생성
-        
-        Args:
-            newsletter: 원본 뉴스레터 딕셔너리 (title, summary, content, keywords 포함)
-            
-        Returns:
-            포맷팅된 프롬프트 문자열
-        """
         prompt = TONE_CONVERSION_PROMPT.format(
             title=newsletter.get("title", ""),
             summary=newsletter.get("summary", ""),
@@ -111,15 +85,6 @@ class ToneConverter:
         return prompt
     
     def convert(self, newsletter: Dict) -> Optional[Dict]:
-        """
-        뉴스레터 문체를 변환합니다 (Formal -> Casual)
-        
-        Args:
-            newsletter: 원본 뉴스레터 딕셔너리
-            
-        Returns:
-            변환된 뉴스레터 딕셔너리 또는 실패 시 None
-        """
         max_retries = 5
         last_converted = None
         for attempt in range(max_retries):
@@ -127,11 +92,9 @@ class ToneConverter:
                 prompt = self.create_prompt(newsletter)
                 
                 # logger.info(f"🎨 문체 변환 시도 ({attempt + 1}/{max_retries})...")
-                
-                # Call LLM using chat_completion
                 response = self.llm_client.chat_completion(
                     messages=[{"role": "user", "content": prompt}],
-                    temperature=0.4,  # Slightly higher for creative rewording
+                    temperature=0.4,
                     max_tokens=4096,
                     response_format={"type": "json_object"}
                 )
@@ -139,13 +102,11 @@ class ToneConverter:
                 if not response:
                     continue
                 
-                # Parse JSON response
                 converted = self._parse_response(response, newsletter)
                 
                 if not converted:
                     continue
                 
-                # logger.info("✅ 문체 변환 완료")
                 if self.validate_conversion(newsletter, converted):
                     return converted
 
@@ -154,13 +115,9 @@ class ToneConverter:
             except Exception as e:
                 last_converted = last_converted or None
                 
-        # Fallback: always return a converted draft to avoid pipeline failures
         return self._fallback_convert(newsletter, last_converted)
     
     def _parse_response(self, response: str, original: Dict) -> Optional[Dict]:
-        """
-        LLM 응답을 파싱하여 JSON 객체로 변환합니다.
-        """
         if not response:
             return None
 
@@ -168,11 +125,9 @@ class ToneConverter:
         if not isinstance(result, dict):
             return None
 
-        # Normalize fields
         if not result.get("summary") and result.get("sentence"):
             result["summary"] = result.get("sentence")
 
-        # Ensure keywords list and preserve original keywords to prevent drift
         keywords = result.get("keywords")
         if isinstance(keywords, str):
             keywords = [k.strip() for k in keywords.split(",") if k.strip()]
@@ -180,7 +135,6 @@ class ToneConverter:
             keywords = original.get("keywords", []) or []
         result["keywords"] = keywords
 
-        # Fill required fields from original if missing
         for field in ("title", "summary", "content"):
             val = result.get(field)
             if not isinstance(val, str) or not val.strip():
@@ -189,9 +143,6 @@ class ToneConverter:
         return result
 
     def _fallback_convert(self, original: Dict, last: Optional[Dict]) -> Dict:
-        """
-        Deterministic fallback to avoid conversion failures.
-        """
         def soften(text: str) -> str:
             if not text:
                 return ""
@@ -228,26 +179,12 @@ class ToneConverter:
         }
     
     def validate_conversion(self, original: Dict, converted: Dict) -> bool:
-        """
-        변환 결과가 핵심 정보를 잘 보존하고 있는지 검증합니다.
-        
-        Args:
-            original: 원본 뉴스레터
-            converted: 변환된 뉴스레터
-            
-        Returns:
-            유효하면 True, 아니면 False
-        """
-        # Minimal validation: ensure required text fields exist
         if not converted.get("title") or not converted.get("summary") or not converted.get("content"):
             return False
         return True
 
 
 def test_tone_converter():
-    """Test function for ToneConverter"""
-    
-    # Sample newsletter
     sample_newsletter = {
         "title": "한동훈 제명 후폭풍 확산",
         "summary": "국민의힘 한동훈 전 대표 제명 결정으로 당내 갈등이 심화되고 있다.",

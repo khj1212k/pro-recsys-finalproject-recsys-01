@@ -1,4 +1,4 @@
-"""RSS 수집기 (Diet Version)"""
+# RSS 수집기
 import feedparser, logging
 from datetime import datetime, timedelta, timezone
 from dateutil import parser as date_parser
@@ -8,7 +8,7 @@ from config.settings import Settings
 logger = logging.getLogger(__name__)
 
 def collect_rss(hours: int = 100) -> int:
-    """RSS 피드 수집 실행"""
+    # RSS 피드 수집 실행
     conn = get_connection()
     total_new = 0
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
@@ -29,15 +29,15 @@ def collect_rss(hours: int = 100) -> int:
                         logger.error(f"❌ {press_name} press_id 없음 - 스킵")
                         continue
                     pid = row[0]
-                    feed = feedparser.parse(url) # rss XML 테그 파싱
-                    entries = [] # 수집된 기사 목록
+                    feed = feedparser.parse(url) 
+                    entries = [] 
                     
                     # 1. 파싱 및 날짜 필터링
                     for e in feed.entries:
                         try:
                             dt_str = e.get('published') or e.get('updated')
-                            dt = date_parser.parse(dt_str) # str -> datetime object
-                            if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc) # timezone이 없으면 UTC로 변환
+                            dt = date_parser.parse(dt_str) 
+                            if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc) 
                             if dt >= cutoff: entries.append((e.link, e.title, dt)) # cutoff 시간 이후의 기사만 추가
                         except: 
                             continue
@@ -72,13 +72,13 @@ def collect_rss(hours: int = 100) -> int:
                     logger.error(f"❌ {press_name} 오류: {e}")
         conn.commit() # 변경사항 저장
     except Exception as e:
-        conn.rollback() # 오류시 롤백
+        conn.rollback()
         logger.error(f"Global Error: {e}")
     finally:
-        conn.close() # 연결 종료
+        conn.close() 
 
     logger.info(f"✨ 총 {total_new}건 수집 완료")
-    return total_new # 수집된 기사 수 반환
+    return total_new 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

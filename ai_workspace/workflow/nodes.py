@@ -1,7 +1,5 @@
-"""
-LangGraph Node Functions
-Each function takes state and returns state updates
-"""
+# 워크플로우 노드 함수 모음
+# - 각 노드는 State를 받아 처리 후 업데이트된 State 반환
 from typing import Dict, Any
 import logging
 from datetime import datetime
@@ -22,8 +20,6 @@ logger = logging.getLogger(__name__)
 def initialize_cluster_processing(state: AgentState) -> Dict[str, Any]:
     """
     클러스터 처리 초기화 노드
-    
-    현재 순서의 클러스터 ID와 관련 기사들을 State에 로드합니다.
     """
     idx = state.get("current_cluster_index", 0)
     all_ids = state.get("all_cluster_ids", [])
@@ -77,9 +73,7 @@ def initialize_cluster_processing(state: AgentState) -> Dict[str, Any]:
 def evaluate_cluster(state: AgentState) -> Dict[str, Any]:
     """
     클러스터 평가 노드
-    
-    군집화된 기사들이 하나의 뉴스레터로 묶이기에 적절한지 평가합니다.
-    (주제 일관성, 기사 개수 등)
+    군집화된 기사들이 하나의 뉴스레터로 묶이기에 적절한지 평가 (주제 일관성, 기사 개수 등)
     """
     articles = state["current_articles"]
     cluster_id = state["current_cluster_id"]
@@ -125,7 +119,6 @@ def handle_cluster_eval_failure(state: AgentState) -> Dict[str, Any]:
     # 1. LLM이 서브 그룹(쪼개기)을 제안한 경우
     if sub_groups and len(sub_groups) >= 2:
         # 가장 큰 서브 그룹을 선택하여 진행 (현재 1:1 구조상 대표 그룹 1개만 살림)
-        # TODO: 아키텍처 개선 시 서브 그룹 모두를 병렬 처리하도록 확장 가능
         sub_groups.sort(key=len, reverse=True)
         best_indices = sub_groups[0]
         
@@ -156,7 +149,7 @@ def handle_cluster_eval_failure(state: AgentState) -> Dict[str, Any]:
         skipped.append(cluster_id)
         return {"skipped_clusters": skipped}
     
-    # Remove outliers
+    # 아웃라이어 제거
     current_articles = state["current_articles"]
     valid_indices = [i for i in outlier_indices if 0 <= i < len(current_articles)]
     
@@ -165,11 +158,10 @@ def handle_cluster_eval_failure(state: AgentState) -> Dict[str, Any]:
         skipped.append(cluster_id)
         return {"skipped_clusters": skipped}
 
-    # Create new article list
     outlier_set = set(valid_indices)
     new_articles = [art for i, art in enumerate(current_articles) if i not in outlier_set]
     
-    # Check minimum articles
+    # 최소 기사 수 확인
     if len(new_articles) < 3:
         skipped = list(state.get("skipped_clusters", []))
         skipped.append(cluster_id)
@@ -183,8 +175,6 @@ def handle_cluster_eval_failure(state: AgentState) -> Dict[str, Any]:
 
 
 def route_after_cluster_fail(state: AgentState) -> str:
-    """Route after fail handling: retry or end?"""
-    # If added to skipped_clusters, then we gave up
     skipped = state.get("skipped_clusters", [])
     if state["current_cluster_id"] in skipped:
         return "end"
@@ -193,24 +183,17 @@ def route_after_cluster_fail(state: AgentState) -> str:
 
 
 def generate_newsletter(state: AgentState) -> Dict[str, Any]:
-    """
-    Generate newsletter draft from cluster articles.
-    Includes feedback from previous evaluation if available.
-    """
     from datetime import datetime
     
     articles = state["current_articles"]
     feedback = state.get("newsletter_feedback")
     retry_count = state.get("newsletter_retry_count", 0)
     
-    # Initialize generation history
     generation_history = initialize_generation_history(state)
     
-    # Generate newsletter draft
     reconstructor = NewsReconstructor()
     draft = reconstructor.reconstruct(articles, feedback=feedback)
     
-    # Log this generation attempt
     log_generation_attempt(generation_history, draft, state)
     
     return {
@@ -242,18 +225,12 @@ def evaluate_newsletter(state: AgentState) -> Dict[str, Any]:
     evaluator = NewsletterEvaluator()
     result = evaluator.evaluate(draft, articles)
     
-    # if result['issues']:
-    #     print(f"    Issues: {', '.join(result['issues'][:3])}")
-    
-    # Accumulate feedback for potential retry
     new_feedback = state.get("newsletter_feedback", "") or ""
     if result["decision"] == "FAIL" and result["feedback"]:
         new_feedback = f"{new_feedback}\n\nAttempt {state['newsletter_retry_count']} feedback:\n{result['feedback']}"
     
-    # Update generation_history with evaluation results
     generation_history = state.get("generation_history", {"attempts": []})
     if generation_history.get("attempts"):
-        # Update the last attempt with evaluation results
         generation_history["attempts"][-1].update({
             "evaluation_score": result["score"],
             "evaluation_result": result["decision"].lower(),
@@ -269,7 +246,6 @@ def evaluate_newsletter(state: AgentState) -> Dict[str, Any]:
 
 
 
-# Global cached embedder
 _CACHED_EMBEDDER = None
 
 def get_shared_embedder():
@@ -281,7 +257,6 @@ def get_shared_embedder():
     return _CACHED_EMBEDDER
 
 def cleanup_workflow_embedder():
-    """Cleanup the shared embedder"""
     global _CACHED_EMBEDDER
     if _CACHED_EMBEDDER:
         logger.info("🧹 Cleaning up shared NewsEmbedder...")
@@ -292,16 +267,9 @@ def cleanup_workflow_embedder():
 def embed_newsletter_node(state: AgentState) -> Dict[str, Any]:
     """
     뉴스레터 임베딩 생성 노드
-    
-    원본(딱딱한 문체, Formal) 뉴스레터 초안을 기반으로 임베딩을 생성합니다.
-    이 임베딩은 추천 시스템에서 사용됩니다. 문체 변환(Casual) 전에 생성함으로써
-    학습 데이터와의 일관성을 유지합니다.
     """
     draft = state["newsletter_draft"]
-    
-    # DEBUG PRINT removed
-    # logger.info("📐 embed_newsletter_node called!")
-    
+
     if not draft or not draft.get("content"):
         logger.info("ℹ️ 임베딩을 위한 초안 내용이 없습니다.")
         return {
@@ -342,9 +310,6 @@ def embed_newsletter_node(state: AgentState) -> Dict[str, Any]:
 def convert_tone_node(state: AgentState) -> Dict[str, Any]:
     """
     문체 변환 노드
-    
-    작성된 뉴스레터(딱딱한 문체)를 사용자 친화적인 '부드러운 문체(Casual)' + 이모지로 변환합니다.
-    실패 시 원본을 그대로 사용(Fallback)합니다.
     """
     draft = state["newsletter_draft"]
     
@@ -353,10 +318,7 @@ def convert_tone_node(state: AgentState) -> Dict[str, Any]:
         return {}
         
     try:
-        # Create tone converter
         converter = ToneConverter()
-        
-        # Convert tone
         converted = converter.convert(draft)
         
         if not converted:
@@ -387,23 +349,19 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
     """
     뉴스레터 DB 저장 노드
     
-    완성된 뉴스레터를 데이터베이스에 저장합니다.
     - 내용(Content): 변환된 부드러운 문체(Casual)
     - 임베딩(Embedding): 원본 딱딱한 문체(Formal) 기반
     """
     # 변환된 뉴스레터 우선 사용, 없으면 원본 사용
     draft = state.get("newsletter_draft") or {}
     converted = state.get("converted_newsletter") or {}
-    # Merge converted onto draft so required fields are never lost
     newsletter_to_save = {**draft, **converted} if converted else draft.copy()
-    # Tone converter uses "summary"; map to "sentence" if missing
     if not newsletter_to_save.get("sentence"):
         newsletter_to_save["sentence"] = (
             newsletter_to_save.get("summary")
             or draft.get("sentence")
             or (newsletter_to_save.get("content", "").split("\n")[0].strip() if newsletter_to_save.get("content") else "")
         )
-    # Ensure title/content are present (DB has NOT NULL constraints in final_db)
     if not newsletter_to_save.get("title"):
         newsletter_to_save["title"] = draft.get("title") or "뉴스 요약"
     if not newsletter_to_save.get("content"):
@@ -468,9 +426,6 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
 
 
 def handle_newsletter_max_retries(state: AgentState) -> Dict[str, Any]:
-    """
-    Handle case when newsletter generation exceeds max retries.
-    """
     cluster_id = state["current_cluster_id"]
     failed = list(state.get("failed_clusters", []))
     failed.append(cluster_id)
@@ -484,9 +439,6 @@ def handle_newsletter_max_retries(state: AgentState) -> Dict[str, Any]:
 
 
 def finalize_workflow(state: AgentState) -> Dict[str, Any]:
-    """
-    Final node that summarizes the workflow results.
-    """
     completed = state.get("completed_newsletters", [])
     failed = state.get("failed_clusters", [])
     skipped = state.get("skipped_clusters", [])
@@ -498,25 +450,21 @@ def finalize_workflow(state: AgentState) -> Dict[str, Any]:
 # ========== Routing Functions ==========
 
 def should_continue_processing(state: AgentState) -> str:
-    """Route after initialize: continue or end?"""
     if state["current_cluster_index"] >= len(state["all_cluster_ids"]):
         return "end"
     return "continue"
 
 
 def route_after_cluster_eval(state: AgentState) -> str:
-    """Route after cluster evaluation: pass or fail?"""
     eval_result = state.get("cluster_eval", {})
     
     if eval_result.get("decision") == "PASS":
         return "pass"
     
-    # Could add logic here to retry with outlier removal
     return "fail"
 
 
 def route_after_newsletter_eval(state: AgentState) -> str:
-    """Route after newsletter evaluation: pass, retry, or max_retries?"""
     eval_result = state.get("newsletter_eval", {})
     retry_count = state.get("newsletter_retry_count", 0)
     

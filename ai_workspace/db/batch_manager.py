@@ -1,6 +1,4 @@
-"""
-뉴스레터 생성 파이프라인을 위한 배치(Batch) 및 run_id 관리
-"""
+# 뉴스레터 생성 파이프라인을 위한 배치(Batch) 및 run_id 관리
 import json
 import logging
 from typing import Dict, Optional
@@ -13,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def convert_numpy(obj):
-    """Numpy 타입을 Python 기본 타입으로 재귀적 변환"""
+    # Numpy 타입을 Python 기본 타입으로 재귀적 변환
     import numpy as np
     if isinstance(obj, np.integer):
         return int(obj)
@@ -29,7 +27,7 @@ def convert_numpy(obj):
 
 
 def sanitize_obj(obj):
-    """Recursively sanitize strings for safe UTF-8 storage"""
+    # 안전한 UTF-8 저장을 위해 문자열 정제
     if isinstance(obj, str):
         return sanitize_text(obj)
     if isinstance(obj, bytes):
@@ -42,25 +40,17 @@ def sanitize_obj(obj):
 
 
 def strip_surrogates(text: str) -> str:
-    """Drop any surrogate code points that can break UTF-8 encoding"""
+    # UTF-8 인코딩을 방해할 수 있는 서러게이트 코드 포인트 제거
     return "".join(ch for ch in text if not (0xD800 <= ord(ch) <= 0xDFFF))
 
 
 def create_new_batch(cluster_log: dict) -> int:
-    """
-    새로운 배치를 생성하고 run_id를 발급합니다.
-    
-    Args:
-        cluster_log: 클러스터링 정보 로그
-        
-    Returns:
-        run_id (배치 ID)
-    """
+
     conn = get_connection()
     cursor = conn.cursor()
     
     try:
-        # Get next run_id
+        # 다음 run_id 가져오기
         cursor.execute("""
             SELECT COALESCE(MAX(run_id), 0) + 1 FROM cluster_history
         """)
@@ -68,7 +58,7 @@ def create_new_batch(cluster_log: dict) -> int:
         
         cluster_log_converted = sanitize_obj(convert_numpy(cluster_log))
         
-        # Insert cluster_history record
+        # cluster_history 레코드 삽입
         cursor.execute("""
             INSERT INTO cluster_history (run_id, cluster_log, created_at)
             VALUES (%s, %s, NOW())
@@ -91,12 +81,6 @@ def create_new_batch(cluster_log: dict) -> int:
 
 
 def get_current_run_id() -> Optional[int]:
-    """
-    가장 최근 실행된 run_id를 조회합니다.
-    
-    Returns:
-        run_id 또는 배치가 없으면 None
-    """
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -115,15 +99,6 @@ def get_current_run_id() -> Optional[int]:
 
 
 def get_batch_info(run_id: int) -> Optional[Dict]:
-    """
-    run_id로 배치 정보를 조회합니다.
-    
-    Args:
-        run_id: 배치 ID
-        
-    Returns:
-        history_id, cluster_log, created_at을 포함한 Dict 또는 None
-    """
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -149,16 +124,6 @@ def get_batch_info(run_id: int) -> Optional[Dict]:
 
 
 def update_cluster_log(run_id: int, cluster_log: dict) -> bool:
-    """
-    특정 배치의 cluster_log를 업데이트합니다.
-    
-    Args:
-        run_id: 배치 ID
-        cluster_log: 업데이트할 클러스터 로그
-        
-    Returns:
-        성공 여부
-    """
     conn = get_connection()
     cursor = conn.cursor()
     
@@ -190,22 +155,9 @@ def save_news_letter(
     run_id: Optional[int] = None, 
     generation_history: Optional[list] = None
 ) -> int:
-    """
-    생성된 뉴스레터를 DB에 저장하고 관련 기사들을 업데이트합니다.
-    
-    Args:
-        conn: DB Connection 객체
-        article_ids: 뉴스레터에 포함된 news_raw_id 리스트
-        newsletter_result: 생성된 뉴스레터 데이터 (title, sentence, content, keywords 등)
-        run_id: 배치 실행 ID
-        generation_history: 생성 과정 로그 리스트
-        
-    Returns:
-        saved_news_letter_id (int)
-    """
     cur = conn.cursor()
     try:
-        # sanitize and normalize
+        # 텍스트 정제 및 정규화
         def coerce_text(value):
             if value is None:
                 return ""
@@ -216,17 +168,17 @@ def save_news_letter(
         title = coerce_text(newsletter_result.get('title'))
         sentence = coerce_text(newsletter_result.get('sentence') or newsletter_result.get('summary'))
         content = coerce_text(newsletter_result.get('content'))
-        # Final UTF-8 safety pass
+        # UTF-8 안전 패스
         title = strip_surrogates(title.encode('utf-8', errors='ignore').decode('utf-8'))
         sentence = strip_surrogates(sentence.encode('utf-8', errors='ignore').decode('utf-8'))
         content = strip_surrogates(content.encode('utf-8', errors='ignore').decode('utf-8'))
 
-        # keywords / generation history (nested sanitize + numpy conversion)
+        # 키워드 / 생성 이력 (중첩 정제 + numpy 변환)
         keywords = sanitize_obj(convert_numpy(newsletter_result.get('keywords', [])))
         generation_history = sanitize_obj(convert_numpy(generation_history)) if generation_history else None
         article_ids = [int(x) for x in article_ids] if article_ids else []
         
-        # 1. Insert Newsletter
+        # 1. 뉴스레터 삽입
         keywords_json = json.dumps(keywords, ensure_ascii=False)
         keywords_json = strip_surrogates(keywords_json.encode('utf-8', errors='ignore').decode('utf-8'))
         generation_history_json = json.dumps(generation_history, ensure_ascii=False) if generation_history else None
@@ -252,7 +204,7 @@ def save_news_letter(
         
         news_letter_id = cur.fetchone()[0]
 
-        # 1.5 Save categories mapping
+        # 1.5 카테고리 매핑 저장
         categories = newsletter_result.get('categories') or []
         for category in categories:
             cat = sanitize_text(str(category))
@@ -268,7 +220,7 @@ def save_news_letter(
                     ON CONFLICT DO NOTHING
                 """, (news_letter_id, cat_row[0]))
 
-        # 2. Update News Raw (Mapping)
+        # 2. 뉴스 원본 업데이트 (매핑)
         if article_ids:
             cur.execute("""
                 UPDATE news_raw

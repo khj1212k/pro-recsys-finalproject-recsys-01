@@ -1,3 +1,8 @@
+# Stage2: 기사 본문 추출
+# - RSS에서 수집한 URL로 실제 기사 내용 크롤링
+# - trafilatura로 HTML에서 본문 텍스트 추출
+# - 멀티프로세싱으로 병렬 처리
+
 import trafilatura
 from multiprocessing import Pool
 from tqdm import tqdm
@@ -6,11 +11,10 @@ from config.settings import Settings
 from .cleaners import clean_text_lite  
 
 class ContentExtractor:
-    # 기사 본문 추출기 (news_raw 테이블 사용)
+    # 기사 본문 추출기 
 
     @staticmethod
     def get_strategy_for_press(press_name: str) -> str:
-        # 언론사명으로 크롤링 전략 조회 
         for source, (strategy, _) in Settings.RSS_FEEDS.items():
             if press_name == '전자신문':
                 if source.startswith('전자신문'):
@@ -21,10 +25,8 @@ class ContentExtractor:
 
     @staticmethod
     def process_single_article(article_data):
-        """
-        개별 기사 처리 (병렬 처리)
-        Args: article_data (raw_news_id, url, press_name)
-        """
+        # 개별 기사 처리 (병렬 처리)
+
         raw_news_id, url, press_name = article_data
         conn = get_connection()
         cur = conn.cursor()
@@ -42,11 +44,11 @@ class ContentExtractor:
                     include_tables=False
                 )
 
-            # [정제 및 무조건 저장]
+            # 정제 및 저장
             if text and len(text.strip()) > 0:
                 cleaned = clean_text_lite(text, press_name=press_name)
 
-                # DROP 판정 없이 바로 업데이트
+                
                 cur.execute("""
                     UPDATE news_raw
                     SET raw_news_content = %s
@@ -111,7 +113,6 @@ class ContentExtractor:
                     empty_count += 1
                 else:
                     error_count += 1
-                    # 첫 5개 에러는 상세 출력하여 디버깅
                     if error_count <= 5:
                         print(f"   [Error] {result}")
 

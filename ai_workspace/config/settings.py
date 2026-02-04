@@ -1,7 +1,8 @@
-"""
-ai_workspace를 위한 환경 설정
-환경 기반 설정 지원 (dev/staging/prod)
-"""
+# 파이프라인 전역 설정
+# - 환경별(dev/staging/prod) 설정 분리
+# - LLM, 임베딩, 클러스터링, 크롤러 관련 파라미터 정의
+# - RSS 피드 소스 목록 관리
+
 import os
 from typing import Dict, Tuple
 from dotenv import load_dotenv
@@ -10,19 +11,16 @@ load_dotenv(override=False)
 
 
 class Environment:
-    """환경 상수 정의"""
     DEV = "dev"
     STAGING = "staging"
     PROD = "prod"
 
 
 def get_environment() -> str:
-    """ENV 환경변수로부터 현재 환경을 조회합니다"""
     return os.getenv("ENV", Environment.DEV).lower()
 
 
 class BaseSettings:
-    """모든 환경에서 공유되는 기본 설정"""
 
     # ========== LLM Provider ==========
     LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "naver")  # 'naver' or 'openai'
@@ -112,16 +110,14 @@ class BaseSettings:
 
 
 class DevSettings(BaseSettings):
-    """지정된 개발 환경 설정"""
     LOG_LEVEL: str = "DEBUG"
     LOG_TO_FILE: bool = False
-    SSL_VERIFY: bool = False  # Disable SSL verification in dev
+    SSL_VERIFY: bool = False  
     DB_POOL_MIN: int = 1
     DB_POOL_MAX: int = 5
 
 
 class StagingSettings(BaseSettings):
-    """Staging environment settings"""
     LOG_LEVEL: str = "INFO"
     LOG_TO_FILE: bool = True
     SSL_VERIFY: bool = True
@@ -130,7 +126,6 @@ class StagingSettings(BaseSettings):
 
 
 class ProdSettings(BaseSettings):
-    """운영(Production) 환경 설정"""
     LOG_LEVEL: str = "WARNING"
     LOG_TO_FILE: bool = True
     SSL_VERIFY: bool = True
@@ -140,7 +135,6 @@ class ProdSettings(BaseSettings):
 
 
 def get_settings() -> BaseSettings:
-    """현재 환경에 맞는 설정 객체를 반환합니다"""
     env = get_environment()
     settings_map = {
         Environment.DEV: DevSettings,
@@ -150,5 +144,4 @@ def get_settings() -> BaseSettings:
     return settings_map.get(env, DevSettings)()
 
 
-# Default Settings instance (for backward compatibility)
 Settings = get_settings()
