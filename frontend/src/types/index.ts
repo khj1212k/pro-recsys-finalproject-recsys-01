@@ -40,6 +40,7 @@ export interface NewsArticle {
   fullContent?: string;
   hookingSentence?: string;
   popularity?: number;
+  raw_news_count?: number;
 }
 
 export interface IssueBundle {
@@ -87,6 +88,7 @@ export interface NewsResponse {
   news_letter_sentence: string;
   news_letter_keywords: string[];
   news_letter_created_at: string;
+  raw_news_count: number;
 }
 
 export interface TodayNewsResponse extends NewsResponse {

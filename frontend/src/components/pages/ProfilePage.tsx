@@ -42,13 +42,13 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ onLogout }) => {
 
       {/* Profile Card */}
       <div className="card-news mb-6">
-        <div className="flex items-center gap-4 mb-6">
+        <div className="flex items-center gap-4 mb-2">
           <div className="w-16 h-16 bg-primary rounded-2xl flex items-center justify-center">
             <User className="w-8 h-8 text-primary-foreground" />
           </div>
           <div>
             <h2 className="text-lg font-bold text-foreground">{user?.nickname}</h2>
-            <p className="text-sm text-muted-foreground">News-Grow 뉴비</p>
+            {/* <p className="text-sm text-muted-foreground">News-Grow 뉴비</p> */}
           </div>
         </div>
       </div>

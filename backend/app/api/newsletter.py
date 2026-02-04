@@ -18,6 +18,7 @@ class NewsResponse(SQLModel):
     news_letter_sentence: str
     news_letter_keywords: List[str] = []
     news_letter_created_at: datetime
+    raw_news_count: int
 
 # 오늘의 뉴스레터 응답 Schema
 class TodayNewsResponse(NewsResponse):
@@ -71,7 +72,8 @@ def get_today_news(
                 news_letter_sentence=nl.news_letter_sentence,
                 news_letter_keywords=nl.news_letter_keywords,
                 news_letter_created_at=nl.news_letter_created_at,
-                category_id=cat.category_id,
+                raw_news_count=nl.raw_news_count,
+                category_id=cat.category_code,
                 category_name=cat.category_name
             ))
             
@@ -158,6 +160,7 @@ def get_newsletter_detail(
         news_letter_content=nl.news_letter_content,
         news_letter_keywords=nl.news_letter_keywords,
         news_letter_created_at=nl.news_letter_created_at,
-        category_id=cat.category_id,
+        raw_news_count=nl.raw_news_count,
+        category_id=cat.category_code,
         category_name=cat.category_name
     )

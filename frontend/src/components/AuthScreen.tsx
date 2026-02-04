@@ -86,7 +86,7 @@ const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthComplete }) => {
           <div className="inline-flex items-center justify-center w-20 h-20 rounded-[2rem] mb-5 overflow-hidden">
             <img src="/favicon.ico" alt="Logo" className="w-full h-full object-cover scale-105" />
           </div>
-          <h1 className="text-3xl font-bold text-foreground">News-Grow</h1>
+          <h1 className="text-3xl font-bold text-foreground">뉴스의 민족</h1>
           <p className="text-muted-foreground mt-2">RecSys-01 Final Project</p>
         </div>
 

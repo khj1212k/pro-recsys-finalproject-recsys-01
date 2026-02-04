@@ -25,14 +25,25 @@ with DAG(
     'newsletter_ranking_batch',
     default_args=default_args,
     description='Calculate popularity ranking for newsletters daily',
-    schedule='45 17 * * *',
-    start_date=datetime(2026, 1, 28, tzinfo=kst),
+    schedule='0 17 * * *', # KST? UTC?
+    start_date=datetime(2026, 2, 4, tzinfo=kst),
     catchup=False,
     tags=['ranking', 'newsletter'],
 ) as dag:
 
     PYTHON_EXEC = f"{PROJECT_ROOT}/.venv/bin/python"
     SCRIPT_PATH = f"{PROJECT_ROOT}/scheduler/calculate_ranking.py"
+    AI_PATH = f"/data/ephemeral/home/pro-recsys-finalproject-recsys-01/ai_workspace"
+
+    pipeline_runner = BashOperator(
+        task_id='pipeline_runner',
+        bash_command=f"python {AI_PATH}/main.py"
+    )
+
+    recsys_runner = BashOperator(
+        task_id='recsys_runner',
+        bash_command=f"python {AI_PATH}/recommend_engine/python main_lgbm.py --train --inference"
+    )
 
     calculate_ranking_task = BashOperator(
         task_id='calculate_ranking',
@@ -47,4 +58,4 @@ with DAG(
         """,
     )
 
-    calculate_ranking_task
+    pipeline_runner >> recsys_runner >> calculate_ranking_task

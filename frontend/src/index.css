@@ -1,8 +1,19 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap');
+@font-face {
+  font-family: 'BMHANNA';
+  src: url('/fonts/BMHANNAProOTF.otf');
+  font-weight: normal;
+  font-style: normal;
+}
+
+.font-hanna-custom {
+  font-family: 'BMHANNA', sans-serif !important;
+}
 
 @layer base {
   :root {

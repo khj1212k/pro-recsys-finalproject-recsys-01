@@ -12,7 +12,7 @@ export const categoryNames: Record<Category, string> = {
 
 // 7개 카테고리 컬러 설정
 export const categoryColors: Record<Category, string> = {
-    politics: 'bg-red-400 text-white',
+    politics: 'bg-gray-500 text-white',
     economy: 'bg-yellow-500 text-white',
     it: 'bg-blue-500 text-white',
     society: 'bg-green-500 text-white',

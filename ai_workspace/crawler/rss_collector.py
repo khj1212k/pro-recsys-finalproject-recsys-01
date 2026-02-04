@@ -17,6 +17,7 @@ def collect_rss(hours: int = 100) -> int:
     try:
         with conn.cursor() as cur:
             for press_name, (_, url) in Settings.RSS_FEEDS.items():
+                cur.execute("SAVEPOINT sp_press")
                 try:
                     press_name = '전자신문' if press_name.startswith('전자신문') else press_name
                     cur.execute("SELECT press_id \
@@ -67,6 +68,7 @@ def collect_rss(hours: int = 100) -> int:
                         logger.info(f"✅ {press_name}: {len(new_items)}건 추가")
                         
                 except Exception as e:
+                    cur.execute("ROLLBACK TO SAVEPOINT sp_press")
                     logger.error(f"❌ {press_name} 오류: {e}")
         conn.commit() # 변경사항 저장
     except Exception as e:

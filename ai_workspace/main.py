@@ -36,7 +36,7 @@ def parse_args():
     parser.add_argument("--min-target", type=int, default=0,       help="Minimum target number of newsletters")
     parser.add_argument("--from-stage", type=int, default=1,       help="Start stage number (0-6)")
     parser.add_argument("--to-stage",   type=int, default=5,       help="End stage number (0-6)")
-    
+
     # Model/Resource options
     parser.add_argument("--force-cpu",  action="store_true",       help="Force CPU for embeddings")
     parser.add_argument("--batch-size", type=int, default=None,    help="Batch size for embedding")

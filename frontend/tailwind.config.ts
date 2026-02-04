@@ -16,6 +16,7 @@ export default {
     extend: {
       fontFamily: {
         sans: ['Noto Sans KR', 'sans-serif'],
+        hanna: ['BMHANNA', 'sans-serif'],
       },
       colors: {
         border: "hsl(var(--border))",
