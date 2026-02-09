@@ -22,10 +22,44 @@ def log_generation_attempt(
     draft: Optional[Dict[str, Any]],
     state: Dict[str, Any]
 ) -> None:
+    """Log detailed generation attempt for verification loop tracking"""
+    
+    # Extract cluster evaluation info
+    cluster_eval = state.get("cluster_eval")
+    cluster_info = None
+    if cluster_eval:
+        cluster_info = {
+            "decision": cluster_eval.get("decision"),
+            "confidence": cluster_eval.get("confidence"),
+            "feedback": cluster_eval.get("feedback"),
+            "outlier_count": len(cluster_eval.get("outlier_indices", [])),
+        }
+    
+    # Extract newsletter evaluation info  
+    newsletter_eval = state.get("newsletter_eval")
+    newsletter_info = None
+    if newsletter_eval:
+        newsletter_info = {
+            "decision": newsletter_eval.get("decision"),
+            "score": newsletter_eval.get("score"),
+            "feedback": newsletter_eval.get("feedback"),
+            "issues": newsletter_eval.get("issues", []),
+        }
+    
+    # Determine retry reason
+    retry_reason = None
+    if state.get("cluster_retry_count", 0) > 0:
+        retry_reason = "cluster_eval_failed"
+    elif state.get("newsletter_retry_count", 0) > 0:
+        retry_reason = "newsletter_eval_failed"
+    
     attempt_log = {
         "attempt_number": state.get("newsletter_retry_count", 0) + 1,
         "draft_title": draft.get("title") if draft else None,
-        "evaluation": state.get("newsletter_eval"),
+        "cluster_eval": cluster_info,
+        "newsletter_eval": newsletter_info,
+        "retry_reason": retry_reason,
+        "article_count": len(state.get("current_articles", [])),
     }
     history["attempts"].append(attempt_log)
 

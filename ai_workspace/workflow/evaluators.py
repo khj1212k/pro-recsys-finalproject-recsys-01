@@ -102,7 +102,8 @@ Content Preview: {content_preview}...
                 messages=messages,
                 temperature=0.1,
                 max_tokens=2048,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                purpose="cluster_eval"
             )
             if not response:
                 continue
@@ -236,7 +237,8 @@ If unsure, still return valid JSON with empty strings/lists."""
                 messages=messages,
                 temperature=0.1,
                 max_tokens=2048,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                purpose="newsletter_eval"
             )
             if not response:
                 continue

@@ -96,7 +96,8 @@ class ToneConverter:
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.4,
                     max_tokens=4096,
-                    response_format={"type": "json_object"}
+                    response_format={"type": "json_object"},
+                    purpose="tone_convert"
                 )
                 
                 if not response:

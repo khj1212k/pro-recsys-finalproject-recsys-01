@@ -88,6 +88,11 @@ class Stage5_NewsletterGeneration(PipelineStage):
     def execute(self, limit=None, min_cluster_size=3, min_samples=2, min_target=0, **kwargs) -> int:
         from core.clusterer import NewsClusterer
         from workflow.graph import compile_workflow
+        from core.llm_metrics import get_metrics_collector
+        
+        # Start LLM metrics collection
+        metrics = get_metrics_collector()
+        metrics.start_batch()
         
         # 1. 클러스터링
         clusterer = NewsClusterer()
@@ -127,5 +132,10 @@ class Stage5_NewsletterGeneration(PipelineStage):
             except Exception as e:
                 logger.error(f"Clubster {cid} 처리 중 에러: {e}")
 
+        # End LLM metrics collection and print summary
+        metrics.end_batch()
+        metrics.print_summary()
+        
         logger.info(f"✨ 뉴스레터 생성 완료: {count}건")
         return count
+

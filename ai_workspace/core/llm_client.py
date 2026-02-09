@@ -1,5 +1,6 @@
 # LLM API 클라이언트
 # - 요청 제한, 재시도 로직 포함
+# - 토큰 사용량, Latency 메트릭 수집
 
 import os
 import json
@@ -7,9 +8,10 @@ import time
 import logging
 import threading
 import requests
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 from abc import ABC, abstractmethod
 
+from core.llm_metrics import get_metrics_collector
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +47,8 @@ class BaseLLMClient(ABC):
         messages: List[Dict[str, str]],
         temperature: float = 0.2,
         max_tokens: int = 4096,
-        response_format: Optional[Dict] = None
+        response_format: Optional[Dict] = None,
+        purpose: str = "unknown"  # For metrics: cluster_eval, newsletter_gen, newsletter_eval, tone_convert
     ) -> Optional[str]:
         pass
 
@@ -89,7 +92,8 @@ class NaverHyperCLOVAClient(BaseLLMClient):
         messages: List[Dict[str, str]],
         temperature: float = 0.2,
         max_tokens: int = 4096,
-        response_format: Optional[Dict] = None
+        response_format: Optional[Dict] = None,
+        purpose: str = "unknown"
     ) -> Optional[str]:
         if self.use_apps_auth:
             headers = {
@@ -137,12 +141,14 @@ class NaverHyperCLOVAClient(BaseLLMClient):
             attempt += 1
             try:
                 self.rate_limiter.wait()
+                start_time = time.time()  # Latency measurement
                 response = requests.post(
                     url,
                     headers=headers,
                     json=payload,
                     timeout=120
                 )
+                latency = time.time() - start_time  # Calculate latency
 
                 if response.status_code == 429:
                     retry_after = response.headers.get('Retry-After')
@@ -157,6 +163,21 @@ class NaverHyperCLOVAClient(BaseLLMClient):
 
                 if result.get("status", {}).get("code") == "20000":
                     content = result.get("result", {}).get("message", {}).get("content", "")
+                    
+                    # Extract token counts from API response (V3: result.usage.*)
+                    usage = result.get("result", {}).get("usage", {})
+                    input_tokens = usage.get("promptTokens", 0)
+                    output_tokens = usage.get("completionTokens", 0)
+                    
+                    # Record metrics
+                    get_metrics_collector().record_call(
+                        purpose=purpose,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        latency_seconds=latency,
+                        success=True
+                    )
+                    
                     return content
                 else:
                     error_msg = result.get("status", {}).get("message", "Unknown error")
@@ -226,7 +247,8 @@ class OpenAIClient(BaseLLMClient):
         messages: List[Dict[str, str]],
         temperature: float = 0.2,
         max_tokens: int = 4096,
-        response_format: Optional[Dict] = None
+        response_format: Optional[Dict] = None,
+        purpose: str = "unknown"
     ) -> Optional[str]:
         kwargs = {
             "model": self.model,
@@ -244,8 +266,27 @@ class OpenAIClient(BaseLLMClient):
         for attempt in range(MAX_RETRIES):
             try:
                 self.rate_limiter.wait()
+                start_time = time.time()
                 response = self.client.chat.completions.create(**kwargs)
-                return response.choices[0].message.content
+                latency = time.time() - start_time
+                
+                content = response.choices[0].message.content
+                
+                # Extract token usage from OpenAI response
+                usage = response.usage
+                input_tokens = usage.prompt_tokens if usage else 0
+                output_tokens = usage.completion_tokens if usage else 0
+                
+                # Record metrics
+                get_metrics_collector().record_call(
+                    purpose=purpose,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    latency_seconds=latency,
+                    success=True
+                )
+                
+                return content
 
             except Exception as e:
                 last_error = str(e)

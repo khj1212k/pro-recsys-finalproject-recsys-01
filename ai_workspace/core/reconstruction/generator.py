@@ -124,7 +124,8 @@ class NewsReconstructor:
                 response = self.client.chat_completion(
                     messages=messages,
                     temperature=0.2,
-                    max_tokens=8192
+                    max_tokens=8192,
+                    purpose="newsletter_content_gen"
                 )
                 if response:
                     return cleanup_content_text(response)
@@ -180,7 +181,8 @@ class NewsReconstructor:
                 response = self.client.chat_completion(
                     messages=messages,
                     temperature=0.2,
-                    max_tokens=1024
+                    max_tokens=1024,
+                    purpose="newsletter_meta_gen"
                 )
                 if not response:
                     continue

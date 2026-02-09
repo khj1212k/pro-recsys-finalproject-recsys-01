@@ -43,7 +43,7 @@ class BaseSettings:
     HDBSCAN_MIN_SAMPLES: int = 2
 
     # ========== Embedder ==========
-    EMBEDDING_BATCH_SIZE: int = 16  # GPU 메모리 고려
+    EMBEDDING_BATCH_SIZE: int = 8  # GPU 메모리 고려
     EMBEDDING_DIM: int = 1024
 
     # ========== Pipeline ==========

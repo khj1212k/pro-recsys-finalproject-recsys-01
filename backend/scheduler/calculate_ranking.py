@@ -24,7 +24,7 @@ def calculate_ranking():
         
         now_kst = now_utc.astimezone(korea_tz)
         
-        cutoff_kst = now_kst.replace(hour=17, minute=0, second=0, microsecond=0)
+        cutoff_kst = now_kst.replace(hour=17, minute=45, second=0, microsecond=0)
         
         cutoff_utc = cutoff_kst.astimezone(timezone.utc)
         
