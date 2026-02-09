@@ -1,28 +1,18 @@
 import React, { useState } from 'react';
-import { User, Save, LogOut, Check, X, Plus } from 'lucide-react';
+import { User, LogOut, X, Plus } from 'lucide-react';
 import { useUserStore } from '@/store/userStore';
 import { Category } from '@/types';
-import { categoryNames, categoryColors } from '@/data/mockData';
+import { categoryNames, categoryColors } from '@/data/category_constants';
 
 interface ProfilePageProps {
   onLogout: () => void;
 }
 
-const allCategories: Category[] = ['politics', 'economy', 'it', 'society', 'culture', 'science', 'world'];
+const allCategories: Category[] = ['politics', 'economy', 'it', 'society', 'culture', 'sports', 'world'];
 
 const ProfilePage: React.FC<ProfilePageProps> = ({ onLogout }) => {
-  const { user, updateNickname, logout, addInterest, removeInterest } = useUserStore();
-  const [nickname, setNickname] = useState(user?.nickname || '');
-  const [isSaved, setIsSaved] = useState(false);
+  const { user, logout, addInterest, removeInterest } = useUserStore();
   const [showAddInterest, setShowAddInterest] = useState(false);
-
-  const handleSave = () => {
-    if (nickname.trim()) {
-      updateNickname(nickname.trim());
-      setIsSaved(true);
-      setTimeout(() => setIsSaved(false), 2000);
-    }
-  };
 
   const handleLogout = () => {
     logout();
@@ -52,43 +42,14 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ onLogout }) => {
 
       {/* Profile Card */}
       <div className="card-news mb-6">
-        <div className="flex items-center gap-4 mb-6">
+        <div className="flex items-center gap-4 mb-2">
           <div className="w-16 h-16 bg-primary rounded-2xl flex items-center justify-center">
             <User className="w-8 h-8 text-primary-foreground" />
           </div>
           <div>
             <h2 className="text-lg font-bold text-foreground">{user?.nickname}</h2>
-            <p className="text-sm text-muted-foreground">News-Grow 뉴비</p>
+            {/* <p className="text-sm text-muted-foreground">News-Grow 뉴비</p> */}
           </div>
-        </div>
-
-        {/* Nickname Edit */}
-        <div className="space-y-3">
-          <label className="text-sm font-medium text-foreground">별명 변경</label>
-          <input
-            type="text"
-            value={nickname}
-            onChange={(e) => setNickname(e.target.value)}
-            className="input-field"
-            placeholder="새 별명을 입력하세요"
-          />
-          <button
-            onClick={handleSave}
-            className={`btn-primary w-full flex items-center justify-center gap-2 ${isSaved ? 'bg-success' : ''
-              }`}
-          >
-            {isSaved ? (
-              <>
-                <Check className="w-5 h-5" />
-                저장되었습니다!
-              </>
-            ) : (
-              <>
-                <Save className="w-5 h-5" />
-                저장하기
-              </>
-            )}
-          </button>
         </div>
       </div>
 
@@ -107,7 +68,7 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ onLogout }) => {
           )}
         </div>
 
-        {/* Current Interests */}
+        {/* Selected Interests */}
         {user?.interests && user.interests.length > 0 ? (
           <div className="flex flex-wrap gap-2 mb-4">
             {user.interests.map((interest) => {
@@ -132,7 +93,7 @@ const ProfilePage: React.FC<ProfilePageProps> = ({ onLogout }) => {
           <p className="text-sm text-muted-foreground mb-4">관심 분야를 추가해주세요</p>
         )}
 
-        {/* Add Interest Dropdown */}
+        {/* Interest Dropdown */}
         {showAddInterest && availableCategories.length > 0 && (
           <div className="border-t border-border pt-4">
             <p className="text-sm font-medium text-foreground mb-3">추가할 분야 선택</p>

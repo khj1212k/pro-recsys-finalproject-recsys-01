@@ -32,16 +32,16 @@ const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   return (
     <>
-      {/* Desktop Top Navigation Bar */}
+      {/* Navigation Bar */}
       <header className="hidden lg:flex fixed top-0 left-0 right-0 h-16 bg-background border-b border-border z-40 items-center justify-between px-8">
         <div
           className="flex items-center gap-3 cursor-pointer"
           onClick={() => onPageChange('home')}
         >
-          <div className="w-10 h-10 bg-primary rounded-xl flex items-center justify-center">
-            <Newspaper className="w-5 h-5 text-primary-foreground" />
+          <div className="w-10 h-10 rounded-xl overflow-hidden">
+            <img src="/favicon.ico" alt="Logo" className="w-full h-full object-cover scale-105" />
           </div>
-          <span className="font-bold text-foreground text-lg">News-Grow</span>
+          <span className="text-2xl font-bold text-foreground">뉴스의 민족</span>
         </div>
 
         <nav className="flex items-center gap-1">
@@ -77,10 +77,10 @@ const Sidebar: React.FC<SidebarProps> = ({
           className="flex items-center gap-3 cursor-pointer"
           onClick={() => onPageChange('home')}
         >
-          <div className="w-10 h-10 bg-primary rounded-xl flex items-center justify-center">
-            <Newspaper className="w-5 h-5 text-primary-foreground" />
+          <div className="w-10 h-10 rounded-xl overflow-hidden">
+            <img src="/favicon.ico" alt="Logo" className="w-full h-full object-cover scale-105" />
           </div>
-          <span className="font-bold text-foreground">News-Grow</span>
+          <span className="text-2xl lg:text-3xl font-bold text-foreground mb-2">뉴스의 민족</span>
         </div>
       </header>
 
@@ -99,12 +99,11 @@ const Sidebar: React.FC<SidebarProps> = ({
       >
         {/* Logo */}
         <div className="h-20 flex items-center gap-3 px-6 border-b border-sidebar-border">
-          <div className="w-11 h-11 bg-primary rounded-2xl flex items-center justify-center">
-            <Newspaper className="w-6 h-6 text-primary-foreground" />
+          <div className="w-11 h-11 rounded-2xl overflow-hidden">
+            <img src="/favicon.ico" alt="Logo" className="w-full h-full object-cover scale-105" />
           </div>
           <div>
-            <h1 className="font-bold text-foreground">News-Grow</h1>
-            <p className="text-xs text-muted-foreground">뉴스와 함께 성장</p>
+            <h1 className="text-foreground font-bold lg:text-2xl text-xl">뉴스의 민족</h1>
           </div>
         </div>
 
@@ -128,7 +127,7 @@ const Sidebar: React.FC<SidebarProps> = ({
         {/* Footer */}
         <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-sidebar-border">
           <p className="text-xs text-muted-foreground text-center">
-            © 2025 News-Grow
+            © 2026 RecSys-01
           </p>
         </div>
       </aside>

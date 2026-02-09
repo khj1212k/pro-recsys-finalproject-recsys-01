@@ -1,0 +1,96 @@
+# config/config.yaml
+
+# =============================================================================
+# 뉴스레터 추천 시스템 설정 파일 (v0.6.1 - Final Spec)
+# ==================================== =========================================
+
+# 시스템 환경 설정 (결과물 출력 방식 제어)
+# "debug"      -> 결과물을 로컬 .csv 파일로 저장
+# "production" -> 결과물을 서버 DB (news_letter_today_batch)에 직접 업로드
+execution_env: "production"
+
+# 임베딩 모델 설정 (BGE-M3)
+embedding:
+  model_name: "BAAI/bge-m3"
+  device: "cuda" # 임베딩 생성 시 사용
+  batch_size: 32
+  dimension: 1024
+
+# 데이터 경로 설정 (DB 모드이므로 로컬 파일 경로 제거, 임베딩 캐시만 유지)
+data:
+  
+  # 1. 데이터 소스 (무조건 DB)
+  data_source: "db"
+
+  # 2. 데이터 필터링 (DB 쿼리 옵션)
+  # 학습 속도 유지를 위해 최근 N일치 로그만 DB에서 가져옴 (Sliding Window)
+  max_history_days: 28         
+
+  # 3. 데이터 분할 (Ratio 기반 동적 분할)
+  # 시간순 정렬 후 최신 20%를 검증용으로 사용 (날짜 하드코딩 제거)
+  validation_ratio: 0.2        
+
+# DB 연결 설정 (PostgreSQL)
+database:
+  host: "localhost"
+  port: 5432
+  dbname: "final_db"
+  user: "recsys01"
+  password: "recsyspeople"
+  
+# 카테고리 매핑
+categories:
+  1: "정치"
+  2: "경제"
+  3: "IT/과학"
+  4: "사회"
+  5: "생활/문화"
+  6: "스포츠"
+  7: "세계"
+
+# Time Decay 설정 (Feature Engineering용)
+# [변경] 카테고리 반감기 삭제 (사용자 UI 설정값 그대로 사용)
+time_decay:
+  news_half_life_days: 7       # 뉴스 신선도 및 히스토리 가중치 반감기
+  min_weight: 0.01
+
+# LightGBM 모델 하이퍼파라미터
+lightgbm:
+  params:
+    objective: "binary"       # 학습 목표: 이진 분류 (클릭함: 1 vs 안함: 0)
+    metric: "auc"             # 평가 지표: AUC (순위 예측 성능에 적합)
+    boosting_type: "gbdt"     # 부스팅 방식: GBDT (Gradient Boosting Decision Tree, 기본값)
+    
+    # --- 모델 복잡도 제어 (과적합 방지) ---
+    num_leaves: 31            # 하나의 트리가 가질 수 있는 최대 잎사귀(분기) 수 (높으면 정확하지만 과적합 위험)
+    learning_rate: 0.05       # 학습률: 한 트리가 오차를 보정하는 정도 (낮을수록 세밀하게 학습하지만 느림)
+    
+    # --- 데이터 샘플링 (속도 향상 및 과적합 방지) ---
+    feature_fraction: 0.9     # 컬럼 샘플링: 트리 만들 때 피처의 90%만 무작위로 선택해서 사용
+    bagging_fraction: 0.8     # 데이터 샘플링: 매 반복마다 전체 데이터의 80%만 무작위로 뽑아서 학습
+    bagging_freq: 5           # 배깅 빈도: 5번 반복(iteration)마다 새로운 데이터를 샘플링
+    
+    # --- 기타 ---
+    verbose: -1               # 로그 출력 레벨: -1은 경고/에러만 출력 (조용히 실행)
+    random_state: 42          # 랜덤 시드: 매번 똑같은 결과가 나오도록 고정
+  
+  # 학습 설정
+  num_boost_round: 1000
+  early_stopping_rounds: 50
+  negative_sample_ratio: 5  # Positive 1개당 Negative 5개 생성
+
+# 추천 설정
+recommendation:
+  method: "lgbm"  # 방식 변경
+  top_k: 20       # 최종 추천 개수 (output)
+  use_mmr: true   # MMR (다양성) 설정
+  mmr_pool_multiplier: 4 # 후보군 배수 (Candidate pool)
+
+# 출력 및 로깅
+output:
+  results_dir: "results" # 모델 inference 결과 저장 (Debug 모드용)
+  checkpoint_dir: "checkpoints" # 모델 저장
+
+logging:
+  level: "INFO"
+  log_to_file: true

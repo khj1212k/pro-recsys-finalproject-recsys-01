@@ -1,30 +1,36 @@
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;600;700&display=swap');
+@font-face {
+  font-family: 'BMHANNA';
+  src: url('/fonts/BMHANNAProOTF.otf');
+  font-weight: normal;
+  font-style: normal;
+}
+
+.font-hanna-custom {
+  font-family: 'BMHANNA', sans-serif !important;
+}
 
 @layer base {
   :root {
-    /* White background */
     --background: 0 0% 100%;
     --foreground: 220 15% 20%;
 
-    /* Card surfaces - Cloud Dancer #F0F7F7 */
     --card: 180 8% 96%;
     --card-foreground: 220 15% 20%;
 
     --popover: 180 8% 96%;
     --popover-foreground: 220 15% 20%;
 
-    /* Pantone Clearly Aqua - main accent */
     --primary: 139 24% 85%;
     --primary-foreground: 220 20% 25%;
 
-    /* Deeper aqua for hover states */
     --primary-hover: 139 28% 75%;
 
-    /* Secondary - muted warm */
     --secondary: 35 20% 88%;
     --secondary-foreground: 220 15% 25%;
 
@@ -34,7 +40,6 @@
     --accent: 139 24% 85%;
     --accent-foreground: 220 20% 25%;
 
-    /* Status colors */
     --destructive: 0 65% 55%;
     --destructive-foreground: 0 0% 100%;
 
@@ -47,7 +52,6 @@
     --info: 200 80% 55%;
     --info-foreground: 0 0% 100%;
 
-    /* Borders and inputs */
     --border: 35 20% 85%;
     --input: 35 20% 88%;
     --ring: 139 28% 70%;
@@ -63,7 +67,6 @@
     --science: 170 60% 45%;
     --world: 220 60% 55%;
 
-    /* Sidebar */
     --sidebar-background: 180 8% 96%;
     --sidebar-foreground: 220 15% 25%;
     --sidebar-primary: 139 24% 85%;
@@ -73,7 +76,6 @@
     --sidebar-border: 35 20% 88%;
     --sidebar-ring: 139 28% 70%;
 
-    /* Shadows */
     --shadow-soft: 0 4px 20px -4px hsl(220 15% 20% / 0.08);
     --shadow-medium: 0 8px 30px -6px hsl(220 15% 20% / 0.12);
     --shadow-card: 0 2px 12px -2px hsl(220 15% 20% / 0.06);
@@ -131,7 +133,12 @@
     font-family: 'Noto Sans KR', sans-serif;
   }
 
-  h1, h2, h3, h4, h5, h6 {
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
     @apply font-semibold tracking-tight;
   }
 }
@@ -245,6 +252,7 @@
     opacity: 0;
     transform: translateY(20px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -255,6 +263,7 @@
   from {
     opacity: 0;
   }
+
   to {
     opacity: 1;
   }
@@ -265,6 +274,7 @@
     opacity: 0;
     transform: scale(0.95);
   }
+
   to {
     opacity: 1;
     transform: scale(1);

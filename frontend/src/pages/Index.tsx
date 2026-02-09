@@ -13,12 +13,15 @@ const Index = () => {
   const [currentPage, setCurrentPage] = useState<Page>('home');
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
-  // Auth flow
+  // 로그인
   if (!isLoggedIn) {
-    return <AuthScreen onAuthComplete={() => setShowOnboarding(true)} />;
+    return <AuthScreen onAuthComplete={(shouldOnboard) => {
+      setShowOnboarding(shouldOnboard);
+      setCurrentPage('home');
+    }} />;
   }
 
-  // Onboarding flow
+  //  온보딩 뉴스레터
   if (showOnboarding && !hasCompletedOnboarding) {
     return <Onboarding onComplete={() => setShowOnboarding(false)} />;
   }
@@ -45,7 +48,6 @@ const Index = () => {
         onMobileToggle={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
       />
 
-      {/* Main Content */}
       <main className="lg:pt-16 pt-20 min-h-screen">
         <div className="max-w-7xl mx-auto p-4 lg:p-8">
           {renderPage()}
