@@ -6,7 +6,7 @@
 import trafilatura
 from multiprocessing import Pool
 from tqdm import tqdm
-from db.connection import get_connection
+from db.connection import get_connection, release_connection
 from config.settings import Settings
 from .cleaners import clean_text_lite  
 
@@ -73,7 +73,7 @@ class ContentExtractor:
             return f"❌ {press_name} 에러: {str(e)[:50]}"
 
         finally:
-            conn.close()
+            release_connection(conn)
 
     def extract_parallel(self, num_workers=None):
         # 병렬 본문 추출 실행
@@ -90,7 +90,7 @@ class ContentExtractor:
             WHERE N.raw_news_content IS NULL OR N.raw_news_content = ''
         """)
         articles = cur.fetchall()
-        conn.close()
+        release_connection(conn)
 
         if not articles:
             print("💤 수집할 기사가 없습니다.")

@@ -38,7 +38,7 @@ class Stage3_NewsEmbedding(PipelineStage):
     """기사 임베딩 (NewsEmbedder -> news_raw 테이블에 저장)"""
     def execute(self, force_cpu=False, batch_size=None, **kwargs) -> int:
         from core.embedder import NewsEmbedder
-        from db.connection import get_connection
+        from db.connection import get_connection, release_connection
         
         batch_size = batch_size or self.settings.EMBEDDING_BATCH_SIZE
         count = 0
@@ -79,7 +79,7 @@ class Stage3_NewsEmbedding(PipelineStage):
                 conn.rollback()
                 logger.error(f"임베딩 실패: {e}")
             finally:
-                conn.close()
+                release_connection(conn)
                 
         return count
 

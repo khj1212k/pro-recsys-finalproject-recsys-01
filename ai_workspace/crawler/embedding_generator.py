@@ -3,7 +3,7 @@ from typing import List, Tuple, Any
 import logging
 from tqdm import tqdm
 
-from db.connection import get_connection
+from db.connection import get_connection, release_connection
 from core.embedder import NewsEmbedder
 from config.settings import Settings
 from utils.logger import setup_logger
@@ -33,7 +33,7 @@ def generate_embeddings_for_articles(batch_size: int = None, force_cpu: bool = F
         """)
         articles = cur.fetchall()
     finally:
-        conn.close()
+        release_connection(conn)
     
     if not articles:
         logger.info("💤 No articles to embed.")
@@ -86,7 +86,7 @@ def generate_embeddings_for_newsletters(batch_size: int = None, force_cpu: bool 
         """)
         newsletters = cur.fetchall()
     finally:
-        conn.close()
+        release_connection(conn)
     
     if not newsletters:
         logger.info("💤 No newsletters to embed.")
@@ -148,4 +148,4 @@ def _update_embeddings_batch(ids: List[int], embeddings: List[Any], is_newslette
                 """, (embedding_str, record_id))
         conn.commit()
     finally:
-        conn.close()
+        release_connection(conn)

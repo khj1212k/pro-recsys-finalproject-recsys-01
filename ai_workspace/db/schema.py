@@ -1,4 +1,4 @@
-from db.connection import get_connection
+from db.connection import get_connection, release_connection
 
 
 
@@ -40,7 +40,7 @@ def insert_initial_press_data():
             print(f"  ✗ {press_name} 삽입 실패: {e}")
 
     conn.commit()
-    conn.close()
+    release_connection(conn)
     print("언론사 초기 데이터 삽입 완료!\n")
 
 
@@ -86,7 +86,7 @@ def insert_initial_rss_url_data():
             print(f"  ✗ {press_name} RSS URL 삽입 실패: {e}")
 
     conn.commit()
-    conn.close()
+    release_connection(conn)
     print("RSS URL 초기 데이터 삽입 완료!\n")
 
 
@@ -121,7 +121,7 @@ def insert_initial_category_data():
             print(f"  ! {name}({code}) 삽입 건너뜀 (에러): {e}")
 
     conn.commit()
-    conn.close()
+    release_connection(conn)
     print("카테고리 초기 데이터 삽입 완료!\n")
 
 
@@ -152,7 +152,7 @@ def full_reset():
         conn.rollback()
         print(f"데이터 리셋 실패: {e}")
     finally:
-        conn.close()
+        release_connection(conn)
 
     # 초기 참조 데이터 보장
     insert_initial_press_data()

@@ -8,7 +8,7 @@ import json
 from workflow.state import AgentState
 from core.reconstructor import NewsReconstructor
 from core.tone_converter import ToneConverter
-from db.connection import get_connection
+from db.connection import get_connection, release_connection
 from db.batch_manager import save_news_letter
 from workflow.helpers import initialize_generation_history, log_generation_attempt
 from workflow.evaluators import ClusterEvaluator, NewsletterEvaluator
@@ -405,8 +405,8 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
             except Exception as e:
                 logger.info(f"ℹ️ 임베딩 저장 실패: {e}")
         
-        conn.close()
-        
+        release_connection(conn)
+
         completed = list(state.get("completed_newsletters", []))
         completed.append(saved_id)
         
