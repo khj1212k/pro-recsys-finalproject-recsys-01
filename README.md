@@ -165,6 +165,28 @@ npm install
 npm run dev
 ```
 
+### 4. 테스트 실행
+`ai_workspace`와 `recommend_engine`은 각각 `pyproject.toml`을 가진 독립 설치 단위다. 개발/테스트 환경은 다음과 같이 구성한다.
+
+```bash
+# ai_workspace 파이프라인 설치 (editable, 테스트용)
+pip install -e "ai_workspace[test]"
+
+# BGE-M3 임베딩 모델까지 실제로 돌려야 한다면(torch 등 무거운 의존성 포함)
+pip install -e "ai_workspace[test,embed]"
+
+# 추천 엔진만 따로 설치하고 싶다면
+pip install -e "ai_workspace/recommend_engine[test]"
+
+# 저장소 루트에서 전체 테스트 실행 (pytest.ini가 tests/를 자동 탐색)
+pytest
+
+# DB/네트워크 등 외부 서비스가 필요한 테스트를 제외하고 실행 (CI와 동일)
+pytest -m "not integration"
+```
+
+각 수정사항의 원인/해결방법/검증 결과는 [`docs/fix-log-2026-07.md`](docs/fix-log-2026-07.md)에 기록되어 있다.
+
 ---
 
 ## 📊 성능 지표
