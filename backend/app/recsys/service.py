@@ -66,6 +66,7 @@ class RecommendationService:
         self._executor = ThreadPoolExecutor(
             max_workers=cfg.workers, thread_name_prefix="recsys"
         )
+        self._shutdown_hooks: List[Callable[[], None]] = []
 
     # ------------------------------------------------------------------ public
     def recommend(self, user_id: int, fallback_repo: RecsysRepository) -> Recommendation:
@@ -125,8 +126,13 @@ class RecommendationService:
             return
         self.counters.inc("impressions.logged", len(rows))
 
+    def add_shutdown_hook(self, hook: Callable[[], None]) -> None:
+        self._shutdown_hooks.append(hook)
+
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
+        for hook in self._shutdown_hooks:
+            hook()
 
     # ----------------------------------------------------------------- private
     def _count(self, rec: Recommendation) -> Recommendation:

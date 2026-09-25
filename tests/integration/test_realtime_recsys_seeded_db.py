@@ -345,3 +345,36 @@ def test_sql_path_latency_p50_p95(engine, seeded):
     )
     assert p95 < 1000
     service.shutdown()
+
+
+def test_request_sessions_holding_every_app_connection_do_not_starve_the_realtime_path(
+    database_url, seeded
+):
+    """API 요청은 인증 조회 때부터 앱 풀 커넥션 하나를 쥔 채 추천을 기다린다. 실시간 경로가
+    같은 풀에서 커넥션을 또 빌리면, 동시 요청 수가 풀 크기에 닿는 순간 요청들이 커넥션을
+    쥐고 작업 스레드는 커넥션을 기다리는 순환 대기가 생긴다(ADR 0015 벤치마크에서 16개
+    동시 클라이언트가 QueuePool 30초 타임아웃으로 죽음)."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from app.database import register_pgvector_on_connect
+    from app.recsys.config import RecsysConfig
+    from app.recsys.runtime import build_sql_service
+    from app.recsys.sql_repository import SqlRecsysRepository
+
+    # 예산은 부하가 큰 러너에서도 정상 경로가 넉넉히 끝나도록 크게 두고, 앱 풀 대기
+    # 한도(pool_timeout)는 그보다 길게 둬서 풀을 공유하면 반드시 예산 초과로 폴백하게 한다.
+    app_engine = create_engine(database_url, pool_size=2, max_overflow=0, pool_timeout=10)
+    register_pgvector_on_connect(app_engine)
+    uid = seeded.add_user(long_term=seeded.vec_of[seeded.by_topic[0][0]])
+    service = build_sql_service(RecsysConfig(time_budget_ms=5000), app_engine, database_url)
+    try:
+        with Session(app_engine) as held, Session(app_engine) as request_session:
+            held.execute(text("SELECT 1"))
+            request_session.execute(text("SELECT 1"))
+            assert app_engine.pool.checkedout() == 2
+            rec = service.recommend(uid, fallback_repo=SqlRecsysRepository(request_session))
+        assert rec.source == "realtime", rec.fallback_reason
+    finally:
+        service.shutdown()
+        app_engine.dispose()
