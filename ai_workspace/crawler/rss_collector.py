@@ -2,7 +2,7 @@
 import feedparser, logging
 from datetime import datetime, timedelta, timezone
 from dateutil import parser as date_parser
-from db.connection import get_connection
+from db.connection import get_connection, release_connection
 from config.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ def collect_rss(hours: int = 100) -> int:
         conn.rollback()
         logger.error(f"Global Error: {e}")
     finally:
-        conn.close() 
+        release_connection(conn)
 
     logger.info(f"✨ 총 {total_new}건 수집 완료")
     return total_new 

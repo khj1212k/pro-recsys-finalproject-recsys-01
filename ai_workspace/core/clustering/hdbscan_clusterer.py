@@ -77,7 +77,7 @@ class NewsClusterer:
         return final_groups
 
     def _load_data_from_db(self, exclude_clustered: bool = True) -> Dict:
-        from db.connection import get_connection
+        from db.connection import get_connection, release_connection
         print("📥 DB에서 뉴스 데이터 로딩 중...", end="", flush=True)
         conn = get_connection()
         try:
@@ -120,7 +120,7 @@ class NewsClusterer:
                 'contents': contents
             }
         finally:
-            conn.close()
+            release_connection(conn)
 
     def cluster_news(self, min_cluster_size=None, min_samples=None) -> Dict[int, List[int]]:
         # Pipeline 연동용
