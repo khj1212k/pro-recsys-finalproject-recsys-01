@@ -11,6 +11,41 @@ from db.connection import get_connection, release_connection
 
 logger = logging.getLogger(__name__)
 
+
+def _to_vector_array(value) -> "np.ndarray | None":
+    """raw-SQL(psycopg2 cursor)로 읽은 vector 컬럼 값을 numpy array로 변환한다.
+
+    db.connection.get_connection()으로 얻은 연결에는 register_pgvector_adapter가
+    적용돼 있다. pgvector.psycopg2.register_vector는 vector 컬럼 값을
+    numpy.ndarray가 아니라 pgvector.Vector 객체로 돌려주므로, 이를 그대로
+    np.array(v)에 넘기면 값이 아니라 Vector 객체 자체를 감싼 0차원 object
+    배열이 만들어져 이후 np.stack/곱셈에서 깨진다. extension이 등록되지 않은
+    연결(레거시 경로)에서는 여전히 문자열로 오므로 그 경우도 처리한다.
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, np.ndarray):
+        return value.astype(np.float32, copy=False)
+
+    # pgvector.Vector 등 to_numpy()를 제공하는 래퍼 (duck-typing)
+    if hasattr(value, "to_numpy"):
+        return value.to_numpy().astype(np.float32, copy=False)
+
+    if isinstance(value, (list, tuple)):
+        return np.array(value, dtype=np.float32)
+
+    if value == "":
+        return None
+
+    # 문자열 폴백 (extension 미등록 등으로 register_vector가 적용 안 된 경우)
+    clean = str(value).strip().strip("[]{}")
+    if not clean:
+        return None
+    parts = clean.split(",") if "," in clean else clean.split()
+    return np.array([float(p) for p in parts if p.strip()], dtype=np.float32)
+
+
 class UserEmbedder:
     def __init__(self, pref_weight=0.4, decay_rate=0.05, lookback=90, min_inte=1):
         self.P_W = pref_weight
@@ -62,7 +97,11 @@ class UserEmbedder:
                     cur.execute("SELECT news_letter_id, news_letter_embedding \
                                 FROM news_letter \
                                 WHERE news_letter_id = ANY(%s)", (list(all_nids),))
-                    vec_map = {nid: np.array(v) for nid, v in cur.fetchall() if v} 
+                    vec_map = {}
+                    for nid, raw_vec in cur.fetchall():
+                        arr = _to_vector_array(raw_vec)
+                        if arr is not None:
+                            vec_map[nid] = arr
 
                 # 3. 계산
                 now = datetime.now()
