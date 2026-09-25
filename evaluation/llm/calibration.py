@@ -11,7 +11,7 @@
 import math
 import random
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Hashable, Iterator, List, Optional, Sequence
+from typing import Callable, Dict, Hashable, List, Optional, Sequence
 
 import numpy as np
 
@@ -107,16 +107,17 @@ def group_folds(groups: Sequence[Hashable], k: int = 2, seed: int = 0) -> List[i
     return [fold_of[g] for g in groups]
 
 
-def bootstrap_group_indices(groups: Sequence[Hashable], n_boot: int, seed: int) -> Iterator[np.ndarray]:
-    """클러스터를 복원 추출해 행 인덱스 배열을 n_boot번 돌려준다."""
-    rows_of: Dict[Hashable, List[int]] = {}
-    for i, g in enumerate(groups):
-        rows_of.setdefault(g, []).append(i)
-    keys = sorted(rows_of, key=str)
+def bootstrap_counts(n_groups: int, n_boot: int, seed: int) -> np.ndarray:
+    """클러스터 복원 추출 n_boot회를 (n_boot × n_groups) 등장 횟수 행렬로 돌려준다.
+
+    통계량이 클러스터별 합의 비율(평균·평균 차이)이면 행렬곱 한 번으로 모든 재표본을 계산할 수
+    있다 - 10,000회 부트스트랩을 파이썬 루프로 돌리면 분석 한 번에 분 단위가 걸린다.
+    """
     rng = np.random.default_rng(seed)
-    for _ in range(n_boot):
-        picked = rng.integers(0, len(keys), size=len(keys))
-        yield np.concatenate([rows_of[keys[j]] for j in picked])
+    picks = rng.integers(0, n_groups, size=(n_boot, n_groups))
+    counts = np.zeros((n_boot, n_groups))
+    np.add.at(counts, (np.arange(n_boot)[:, None], picks), 1.0)
+    return counts
 
 
 def percentile_ci(values: Sequence[float], level: float = 0.95) -> List[float]:
@@ -260,6 +261,20 @@ def self_preference_did(
             return float("nan")
         return float(same.mean() - other.mean())
 
+    def per_cluster(d, fam, clusters):
+        """클러스터별 (같은 계열 오차 합, 개수, 다른 계열 오차 합, 개수)."""
+        pos = {c: i for i, c in enumerate(clusters)}
+        agg = np.zeros((len(clusters), 4))
+        for e, g, c in zip(d["err"], d["gen"], d["groups"]):
+            col = 0 if g == fam else 2
+            agg[pos[c], col] += e
+            agg[pos[c], col + 1] += 1
+        return agg
+
+    def boot_gap(w, agg):
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return (w @ agg[:, 0]) / (w @ agg[:, 1]) - (w @ agg[:, 2]) / (w @ agg[:, 3])
+
     ref = err_by_judge[reference_judge]
     out: Dict[str, dict] = {}
     for j in judges:
@@ -271,26 +286,14 @@ def self_preference_did(
             continue  # 자기 계열 생성물이 없으면 자기선호를 정의할 수 없다
         point_j, point_ref = gap(d["err"], d["gen"], fam), gap(ref["err"], ref["gen"], fam)
 
-        # 두 judge를 같은 클러스터 표본으로 재추출해야 차이의 분산이 맞게 잡힌다
+        # 두 judge를 같은 클러스터 재표본(같은 가중치 행)으로 계산해야 차이의 분산이 맞게 잡힌다
         clusters = sorted(set(d["groups"]) | set(ref["groups"]), key=str)
-        pos = {c: i for i, c in enumerate(clusters)}
-        rows_j = [[] for _ in clusters]
-        rows_r = [[] for _ in clusters]
-        for i, g in enumerate(d["groups"]):
-            rows_j[pos[g]].append(i)
-        for i, g in enumerate(ref["groups"]):
-            rows_r[pos[g]].append(i)
-        rng = np.random.default_rng(seed)
-        boots = []
-        for _ in range(n_boot):
-            pick = rng.integers(0, len(clusters), size=len(clusters))
-            ij = np.array([i for c in pick for i in rows_j[c]], dtype=int)
-            ir = np.array([i for c in pick for i in rows_r[c]], dtype=int)
-            boots.append(gap(d["err"][ij], d["gen"][ij], fam) - gap(ref["err"][ir], ref["gen"][ir], fam))
+        w = bootstrap_counts(len(clusters), n_boot, seed)
+        boots = boot_gap(w, per_cluster(d, fam, clusters)) - boot_gap(w, per_cluster(ref, fam, clusters))
         out[j] = {
             "family": fam,
             "did": point_j - point_ref,
-            "ci": percentile_ci(boots, level),
+            "ci": percentile_ci(boots.tolist(), level),
             "same_family_gap": point_j,
             "reference_gap": point_ref,
             "n_rows": int(len(d["err"])),
