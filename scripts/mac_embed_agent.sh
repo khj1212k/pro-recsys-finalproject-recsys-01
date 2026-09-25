@@ -87,8 +87,9 @@ cmd_uninstall() {
 }
 
 cmd_status() {
-  launchctl print "gui/$UID/$LABEL" 2>/dev/null | grep -E "state|last exit code|runs" || print "$LABEL: not loaded"
-  launchctl print "gui/$UID/$AWAKE_LABEL" 2>/dev/null | grep -E "state" | sed "s/^/$AWAKE_LABEL /" || true
+  local top=$'^\t(state|runs|last exit code|pid) ='
+  print "$LABEL:"; launchctl print "gui/$UID/$LABEL" 2>/dev/null | grep -E "$top" || print "  not loaded"
+  print "$AWAKE_LABEL:"; launchctl print "gui/$UID/$AWAKE_LABEL" 2>/dev/null | grep -E "$top" || print "  not loaded"
   [[ -f $LOG_DIR/embed.log ]] && grep '^{"job"' "$LOG_DIR/embed.log" | tail -3 | cut -c1-300 || true
 }
 
