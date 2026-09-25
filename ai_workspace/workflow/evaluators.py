@@ -1,11 +1,9 @@
 # LLM 기반 평가기
 # - 클러스터 품질 평가, 뉴스레터 품질 평가
-import os
-import json
 from typing import Dict, List, Optional
 
-from core.llm_client import get_llm_client, extract_json_from_response, BaseLLMClient
-from config.settings import Settings
+from core.llm import LLMClient, get_client
+from core.llm.schemas import ClusterEval as ClusterEvalSchema, NewsletterEval as NewsletterEvalSchema
 
 
 class ClusterEvaluator:
@@ -47,14 +45,16 @@ Determine if these articles represent a **single coherent news event** or topic.
 Only output valid JSON. No other text.
 If unsure, still return valid JSON with empty strings/lists."""
 
-    def __init__(self, provider: Optional[str] = None):
+    def __init__(self, llm_client: Optional[LLMClient] = None):
         """
         Initialize ClusterEvaluator
 
         Args:
-            provider: LLM provider ('naver', 'openai', or None for auto-detect)
+            llm_client: 주입할 LLMClient (테스트/DI용). None이면 role="judge"로 레지스트리에서 가져온다.
         """
-        self.client: BaseLLMClient = get_llm_client(provider)
+        # role="judge" - JUDGE_PROVIDER/JUDGE_MODEL로 프로바이더를 정한다 (docs/adr/0005).
+        # 생성기(role="generator")와 다른 모델 계열을 쓰는 것이 LLM-as-judge 요건이다.
+        self.client: LLMClient = llm_client or get_client("judge")
 
     def evaluate(self, articles: List[Dict]) -> Dict:
         """
@@ -96,56 +96,28 @@ Content Preview: {content_preview}...
             {"role": "user", "content": prompt}
         ]
 
-        max_retries = Settings.MAX_JSON_PARSE_RETRIES
-        last_response = None
-        for _ in range(max_retries):
-            response = self.client.chat_completion(
-                messages=messages,
-                temperature=0.1,
-                max_tokens=2048,
-                response_format={"type": "json_object"},
-                purpose="cluster_eval"
-            )
-            if not response:
-                continue
-            last_response = response
-            result = extract_json_from_response(response)
-            if not result:
-                continue
+        # 재시도/백오프는 LLMClient.complete() 내부에서 처리한다 (core/llm/adapters.py)
+        result = self.client.complete(
+            messages=messages,
+            schema=ClusterEvalSchema,
+            temperature=0.1,
+            max_tokens=2048,
+            purpose="cluster_eval",
+        )
 
-            decision = (result.get("decision") or "FAIL").upper()
-            if decision not in ("PASS", "FAIL"):
-                decision = "FAIL"
-            def _to_int_list(items):
-                out = []
-                for x in items or []:
-                    try:
-                        out.append(int(x))
-                    except Exception:
-                        continue
-                return out
-
-            def _to_int_groups(groups):
-                out = []
-                for g in groups or []:
-                    if not isinstance(g, list):
-                        continue
-                    converted = _to_int_list(g)
-                    if converted:
-                        out.append(converted)
-                return out
-
+        if result.parsed is not None:
+            parsed = result.parsed
             return {
-                "decision": decision,
-                "confidence": float(result.get("confidence", 0.0)),
-                "summary": result.get("summary", ""),
-                "feedback": result.get("feedback", ""),
-                "outlier_indices": _to_int_list(result.get("outlier_indices", [])),
-                "sub_groups": _to_int_groups(result.get("sub_groups", []))
+                "decision": parsed.decision,
+                "confidence": parsed.confidence,
+                "summary": parsed.summary,
+                "feedback": parsed.feedback,
+                "outlier_indices": parsed.outlier_indices,
+                "sub_groups": parsed.sub_groups,
             }
 
-        if last_response:
-            upper = last_response.upper()
+        if result.text:
+            upper = result.text.upper()
             decision = "FAIL" if "FAIL" in upper and "PASS" not in upper else "PASS" if "PASS" in upper else "FAIL"
             return {
                 "decision": decision,
@@ -203,8 +175,9 @@ Content:
 Only output valid JSON. No other text.
 If unsure, still return valid JSON with empty strings/lists."""
 
-    def __init__(self, provider: Optional[str] = None):
-        self.client: BaseLLMClient = get_llm_client(provider)
+    def __init__(self, llm_client: Optional[LLMClient] = None):
+        # role="judge" - ClusterEvaluator와 동일하게 생성기와 다른 모델 계열을 쓴다.
+        self.client: LLMClient = llm_client or get_client("judge")
 
     def evaluate(self, newsletter: Dict, source_articles: List[Dict]) -> Dict:
         if not newsletter:
@@ -231,34 +204,27 @@ If unsure, still return valid JSON with empty strings/lists."""
             {"role": "user", "content": prompt}
         ]
 
-        max_retries = Settings.MAX_JSON_PARSE_RETRIES
-        last_response = None
-        for _ in range(max_retries):
-            response = self.client.chat_completion(
-                messages=messages,
-                temperature=0.1,
-                max_tokens=2048,
-                response_format={"type": "json_object"},
-                purpose="newsletter_eval"
-            )
-            if not response:
-                continue
-            last_response = response
-            result = extract_json_from_response(response)
-            if not result:
-                continue
+        result = self.client.complete(
+            messages=messages,
+            schema=NewsletterEvalSchema,
+            temperature=0.1,
+            max_tokens=2048,
+            purpose="newsletter_eval",
+        )
 
-            score = int(result.get("score", 0))
+        if result.parsed is not None:
+            parsed = result.parsed
+            score = parsed.score
             decision = "PASS" if score >= 5 else "FAIL"
             return {
                 "decision": decision,
                 "score": score,
-                "feedback": result.get("feedback", ""),
-                "issues": result.get("issues", [])
+                "feedback": parsed.feedback,
+                "issues": parsed.issues,
             }
 
-        if last_response:
-            upper = last_response.upper()
+        if result.text:
+            upper = result.text.upper()
             decision = "PASS" if "PASS" in upper and "FAIL" not in upper else "FAIL"
             return {
                 "decision": decision,

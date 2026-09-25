@@ -37,9 +37,10 @@ class BaseSettings:
     # ========== LangGraph ==========
     MAX_RETRY_CLUSTER_EVAL: int = 2
     MAX_RETRY_NEWSLETTER_EVAL: int = 3
-    # LLM 응답의 JSON 파싱이 실패했을 때 재시도할 최대 횟수 (이전에는 1000000으로
-    # 사실상 무제한이었음 - 비용 폭주 위험 방지를 위해 유한한 상한으로 교체)
-    MAX_JSON_PARSE_RETRIES: int = 5
+    # (구) MAX_JSON_PARSE_RETRIES: workflow/evaluators.py가 직접 재시도 루프를 돌리던
+    # 시절의 상한이었다. core/llm/ 도입(ADR 0005) 이후로는 LLMClient.complete()가
+    # MAX_LLM_CALL_RETRIES 하나로 모든 재시도(429/5xx/timeout/스키마 검증 실패)를
+    # 통일해서 처리하므로 제거했다.
 
     # ========== HDBSCAN ==========
     HDBSCAN_MIN_CLUSTER_SIZE: int = int(os.getenv("HDBSCAN_MIN_CLUSTER_SIZE", "3"))
