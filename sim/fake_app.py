@@ -10,6 +10,8 @@ production recommender and nothing here measures its quality:
                          without a batch get []
   static_batch_fallback  same, but users without a batch get the popular list
   reactive               request-time re-ranking from onboarding + clicks
+  reactive_explore       reactive, plus 3 of the top-10 slots given to
+                         categories outside the user's top-2 affinities
   random                 uniformly random candidates
 
 Responses carry an `X-Rec-Source` header (the production API does not - ADR 0019
@@ -29,7 +31,8 @@ import numpy as np
 from sim.catalog import CATEGORIES, Catalog, Item
 from sim.driver import REC_SOURCE_HEADER
 
-POLICIES = ("static_batch", "static_batch_fallback", "reactive", "random")
+POLICIES = ("static_batch", "static_batch_fallback", "reactive", "reactive_explore", "random")
+EXPLORE_SLOTS = (2, 5, 8)
 
 
 @dataclass
@@ -107,8 +110,7 @@ class FakeBackend:
                                               it.news_letter_id))
         return [it.news_letter_id for it in ranked if it.news_letter_id not in exclude][: self.today_size]
 
-    def personalized(self, u: _User) -> Optional[List[int]]:
-        """Toy content-based scorer; None when the user has no signal at all."""
+    def _affinity(self, u: _User) -> Optional[Tuple[Dict[int, float], Counter, Set[int]]]:
         now = self.now()
         mine = self.user_clicks.get(u.user_id, [])
         if not u.categories and not mine and not u.onboarding_ids:
@@ -128,9 +130,17 @@ class FakeBackend:
             decay = math.exp(-(now - t).total_seconds() / (48 * 3600))
             affinity[it.category_id] += 1.5 * decay
             kw.update({k: decay for k in it.keywords})
+        return affinity, kw, {nid for nid, _ in mine}
+
+    def personalized(self, u: _User) -> Optional[List[int]]:
+        """Toy content-based scorer; None when the user has no signal at all."""
+        signals = self._affinity(u)
+        if signals is None:
+            return None
+        affinity, kw, clicked = signals
+        now = self.now()
         top_aff = max(affinity.values()) if affinity else 1.0
         top_kw = max(kw.values()) if kw else 1.0
-        clicked = {nid for nid, _ in mine}
 
         def score(it: Item) -> float:
             age_h = max(0.0, (now - it.created_at).total_seconds() / 3600)
@@ -141,6 +151,21 @@ class FakeBackend:
         ranked = sorted((it for it in self.candidates() if it.news_letter_id not in clicked),
                         key=lambda it: (-score(it), it.news_letter_id))
         return [it.news_letter_id for it in ranked[: self.today_size]]
+
+    def with_exploration(self, u: _User, ids: List[int], cands: List[Item]) -> List[int]:
+        affinity, _, clicked = self._affinity(u)
+        top = set(sorted(affinity, key=lambda c: -affinity[c])[:2])
+        head = set(ids[:10])
+        pool = [it.news_letter_id for it in cands
+                if it.category_id not in top and it.news_letter_id not in head and it.news_letter_id not in clicked]
+        if not pool:
+            return ids
+        rng = np.random.default_rng([self.seed, u.user_id, next(self._req)])
+        picks = [pool[int(i)] for i in rng.choice(len(pool), size=min(len(EXPLORE_SLOTS), len(pool)), replace=False)]
+        out = [i for i in ids if i not in picks]
+        for slot, nid in zip(EXPLORE_SLOTS, picks):
+            out.insert(slot, nid)
+        return out[: self.today_size]
 
     def rebuild_batches(self) -> None:
         """Nightly job analogue for the static_batch policies."""
@@ -157,9 +182,13 @@ class FakeBackend:
                 rng = np.random.default_rng([self.seed, u.user_id, next(self._req)])
                 pick = rng.choice(len(cands), size=min(self.today_size, len(cands)), replace=False) if cands else []
                 return [cands[int(i)].news_letter_id for i in pick], "random"
-            if self.policy == "reactive":
+            if self.policy in ("reactive", "reactive_explore"):
                 ids = self.personalized(u)
-                return (ids, "personalized") if ids is not None else (self.popular(cands), "fallback")
+                if ids is None:
+                    return self.popular(cands), "fallback"
+                if self.policy == "reactive_explore":
+                    ids = self.with_exploration(u, ids, cands)
+                return ids, "personalized"
             batch = self.batches.get(u.user_id)
             if batch:
                 return list(batch), "batch"
