@@ -97,9 +97,18 @@ class DatabasePool:
             if conn is not None:
                 # PoolError만 direct connection으로 폴백한다 - 여기서 발생하는
                 # VectorExtensionMissingError까지 삼켜서 폴백해버리면 안 된다.
-                return _register_pgvector_adapter(conn)
+                try:
+                    return _register_pgvector_adapter(conn)
+                except Exception:
+                    self._pool.putconn(conn, close=True)
+                    raise
 
-        return _register_pgvector_adapter(self._create_direct_connection())
+        direct_conn = self._create_direct_connection()
+        try:
+            return _register_pgvector_adapter(direct_conn)
+        except Exception:
+            direct_conn.close()
+            raise
 
     def release_connection(self, conn: Connection) -> None:
         if self._pool and conn:
