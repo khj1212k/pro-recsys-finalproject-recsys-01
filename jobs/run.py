@@ -1,4 +1,4 @@
-"""`python -m jobs.run <job> [옵션]` - 스케줄러(supercronic/Airflow)가 호출하는 유일한 진입점.
+"""`python -m jobs.run <job> [옵션]` - 스케줄러(supercronic)·launchd 에이전트가 호출하는 유일한 진입점.
 
 종료 코드: 0 = 성공 또는 정상 건너뜀(락 점유, 킬 스위치 등), 1 = 실패, 2 = 잘못된 인자.
 """

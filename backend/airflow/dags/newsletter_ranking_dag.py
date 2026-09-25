@@ -21,8 +21,8 @@ with DAG(
 ) as ranking_dag:
     BashOperator(task_id="popularity", bash_command=job_command("popularity"), do_xcom_push=False)
 
-# 생성 -> 사용자 임베딩 -> 학습/추론 -> 폴백. LLM 평가 프로토콜(ADR 0009/0010)과
-# 랭커 v2(ADR 0013) 결정 전까지는 켜지 않는다 - 생성 시 일시정지 상태로 등록된다.
+# 생성 -> 사용자 임베딩 -> 학습/추론 -> 폴백. LLM 평가 프로토콜·사실성 게이트와 랭커 v2 설계가
+# 결정되기 전까지는 켜지 않는다 - 생성 시 일시정지 상태로 등록된다.
 with DAG(
     "newsletter_daily",
     default_args=DEFAULT_ARGS,

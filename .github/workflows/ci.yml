@@ -171,7 +171,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [api, worker, airflow]
+        image: [api, worker]
 
     steps:
       - name: Checkout
@@ -184,7 +184,7 @@ jobs:
           API_SECRET_KEY: ci-only-not-a-secret
         run: |
           docker compose config -q
-          docker compose --profile tools --profile airflow config -q
+          docker compose --profile tools config -q
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

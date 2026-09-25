@@ -3,7 +3,6 @@
 #   cp .env.compose.example .env   # 비밀번호/시크릿 채우기 (.env는 gitignore)
 #   docker compose up -d --build   # db + migrate(1회) + api + scheduler
 #   docker compose run --rm worker ingest   # 잡 수동 실행 (worker는 tools 프로필 = 상시 기동 안 함)
-#   docker compose --profile airflow up -d airflow   # 선택: supercronic 대신 Airflow로 같은 CLI 호출
 #
 # 프로젝트 이름을 고정해 저장소를 어느 디렉터리(워크트리/메인 체크아웃)에서 띄워도
 # 같은 볼륨(pgdata 등)을 이어 쓴다.
@@ -120,41 +119,6 @@ services:
     restart: unless-stopped
     # 잡은 자식 프로세스로 돌고 끝나면 메모리를 돌려준다. 한도는 BGE-M3 CPU 임베딩 피크 기준.
     mem_limit: ${SCHEDULER_MEM_LIMIT:-6g}
-
-  # 선택: supercronic 대신 Airflow로 같은 CLI를 호출하는 경로(기본 비활성, docs/adr/0006).
-  # DAG은 backend/airflow/dags/에 있고 모두 `python -m jobs.run <job>`만 부른다.
-  # scheduler 서비스와 동시에 켜지 말 것(같은 잡을 두 번 스케줄링하게 됨 - advisory lock이
-  # 겹쳐 돌지는 않게 막지만 불필요한 skipped 기록이 쌓인다).
-  airflow:
-    profiles: ["airflow"]
-    build:
-      context: .
-      dockerfile: docker/airflow.Dockerfile
-    image: newsletter-recsys/airflow:${IMAGE_TAG:-local}
-    restart: unless-stopped
-    environment:
-      <<: *db-env
-      ENV: prod
-      DB_POOL_MIN: "1"
-      DB_POOL_MAX: "4"
-      LLM_KILL_SWITCH_FILE: /ops/LLM_KILL_SWITCH
-      AIRFLOW_METADATA_DB: ${AIRFLOW_METADATA_DB:-airflow}
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-newsletter}:${POSTGRES_PASSWORD}@db:5432/${AIRFLOW_METADATA_DB:-airflow}
-      AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-      AIRFLOW__CORE__DAGS_FOLDER: /opt/newsletter/backend/airflow/dags
-      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW_DAGS_PAUSED:-true}
-      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
-    volumes:
-      - ${OPS_DIR:-./.ops}:/ops:ro
-      - hf_cache:/hf
-    ports:
-      - "127.0.0.1:${AIRFLOW_HOST_PORT:-8080}:8080"
-    depends_on:
-      db:
-        condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
 
 volumes:
   pgdata:

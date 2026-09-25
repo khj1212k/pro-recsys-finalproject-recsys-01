@@ -1,7 +1,7 @@
 """알림: 로그에 남기고, SLACK_WEBHOOK_URL이 있으면 Slack으로도 보낸다.
 
 backend/airflow/dags/_callbacks.py의 notify_failure도 send_alert를 호출한다 -
-supercronic 경로(jobs.run)와 Airflow 경로가 같은 알림 규칙을 쓰게 하기 위함.
+supercronic 경로(jobs.run)와 보관된 Airflow DAG이 같은 알림 규칙을 쓰게 하기 위함.
 """
 import logging
 import os

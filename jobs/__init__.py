@@ -1,6 +1,6 @@
 """배치 잡 진입점 패키지 (`python -m jobs.run <job>`, `python -m jobs.migrate`).
 
-스케줄러(supercronic, 선택적으로 Airflow)는 이 CLI만 호출한다. 잡 로직은
+스케줄러(supercronic)와 Mac 호스트 임베딩 에이전트(launchd)는 이 CLI만 호출한다. 잡 로직은
 ai_workspace/ 파이프라인과 backend/ 배치 스크립트를 그대로 재사용하고, 여기서는
 실행 기록(job_runs), 중복 실행 방지(Postgres advisory lock), 실패 알림만 더한다.
 """
