@@ -61,7 +61,7 @@ def main() -> None:
     A(
         f"> v1([`team_repro_v1.md`](./team_repro_v1.md))이 어드버서리얼 방법론 검토에서 "
         f"\"unsound\" 판정을 받은 뒤 재작성한 버전이다. v1과의 차이는 이 문서 전체에 걸쳐 "
-        f"명시한다 - 특히 3절(프로토콜)과 7절(v1에서 무엇이 왜 바뀌었는지)."
+        f"명시한다 - 특히 2절(프로토콜)과 4절(분해 실험, 무엇을 고치거나 뺐는지)."
     )
     A("")
     A(f"- 생성 시각: {meta['generated_at']}")
@@ -97,7 +97,7 @@ def main() -> None:
         f"{fmt_mean_std(cur_aw.get('mrr', {}))})보다 뚜렷이 낮다.** team-final도 같은 방향"
         f"({fmt_mean_std(tf_p.get('mrr', {}))} vs {fmt_mean_std(tf_aw.get('mrr', {}))})이다 - "
         f"v1이 보고한 '팀 최종이 현재 코드보다 낫다'는 차이(0.849 vs 0.772)는 이 추론 시점 "
-        f"누출이 주된 원인이었다(4절 참고)."
+        f"누출이 주된 원인이었다(2절 참고)."
     )
     A(
         f"2. **1차(point-in-time) 프로토콜에서 current 모델 Precision@5는 {pct(cur_p5)}로, "
@@ -106,7 +106,7 @@ def main() -> None:
     )
     A(
         f"3. team-final을 자신의 실제 정답 정의(`scripts/evaluate_results.py`, NOW()-6일)로 "
-        f"그대로 재현하면 MRR {fmt_mean_std(tfw)}로 팀이 보고한 0.897에 근접한다 - 이 아카이브 "
+        f"그대로 재현하면 MRR {fmt_mean_std(tfw.get('mrr', {}))}로 팀이 보고한 0.897에 근접한다 - 이 아카이브 "
         f"구간(약 {ds['dataset_window_seconds']/3600:.1f}시간)에서는 '최근 6일'이 로그 전체(학습 "
         f"구간 포함)와 같기 때문이다. 팀의 103명/405건 스냅샷 자체는 검증할 수 없다."
     )
@@ -162,6 +162,13 @@ def main() -> None:
       f"BGE-M3 kNN(k={cr['chosen_k']})으로 채웠다. LOO 정확도 {pct(cr['loo_accuracy_by_k'][str(cr['chosen_k'])])}"
       f"(Wilson 95% CI [{pct(cr['loo_ci_chosen_k_wilson95'][0])}, {pct(cr['loo_ci_chosen_k_wilson95'][1])}], "
       f"카테고리 7개, 무작위 기대값 ≈14.3%) - **{cr['loo_ci_note']}**")
+    A(
+        "라벨 품질도 generator_split의 train/valid 경계(뉴스레터 id 4~154 대 155~198)를 "
+        "기준으로 비대칭이다 - 직접 라벨은 train 쪽 151건 중 25건(17%), valid 쪽 44건 "
+        "중 22건(50%)에만 있다. 즉 valid 쪽 카테고리는 상대적으로 더 신뢰할 수 있고 "
+        "train 쪽은 kNN 추정에 더 의존한다 - `category_match` 관련 지표를 generator_"
+        "split의 train/valid 사이에서 비교할 때는 이 비대칭을 감안해야 한다."
+    )
     A("")
 
     # ---------------------------------------------------------------- 프로토콜
@@ -184,8 +191,16 @@ def main() -> None:
     A("")
     A("### 2-1. 결과표 (team_split 프로토콜, clicks_only, 후보 195건 전체)")
     A("")
-    A("| 코드 버전 | 프로토콜 | 시드 수 | MRR | Precision@5 | nDCG@5 | Coverage@5 | best_iteration |")
-    A("|---|---|---|---|---|---|---|---|")
+    A(
+        "`best_iteration`과 `distinct scores`는 모델(학습)에 대한 값이라 1차/2차 행에 "
+        "동일하게 표시된다 - 같은 학습된 ranker를 두 가지 방식으로 추론만 다르게 한 "
+        "것이기 때문이다(2절 서두 참고). `best_iteration`이 시드마다 낮으면(예: 1) "
+        "모델이 사실상 거의 학습되지 않았다는 뜻이고, `distinct scores`가 후보 수 "
+        "대비 작으면 랭킹의 상당 부분이 동점 처리되고 있다는 뜻이다."
+    )
+    A("")
+    A("| 코드 버전 | 프로토콜 | 시드 수 | MRR | Precision@5 | nDCG@5 | Coverage@5 | best_iteration | distinct scores(1차) |")
+    A("|---|---|---|---|---|---|---|---|---|")
     version_labels = {
         "team-final": "team-final (팀 최종, 리포트 당시 코드)",
         "fix-snapshot": "fix-snapshot (중간 수정본)",
@@ -198,11 +213,13 @@ def main() -> None:
                 continue
             bi = s.get("best_iteration")
             bi_str = str(bi) if bi else "-"
+            n_distinct = s.get("n_distinct_scores_primary")
+            ds_str = str(n_distinct) if n_distinct else "-"
             A(
                 f"| {version_labels[version]} | {label} | {s.get('n_seeds', '-')} "
                 f"| {fmt_mean_std(s.get('mrr', {}))} | {fmt_mean_std(s.get('precision@5', {}))} "
                 f"| {fmt_mean_std(s.get('ndcg@5', {}))} | {fmt_mean_std(s.get('coverage@5', {}))} "
-                f"| {bi_str} |"
+                f"| {bi_str} | {ds_str} |"
             )
     A("")
     A("추론 시점 누출 효과(as-written − 1차, 시드 x 유저 nested bootstrap 95% CI):")
