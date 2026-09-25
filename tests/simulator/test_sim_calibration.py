@@ -4,7 +4,7 @@ from datetime import timedelta
 import pandas as pd
 import pytest
 
-from sim.calibration import CalibrationTarget, calibrate_bias, ebnerd_base_rate
+from sim.calibration import CalibrationTarget, calibrate_bias, ebnerd_base_rate, team_click_rate
 from sim.catalog import synthetic_catalog
 from sim.click_model import preset
 from sim.personas import PopulationConfig, generate_population
@@ -59,3 +59,17 @@ def test_ebnerd_base_rate_aggregates_inview_and_clicks():
     assert r["mean_impression_ctr"] == pytest.approx((1 / 4 + 2 / 2 + 1 / 10) / 3)
     assert r["share_impressions_with_click"] == 1.0
     assert r["median_inview"] == 4
+
+
+def test_team_click_rate_pools_and_spreads_per_user():
+    df = pd.DataFrame({
+        "user_id": [1, 1, 1, 1, 2, 2, 2, 2],
+        "news_letter_id": [10, 11, 12, 13, 10, 11, 12, 13],
+        "is_clicked": [1, 1, 0, 0, 1, 0, 0, 0],
+    })
+    r = team_click_rate(df)
+    assert r["impressions"] == 8 and r["clicks"] == 3
+    assert r["pooled_ctr"] == pytest.approx(3 / 8)
+    assert r["impressions_per_user_median"] == 4
+    assert r["user_ctr_min"] == pytest.approx(0.25) and r["user_ctr_max"] == pytest.approx(0.5)
+    assert r["user_ctr_median"] == pytest.approx(0.375)
