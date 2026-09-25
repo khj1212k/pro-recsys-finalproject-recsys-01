@@ -81,6 +81,11 @@ class BaseSettings:
     # LLM 채팅 API(HyperCLOVA/OpenAI) 호출 재시도 최대 횟수 (감사에서 발견: HyperCLOVA
     # 클라이언트의 `while True` 루프가 이 상한 없이 무제한 재시도했음)
     MAX_LLM_CALL_RETRIES: int = 10
+    # ToneConverter.convert()가 validate_conversion() 실패 시 추가로 재생성을
+    # 시도하는 횟수(최초 1회 + 이 값만큼 추가). 전송 계층 재시도(429/5xx/timeout)는
+    # core/llm/adapters.py::OpenAICompatLLMClient.complete() 내부에서 이미 처리되므로
+    # 이 값은 "콘텐츠가 검증을 통과하지 못했을 때"만 적용된다.
+    MAX_RETRY_TONE_VALIDATION: int = 2
     
     # ========== Crawler Settings ==========
     PARALLEL_WORKERS: int = 8  # 병렬 크롤링 워커
