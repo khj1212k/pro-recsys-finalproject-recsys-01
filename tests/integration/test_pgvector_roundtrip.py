@@ -46,7 +46,9 @@ def test_vector_write_read_roundtrip_and_cosine_distance_query(database_url, pg_
                 cur.execute(
                     "SELECT id, embedding <=> %s AS distance "
                     "FROM pgvector_roundtrip_test ORDER BY distance LIMIT 1",
-                    ([1.0, 0.0, 0.0, 0.0],),
+                    # 파이썬 list는 numeric[]로 바인딩되어 <=> 연산자와 맞지 않는다.
+                    # register_vector가 numpy 배열을 vector로 변환하므로 ndarray로 넘긴다.
+                    (np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),),
                 )
                 nearest_id, distance = cur.fetchone()
             assert distance == pytest.approx(0.0, abs=1e-6)

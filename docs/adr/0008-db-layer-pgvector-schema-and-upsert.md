@@ -246,3 +246,7 @@
   호출부(`pipeline/stages.py`, `pipeline/runner.py`)만 갱신했다. 이 함수를
   외부에서 직접 호출하는 코드(예: Airflow DAG)가 있다면 별도 확인이
   필요하다 - 이번 조사에서는 저장소 안에 다른 호출부를 찾지 못했다.
+
+### 운영 규칙: 벡터 쿼리 파라미터 (2026-09-25 CI에서 확인)
+- 파이썬 list를 파라미터로 넘기면 psycopg2가 `numeric[]`로 바인딩한다. INSERT/UPDATE는 pgvector의 대입 캐스트로 동작하지만, `<=>`·`<->` 같은 거리 연산자는 `operator does not exist: vector <=> numeric[]`로 실패한다(실제 PostgreSQL integration 잡에서 재현).
+- 따라서 후보 검색 등 벡터 연산 쿼리는 파라미터를 `numpy.ndarray`로 넘기거나(`register_vector`가 vector로 변환) SQL에서 `%s::vector`로 명시 캐스트한다.

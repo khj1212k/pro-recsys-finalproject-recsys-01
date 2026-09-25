@@ -24,8 +24,8 @@ def test_user_embedder_batch_update_all_users_on_seeded_db(database_url, pg_conn
         with pg_conn.cursor() as cur:
             cur.execute(
                 "INSERT INTO news_letter (news_letter_title, news_letter_sentence, news_letter_content, "
-                "news_letter_embedding, news_letter_keywords, raw_news_count) "
-                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING news_letter_id",
+                "news_letter_embedding, news_letter_keywords, raw_news_count, news_letter_created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, NOW()) RETURNING news_letter_id",
                 (f"뉴스레터-{suffix}", "요약", "내용", seed_vector, "[]", 1),
             )
             news_letter_id = cur.fetchone()[0]
