@@ -35,6 +35,7 @@ sys.path.insert(0, str(TEAM_REPRO_DIR))
 import file_loader as FL  # noqa: E402
 import baselines as BL  # noqa: E402
 import metrics as M  # noqa: E402
+import categories as CAT  # noqa: E402
 
 # Evaluator는 src.core.evaluator에 numpy 외 의존성이 없다(팀 코드 수정 없이 그대로 재사용,
 # torch 스텁도 필요 없다 - src.core.__init__이 utils를 안 끌어온다). 베이스라인 평가 전용으로
@@ -351,6 +352,18 @@ def main() -> None:
     print("=" * 70)
     print("6) 메타데이터 (git SHA, 데이터 sha256)")
     print("=" * 70)
+    # categories.py가 이미 만들어 둔 newsletter_categories.csv를 다시 계산해 LOO
+    # 정확도/선택된 k/소스별 건수를 리포트에 남긴다(스펙 1번: "k는 ... LOO 교차검증으로
+    # 선택한다. report LOO accuracy and per-source counts"). 195건 기준 1초 내외로
+    # 끝나는 가벼운 진단이라 run_pipeline처럼 캐시할 필요는 없다.
+    cat_result = CAT.recover_categories()
+    category_recovery = {
+        "chosen_k": cat_result.chosen_k,
+        "loo_accuracy_by_k": {str(k): v for k, v in sorted(cat_result.loo_scores.items())},
+        "n_direct_labels": sum(1 for r in cat_result.rows if r["source"] not in ("knn", "unlabeled_no_embedding")),
+        "source_counts": dict(cat_result.source_counts),
+    }
+
     meta = {
         "generated_at": datetime.now().isoformat(),
         "git": {
@@ -377,6 +390,7 @@ def main() -> None:
             "n_clicks": int((bundle.ctr_logs["is_clicked"] == 1).sum()),
         },
         "seeds": {"headline": seeds5, "decomposition_secondary": seeds3},
+        "category_recovery": category_recovery,
     }
 
     final = {
