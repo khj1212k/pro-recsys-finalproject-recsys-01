@@ -352,8 +352,8 @@ def test_request_sessions_holding_every_app_connection_do_not_starve_the_realtim
 ):
     """API 요청은 인증 조회 때부터 앱 풀 커넥션 하나를 쥔 채 추천을 기다린다. 실시간 경로가
     같은 풀에서 커넥션을 또 빌리면, 동시 요청 수가 풀 크기에 닿는 순간 요청들이 커넥션을
-    쥐고 작업 스레드는 커넥션을 기다리는 순환 대기가 생긴다(ADR 0015 벤치마크에서 16개
-    동시 클라이언트가 QueuePool 30초 타임아웃으로 죽음)."""
+    쥐고 작업 스레드는 커넥션을 기다리는 순환 대기가 생기고, 요청은 시간 예산을 다 쓴 뒤
+    폴백으로 끝난다(예산이 길면 풀 타임아웃 에러까지 간다 - ADR 0015 증거)."""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
 
