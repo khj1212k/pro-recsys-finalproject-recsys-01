@@ -1,0 +1,13 @@
+# Mac(colima) 개발용 오버레이: 호스트에 이미 받아둔 BGE-M3 가중치를 읽기 전용으로 재사용해
+# 컨테이너가 2.2GB를 다시 내려받지 않게 한다. .env에 다음을 넣으면 자동 적용된다:
+#   COMPOSE_FILE=docker-compose.yml:docker/compose.mac.yaml
+# 서버(Oracle A1 등)에서는 쓰지 않는다 - 첫 ingest가 hf_cache 볼륨에 모델을 받는다.
+x-hf-bind: &hf-bind
+  volumes:
+    - ${HOST_HF_HUB:-${HOME}/.cache/huggingface/hub}/models--BAAI--bge-m3:/hf/hub/models--BAAI--bge-m3:ro
+  environment:
+    HF_HUB_OFFLINE: "1"
+
+services:
+  worker: *hf-bind
+  scheduler: *hf-bind

@@ -1,0 +1,159 @@
+# 뉴스레터 추천 시스템 런타임 (docs/adr/0006, 운영 절차: docs/runbook.md)
+#
+#   cp .env.compose.example .env   # 비밀번호/시크릿 채우기 (.env는 gitignore)
+#   docker compose up -d --build   # db + migrate(1회) + api + scheduler
+#   docker compose run --rm worker ingest   # 잡 수동 실행 (worker는 tools 프로필 = 상시 기동 안 함)
+#   docker compose --profile airflow up -d airflow   # 선택: supercronic 대신 Airflow로 같은 CLI 호출
+#
+# 프로젝트 이름을 고정해 저장소를 어느 디렉터리(워크트리/메인 체크아웃)에서 띄워도
+# 같은 볼륨(pgdata 등)을 이어 쓴다.
+name: newsletter-recsys
+
+x-db-env: &db-env
+  DB_HOST: db
+  DB_PORT: "5432"
+  DB_USER: ${POSTGRES_USER:-newsletter}
+  DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD를 .env에 설정하세요 (.env.compose.example 참고)}
+  DB_NAME: ${POSTGRES_DB:-newsletter}
+  DATABASE_URL: postgresql://${POSTGRES_USER:-newsletter}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-newsletter}
+
+x-worker: &worker
+  build:
+    context: .
+    dockerfile: docker/worker.Dockerfile
+    args:
+      GIT_SHA: ${GIT_SHA:-unknown}
+  image: newsletter-recsys/worker:${IMAGE_TAG:-local}
+  environment:
+    <<: *db-env
+    ENV: prod
+    # ProdSettings 기본값(min 5)은 본문 추출 워커 프로세스마다 풀을 만들 때 커넥션을 낭비한다
+    DB_POOL_MIN: "1"
+    DB_POOL_MAX: "4"
+    # 호스트의 비용 가드가 <메인 체크아웃>/.ops/LLM_KILL_SWITCH를 만들면 컨테이너 안에서도 보이게
+    LLM_KILL_SWITCH_FILE: /ops/LLM_KILL_SWITCH
+    HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}
+    OMP_NUM_THREADS: ${EMBED_THREADS:-4}
+    SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+  env_file:
+    # LLM API 키. generate 잡에만 필요하다 - 없으면 무시(수집/랭킹 잡은 키 없이 동작).
+    - path: ${AI_ENV_FILE:-ai_workspace/.env}
+      required: false
+  volumes:
+    - ${OPS_DIR:-./.ops}:/ops:ro
+    - hf_cache:/hf
+    - model_checkpoints:/app/ai_workspace/recommend_engine/checkpoints
+  depends_on:
+    db:
+      condition: service_healthy
+    migrate:
+      condition: service_completed_successfully
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-newsletter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD를 .env에 설정하세요 (.env.compose.example 참고)}
+      POSTGRES_DB: ${POSTGRES_DB:-newsletter}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # 호스트 루프백에만 노출(호스트 MPS 임베딩, integration 테스트, psql 확인용).
+    # 서버 배포에서는 DB_BIND=127.0.0.1을 유지하고 방화벽에서 5432를 열지 않는다.
+    ports:
+      - "${DB_BIND:-127.0.0.1}:${DB_HOST_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  migrate:
+    <<: *worker
+    entrypoint: ["python", "-m", "jobs.migrate"]
+    command: []
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    image: newsletter-recsys/api:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-newsletter}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-newsletter}
+      SECRET_KEY: ${API_SECRET_KEY:?API_SECRET_KEY를 .env에 설정하세요 (.env.compose.example 참고)}
+      ALGORITHM: HS256
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+    ports:
+      - "${API_BIND:-127.0.0.1}:${API_HOST_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/openapi.json', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # 잡 수동 실행용: docker compose run --rm worker <job> [옵션]
+  worker:
+    <<: *worker
+    profiles: ["tools"]
+    restart: "no"
+
+  # 상시 스케줄러: docker/crontab에 적힌 잡만 `python -m jobs.run <job>`으로 실행한다.
+  scheduler:
+    <<: *worker
+    entrypoint: ["supercronic", "/app/docker/crontab"]
+    command: []
+    restart: unless-stopped
+    # 잡은 자식 프로세스로 돌고 끝나면 메모리를 돌려준다. 한도는 BGE-M3 CPU 임베딩 피크 기준.
+    mem_limit: ${SCHEDULER_MEM_LIMIT:-6g}
+
+  # 선택: supercronic 대신 Airflow로 같은 CLI를 호출하는 경로(기본 비활성, docs/adr/0006).
+  # DAG은 backend/airflow/dags/에 있고 모두 `python -m jobs.run <job>`만 부른다.
+  # scheduler 서비스와 동시에 켜지 말 것(같은 잡을 두 번 스케줄링하게 됨 - advisory lock이
+  # 겹쳐 돌지는 않게 막지만 불필요한 skipped 기록이 쌓인다).
+  airflow:
+    profiles: ["airflow"]
+    build:
+      context: .
+      dockerfile: docker/airflow.Dockerfile
+    image: newsletter-recsys/airflow:${IMAGE_TAG:-local}
+    restart: unless-stopped
+    environment:
+      <<: *db-env
+      ENV: prod
+      DB_POOL_MIN: "1"
+      DB_POOL_MAX: "4"
+      LLM_KILL_SWITCH_FILE: /ops/LLM_KILL_SWITCH
+      AIRFLOW_METADATA_DB: ${AIRFLOW_METADATA_DB:-airflow}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER:-newsletter}:${POSTGRES_PASSWORD}@db:5432/${AIRFLOW_METADATA_DB:-airflow}
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/newsletter/backend/airflow/dags
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: ${AIRFLOW_DAGS_PAUSED:-true}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+    volumes:
+      - ${OPS_DIR:-./.ops}:/ops:ro
+      - hf_cache:/hf
+    ports:
+      - "127.0.0.1:${AIRFLOW_HOST_PORT:-8080}:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  pgdata:
+  hf_cache:
+  model_checkpoints:

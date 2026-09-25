@@ -1,66 +1,42 @@
+from datetime import datetime
+
+import pendulum
 from airflow import DAG
 from airflow.providers.standard.operators.bash import BashOperator
-from datetime import datetime, timedelta
-import pendulum
-import os
-from pathlib import Path
-from dotenv import load_dotenv
 
-from _callbacks import notify_failure
-
-PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
-env_path = PROJECT_ROOT / '.env'
-load_dotenv(env_path)
+from _jobs import DEFAULT_ARGS, PROJECT_ROOT, job_command  # noqa: F401  (PROJECT_ROOT: 경로 기준점)
 
 kst = pendulum.timezone("Asia/Seoul")
 
-default_args = {
-    'owner': 'admin',
-    'depends_on_past': False,
-    'email_on_failure': False,
-    'email_on_retry': False,
-    'retries': 1,
-    'retry_delay': timedelta(minutes=5),
-    'on_failure_callback': notify_failure,
-}
-
+# 인기도 랭킹: docker/crontab과 같은 매시 35분. on_failure_callback은 DEFAULT_ARGS에 들어 있다.
 with DAG(
-    'newsletter_ranking_batch',
-    default_args=default_args,
-    description='Calculate popularity ranking for newsletters daily',
-    schedule='0 17 * * *', # KST
-    start_date=datetime(2026, 2, 4, tzinfo=kst),
+    "newsletter_ranking_batch",
+    default_args=DEFAULT_ARGS,
+    description="인기도-최신성 랭킹 (python -m jobs.run popularity)",
+    schedule="35 * * * *",
+    start_date=datetime(2026, 9, 1, tzinfo=kst),
     catchup=False,
-    tags=['ranking', 'newsletter'],
-) as dag:
+    max_active_runs=1,
+    tags=["ranking", "newsletter"],
+) as ranking_dag:
+    BashOperator(task_id="popularity", bash_command=job_command("popularity"), do_xcom_push=False)
 
-    PYTHON_EXEC = f"{PROJECT_ROOT}/.venv/bin/python"
-    SCRIPT_PATH = f"{PROJECT_ROOT}/scheduler/calculate_ranking.py"
-    AI_PATH = f"{PROJECT_ROOT}/ai_workspace"
+# 생성 -> 사용자 임베딩 -> 학습/추론 -> 폴백. LLM 평가 프로토콜(ADR 0009/0010)과
+# 랭커 v2(ADR 0013) 결정 전까지는 켜지 않는다 - 생성 시 일시정지 상태로 등록된다.
+with DAG(
+    "newsletter_daily",
+    default_args=DEFAULT_ARGS,
+    description="generate >> user_embed >> train >> batch_fallback",
+    schedule="0 18 * * *",
+    start_date=datetime(2026, 9, 1, tzinfo=kst),
+    catchup=False,
+    max_active_runs=1,
+    is_paused_upon_creation=True,
+    tags=["newsletter"],
+) as daily_dag:
+    generate = BashOperator(task_id="generate", bash_command=job_command("generate"), do_xcom_push=False)
+    user_embed = BashOperator(task_id="user_embed", bash_command=job_command("user_embed"), do_xcom_push=False)
+    train = BashOperator(task_id="train", bash_command=job_command("train"), do_xcom_push=False)
+    fallback = BashOperator(task_id="batch_fallback", bash_command=job_command("batch_fallback"), do_xcom_push=False)
 
-    pipeline_runner = BashOperator(
-        task_id='pipeline_runner',
-        bash_command=f"python {AI_PATH}/main.py",
-        do_xcom_push=False,
-    )
-
-    recsys_runner = BashOperator(
-        task_id='recsys_runner',
-        bash_command=f"python {AI_PATH}/recommend_engine/main_lgbm.py --train --inference",
-        do_xcom_push=False,
-    )
-
-    calculate_ranking_task = BashOperator(
-        task_id='calculate_ranking',
-        bash_command=f"""
-        set -e
-        export PYTHONPATH={PROJECT_ROOT}
-        cd {PROJECT_ROOT}
-        set -a
-        source .env
-        set +a
-        {PYTHON_EXEC} -u {SCRIPT_PATH}
-        """,
-    )
-
-    pipeline_runner >> recsys_runner >> calculate_ranking_task
+    generate >> user_embed >> train >> fallback

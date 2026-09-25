@@ -36,6 +36,5 @@ FlagEmbedding==1.2.5
 transformers==4.38.2
 sentence-transformers==2.2.2
 
-# Airflow
-apache-airflow
-apache-airflow-providers-standard
+# Airflow는 선택 사항이라 여기서 뺐다(기본 스케줄러는 supercronic + `python -m jobs.run`).
+# Airflow 프로필을 쓸 때만: pip install -r backend/requirements-airflow.txt (docs/adr/0006 참고)
