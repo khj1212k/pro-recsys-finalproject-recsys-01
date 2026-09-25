@@ -89,20 +89,25 @@ class Stage5_NewsletterGeneration(PipelineStage):
         from core.clusterer import NewsClusterer
         from workflow.graph import compile_workflow
         from core.llm_metrics import get_metrics_collector
-        
+        from db.batch_manager import create_new_batch
+
         # Start LLM metrics collection
         metrics = get_metrics_collector()
         metrics.start_batch()
-        
+
         # 1. 클러스터링
         clusterer = NewsClusterer()
         clusters = clusterer.cluster_news(min_cluster_size=min_cluster_size, min_samples=min_samples)
-        
+
         if not clusters:
             logger.info("생성된 클러스터가 없습니다.")
             return 0
-            
-        # 2. 워크플로우 실행 (뉴스레터 생성)
+
+        # 2. 정식 run_id 발급 (cluster_history에 이번 배치 기록)
+        run_id = create_new_batch(clusters)
+        logger.info(f"🆔 배치 run_id={run_id} 발급 완료")
+
+        # 3. 워크플로우 실행 (뉴스레터 생성)
         app = compile_workflow()
         count = 0
         total = len(clusters) if not limit else min(len(clusters), limit)
@@ -122,7 +127,7 @@ class Stage5_NewsletterGeneration(PipelineStage):
                 "all_cluster_ids": all_ids,
                 "all_cluster_groups": clusters,
                 "data": data,
-                "run_id": int(logging.getLogger().name) if logging.getLogger().name.isdigit() else 0 # 임시 run_id
+                "run_id": run_id,
             }
             
             try:
@@ -135,7 +140,7 @@ class Stage5_NewsletterGeneration(PipelineStage):
         # End LLM metrics collection and print summary
         metrics.end_batch()
         metrics.print_summary()
-        
-        logger.info(f"✨ 뉴스레터 생성 완료: {count}건")
+
+        logger.info(f"✨ 뉴스레터 생성 완료: {count}건 (run_id={run_id})")
         return count
 
