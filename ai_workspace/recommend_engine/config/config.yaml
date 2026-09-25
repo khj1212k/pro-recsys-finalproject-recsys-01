@@ -56,11 +56,23 @@ time_decay:
   news_half_life_days: 7       # 뉴스 신선도 및 히스토리 가중치 반감기
   min_weight: 0.01
 
+# LightGBM 랭킹(LambdaRank) 그룹 설정
+ranking:
+  # LightGBM lambdarank의 '쿼리 그룹'을 무엇으로 묶을지 결정한다.
+  # "user_timestamp"(기본값): (user_id, 클릭 시각) 조합 - lgbm_dataset.py가 만드는
+  #   '한 번의 노출(positive + sampled negatives)' 단위와 일치. 시간순 Train/Valid
+  #   분할과도 안전하게 맞물린다(그룹이 분할 경계에서 잘리지 않음).
+  # "user_id": 유저 전체 이력을 하나의 그룹으로 묶는 레거시 동작 - 학습 기간 전체가
+  #   한 쿼리가 되어 시간순 분할과 함께 쓰면 그룹이 분할 경계에서 거의 항상 잘린다.
+  group_key: "user_timestamp"
+
 # LightGBM 모델 하이퍼파라미터
 lightgbm:
   params:
-    objective: "binary"       # 학습 목표: 이진 분류 (클릭함: 1 vs 안함: 0)
-    metric: "auc"             # 평가 지표: AUC (순위 예측 성능에 적합)
+    objective: "lambdarank"   # 학습 목표: LambdaRank로 유저 내 아이템 순서를 직접 학습 (기존 binary 분류에서 전환)
+    metric: "ndcg"             # 평가 지표: nDCG (랭킹 품질에 직접 대응, 기존 auc에서 전환)
+    ndcg_eval_at: [5, 10]      # nDCG@5, nDCG@10 계산
+    label_gain: [0, 1]         # 레이블(0/1)에 대한 relevance gain 매핑
     boosting_type: "gbdt"     # 부스팅 방식: GBDT (Gradient Boosting Decision Tree, 기본값)
     
     # --- 모델 복잡도 제어 (과적합 방지) ---
