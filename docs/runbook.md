@@ -112,7 +112,7 @@ docker compose exec db psql -U newsletter -d newsletter -c "
 
 ```bash
 docker compose run --rm worker ingest --stages rss,extract     # 수집만 (스케줄러와 같음)
-docker compose run --rm worker embed --limit 200 --time-budget-s 600   # 컨테이너 CPU 임베딩(느림)
+docker compose run --rm worker embed --limit 200 --time-budget-s 600   # 컨테이너 CPU 임베딩 (서버용. Mac 4GB VM에서는 모델 로드 중 OOM)
 scripts/mac_embed_agent.sh run --limit 200                     # 호스트 MPS 임베딩
 docker compose run --rm worker cluster
 docker compose run --rm worker daily_report
