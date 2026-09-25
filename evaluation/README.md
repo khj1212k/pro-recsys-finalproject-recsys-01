@@ -41,7 +41,12 @@ python -m evaluation.clustering.metrics \
   --out report.json
 ```
 
-### `evaluation/llm/faithfulness.py` — 한국어 뉴스레터 사실성 검증
+### `ai_workspace/core/faithfulness.py` — 한국어 뉴스레터 사실성 검증
+
+> 2026-09-25 `evaluation/llm/`에서 `ai_workspace/core/`로 옮겼다. LangGraph
+> 워크플로우가 이 모듈로 생성물을 게이트하므로(ADR 0010) 런타임 패키지에 있어야
+> 하고, 평가 코드는 `from core.faithfulness import ...`로 가져다 쓴다(런타임 →
+> 평가 방향 의존을 만들지 않기 위함).
 
 원문 기사들로부터 생성된 뉴스레터(및 캐주얼체로 재작성한 버전)가 숫자,
 날짜, 인명/기관명, 인용구를 원문과 다르게(환각·누락·훼손) 만들지
@@ -87,7 +92,7 @@ uv pip install -q --python .venv/bin/python -r evaluation/requirements.txt
 
 # 모듈별
 .venv/bin/python -m pytest -q tests/evaluation/test_clustering_metrics.py
-.venv/bin/python -m pytest -q tests/evaluation/test_faithfulness.py
+.venv/bin/python -m pytest -q tests/test_faithfulness.py
 ```
 
 `tests/evaluation/test_clustering_metrics.py`의 `TestCli` 클래스는

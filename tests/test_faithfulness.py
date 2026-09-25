@@ -1,7 +1,7 @@
 import pytest
 
-from evaluation.llm import faithfulness
-from evaluation.llm.faithfulness import (
+from core import faithfulness
+from core.faithfulness import (
     check_against_sources,
     compare_rewrite,
     extract_facts,

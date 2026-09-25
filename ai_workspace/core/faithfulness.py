@@ -1,6 +1,8 @@
 """Deterministic fact-extraction and faithfulness checks for Korean LLM newsletters.
 
-Pure functions, no DB/LLM calls. Meant to become a LangGraph gate later.
+Pure functions, no DB/LLM calls. Lives in the runtime package (not evaluation/)
+because the LangGraph workflow gates on it (docs/adr/0010); evaluation code
+imports it from here so runtime never depends on the evaluation tree.
 """
 
 import re
