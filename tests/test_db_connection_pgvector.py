@@ -127,6 +127,33 @@ def test_get_connection_propagates_vector_extension_missing_error_without_fallin
         DatabasePool._pool = None
 
 
+def test_get_connection_returns_pooled_connection_to_pool_when_pgvector_registration_fails():
+    """등록 실패 시 checkout된 커넥션이 풀로 반납되지 않으면 풀이 고갈된다 -
+    putconn(conn, close=True)로 반납하면서 에러는 그대로 전파돼야 한다."""
+    from db.connection import DatabasePool, VectorExtensionMissingError
+
+    DatabasePool._instance = None
+    DatabasePool._pool = None
+
+    fake_conn = MagicMock()
+    fake_pool = MagicMock()
+    fake_pool.getconn.return_value = fake_conn
+
+    with patch("db.connection.pool.ThreadedConnectionPool", return_value=fake_pool), \
+         patch("db.connection._build_db_config", return_value={}):
+        db_pool = DatabasePool()
+
+    try:
+        with patch("db.connection._register_pgvector_adapter", side_effect=VectorExtensionMissingError("no ext")):
+            with pytest.raises(VectorExtensionMissingError):
+                db_pool.get_connection()
+
+        fake_pool.putconn.assert_called_once_with(fake_conn, close=True)
+    finally:
+        DatabasePool._instance = None
+        DatabasePool._pool = None
+
+
 def test_get_connection_still_falls_back_to_direct_connection_on_pool_error():
     """기존 동작(풀 고갈 시 direct connection으로 폴백)은 그대로 유지되어야 한다."""
     from db.connection import DatabasePool
