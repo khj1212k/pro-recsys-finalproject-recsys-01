@@ -25,7 +25,7 @@ class Stage0_UserEmbedding(PipelineStage):
 
 class Stage1_RSSCollection(PipelineStage):
     """RSS 수집"""
-    def execute(self, **kwargs) -> int:
+    def execute(self, **kwargs) -> Dict[str, int]:
         from crawler.rss_collector import collect_rss
         return collect_rss()
 

@@ -85,14 +85,37 @@ class DataLoader:
         self._news_dict = None
         self._user_profiles = None
 
-    def _parse_pgvector(self, vector_str: str) -> np.ndarray:
+    def _parse_pgvector(self, value: Any) -> np.ndarray:
         """
-        PostgreSQL vector/text 타입의 문자열을 numpy array로 변환
+        PostgreSQL vector 컬럼 값을 numpy array로 변환한다.
+
+        DataLoader는 SQLAlchemy 엔진으로 자체 연결을 맺으므로(ai_workspace/db/
+        connection.py의 register_vector와는 별개 연결) 보통 문자열("[0.1,0.2,...]")로
+        온다. 하지만 pgvector.psycopg2.register_vector가 등록된 연결로 읽으면
+        (ai_workspace/core/user_embedder.py 등 raw psycopg2 경로) 값이
+        pgvector.Vector 객체나 numpy.ndarray로 올 수 있다 - 어느 쪽이든 안전하게
+        처리한다. 특히 ndarray/Vector를 str()로 강제 변환하면 numpy가 큰 배열
+        (1024차원)을 "..."로 요약 표기해 값이 깨지므로 그렇게 하면 안 된다.
         예: "[0.1, 0.2, ...]" -> np.array([0.1, 0.2, ...])
         """
+        if value is None:
+            return np.zeros(1024, dtype=np.float32)
+
+        if isinstance(value, np.ndarray):
+            return value.astype(np.float32, copy=False)
+
+        if isinstance(value, (list, tuple)):
+            return np.array(value, dtype=np.float32)
+
+        # pgvector.Vector 등 to_numpy()를 제공하는 래퍼 (duck-typing - 이
+        # 서브 프로젝트는 pgvector를 의존성으로 두지 않으므로 직접 import하지 않는다)
+        if hasattr(value, "to_numpy"):
+            return value.to_numpy().astype(np.float32, copy=False)
+
+        vector_str = str(value)
         if not vector_str:
             return np.zeros(1024, dtype=np.float32)
-        
+
         try:
             # 1. 불필요한 괄호 및 공백 제거
             clean_str = vector_str.replace('[', '').replace(']', '').replace('{', '').replace('}', '').strip()
@@ -153,7 +176,7 @@ class DataLoader:
             nid = int(row['news_letter_id'])
             
             # 임베딩 파싱
-            emb_vec = self._parse_pgvector(str(row['news_letter_embedding']))
+            emb_vec = self._parse_pgvector(row['news_letter_embedding'])
             
             # 카테고리 매핑
             cats = cat_map.get(nid, [])

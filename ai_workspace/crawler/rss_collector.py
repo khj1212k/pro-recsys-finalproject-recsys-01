@@ -2,7 +2,9 @@
 import time
 import feedparser, logging
 from datetime import datetime, timedelta, timezone
+from typing import Dict
 from dateutil import parser as date_parser
+from psycopg2.extras import execute_values
 from db.connection import get_connection, release_connection
 from config.settings import Settings
 
@@ -30,10 +32,19 @@ def parse_feed_with_retry(url, parse_fn=None, max_attempts=None, sleep_fn=time.s
     return feed
 
 
-def collect_rss(hours: int = 100) -> int:
-    # RSS 피드 수집 실행
+def collect_rss(hours: int = 100) -> Dict[str, int]:
+    """RSS 피드 수집 실행.
+
+    이전에는 INSERT 전에 SELECT raw_news_url ... WHERE raw_news_url IN %s로
+    기존 URL을 조회해 후보를 걸러냈다. 이 방식은 조회와 삽입 사이에 다른
+    프로세스가 같은 URL을 먼저 넣으면(동시 수집 실행 등) UniqueViolation으로
+    깨질 수 있는 TOCTOU다. INSERT ... ON CONFLICT (raw_news_url) DO NOTHING으로
+    바꿔 DB가 원자적으로 충돌을 처리하게 하고, RETURNING으로 실제 삽입된 행만
+    돌려받아 언론사(press)별 SAVEPOINT 안에서 inserted/skipped 건수를 집계한다.
+    """
     conn = get_connection()
-    total_new = 0
+    total_inserted = 0
+    total_skipped = 0
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     logger.info(f"RSS 수집 시작 (Cutoff: {hours}h)")
 
@@ -45,7 +56,7 @@ def collect_rss(hours: int = 100) -> int:
                     press_name = '전자신문' if press_name.startswith('전자신문') else press_name
                     cur.execute("SELECT press_id \
                                        FROM press \
-                                       WHERE press_name=%s", 
+                                       WHERE press_name=%s",
                                        (press_name,))
                     row = cur.fetchone()
                     if not row:
@@ -66,31 +77,32 @@ def collect_rss(hours: int = 100) -> int:
                             logger.debug(f"⚠️ {press_name} 날짜 파싱 실패: {dt_str!r} - {date_err}")
                             continue
 
-                    if not entries: 
+                    if not entries:
                         continue
 
-                    # 2. 링크 기준 중복 제거 
-                    links = tuple(x[0] for x in entries) 
-                    cur.execute("SELECT raw_news_url \
-                                 FROM news_raw \
-                                 WHERE raw_news_url IN %s", (links,))
-                    existing = {r[0] for r in cur.fetchall()}
-                    
-                    # 3. 신규 기사만 필터링
-                    new_items = [
-                        (pid, title, '', link, dt, datetime.now()) 
-                        for link, title, dt in entries if link not in existing
+                    # 2. ON CONFLICT DO NOTHING으로 삽입, RETURNING으로 실제
+                    #    삽입된 URL만 받아 inserted/skipped 건수 계산
+                    candidates = [
+                        (pid, title, '', link, dt, datetime.now())
+                        for link, title, dt in entries
                     ]
+                    inserted_rows = execute_values(
+                        cur,
+                        """
+                        INSERT INTO news_raw (press_id, raw_news_title, raw_news_content, raw_news_url, raw_news_created_at, raw_news_crawled_at)
+                        VALUES %s
+                        ON CONFLICT (raw_news_url) DO NOTHING
+                        RETURNING raw_news_url
+                        """,
+                        candidates,
+                        fetch=True,
+                    )
+                    inserted_count = len(inserted_rows)
+                    skipped_count = len(candidates) - inserted_count
+                    total_inserted += inserted_count
+                    total_skipped += skipped_count
+                    logger.info(f"✅ {press_name}: 신규 {inserted_count}건 추가, {skipped_count}건 스킵(중복)")
 
-                    # 4. DB에 신규 기사 추가
-                    if new_items:
-                        cur.executemany("""
-                            INSERT INTO news_raw (press_id, raw_news_title, raw_news_content, raw_news_url, raw_news_created_at, raw_news_crawled_at) 
-                            VALUES (%s, %s, %s, %s, %s, %s)
-                            """, new_items)
-                        total_new += len(new_items)
-                        logger.info(f"✅ {press_name}: {len(new_items)}건 추가")
-                        
                 except Exception as e:
                     cur.execute("ROLLBACK TO SAVEPOINT sp_press")
                     logger.error(f"❌ {press_name} 오류: {e}")
@@ -101,8 +113,8 @@ def collect_rss(hours: int = 100) -> int:
     finally:
         release_connection(conn)
 
-    logger.info(f"✨ 총 {total_new}건 수집 완료")
-    return total_new 
+    logger.info(f"✨ 총 {total_inserted}건 수집 완료 ({total_skipped}건 스킵)")
+    return {"inserted": total_inserted, "skipped": total_skipped}
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

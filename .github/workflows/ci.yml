@@ -60,3 +60,105 @@ jobs:
 
       - name: Run tests (excluding integration)
         run: .venv/bin/python -m pytest -q -m "not integration and not benchmark" tests/
+
+  integration-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: newsletter_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/newsletter_test
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/newsletter_test
+      DB_HOST: localhost
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: newsletter_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Python 3.11
+        run: uv python install 3.11
+
+      - name: Create virtualenv
+        run: uv venv --python 3.11 .venv
+
+      - name: Install test dependencies
+        run: |
+          uv pip install --python .venv/bin/python \
+            pytest \
+            langgraph \
+            langchain-openai \
+            openai \
+            tiktoken \
+            numpy \
+            pandas \
+            scikit-learn \
+            lightgbm \
+            optuna \
+            pgvector \
+            psycopg2-binary \
+            python-dotenv \
+            sqlalchemy \
+            sqlmodel \
+            alembic \
+            feedparser \
+            requests \
+            python-dateutil \
+            trafilatura \
+            tqdm \
+            pyyaml \
+            lxml_html_clean \
+            pydantic \
+            kiwipiepy \
+            hdbscan \
+            rapidfuzz
+
+      - name: Install ai_workspace package (no deps, editable)
+        run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace
+
+      - name: Install recommend_engine package (no deps, editable)
+        run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace/recommend_engine
+
+      - name: Create pgvector extension
+        run: |
+          .venv/bin/python -c "
+          import os, psycopg2
+          conn = psycopg2.connect(os.environ['DATABASE_URL'])
+          conn.autocommit = True
+          with conn.cursor() as cur:
+              cur.execute('CREATE EXTENSION IF NOT EXISTS vector')
+          conn.close()
+          print('vector extension ensured')
+          "
+
+      - name: Run alembic upgrade head
+        working-directory: backend
+        run: ../.venv/bin/python -m alembic upgrade head
+
+      - name: Verify migration downgrade/upgrade round-trip
+        working-directory: backend
+        run: |
+          ../.venv/bin/python -m alembic downgrade -1
+          ../.venv/bin/python -m alembic upgrade head
+
+      - name: Run integration tests
+        run: .venv/bin/python -m pytest -q -m integration tests/
