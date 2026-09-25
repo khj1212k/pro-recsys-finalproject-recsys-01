@@ -97,3 +97,16 @@ def test_generate_embeddings_batch_l2_normalizes_when_enabled():
 def test_generate_embeddings_batch_empty(texts):
     emb = _embedder()
     assert emb.generate_embeddings_batch(texts or [], batch_size=8) == ([], 0.0)
+
+
+def test_device_cache_is_released_after_every_sub_batch():
+    """MPS 할당자는 길이가 다른 큰 텐서를 재사용하지 못하고 캐시로 쌓는다 - 4,000토큰대 기사 8건을
+    한 건씩 처리하는 동안 드라이버 메모리가 3GB에서 14GB까지 커졌다(2026-09-26 측정).
+    그래서 하위 배치마다 장치 캐시를 비운다."""
+    emb = _embedder()
+    released = []
+    emb._release_device_cache = lambda: released.append(True)
+
+    emb.generate_embeddings_batch(["a" * 50, "b" * 3, "c" * 40, "d" * 5], batch_size=8)
+
+    assert len(released) == len(emb.model.calls) == 3

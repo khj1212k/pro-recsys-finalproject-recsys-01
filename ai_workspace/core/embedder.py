@@ -122,18 +122,25 @@ class NewsEmbedder:
                 raise
             for i, vec in zip(group, output['dense_vecs']):
                 dense[i] = vec
+            # MPS 할당자는 길이가 다른 큰 텐서 블록을 재사용하지 못하고 캐시에 쌓는다 - 4,000토큰대
+            # 기사 8건을 한 건씩 처리하는 동안 드라이버 메모리가 3GB에서 14GB까지 커졌다(ADR 0006).
+            self._release_device_cache()
 
         embeddings = np.asarray(dense, dtype=np.float32)
         if self.l2_normalize:
             # torch.nn.functional.normalize(p=2, dim=1)과 같은 계산(eps=1e-12)
             embeddings = embeddings / np.maximum(np.linalg.norm(embeddings, axis=1, keepdims=True), 1e-12)
 
-        if self.device == 'cuda':
-            import torch
-            torch.cuda.empty_cache()
-
         elapsed = time.time() - start_time
         return embeddings.tolist(), elapsed
+
+    def _release_device_cache(self) -> None:
+        if self.device == 'mps':
+            import torch
+            torch.mps.empty_cache()
+        elif self.device == 'cuda':
+            import torch
+            torch.cuda.empty_cache()
 
     def cleanup(self):
         if self.model:
