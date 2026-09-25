@@ -7,6 +7,11 @@
 # 최근 20건이 약 2.7시간 분량, 2026-09-26 첫 수집) 수집은 매시 돌린다.
 5 * * * * python -m jobs.run ingest --stages rss,extract
 
+# 임베딩: 매시 20분, 한 실행은 40분 예산(남은 기사는 다음 실행이 오래된 것부터 이어받음).
+# Mac 개발 환경은 docker/compose.mac.yaml이 JOBS_DISABLED=embed로 이 줄을 끄고, 호스트 MPS
+# launchd 에이전트(scripts/mac_embed_agent.sh)가 같은 잡을 같은 advisory lock으로 돌린다.
+20 * * * * python -m jobs.run embed --time-budget-s 2400
+
 # 인기도 랭킹(KST 하루 단위 UPSERT), 매시 35분
 35 * * * * python -m jobs.run popularity
 
@@ -17,7 +22,7 @@
 10 0 * * * python -m jobs.run daily_report
 
 # --- 아직 켜지 않음 ---
-# generate/train은 LLM 평가 프로토콜(ADR 0009/0010)과 랭커 v2(ADR 0013) 결정 이후에 켠다.
+# generate/train은 LLM 평가 프로토콜·사실성 게이트와 랭커 v2 설계가 결정된 뒤에 켠다.
 # 켤 때는 docker/crontab을 고치고 scheduler 이미지를 다시 빌드한다(docs/runbook.md).
 # 0 9 * * * python -m jobs.run generate
 # 0 10 * * * python -m jobs.run user_embed
