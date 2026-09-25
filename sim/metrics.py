@@ -15,7 +15,11 @@ from sim.driver import SimulationLog, ViewEvent
 from sim.personas import ARCHETYPE_BY_NAME
 from sim.text import jaccard
 
-FALLBACK_SOURCES = frozenset({"fallback", "popular"})
+# X-Rec-Source values that mean "the personalized path did not answer": the fake
+# app's "fallback" plus the request-time API's failure chain (popular -> recent ->
+# empty). "batch" is ambiguous there (fallback in realtime mode, the normal answer
+# in batch mode), so it is left to source_counts.
+FALLBACK_SOURCES = frozenset({"fallback", "popular", "recent", "empty"})
 SIMILAR_NOUN_JACCARD = 0.2
 
 
