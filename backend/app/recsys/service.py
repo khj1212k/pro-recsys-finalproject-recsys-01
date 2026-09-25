@@ -216,12 +216,14 @@ def build_service(
     impression_writer: Optional[ImpressionWriter] = None,
     now_fn: Callable[[], datetime] = utcnow,
     clock: Callable[[], float] = time.monotonic,
+    counters: Optional[RecsysCounters] = None,
 ) -> RecommendationService:
     recommender = RealtimeRecommender(cfg, scorer=scorer or HeuristicScorer())
     return RecommendationService(
         cfg,
         repo_factory=repo_factory,
         recommender=recommender,
+        counters=counters,
         impression_writer=impression_writer,
         now_fn=now_fn,
         clock=clock,
