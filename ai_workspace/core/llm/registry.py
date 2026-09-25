@@ -70,7 +70,7 @@ ROLE_DEFAULT_PROVIDER = {
 # 2026-09-25)에서 확인한 현재 유효한 id다 - 상세 근거는 docs/adr/0005 참고.
 ROLE_DEFAULT_MODEL = {
     "generator": "gemini-3.5-flash-lite",  # 초안 생성 - "가장 빠르고 비용 효율적인 3.5 모델"
-    "judge": "gemini-3.5-flash",  # 평가 - generator보다 한 단계 위 모델(Flash-Lite가 아닌 Flash)
+    "judge": "gemini-3.1-flash-lite",  # 평가 - generator와 다른 모델. 2026-09-25 프로브에서 3.5-flash는 타임아웃/503(ADR 0005 부록)
     "tone": "gemini-3.5-flash-lite",  # 문체 변환 - 생성과 비슷한 비용 프로필의 가벼운 재작성 작업
 }
 
