@@ -141,3 +141,72 @@ def test_all_batches_succeed_commits_per_batch(monkeypatch):
     assert cursor.executemany.call_count == 2
     assert conn.commit.call_count == 2
     assert not conn.rollback.called
+
+
+def test_embed_pending_articles_reports_throughput_stats_and_binds_numpy_vectors(monkeypatch):
+    """ingest 잡이 job_runs.stats에 남길 임베딩 처리량(건/초)과, pgvector 규칙
+    (벡터 파라미터는 numpy 배열로 바인딩 - 리스트는 numeric[]로 바인딩됨)을 확인한다."""
+    import numpy as np
+    from pipeline.stages import embed_pending_articles
+
+    embedder = _make_embedder_double(
+        generate_side_effect=[
+            ([[0.1, 0.2], [0.3, 0.4]], 0.5),
+            ([[0.5, 0.6]], 0.25),
+        ]
+    )
+    embedder.device = "cpu"
+    _install_fake_news_embedder(monkeypatch, embedder)
+
+    rows = [(1, "제목1", "본문1"), (2, "제목2", "본문2"), (3, "제목3", "본문3")]
+    cursor = _make_cursor(rows=rows)
+    cursor.fetchone.return_value = (4,)  # 본문 미수집으로 보류된 건수
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    settings = MagicMock()
+    settings.EMBEDDING_BATCH_SIZE = 2
+
+    with patch("db.connection.get_connection", return_value=conn), \
+         patch("db.connection.release_connection"):
+        stats = embed_pending_articles(settings, batch_size=2, limit=10)
+
+    assert stats["targets"] == 3
+    assert stats["embedded"] == 3
+    assert stats["failed_batches"] == 0
+    assert stats["pending_no_content"] == 4
+    assert stats["device"] == "cpu"
+    assert stats["batch_size"] == 2
+    assert stats["encode_s"] == 0.75
+    assert stats["articles_per_s"] == 4.0
+    assert stats["model_load_s"] >= 0
+
+    select_sql, select_params = cursor.execute.call_args_list[0][0]
+    assert "ORDER BY raw_news_id" in select_sql and "LIMIT %s" in select_sql
+    assert select_params == (10,)
+
+    first_batch_updates = cursor.executemany.call_args_list[0][0][1]
+    vec, raw_news_id = first_batch_updates[0]
+    assert isinstance(vec, np.ndarray) and vec.dtype == np.float32
+    assert raw_news_id == 1
+
+
+def test_embed_pending_articles_skips_model_load_when_nothing_to_embed(monkeypatch):
+    from pipeline.stages import embed_pending_articles
+
+    embedder = _make_embedder_double(generate_return=([], 0.0))
+    news_embedder_cls = _install_fake_news_embedder(monkeypatch, embedder)
+
+    cursor = _make_cursor(rows=[])
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    settings = MagicMock()
+    settings.EMBEDDING_BATCH_SIZE = 8
+
+    with patch("db.connection.get_connection", return_value=conn), \
+         patch("db.connection.release_connection"):
+        stats = embed_pending_articles(settings)
+
+    assert stats["targets"] == 0 and stats["embedded"] == 0
+    news_embedder_cls.assert_not_called()

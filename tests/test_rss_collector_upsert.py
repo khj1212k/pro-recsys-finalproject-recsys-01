@@ -54,7 +54,7 @@ def test_collect_rss_uses_on_conflict_do_nothing_and_counts_inserted_vs_skipped(
          patch("crawler.rss_collector.execute_values", return_value=fake_execute_values_return) as mock_execute_values:
         stats = collect_rss()
 
-    assert stats == {"inserted": 2, "skipped": 1}
+    assert (stats["inserted"], stats["skipped"]) == (2, 1)
 
     # ON CONFLICT DO NOTHING + RETURNING을 쓰는 단일 INSERT로 처리했는지 확인
     assert mock_execute_values.call_count == 1
@@ -103,7 +103,7 @@ def test_collect_rss_keeps_per_press_savepoint_isolation_on_error():
     savepoint_calls = [c for c in cur.execute.call_args_list if c[0][0] == "SAVEPOINT sp_press"]
     assert len(savepoint_calls) == 2
 
-    assert stats == {"inserted": 1, "skipped": 0}
+    assert (stats["inserted"], stats["skipped"]) == (1, 0)
     mock_execute_values.assert_called_once()
     conn.commit.assert_called_once()
 
@@ -124,4 +124,71 @@ def test_collect_rss_skips_entries_older_than_cutoff_without_inserting():
         stats = collect_rss(hours=100)
 
     mock_execute_values.assert_not_called()
-    assert stats == {"inserted": 0, "skipped": 0}
+    assert (stats["inserted"], stats["skipped"]) == (0, 0)
+
+
+def test_collect_rss_reports_per_feed_breakdown_of_new_duplicate_stale_and_undated_entries():
+    conn, cur = _make_cursor_conn()
+    cur.fetchone.return_value = (1,)
+
+    old_dt = (datetime.now(timezone.utc) - timedelta(hours=200)).strftime("%a, %d %b %Y %H:%M:%S %z")
+    fake_feed = MagicMock()
+    fake_feed.bozo = 0
+    fake_feed.entries = [
+        FakeEntry("http://a.com/new", "신규", _recent()),
+        FakeEntry("http://a.com/dup", "중복", _recent()),
+        FakeEntry("http://a.com/old", "오래됨", old_dt),
+        FakeEntry("http://a.com/nodate", "날짜깨짐", "not a date"),
+    ]
+
+    with patch("crawler.rss_collector.get_connection", return_value=conn), \
+         patch("crawler.rss_collector.release_connection"), \
+         patch("crawler.rss_collector.Settings.RSS_FEEDS", {"전자신문_IT": ("direct", "http://x/rss")}), \
+         patch("crawler.rss_collector.parse_feed_with_retry", return_value=fake_feed), \
+         patch("crawler.rss_collector.execute_values", return_value=[("http://a.com/new",)]):
+        stats = collect_rss(hours=100)
+
+    feed = stats["per_feed"]["전자신문_IT"]
+    assert feed["press"] == "전자신문"
+    assert feed["entries"] == 4
+    assert feed["inserted"] == 1
+    assert feed["skipped"] == 1
+    assert feed["too_old"] == 1
+    assert feed["bad_date"] == 1
+    assert feed["error"] is None
+
+
+def test_collect_rss_records_feed_error_per_feed_and_counts_failed_feeds():
+    conn, cur = _make_cursor_conn()
+    cur.fetchone.return_value = (1,)
+
+    def parse_feed_side_effect(url):
+        raise RuntimeError("network boom")
+
+    with patch("crawler.rss_collector.get_connection", return_value=conn), \
+         patch("crawler.rss_collector.release_connection"), \
+         patch("crawler.rss_collector.Settings.RSS_FEEDS", {"깨진언론": ("direct", "http://broken/rss")}), \
+         patch("crawler.rss_collector.parse_feed_with_retry", side_effect=parse_feed_side_effect):
+        stats = collect_rss()
+
+    assert "network boom" in stats["per_feed"]["깨진언론"]["error"]
+    assert stats["failed_feeds"] == 1
+
+
+def test_collect_rss_flags_unreachable_feed_that_returns_bozo_without_entries():
+    conn, cur = _make_cursor_conn()
+    cur.fetchone.return_value = (1,)
+
+    bozo_feed = MagicMock()
+    bozo_feed.bozo = 1
+    bozo_feed.bozo_exception = OSError("connection refused")
+    bozo_feed.entries = []
+
+    with patch("crawler.rss_collector.get_connection", return_value=conn), \
+         patch("crawler.rss_collector.release_connection"), \
+         patch("crawler.rss_collector.Settings.RSS_FEEDS", {"먹통언론": ("direct", "http://down/rss")}), \
+         patch("crawler.rss_collector.parse_feed_with_retry", return_value=bozo_feed):
+        stats = collect_rss()
+
+    assert "connection refused" in stats["per_feed"]["먹통언론"]["error"]
+    assert stats["failed_feeds"] == 1

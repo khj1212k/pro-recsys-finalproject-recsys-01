@@ -1,6 +1,7 @@
 """Pipeline Stages: 간소화된 파이프라인 단계 정의"""
 import logging
 import os
+import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 from tqdm import tqdm
@@ -38,80 +39,110 @@ class Stage2_ContentExtraction(PipelineStage):
 class Stage3_NewsEmbedding(PipelineStage):
     """기사 임베딩 (NewsEmbedder -> news_raw 테이블에 저장)"""
     def execute(self, force_cpu=False, batch_size=None, **kwargs) -> int:
-        from core.embedder import NewsEmbedder
-        from db.connection import get_connection, release_connection
+        return embed_pending_articles(
+            self.settings, force_cpu=force_cpu, batch_size=batch_size
+        )["embedded"]
 
-        batch_size = batch_size or self.settings.EMBEDDING_BATCH_SIZE
-        count = 0
-        failed_batches = 0
 
-        # 임베딩 모델을 마지막에 VRAM에서 확실히 제거하기 위해 with문 사용
-        with NewsEmbedder(force_cpu=force_cpu, verbose=True) as embedder:
-            conn = get_connection()
-            try:
-                with conn.cursor() as cur:
-                    # 임베딩이 없고 본문이 실제로 채워진 기사만 조회.
-                    # raw_news_content가 비어있는 행은 대상에서 제외하고 embedding_result를
-                    # NULL로 남겨둔다 -> 본문이 채워지면 다음 실행에서 자동으로 재검토된다.
-                    cur.execute("""
-                        SELECT raw_news_id, raw_news_title, raw_news_content
-                        FROM news_raw
-                        WHERE embedding_result IS NULL
-                          AND raw_news_content IS NOT NULL
-                          AND raw_news_content != ''
-                    """)
-                    rows = cur.fetchall() # 임베딩 없는 기사 목록 (본문 있는 것만)
+def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=None) -> Dict[str, Any]:
+    """임베딩이 없는 기사를 BGE-M3로 임베딩해 news_raw.embedding_result에 저장하고 통계를 반환한다.
 
-                    cur.execute("""
-                        SELECT COUNT(*) FROM news_raw
-                        WHERE embedding_result IS NULL
-                          AND (raw_news_content IS NULL OR raw_news_content = '')
-                    """)
-                    pending_no_content = cur.fetchone()[0]
-                    if pending_no_content:
-                        logger.info(
-                            f"⏭️  본문 미수집으로 임베딩 보류: {pending_no_content}건 "
-                            f"(본문이 채워지면 다음 실행에서 처리됩니다)"
-                        )
+    limit: 한 번에 처리할 최대 건수(오래된 것부터). CPU에서 첫 백로그를 여러 실행에
+    나눠 처리할 때 쓴다 - 남은 건 다음 실행이 이어서 처리한다.
+    """
+    from db.connection import get_connection, release_connection
+    import numpy as np
 
-                    if not rows:
-                        logger.info("건너뜀: 임베딩할 새로운 기사가 없습니다.")
-                        return 0
+    batch_size = batch_size or settings.EMBEDDING_BATCH_SIZE
+    stats: Dict[str, Any] = {
+        "targets": 0, "embedded": 0, "failed_batches": 0, "pending_no_content": 0,
+        "batch_size": batch_size, "device": None, "model_load_s": 0.0, "encode_s": 0.0,
+        "articles_per_s": None,
+    }
 
-                    logger.info(f"🚀 기사 {len(rows)}건 임베딩 시작 (Batch: {batch_size})...")
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            # 임베딩이 없고 본문이 실제로 채워진 기사만 조회.
+            # raw_news_content가 비어있는 행은 대상에서 제외하고 embedding_result를
+            # NULL로 남겨둔다 -> 본문이 채워지면 다음 실행에서 자동으로 재검토된다.
+            cur.execute("""
+                SELECT raw_news_id, raw_news_title, raw_news_content
+                FROM news_raw
+                WHERE embedding_result IS NULL
+                  AND raw_news_content IS NOT NULL
+                  AND raw_news_content != ''
+                ORDER BY raw_news_id
+                LIMIT %s
+            """, (limit,))
+            rows = cur.fetchall() # 임베딩 없는 기사 목록 (본문 있는 것만)
 
-                    # 배치 처리: 배치 하나가 실패해도 나머지 배치는 계속 처리한다
-                    # (이전에는 예외가 루프 전체를 중단시켜 이후 배치가 전부 스킵됐음).
-                    for i in tqdm(range(0, len(rows), batch_size), desc="🚀 Embedding Articles", unit="batch"):
-                        batch = rows[i:i+batch_size]
-                        try:
-                            # 제목 + 본문 결합
-                            texts = [f"{r[1]} {r[2]}"[:8000] for r in batch]
-                            embeddings, _ = embedder.generate_embeddings_batch(texts, batch_size)
+            cur.execute("""
+                SELECT COUNT(*) FROM news_raw
+                WHERE embedding_result IS NULL
+                  AND (raw_news_content IS NULL OR raw_news_content = '')
+            """)
+            stats["pending_no_content"] = cur.fetchone()[0]
+            if stats["pending_no_content"]:
+                logger.info(
+                    f"⏭️  본문 없음/미수집으로 임베딩 보류: {stats['pending_no_content']}건 "
+                    f"(본문이 채워지면 다음 실행에서 처리됩니다)"
+                )
 
-                            # 저장
-                            updates = [(emb, r[0]) for emb, r in zip(embeddings, batch)]
-                            cur.executemany("UPDATE news_raw \
-                                             SET embedding_result=%s \
-                                             WHERE raw_news_id=%s", updates) # (emb, raw_news_id)
-                            conn.commit()
-                            count += len(updates)
-                        except Exception as e:
-                            conn.rollback()
-                            failed_batches += 1
-                            logger.error(f"❌ 배치 임베딩 실패 (batch {i // batch_size}), 건너뛰고 계속 진행: {e}")
+            stats["targets"] = len(rows)
+            if not rows:
+                logger.info("건너뜀: 임베딩할 새로운 기사가 없습니다.")
+                return stats
 
-            except Exception as e:
-                # 배치 루프 진입 전(쿼리 준비 단계 등) 실패 - 지금까지 커밋된 count는 보존한다
-                conn.rollback()
-                logger.error(f"임베딩 준비 단계 실패: {e}")
-            finally:
-                release_connection(conn)
+            # 대상이 있을 때만 모델을 올린다(BGE-M3 로드만 CPU에서 수십 초).
+            from core.embedder import NewsEmbedder
 
-        if failed_batches:
-            logger.warning(f"⚠️  총 {failed_batches}개 배치가 실패하여 건너뛰었습니다.")
+            load_started = time.monotonic()
+            with NewsEmbedder(force_cpu=force_cpu, verbose=True) as embedder:
+                stats["model_load_s"] = round(time.monotonic() - load_started, 3)
+                stats["device"] = str(getattr(embedder, "device", None))
+                logger.info(f"🚀 기사 {len(rows)}건 임베딩 시작 (Batch: {batch_size}, device={stats['device']})...")
 
-        return count
+                # 배치 처리: 배치 하나가 실패해도 나머지 배치는 계속 처리한다
+                # (이전에는 예외가 루프 전체를 중단시켜 이후 배치가 전부 스킵됐음).
+                encode_s = 0.0
+                for i in tqdm(range(0, len(rows), batch_size), desc="🚀 Embedding Articles", unit="batch"):
+                    batch = rows[i:i+batch_size]
+                    try:
+                        # 제목 + 본문 결합
+                        texts = [f"{r[1]} {r[2]}"[:8000] for r in batch]
+                        embeddings, elapsed = embedder.generate_embeddings_batch(texts, batch_size)
+                        encode_s += elapsed
+
+                        # pgvector 규칙: 리스트는 numeric[]로 바인딩되므로 numpy 배열로 넘긴다
+                        updates = [
+                            (np.asarray(emb, dtype=np.float32), r[0]) for emb, r in zip(embeddings, batch)
+                        ]
+                        cur.executemany("UPDATE news_raw \
+                                         SET embedding_result=%s \
+                                         WHERE raw_news_id=%s", updates) # (emb, raw_news_id)
+                        conn.commit()
+                        stats["embedded"] += len(updates)
+                    except Exception as e:
+                        conn.rollback()
+                        stats["failed_batches"] += 1
+                        logger.error(f"❌ 배치 임베딩 실패 (batch {i // batch_size}), 건너뛰고 계속 진행: {e}")
+
+            stats["encode_s"] = round(encode_s, 3)
+            if encode_s > 0:
+                stats["articles_per_s"] = round(stats["embedded"] / encode_s, 3)
+    except Exception as e:
+        # 배치 루프 진입 전(쿼리 준비 단계 등) 실패 - 지금까지 커밋된 count는 보존한다
+        conn.rollback()
+        logger.error(f"임베딩 준비 단계 실패: {e}")
+        stats["error"] = str(e)[:300]
+    finally:
+        release_connection(conn)
+
+    if stats["failed_batches"]:
+        logger.warning(f"⚠️  총 {stats['failed_batches']}개 배치가 실패하여 건너뛰었습니다.")
+
+    return stats
 
 def _compute_clustering_stats(clusterer, clusters, effective_params) -> Dict[str, Any]:
     """클러스터링 실행 통계(전체 기사 수, 클러스터 수, noise 비율)를 계산.
