@@ -71,6 +71,9 @@ class BaseSettings:
     RETRY_EXPONENTIAL_BASE: float = 2.0
     MAX_RETRY_WAIT_SECONDS: int = 64
     MAX_FETCH_RETRIES: int = 3  # RSS/본문 크롤링 네트워크 요청 최대 재시도 횟수
+    # LLM 채팅 API(HyperCLOVA/OpenAI) 호출 재시도 최대 횟수 (감사에서 발견: HyperCLOVA
+    # 클라이언트의 `while True` 루프가 이 상한 없이 무제한 재시도했음)
+    MAX_LLM_CALL_RETRIES: int = 10
     
     # ========== Crawler Settings ==========
     PARALLEL_WORKERS: int = 8  # 병렬 크롤링 워커

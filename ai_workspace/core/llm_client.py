@@ -12,11 +12,12 @@ from typing import Dict, List, Optional, Any, Tuple
 from abc import ABC, abstractmethod
 
 from core.llm_metrics import get_metrics_collector
+from config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
 # Retry configuration
-MAX_RETRIES = 10  # 최대 재생성 횟수 제한
+MAX_RETRIES = Settings.MAX_LLM_CALL_RETRIES  # 최대 재생성 횟수 제한
 INITIAL_BACKOFF = 1.0  # 초기 생성 대기 시간
 MAX_BACKOFF = 60.0  # 최대 대기 시간
 BACKOFF_MULTIPLIER = 2.0  # 대기 시간 증가 비율
@@ -135,10 +136,10 @@ class NaverHyperCLOVAClient(BaseLLMClient):
         url = f"{self.base_url}/{self.model}"
 
         backoff = INITIAL_BACKOFF
-        attempt = 0
 
-        while True: 
-            attempt += 1
+        # 원래 `while True`로 무제한 재시도했음(감사에서 발견) - 상한 없는 루프는
+        # 서버가 계속 429/5xx를 반환하면 프로세스가 영원히 멈추지 않음.
+        for attempt in range(1, MAX_RETRIES + 1):
             try:
                 self.rate_limiter.wait()
                 start_time = time.time()  # Latency measurement
@@ -221,6 +222,9 @@ class NaverHyperCLOVAClient(BaseLLMClient):
             except Exception as e:
                 logger.error("HyperCLOVA API unexpected error: %s", e)
                 return None
+
+        logger.error("HyperCLOVA max retries (%s) exhausted.", MAX_RETRIES)
+        return None
 
 
 class OpenAIClient(BaseLLMClient):
@@ -349,7 +353,7 @@ def extract_json_from_response(content: str) -> Optional[Dict]:
                     escape = False
                     i += 1
                     continue
-                if ch == '\\\\':
+                if ch == '\\':
                     out.append(ch)
                     escape = True
                     i += 1
@@ -398,7 +402,7 @@ def extract_json_from_response(content: str) -> Optional[Dict]:
             if in_str:
                 if escape:
                     escape = False
-                elif ch == '\\\\':
+                elif ch == '\\':
                     escape = True
                 elif ch == '"':
                     in_str = False
