@@ -6,8 +6,10 @@ from typing import Dict, Optional
 import json
 import logging
 
-from core.llm_client import get_llm_client, extract_json_from_response
-from config.settings import BaseSettings, Settings
+from core.llm import LLMClient, get_client
+from core.llm.schemas import ToneResult
+from core.llm_client import extract_json_from_response
+from config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +71,11 @@ TONE_CONVERSION_PROMPT = """당신은 뉴스를 대중에게 쉽고 친근하게
 
 
 class ToneConverter:
-    
-    def __init__(self, settings: Optional[BaseSettings] = None):
-        self.settings = settings if settings is not None else Settings
-        self.llm_client = get_llm_client(self.settings.LLM_PROVIDER)
-        
+
+    def __init__(self, llm_client: Optional[LLMClient] = None):
+        # role="tone" - TONE_PROVIDER/TONE_MODEL로 프로바이더를 정한다 (docs/adr/0005)
+        self.llm_client: LLMClient = llm_client or get_client("tone")
+
     def create_prompt(self, newsletter: Dict) -> str:
         prompt = TONE_CONVERSION_PROMPT.format(
             title=newsletter.get("title", ""),
@@ -85,39 +87,46 @@ class ToneConverter:
         return prompt
     
     def convert(self, newsletter: Dict) -> Optional[Dict]:
-        max_retries = 5
-        last_converted = None
-        for attempt in range(max_retries):
-            try:
-                prompt = self.create_prompt(newsletter)
-                
-                # logger.info(f"🎨 문체 변환 시도 ({attempt + 1}/{max_retries})...")
-                response = self.llm_client.chat_completion(
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.4,
-                    max_tokens=4096,
-                    response_format={"type": "json_object"},
-                    purpose="tone_convert"
-                )
-                
-                if not response:
-                    continue
-                
-                converted = self._parse_response(response, newsletter)
-                
-                if not converted:
-                    continue
-                
-                if self.validate_conversion(newsletter, converted):
-                    return converted
+        prompt = self.create_prompt(newsletter)
 
-                last_converted = converted
-                
-            except Exception as e:
-                last_converted = last_converted or None
-                
+        # 콘텐츠 검증(validate_conversion) 실패 시에만 여기서 추가로 재생성한다
+        # (최초 1회 + Settings.MAX_RETRY_TONE_VALIDATION회). 429/5xx/timeout 같은
+        # 전송 계층 재시도는 LLMClient.complete() 내부에서 이미 처리된다
+        # (core/llm/adapters.py).
+        max_attempts = 1 + max(Settings.MAX_RETRY_TONE_VALIDATION, 0)
+        last_converted = None
+
+        for _attempt in range(max_attempts):
+            result = self.llm_client.complete(
+                messages=[{"role": "user", "content": prompt}],
+                schema=ToneResult,
+                temperature=0.4,
+                max_tokens=4096,
+                purpose="tone_convert",
+            )
+
+            converted = None
+            if result.parsed is not None:
+                converted = self._normalize_parsed(result.parsed.model_dump(), newsletter)
+            elif result.text:
+                converted = self._parse_response(result.text, newsletter)
+
+            if converted and self.validate_conversion(newsletter, converted):
+                return converted
+
+            last_converted = converted or last_converted
+
         return self._fallback_convert(newsletter, last_converted)
-    
+
+    def _normalize_parsed(self, result: Dict, original: Dict) -> Dict:
+        """네이티브 구조화 출력으로 이미 필드가 채워져 있어도, keywords가 비어 있으면
+        원본 키워드로 보강한다 (JSON 모드 폴백 경로의 _parse_response와 동일한 보정)."""
+        keywords = result.get("keywords")
+        if not isinstance(keywords, list) or not keywords:
+            keywords = original.get("keywords", []) or []
+        result["keywords"] = keywords
+        return result
+
     def _parse_response(self, response: str, original: Dict) -> Optional[Dict]:
         if not response:
             return None
