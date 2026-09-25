@@ -31,8 +31,8 @@ def test_user_embedder_batch_update_all_users_on_seeded_db(database_url, pg_conn
             news_letter_id = cur.fetchone()[0]
 
             cur.execute(
-                "INSERT INTO \"user\" (user_email, user_password_hash, user_nickname) "
-                "VALUES (%s, %s, %s) RETURNING user_id",
+                "INSERT INTO \"user\" (user_email, user_password_hash, user_nickname, user_created_at) "
+                "VALUES (%s, %s, %s, NOW()) RETURNING user_id",
                 (f"user-{suffix}@example.com", "hash", f"유저-{suffix}"),
             )
             user_id = cur.fetchone()[0]
