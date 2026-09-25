@@ -42,8 +42,14 @@ class BaseSettings:
     MAX_JSON_PARSE_RETRIES: int = 5
 
     # ========== HDBSCAN ==========
-    HDBSCAN_MIN_CLUSTER_SIZE: int = 3
-    HDBSCAN_MIN_SAMPLES: int = 2
+    HDBSCAN_MIN_CLUSTER_SIZE: int = int(os.getenv("HDBSCAN_MIN_CLUSTER_SIZE", "3"))
+    HDBSCAN_MIN_SAMPLES: int = int(os.getenv("HDBSCAN_MIN_SAMPLES", "2"))
+    # 생성할 뉴스레터 최소 목표 수량 (0이면 비활성화, --limit 밖의 클러스터로 보충하지 않음)
+    MIN_NEWSLETTER_TARGET: int = int(os.getenv("MIN_NEWSLETTER_TARGET", "0"))
+    # 클러스터링 대상 기사의 크롤링 시각 lookback 윈도우(시간). 기본값 24는 기존 동작을 보존한다.
+    # noise/평가실패로 뉴스레터화되지 못한 기사(news_letter_id IS NULL)를 더 긴 윈도우(예: 48~72)로
+    # 다음 실행에서 재검토할 수 있도록 설정 가능하게 만든 값.
+    CLUSTER_LOOKBACK_HOURS: int = int(os.getenv("CLUSTER_LOOKBACK_HOURS", "24"))
 
     # ========== Embedder ==========
     EMBEDDING_BATCH_SIZE: int = 8  # GPU 메모리 고려
