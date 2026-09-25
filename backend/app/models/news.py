@@ -1,6 +1,7 @@
 from typing import Optional, List
 from datetime import datetime, timezone
 from sqlmodel import Field, SQLModel, JSON, Column
+from sqlalchemy import DateTime
 from pgvector.sqlalchemy import Vector
 
 from sqlalchemy.dialects.postgresql import TSVECTOR
@@ -38,7 +39,11 @@ class NewsRaw(SQLModel, table=True):
     raw_news_content: str
     raw_news_url: str
     embedding_result: List[float] = Field(default=None, sa_column=Column(Vector(1024)))
-    raw_news_created_at: str
+    # 2026-09 마이그레이션(e725a62ffef1) 이전에는 VARCHAR였다. RSS 수집기가 쓰는
+    # 형식을 파싱하지 못한 기존 값은 NULL로 대체됐으므로 Optional이다.
+    raw_news_created_at: Optional[datetime] = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
     raw_news_crawled_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
