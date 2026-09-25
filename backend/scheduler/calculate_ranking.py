@@ -106,6 +106,7 @@ def calculate_ranking():
             session.commit()
             session.refresh(existing_batch)
             print(f"[*] Updated existing batch ID: {existing_batch.news_letter_batch_id} (idempotent re-run) with {len(ranked_ids)} items.")
+            batch_id, mode = existing_batch.news_letter_batch_id, "updated"
         else:
             batch_entry = NewsLettersCategory(
                 news_letter_ids=ranked_ids,
@@ -115,6 +116,15 @@ def calculate_ranking():
             session.commit()
             session.refresh(batch_entry)
             print(f"[*] Successfully saved batch ID: {batch_entry.news_letter_batch_id} with {len(ranked_ids)} items.")
+            batch_id, mode = batch_entry.news_letter_batch_id, "inserted"
+
+        # jobs.run popularity가 job_runs.stats에 남기는 요약
+        return {
+            "newsletters_ranked": len(ranked_ids),
+            "batch_id": batch_id,
+            "mode": mode,
+            "cutoff_utc": cutoff_utc.isoformat(),
+        }
 
 if __name__ == "__main__":
     calculate_ranking()
