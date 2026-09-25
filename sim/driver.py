@@ -288,10 +288,15 @@ def run_simulation(
     cfg: SimulationConfig = SimulationConfig(),
     clock: Optional[VirtualClock] = None,
     on_day_end: Optional[Callable[[int], None]] = None,
+    wall_clock_features: bool = False,
 ) -> SimulationLog:
     """Replays n_days of virtual time. Day-0 users onboard before day 0 and get one
     day-end pass (so they are 'existing' users); only mid-simulation joiners are
-    cold-start."""
+    cold-start.
+
+    Against a live stack the items carry wall-clock created_at values, so
+    `wall_clock_features=True` makes the click model age items against the real
+    clock while sessions are still ordered by virtual time."""
     calls: List[CallRecord] = []
     items: Dict[int, Item] = {}
     agents: Dict[int, SimAgent] = {}
@@ -308,7 +313,7 @@ def run_simulation(
     def at(now: datetime) -> datetime:
         if clock is not None:
             clock.set(now)
-        return now
+        return datetime.now(timezone.utc) if wall_clock_features else now
 
     def onboard(u: SimUser, day: int, now: datetime) -> None:
         a = agent_for(u)
