@@ -57,6 +57,12 @@ def fake_report_json(tmp_path, monkeypatch):
             "data_sha256": {"a.csv": "hash1"},
             "dataset_window": {"start": "2026-01-30T00:00:00", "end": "2026-01-31T00:00:00", "n_users": 100, "n_newsletters": 195, "n_ctr_logs": 19500, "n_clicks": 9281},
             "seeds": {"headline": [42, 43], "decomposition_secondary": [42]},
+            "category_recovery": {
+                "chosen_k": 5,
+                "loo_accuracy_by_k": {"1": 0.1489, "3": 0.1915, "5": 0.2979, "7": 0.2766},
+                "n_direct_labels": 47,
+                "source_counts": {"knn": 148, "onboarding_log": 42, "json_title": 5},
+            },
         },
         "headline": {
             "team-final": {"summary": _metric_summary()},
@@ -126,6 +132,19 @@ def test_decomposition_table_rows_have_balanced_parens(fake_report_json):
     assert table_lines, "분해 실험 표 데이터 행을 찾지 못했습니다."
     for line in table_lines:
         assert line.count("(") == line.count(")"), f"괄호 짝이 안 맞음: {line!r}"
+
+
+def test_category_recovery_loo_accuracy_surfaced(fake_report_json):
+    """스펙 1번("k는 ... leave-one-out 교차검증으로 선택한다. report LOO accuracy and
+    per-source counts")이 실제로 리포트 본문에 반영돼야 한다 - 숫자로 묻힌 JSON이
+    아니라 사람이 읽는 markdown에 LOO 정확도와 소스별 건수가 나와야 한다."""
+    make_report, report_dir = fake_report_json
+    make_report.main()
+    text = (report_dir / "team_repro_v1.md").read_text(encoding="utf-8")
+
+    assert "29.8" in text or "0.2979" in text  # LOO 정확도(k=5) 값이 어딘가에 등장
+    assert "148" in text  # knn 소스 건수
+    assert "LOO" in text
 
 
 def test_generator_split_disjoint_id_caveat_present(fake_report_json):

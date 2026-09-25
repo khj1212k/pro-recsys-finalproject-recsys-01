@@ -79,6 +79,21 @@ def main() -> None:
         "'생성기가 어떻게 분할했는가'를 그대로 재현할 뿐, 팀이 실제로 이 분할을 썼다는 "
         "근거는 없다(로더 스크립트 접근 불가, 위 참고)."
     )
+    cr = meta.get("category_recovery")
+    if cr:
+        n_total = sum(cr["source_counts"].values())
+        n_knn = cr["source_counts"].get("knn", 0)
+        A(
+            f"- 카테고리 복원(뉴스레터→category_id, `newsletter_categories.csv`)의 "
+            f"{n_knn}/{n_total}건({n_knn/n_total*100:.0f}%)은 직접 라벨이 없어 BGE-M3 "
+            f"임베딩 kNN(k={cr['chosen_k']})으로 채운 것이고, 그 kNN의 leave-one-out 정확도는 "
+            f"직접 라벨 {cr['n_direct_labels']}건 기준 **{cr['loo_accuracy_by_k'][str(cr['chosen_k'])]*100:.1f}%**"
+            f"(카테고리 7개, 무작위 추측 기대값 ≈14.3%)에 그친다 - k 후보 중 최선의 값이 이 "
+            f"정도이므로, category_match 베이스라인·Coverage@k·모델의 카테고리 피처는 이 kNN이 "
+            f"틀렸을 195건 중 상당수(대략 100건 안팎)를 안고 있다고 봐야 한다. 이 리포트의 "
+            f"카테고리 의존 수치는 '팀이 실제로 쓴 카테고리 체계와 얼마나 같은가'가 아니라 "
+            f"'복원한 근사 라벨 위에서 파이프라인이 논리적으로 일관되게 도는가'로 읽어야 한다."
+        )
     A("")
 
     A("## 1. 재현 vs 팀이 보고한 수치")
@@ -285,6 +300,22 @@ def main() -> None:
     A(f"- 분해실험/generator_split 시드: {meta['seeds']['decomposition_secondary']}")
     A(f"- 데이터셋 유저 수: {meta['dataset_window']['n_users']}, 뉴스레터 수: {meta['dataset_window']['n_newsletters']}")
     A("")
+
+    if cr:
+        A("## 부록: 카테고리 복원 상세 (categories.py)")
+        A("")
+        A("소스별 건수:")
+        for src, cnt in sorted(cr["source_counts"].items(), key=lambda kv: -kv[1]):
+            A(f"- {src}: {cnt}건")
+        A("")
+        A(f"k-NN 후보 k별 LOO 정확도 (직접 라벨 {cr['n_direct_labels']}건 대상, 굵게 표시된 k가 선택됨):")
+        A("")
+        A("| k | LOO 정확도 |")
+        A("|---|---|")
+        for k, acc in cr["loo_accuracy_by_k"].items():
+            marker = f"**{k}**" if int(k) == cr["chosen_k"] else k
+            A(f"| {marker} | {pct(acc)} |")
+        A("")
 
     out_path = REPORT_DIR / "team_repro_v1.md"
     out_path.write_text("\n".join(lines), encoding="utf-8")
