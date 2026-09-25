@@ -1,4 +1,5 @@
 # RSS 수집기
+import time
 import feedparser, logging
 from datetime import datetime, timedelta, timezone
 from dateutil import parser as date_parser
@@ -6,6 +7,28 @@ from db.connection import get_connection, release_connection
 from config.settings import Settings
 
 logger = logging.getLogger(__name__)
+
+
+def parse_feed_with_retry(url, parse_fn=None, max_attempts=None, sleep_fn=time.sleep):
+    """feedparser.parse를 지수 백오프로 재시도한다.
+
+    feedparser는 네트워크/파싱 실패 시 예외를 던지는 대신 feed.bozo=1로 표시하므로
+    이를 재시도 트리거로 사용한다. parse_fn/sleep_fn은 테스트에서 실제 네트워크
+    호출/대기 없이 검증하기 위해 주입 가능하게 열어둔다.
+    """
+    parse_fn = parse_fn or feedparser.parse
+    max_attempts = max_attempts or Settings.MAX_FETCH_RETRIES
+    delay = 1.0
+    feed = None
+    for attempt in range(max_attempts):
+        feed = parse_fn(url)
+        if not getattr(feed, 'bozo', 0):
+            return feed
+        if attempt < max_attempts - 1:
+            sleep_fn(delay)
+            delay = min(delay * Settings.RETRY_EXPONENTIAL_BASE, Settings.MAX_RETRY_WAIT_SECONDS)
+    return feed
+
 
 def collect_rss(hours: int = 100) -> int:
     # RSS 피드 수집 실행
@@ -29,17 +52,18 @@ def collect_rss(hours: int = 100) -> int:
                         logger.error(f"❌ {press_name} press_id 없음 - 스킵")
                         continue
                     pid = row[0]
-                    feed = feedparser.parse(url) 
-                    entries = [] 
-                    
+                    feed = parse_feed_with_retry(url)
+                    entries = []
+
                     # 1. 파싱 및 날짜 필터링
                     for e in feed.entries:
                         try:
                             dt_str = e.get('published') or e.get('updated')
-                            dt = date_parser.parse(dt_str) 
-                            if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc) 
+                            dt = date_parser.parse(dt_str)
+                            if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
                             if dt >= cutoff: entries.append((e.link, e.title, dt)) # cutoff 시간 이후의 기사만 추가
-                        except: 
+                        except (ValueError, TypeError, OverflowError) as date_err:
+                            logger.debug(f"⚠️ {press_name} 날짜 파싱 실패: {dt_str!r} - {date_err}")
                             continue
 
                     if not entries: 
