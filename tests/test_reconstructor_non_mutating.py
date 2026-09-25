@@ -11,7 +11,7 @@ sys.path.insert(
 def _make_reconstructor():
     from core.reconstruction.generator import NewsReconstructor
 
-    with patch("core.reconstruction.generator.get_llm_client", return_value=MagicMock()):
+    with patch("core.reconstruction.generator.get_client", return_value=MagicMock()):
         return NewsReconstructor()
 
 

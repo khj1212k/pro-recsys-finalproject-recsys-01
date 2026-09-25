@@ -67,6 +67,7 @@ def _build_state(cluster_id, article_ids):
             "ids": list(article_ids),
             "titles": [f"title-{i}" for i in article_ids],
             "contents": [f"content-{i}" for i in article_ids],
+            "press_names": [f"press-{i}" for i in article_ids],
         },
         "completed_newsletters": [],
         "failed_clusters": [],

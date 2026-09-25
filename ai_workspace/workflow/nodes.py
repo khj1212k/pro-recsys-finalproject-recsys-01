@@ -36,7 +36,12 @@ def initialize_cluster_processing(state: AgentState) -> Dict[str, Any]:
     # 기사 내용 로드 (제목, 본문 등)
     data = state.get("data", {})
     articles = []
-    
+    # NewsletterEvaluator 프롬프트가 언론사(press_name)를 참조하는데
+    # (workflow/evaluators.py의 source_summary) 이 필드가 없어서 항상 빈 문자열로
+    # 채워지고 있었다 (data에는 press_names가 있음 - workflow/state.py 참고).
+    # press_names가 없는(예: 구버전 테스트 픽스처) data도 있을 수 있어 방어적으로 처리한다.
+    press_names = data.get('press_names') or []
+
     for aid in article_ids:
         try:
             import numpy as np
@@ -49,7 +54,8 @@ def initialize_cluster_processing(state: AgentState) -> Dict[str, Any]:
             articles.append({
                 "id": aid,
                 "title": data['titles'][position],
-                "content": data['contents'][position]
+                "content": data['contents'][position],
+                "press_name": press_names[position] if position < len(press_names) else "",
             })
         except ValueError:
             logger.info(f"ℹ️ 기사 ID {aid}를 데이터에서 찾을 수 없습니다.")
@@ -89,11 +95,10 @@ def evaluate_cluster(state: AgentState) -> Dict[str, Any]:
             }
         }
     
-    # 평가 수행 (LLM 사용)
+    # 평가 수행 (LLM 사용) - role="judge"로 레지스트리에서 클라이언트를 가져온다 (docs/adr/0005)
     from workflow.evaluators import ClusterEvaluator
-    
-    # Provider 설정 (None이면 환경변수나 기본값 사용)
-    evaluator = ClusterEvaluator(provider=None)
+
+    evaluator = ClusterEvaluator()
     eval_result = evaluator.evaluate(articles)
     
     if eval_result["decision"] == "FAIL":

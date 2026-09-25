@@ -3,8 +3,9 @@
 # - 2-call 방식: 본문 생성 → 메타데이터 생성
 
 from typing import Dict, List, Optional
-from core.llm_client import get_llm_client, extract_json_from_response, BaseLLMClient
 
+from core.llm import LLMClient, get_client
+from core.llm.schemas import NewsletterContent, NewsletterMeta
 
 from .prompts import SYSTEM_EDITOR_ROLE, SYSTEM_META_ROLE, CONTENT_GEN_PROMPT, META_GEN_PROMPT
 from .validator import cleanup_content_text, normalize_meta
@@ -19,8 +20,9 @@ class NewsReconstructor:
     - Call 2: meta만 생성 (title, keyword, sentence, category)
     """
 
-    def __init__(self, provider: Optional[str] = None):
-        self.client: BaseLLMClient = get_llm_client(provider)
+    def __init__(self, llm_client: Optional[LLMClient] = None):
+        # role="generator" - GEN_PROVIDER/GEN_MODEL로 프로바이더를 정한다 (docs/adr/0005)
+        self.client: LLMClient = llm_client or get_client("generator")
 
     def reconstruct(self, articles: List[Dict], feedback: Optional[str] = None) -> Optional[Dict]:
         """
@@ -121,18 +123,16 @@ class NewsReconstructor:
             {"role": "user", "content": prompt},
         ]
 
-        for _ in range(5):
-            try:
-                response = self.client.chat_completion(
-                    messages=messages,
-                    temperature=0.2,
-                    max_tokens=8192,
-                    purpose="newsletter_content_gen"
-                )
-                if response:
-                    return cleanup_content_text(response)
-            except Exception:
-                continue
+        # 재시도/백오프는 LLMClient.complete() 내부에서 처리한다 (core/llm/adapters.py)
+        result = self.client.complete(
+            messages=messages,
+            schema=NewsletterContent,
+            temperature=0.2,
+            max_tokens=8192,
+            purpose="newsletter_content_gen",
+        )
+        if result.parsed is not None:
+            return cleanup_content_text(result.parsed.content)
 
         return fallback_content()
 
@@ -178,20 +178,14 @@ class NewsReconstructor:
             {"role": "user", "content": prompt},
         ]
 
-        for _ in range(5):
-            try:
-                response = self.client.chat_completion(
-                    messages=messages,
-                    temperature=0.2,
-                    max_tokens=1024,
-                    purpose="newsletter_meta_gen"
-                )
-                if not response:
-                    continue
-                result = extract_json_from_response(response)
-                if result:
-                    return result
-            except Exception:
-                continue
+        result = self.client.complete(
+            messages=messages,
+            schema=NewsletterMeta,
+            temperature=0.2,
+            max_tokens=1024,
+            purpose="newsletter_meta_gen",
+        )
+        if result.parsed is not None:
+            return result.parsed.model_dump()
 
         return fallback_meta()
