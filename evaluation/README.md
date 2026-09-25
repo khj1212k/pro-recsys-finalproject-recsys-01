@@ -76,9 +76,8 @@ uv pip install -q --python .venv/bin/python -r evaluation/requirements.txt
 ```
 
 (`evaluation/requirements.txt`에 명시된 버전은 이 프로젝트의 개발 venv에서
-`uv pip freeze`로 실제 검증한 버전이다. `pytest`, `rapidfuzz` 등 테스트
-전용 패키지는 별도 test 환경 구성에 맡기고 여기에는 모듈이 직접
-`import`하는 런타임 의존성만 담았다.)
+`uv pip freeze`로 실제 검증한 버전이다. 모듈이 직접 `import`하는 런타임 의존성
+(`rapidfuzz` 포함)만 담았고, `pytest` 같은 테스트 전용 패키지는 제외했다.)
 
 ## 테스트 실행
 
