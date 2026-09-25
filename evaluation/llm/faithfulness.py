@@ -346,13 +346,18 @@ def extract_facts(text: str) -> Facts:
     return Facts(numbers=numbers, dates=dates, entities=entities, quotes=quotes)
 
 
-_CURRENCY_LIKE_UNITS = {"", "KRW", "USD"}
-
-
 def _units_compatible(u1: str, u2: str) -> bool:
+    """A unit-less scaled number (no trailing currency word, e.g. "12억")
+    is assumed KRW-denominated -- the default case in Korean financial
+    writing -- so it may stand in for an explicit KRW figure, but never
+    for USD. Two explicit currencies must match exactly: without a
+    conversion rate, a KRW amount and a USD amount are never the same
+    claim even when their bare numeric value happens to coincide (e.g.
+    unit-less "12억" must not match a "12억 달러" source figure).
+    """
     if u1 == u2:
         return True
-    return u1 in _CURRENCY_LIKE_UNITS and u2 in _CURRENCY_LIKE_UNITS
+    return {u1, u2} == {"", "KRW"}
 
 
 def _number_match_status(a: NumberFact, b: NumberFact, approx_tol: float) -> Optional[str]:
