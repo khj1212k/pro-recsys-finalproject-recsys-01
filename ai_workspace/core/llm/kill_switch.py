@@ -35,6 +35,18 @@ def _kill_switch_reason() -> Optional[str]:
     return None
 
 
+class LLMKillSwitchEngaged(RuntimeError):
+    pass
+
+
+def ensure_kill_switch_off() -> None:
+    """레거시 클라이언트처럼 LLMResult를 돌려줄 수 없는 경로에서 쓰는 fail-closed 가드."""
+    reason = _kill_switch_reason()
+    if reason is not None:
+        logger.error("LLM kill switch가 활성화되어 레거시 클라이언트 호출을 거부했습니다 (%s)", reason)
+        raise LLMKillSwitchEngaged(reason)
+
+
 def check_kill_switch(provider: str, model: str, purpose: str) -> Optional[LLMResult]:
     """킬 스위치가 켜져 있으면 프로바이더 호출 없이 LLMResult를 반환하고,
     꺼져 있으면 None을 반환한다(호출부는 평소대로 네트워크 호출을 진행).
