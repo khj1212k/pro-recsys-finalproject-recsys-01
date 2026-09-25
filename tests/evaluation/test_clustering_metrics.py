@@ -108,6 +108,32 @@ class TestDbcv:
         score2, _ = dbcv(X_well, y_well)
         assert score1 == score2
 
+    def test_metric_defaults_to_euclidean(self):
+        X_well, y_well = make_sphere_blobs(**WELL_SEPARATED_KWARGS)
+        score_default, reason_default = dbcv(X_well, y_well)
+        score_explicit, reason_explicit = dbcv(X_well, y_well, metric="euclidean")
+        assert reason_default is None
+        assert score_default == score_explicit
+
+    def test_cosine_metric_is_accepted_and_still_separates_well_from_overlapping(self):
+        # regression for the false claim that hdbscan's validity_index
+        # doesn't support metric='cosine' -- it does, it just isn't the
+        # default here (see dbcv's docstring).
+        X_well, y_well = make_sphere_blobs(**WELL_SEPARATED_KWARGS)
+        X_overlap, y_overlap = make_sphere_blobs(**OVERLAPPING_KWARGS)
+
+        score_well, reason_well = dbcv(X_well, y_well, metric="cosine")
+        score_overlap, reason_overlap = dbcv(X_overlap, y_overlap, metric="cosine")
+
+        assert reason_well is None
+        assert reason_overlap is None
+        assert score_well > score_overlap
+
+    def test_mismatched_lengths_raises_value_error(self):
+        X_well, y_well = make_sphere_blobs(**WELL_SEPARATED_KWARGS)
+        with pytest.raises(ValueError):
+            dbcv(X_well, y_well[:-1])
+
 
 # ---------------------------------------------------------------------------
 # basic_stats
