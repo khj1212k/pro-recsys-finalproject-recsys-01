@@ -93,15 +93,23 @@ class LLMMetricsCollector:
 
         self.calls는 성공한 호출뿐 아니라 재시도/실패한 호출도 포함한다(record_call이
         success=False로도 호출됨) - 그래야 실제로 API에 몇 번 요청했는지(재시도 비용
-        포함)를 총계가 반영한다.
+        포함)를 총계가 반영한다. 단, 실패/재시도 호출은 토큰이 항상 0으로 기록되므로
+        avg_input_tokens/avg_output_tokens를 전체 호출 수로 나누면 평균이 희석된다 -
+        성공한 호출 수로만 나눈다. 시도(attempt) 단위 통계는 total_attempts/
+        failed_attempts/retry_rate로 별도 노출한다.
         """
         if not self.calls:
             return {
                 "total_calls": 0,
                 "successful_calls": 0,
                 "failed_calls": 0,
+                "total_attempts": 0,
+                "failed_attempts": 0,
+                "retry_rate": 0,
                 "total_input_tokens": 0,
                 "total_output_tokens": 0,
+                "avg_input_tokens": 0,
+                "avg_output_tokens": 0,
                 "avg_latency_seconds": 0,
                 "by_purpose": {}
             }
@@ -110,6 +118,9 @@ class LLMMetricsCollector:
         total_output = sum(c.output_tokens for c in self.calls)
         total_latency = sum(c.latency_seconds for c in self.calls)
         failed_calls = [c for c in self.calls if not c.success]
+        total_attempts = len(self.calls)
+        failed_attempts = len(failed_calls)
+        successful_count = total_attempts - failed_attempts
 
         # By purpose breakdown
         by_purpose = defaultdict(lambda: {
@@ -130,14 +141,17 @@ class LLMMetricsCollector:
             p["avg_latency"] = (p["avg_latency"] * (p["calls"] - 1) + call.latency_seconds) / p["calls"]
 
         return {
-            "total_calls": len(self.calls),
-            "successful_calls": len(self.calls) - len(failed_calls),
-            "failed_calls": len(failed_calls),
+            "total_calls": total_attempts,
+            "successful_calls": successful_count,
+            "failed_calls": failed_attempts,
+            "total_attempts": total_attempts,
+            "failed_attempts": failed_attempts,
+            "retry_rate": (failed_attempts / total_attempts) if total_attempts else 0,
             "total_input_tokens": total_input,
             "total_output_tokens": total_output,
-            "avg_input_tokens": total_input / len(self.calls),
-            "avg_output_tokens": total_output / len(self.calls),
-            "avg_latency_seconds": total_latency / len(self.calls),
+            "avg_input_tokens": (total_input / successful_count) if successful_count else 0,
+            "avg_output_tokens": (total_output / successful_count) if successful_count else 0,
+            "avg_latency_seconds": total_latency / total_attempts,
             "total_latency_seconds": total_latency,
             "by_purpose": dict(by_purpose),
             "batch_duration_seconds": (self.batch_end_time or time.time()) - (self.batch_start_time or time.time())
