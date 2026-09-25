@@ -1,8 +1,8 @@
 {
   "meta": {
-    "generated_at": "2026-09-25T21:04:49.187414",
+    "generated_at": "2026-09-25T21:19:26.798054",
     "git": {
-      "current_head": "f62da15fc8517288313b1821f61e1e01efd0ce06",
+      "current_head": "eef0ba6ba08ba1b17a4ed41a6f7c65beaa6e358e",
       "current_branch": "eval/team-baseline-repro-v1",
       "team_final_sha": "ef7c176c4f795aad0d70e1c63ebd026065f4cd1e",
       "fix_snapshot_sha": "a48cdff5de39294ca6c2a592382f72efbe6916c9"
@@ -34,6 +34,26 @@
         43,
         44
       ]
+    },
+    "category_recovery": {
+      "chosen_k": 5,
+      "loo_accuracy_by_k": {
+        "1": 0.14893617021276595,
+        "3": 0.19148936170212766,
+        "5": 0.2978723404255319,
+        "7": 0.2765957446808511,
+        "9": 0.2127659574468085,
+        "11": 0.2553191489361702,
+        "15": 0.2553191489361702,
+        "21": 0.1276595744680851,
+        "31": 0.1276595744680851
+      },
+      "n_direct_labels": 47,
+      "source_counts": {
+        "onboarding_log": 42,
+        "knn": 148,
+        "json_title": 5
+      }
     }
   },
   "headline": {
