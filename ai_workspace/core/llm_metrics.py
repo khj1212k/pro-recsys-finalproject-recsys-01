@@ -24,6 +24,10 @@ class LLMCallRecord:
     latency_seconds: float
     timestamp: float
     success: bool = True
+    # core/llm/ 어댑터 도입(ADR 0005)으로 호출마다 어느 프로바이더/모델을 썼는지 기록한다.
+    # 레거시 HyperCLOVA 경로 등 값을 안 넘기는 호출도 있으므로 기본값을 둔다.
+    provider: str = "unknown"
+    model: str = "unknown"
 
 
 class LLMMetricsCollector:
@@ -73,7 +77,9 @@ class LLMMetricsCollector:
         input_tokens: int,
         output_tokens: int,
         latency_seconds: float,
-        success: bool = True
+        success: bool = True,
+        provider: str = "unknown",
+        model: str = "unknown"
     ):
         """Record a single LLM API call"""
         record = LLMCallRecord(
@@ -82,7 +88,9 @@ class LLMMetricsCollector:
             output_tokens=output_tokens,
             latency_seconds=latency_seconds,
             timestamp=time.time(),
-            success=success
+            success=success,
+            provider=provider,
+            model=model
         )
         with self._lock:
             self.calls.append(record)
@@ -111,7 +119,8 @@ class LLMMetricsCollector:
                 "avg_input_tokens": 0,
                 "avg_output_tokens": 0,
                 "avg_latency_seconds": 0,
-                "by_purpose": {}
+                "by_purpose": {},
+                "by_model": {}
             }
 
         total_input = sum(c.input_tokens for c in self.calls)
@@ -131,6 +140,15 @@ class LLMMetricsCollector:
             "avg_latency": 0
         })
 
+        # By (provider, model) breakdown - ADR 0005 이후 프로바이더별 비용/성공률 비교용
+        by_model = defaultdict(lambda: {
+            "calls": 0,
+            "failed_calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "avg_latency": 0
+        })
+
         for call in self.calls:
             p = by_purpose[call.purpose]
             p["calls"] += 1
@@ -139,6 +157,15 @@ class LLMMetricsCollector:
             p["input_tokens"] += call.input_tokens
             p["output_tokens"] += call.output_tokens
             p["avg_latency"] = (p["avg_latency"] * (p["calls"] - 1) + call.latency_seconds) / p["calls"]
+
+            model_key = f"{call.provider}/{call.model}"
+            m = by_model[model_key]
+            m["calls"] += 1
+            if not call.success:
+                m["failed_calls"] += 1
+            m["input_tokens"] += call.input_tokens
+            m["output_tokens"] += call.output_tokens
+            m["avg_latency"] = (m["avg_latency"] * (m["calls"] - 1) + call.latency_seconds) / m["calls"]
 
         return {
             "total_calls": total_attempts,
@@ -154,6 +181,7 @@ class LLMMetricsCollector:
             "avg_latency_seconds": total_latency / total_attempts,
             "total_latency_seconds": total_latency,
             "by_purpose": dict(by_purpose),
+            "by_model": dict(by_model),
             "batch_duration_seconds": (self.batch_end_time or time.time()) - (self.batch_start_time or time.time())
         }
     
