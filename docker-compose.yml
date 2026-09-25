@@ -38,8 +38,10 @@ x-worker: &worker
     OMP_NUM_THREADS: ${EMBED_THREADS:-4}
     SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
   env_file:
-    # LLM API 키. generate 잡에만 필요하다 - 없으면 무시(수집/랭킹 잡은 키 없이 동작).
-    - path: ${AI_ENV_FILE:-ai_workspace/.env}
+    # LLM API 키는 opt-in: generate 잡을 켤 때만 .env에 AI_ENV_FILE=<키 파일>을 넣는다(runbook 9절).
+    # 기본값을 ai_workspace/.env로 두면 메인 체크아웃에서 띄울 때 키가 필요 없는 migrate/scheduler에도
+    # 실려 `docker inspect`로 보이게 된다.
+    - path: ${AI_ENV_FILE:-/dev/null}
       required: false
   volumes:
     - ${OPS_DIR:-./.ops}:/ops:ro
