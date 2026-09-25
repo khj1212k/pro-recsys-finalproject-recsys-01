@@ -36,6 +36,7 @@ __pycache__/
 venv/
 env/
 ENV/
+.venv-*/
 
 # 배포 및 라이브러리
 dist/
@@ -143,3 +144,17 @@ ai_workspace/tests/
 ai_workspace/scripts/
 ai_workspace/test/
 ai_workspace/docs/
+
+# ==========================
+# 10. 재현성 산출물 및 로컬 도구 상태 (self-review #4)
+# ==========================
+# 원본 데이터셋 (repo 루트 기준)
+/data/
+# 리포트 내 원본(raw) 산출물 - 정제된 리포트 본문만 추적
+reports/**/raw/
+# MLflow 실험 추적 로컬 저장소
+mlruns/
+# 학습 체크포인트
+checkpoints/
+# Claude Code 로컬 상태 (AGENTS.md: AI 도구 상태, 리팩터링 대상 아님 - 여기서는 무시만)
+.claude/
