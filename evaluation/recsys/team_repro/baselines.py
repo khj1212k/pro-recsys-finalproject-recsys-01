@@ -178,6 +178,10 @@ def compute_all_baselines(
     top_k: int = 20,
     seed: int = 0,
 ) -> Dict[str, Dict[int, List[int]]]:
+    """모든 베이스라인은 `train_logs`(cutoff 이전 로그) + `cutoff`만 본다 - 이미 v1
+    시점부터 point-in-time이었다(모델과 달리 미래 정보를 볼 방법이 없었다). v2가
+    바꾼 것은 이 함수 자체가 아니라, 호출부(run_repro.py)가 넘기는 `cutoff`를
+    모든 arm/시드가 공유하는 고정 answer_start로 통일한 것(MINOR #1 수정)이다."""
     emb_by_id = {
         int(row.news_letter_id): np.asarray(row.embedding, dtype=np.float32)
         for row in bundle.newsletters.itertuples(index=False)

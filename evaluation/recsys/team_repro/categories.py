@@ -287,6 +287,22 @@ def choose_k(
     return best_k, scores
 
 
+def wilson_interval(k_successes: int, n: int, z: float = 1.96) -> Tuple[float, float]:
+    """이항 비율의 Wilson score 구간 (표본이 작을 때(n=47) 정규근사보다 안정적).
+
+    v2 요구사항 8 / 어드버서리얼 리뷰 MINOR: chosen_k의 LOO 정확도(29.8%)는 k
+    9개 중 최선값이라 그 자체로 낙관적이다(다중비교 보정은 아님 - best-of-9라는
+    사실 자체를 리포트 본문에 별도로 명시한다). 이 함수는 적어도 그 지점의
+    표집 불확실성만큼은 정직한 구간으로 보여준다."""
+    if n == 0:
+        return (float("nan"), float("nan"))
+    phat = k_successes / n
+    denom = 1 + (z ** 2) / n
+    center = (phat + (z ** 2) / (2 * n)) / denom
+    half = (z * ((phat * (1 - phat) / n + (z ** 2) / (4 * n ** 2)) ** 0.5)) / denom
+    return (max(0.0, center - half), min(1.0, center + half))
+
+
 # ---------------------------------------------------------------------------
 # 메인 파이프라인
 # ---------------------------------------------------------------------------
@@ -297,6 +313,8 @@ class CategoryRecoveryResult:
     loo_scores: Dict[int, float]
     chosen_k: int
     source_counts: Counter
+    loo_ci: Tuple[float, float] = (float("nan"), float("nan"))  # chosen_k의 Wilson 95% CI
+    n_direct_for_loo: int = 0  # LOO에 쓰인 직접 라벨 수 (분모)
 
 
 def recover_categories(
@@ -326,6 +344,9 @@ def recover_categories(
     bank_labels = [direct[nid] for nid in direct_ids]
 
     chosen_k, loo_scores = choose_k(bank_vecs, bank_labels, k_grid)
+    n_direct_for_loo = len(bank_labels)
+    chosen_k_correct = round(loo_scores[chosen_k] * n_direct_for_loo)
+    loo_ci = wilson_interval(chosen_k_correct, n_direct_for_loo)
 
     rows = []
     source_counts = Counter()
@@ -367,7 +388,14 @@ def recover_categories(
             )
             source_counts["unlabeled_no_embedding"] += 1
 
-    return CategoryRecoveryResult(rows=rows, loo_scores=loo_scores, chosen_k=chosen_k, source_counts=source_counts)
+    return CategoryRecoveryResult(
+        rows=rows,
+        loo_scores=loo_scores,
+        chosen_k=chosen_k,
+        source_counts=source_counts,
+        loo_ci=loo_ci,
+        n_direct_for_loo=n_direct_for_loo,
+    )
 
 
 def save_csv(result: CategoryRecoveryResult, out_path: Path = DEFAULT_OUT) -> None:

@@ -92,3 +92,70 @@ def test_bootstrap_paired_diff_only_uses_common_users():
     result = M.bootstrap_paired_diff(a, b, "m", n_boot=200, seed=4)
     assert result["n_users"] == 1
     assert result["effect"] == pytest.approx(3.0)
+
+
+# --- v2 REQUIRED CHANGE #8: nested bootstrap (시드 x 유저) -----------------------
+
+
+def test_nested_bootstrap_ci_mean_matches_point_estimate_and_reports_n_seeds():
+    # 3개 시드, 각 시드마다 동일한 20명 유저 (시드 간 값은 살짝 다름 - 학습 무작위성 모사)
+    per_user_by_seed = [
+        {i: {"m": float(i % 3) + offset} for i in range(20)} for offset in (0.0, 0.1, -0.1)
+    ]
+    result = M.nested_bootstrap_ci(per_user_by_seed, "m", n_boot=300, seed=1)
+    true_mean = np.mean([m["m"] for pu in per_user_by_seed for m in pu.values()])
+    assert result["mean"] == pytest.approx(true_mean)
+    assert result["ci_lo"] <= result["mean"] <= result["ci_hi"]
+    assert result["n_seeds"] == 3
+    assert result["n_users"] == 20
+
+
+def test_nested_bootstrap_ci_empty_seeds_returns_nan():
+    result = M.nested_bootstrap_ci([], "m", n_boot=10)
+    assert result["n_seeds"] == 0
+    assert np.isnan(result["mean"])
+
+
+def test_nested_bootstrap_ci_only_uses_users_common_to_all_seeds():
+    per_user_by_seed = [
+        {1: {"m": 1.0}, 2: {"m": 2.0}},
+        {1: {"m": 1.0}, 3: {"m": 3.0}},  # user2/3는 시드 한쪽에만 있음
+    ]
+    result = M.nested_bootstrap_ci(per_user_by_seed, "m", n_boot=50, seed=0)
+    assert result["n_users"] == 1
+
+
+def test_nested_bootstrap_paired_diff_zero_when_arms_identical():
+    per_user_by_seed = [{i: {"m": float(i)} for i in range(15)} for _ in range(3)]
+    result = M.nested_bootstrap_paired_diff(per_user_by_seed, per_user_by_seed, "m", n_boot=300, seed=2)
+    assert result["effect"] == pytest.approx(0.0)
+    assert result["ci_lo"] <= 0.0 <= result["ci_hi"]
+
+
+def test_nested_bootstrap_paired_diff_detects_constant_shift():
+    a = [{i: {"m": float(i)} for i in range(15)} for _ in range(3)]
+    b = [{i: {"m": float(i) + 2.0} for i in range(15)} for _ in range(3)]
+    result = M.nested_bootstrap_paired_diff(a, b, "m", n_boot=300, seed=3)
+    assert result["effect"] == pytest.approx(2.0)
+    assert result["n_seeds_a"] == 3 and result["n_seeds_b"] == 3
+
+
+def test_nested_bootstrap_paired_diff_wider_than_plain_bootstrap_when_seeds_vary():
+    """시드마다 값이 크게 요동치면, 유저만 재표본하는 bootstrap_paired_diff보다
+    시드까지 재표본하는 nested 쪽 CI가 더 넓어야 한다(v1이 놓친 변동성을 잡아낸다는
+    것의 직접적인 회귀 테스트)."""
+    rng = np.random.default_rng(0)
+    n_users = 25
+    per_user_by_seed = []
+    for _ in range(6):
+        seed_shift = rng.normal(scale=2.0)  # 시드마다 큰 흔들림
+        per_user_by_seed.append({i: {"m": float(i % 3) + seed_shift} for i in range(n_users)})
+
+    nested = M.nested_bootstrap_ci(per_user_by_seed, "m", n_boot=500, seed=5)
+
+    pooled = {i: {"m": float(np.mean([pu[i]["m"] for pu in per_user_by_seed]))} for i in range(n_users)}
+    plain = M.bootstrap_ci(pooled, "m", n_boot=500, seed=5)
+
+    nested_width = nested["ci_hi"] - nested["ci_lo"]
+    plain_width = plain["ci_hi"] - plain["ci_lo"]
+    assert nested_width > plain_width

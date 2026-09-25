@@ -8,6 +8,12 @@ from typing import Dict, List, Optional, Sequence, Set
 
 import numpy as np
 
+# v2 REQUIRED CHANGE #8: v1의 bootstrap_ci/bootstrap_paired_diff는 여러 시드의
+# per-user 지표를 유저별로 평균낸 뒤(pooled_per_user) 유저만 재표본했다 - 그러면
+# 학습 자체의 무작위성(시드 간 변동)이 신뢰구간에서 완전히 빠진다. 아래
+# nested_bootstrap_*는 시드와 유저를 함께 재표본한다(시드는 좁고(3~5개) 유저는
+# 31명 안팎이라는 것도 함께 report에 n으로 남긴다).
+
 
 def per_user_metrics(
     evaluator,
@@ -97,4 +103,89 @@ def bootstrap_paired_diff(
         "n_boot": n_boot,
         "mean_a": float(a_vals.mean()),
         "mean_b": float(b_vals.mean()),
+    }
+
+
+def _common_matrix(
+    per_user_by_seed: Sequence[Dict[int, Dict[str, float]]], metric_key: str
+) -> "tuple[np.ndarray, list, int, int]":
+    seed_sets = [set(pu) for pu in per_user_by_seed if pu]
+    common = sorted(set.intersection(*seed_sets)) if seed_sets else []
+    n_seeds = len(per_user_by_seed)
+    n_users = len(common)
+    mat = np.zeros((n_seeds, n_users), dtype=float)
+    for i, pu in enumerate(per_user_by_seed):
+        for j, u in enumerate(common):
+            mat[i, j] = pu[u][metric_key]
+    return mat, common, n_seeds, n_users
+
+
+def nested_bootstrap_ci(
+    per_user_by_seed: Sequence[Dict[int, Dict[str, float]]],
+    metric_key: str,
+    n_boot: int = 1000,
+    seed: int = 0,
+    alpha: float = 0.05,
+) -> Dict[str, float]:
+    """시드 x 유저를 함께 재표본하는 중첩 부트스트랩(nested bootstrap). 각 반복마다
+    (a) 시드를 복원추출로 재표본하고 (b) 유저도 복원추출로 재표본한 뒤, 재표본된
+    (시드, 유저) 조합 전체의 평균을 취한다 - 학습 무작위성(시드 변동)과 유저
+    표본 변동을 둘 다 신뢰구간에 반영한다(v1은 유저 변동만 반영했다)."""
+    mat, common, n_seeds, n_users = _common_matrix(per_user_by_seed, metric_key)
+    if n_seeds == 0 or n_users == 0:
+        return {
+            "mean": float("nan"), "ci_lo": float("nan"), "ci_hi": float("nan"),
+            "n_users": n_users, "n_seeds": n_seeds, "n_boot": n_boot,
+        }
+    rng = np.random.default_rng(seed)
+    point = float(mat.mean())
+    boot_means = np.empty(n_boot)
+    for b in range(n_boot):
+        seed_idx = rng.integers(0, n_seeds, size=n_seeds)
+        user_idx = rng.integers(0, n_users, size=n_users)
+        boot_means[b] = mat[np.ix_(seed_idx, user_idx)].mean()
+    lo, hi = np.percentile(boot_means, [100 * alpha / 2, 100 * (1 - alpha / 2)])
+    return {
+        "mean": point, "ci_lo": float(lo), "ci_hi": float(hi),
+        "n_users": n_users, "n_seeds": n_seeds, "n_boot": n_boot,
+    }
+
+
+def nested_bootstrap_paired_diff(
+    per_user_by_seed_a: Sequence[Dict[int, Dict[str, float]]],
+    per_user_by_seed_b: Sequence[Dict[int, Dict[str, float]]],
+    metric_key: str,
+    n_boot: int = 1000,
+    seed: int = 0,
+    alpha: float = 0.05,
+) -> Dict[str, float]:
+    """nested_bootstrap_ci의 paired-diff 버전. A/B 각각 (시드 리스트, per-user dict
+    리스트)를 받아, 공통 유저에 대해 시드 x 유저를 함께(각 조건 내에서 독립적으로)
+    재표본하며 B-A 평균 차이의 신뢰구간을 계산한다."""
+    mat_a, common_a, n_seeds_a, n_users_a = _common_matrix(per_user_by_seed_a, metric_key)
+    mat_b, common_b, n_seeds_b, n_users_b = _common_matrix(per_user_by_seed_b, metric_key)
+    common = sorted(set(common_a) & set(common_b))
+    if not common or n_seeds_a == 0 or n_seeds_b == 0:
+        return {
+            "effect": float("nan"), "ci_lo": float("nan"), "ci_hi": float("nan"),
+            "n_users": len(common), "n_boot": n_boot,
+        }
+    idx_a = [common_a.index(u) for u in common]
+    idx_b = [common_b.index(u) for u in common]
+    mat_a = mat_a[:, idx_a]
+    mat_b = mat_b[:, idx_b]
+    n_users = len(common)
+    rng = np.random.default_rng(seed)
+    point = float(mat_b.mean() - mat_a.mean())
+    diffs = np.empty(n_boot)
+    for b in range(n_boot):
+        sa = rng.integers(0, n_seeds_a, size=n_seeds_a)
+        sb = rng.integers(0, n_seeds_b, size=n_seeds_b)
+        u_idx = rng.integers(0, n_users, size=n_users)
+        diffs[b] = mat_b[np.ix_(sb, u_idx)].mean() - mat_a[np.ix_(sa, u_idx)].mean()
+    lo, hi = np.percentile(diffs, [100 * alpha / 2, 100 * (1 - alpha / 2)])
+    return {
+        "effect": point, "ci_lo": float(lo), "ci_hi": float(hi),
+        "n_users": n_users, "n_seeds_a": n_seeds_a, "n_seeds_b": n_seeds_b, "n_boot": n_boot,
+        "mean_a": float(mat_a.mean()), "mean_b": float(mat_b.mean()),
     }

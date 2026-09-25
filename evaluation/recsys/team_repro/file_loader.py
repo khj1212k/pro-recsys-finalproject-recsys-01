@@ -166,6 +166,40 @@ def load_archive_bundle() -> ArchiveBundle:
     )
 
 
+def bundle_before(bundle: ArchiveBundle, cutoff: datetime) -> ArchiveBundle:
+    """v2 REQUIRED CHANGE #1: point-in-time 추론용 - ctr_logs를 cutoff '이전'으로만
+    엄격히 잘라낸 새 번들을 만든다.
+
+    current/fix-snapshot은 자체 point-in-time cutoff 로직(compute_history_embedding)이
+    있어 이 없이도 eval_timestamp만으로 안전하지만, team-final은 그 메서드 자체가
+    없어 build_user_profiles()가 로더가 반환하는 로그를 시간 필터 없이 전부 쓴다
+    (모듈 docstring/challenge 리뷰 참고) - 즉 team-final의 히스토리 누출은 "지금이
+    언제인지"가 아니라 "로더가 무슨 로그를 돌려주는지"에서 생긴다. 그래서 세 버전
+    모두에 안전하게 먹히는 유일한 fix는 로더 데이터 자체를 cutoff 이전으로
+    잘라내는 것이다.
+    """
+    from dataclasses import replace
+
+    restricted = bundle.ctr_logs[bundle.ctr_logs["timestamp"] < cutoff].reset_index(drop=True)
+    return replace(bundle, ctr_logs=restricted)
+
+
+def bundle_for_generator_split_training(bundle: ArchiveBundle) -> ArchiveBundle:
+    """v2 REQUIRED CHANGE #3 (generator_split): 학습에 쓰이는 로그 자체를
+    `ctr_logs_train.csv`(뉴스레터 id 4~154)로 제한한 번들을 만든다.
+
+    v1은 이 프로토콜에서 정답만 valid 파일(155~198)에서 가져오고 실제 학습은
+    여전히 synthetic_ctr_logs.csv 전체(4,400개 상호작용, valid 뉴스레터도 포함)로
+    했다 - 'cold item 평가'라는 설명과 달리 모델이 정답 아이템을 이미 학습에서
+    봤다(BLOCKER). generator_train_keys만 ctr_logs로 넘기면 build_user_profiles/
+    create_train_dataset이 구조적으로 valid 뉴스레터의 상호작용을 전혀 보지 못한다.
+    """
+    from dataclasses import replace
+
+    train_logs = bundle.generator_train_keys[["user_id", "news_letter_id", "timestamp", "is_clicked"]]
+    return replace(bundle, ctr_logs=train_logs.reset_index(drop=True))
+
+
 def category_ids_by_newsletter(bundle: ArchiveBundle) -> Dict[int, List[int]]:
     out: Dict[int, List[int]] = {}
     for row in bundle.categories.itertuples(index=False):
