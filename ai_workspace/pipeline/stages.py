@@ -1,5 +1,6 @@
 """Pipeline Stages: 간소화된 파이프라인 단계 정의"""
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 from tqdm import tqdm
@@ -137,9 +138,10 @@ class Stage5_NewsletterGeneration(PipelineStage):
             except Exception as e:
                 logger.error(f"Clubster {cid} 처리 중 에러: {e}")
 
-        # End LLM metrics collection and print summary
+        # End LLM metrics collection, print summary, and persist for later cost/latency 분석
         metrics.end_batch()
         metrics.print_summary()
+        metrics.save_summary(os.path.join("logs", f"llm_metrics_run{run_id}.json"))
 
         logger.info(f"✨ 뉴스레터 생성 완료: {count}건 (run_id={run_id})")
         return count
