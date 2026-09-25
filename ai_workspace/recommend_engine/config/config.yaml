@@ -87,6 +87,14 @@ recommendation:
   top_k: 20       # 최종 추천 개수 (output)
   use_mmr: true   # MMR (다양성) 설정
   mmr_pool_multiplier: 4 # 후보군 배수 (Candidate pool)
+  # 사용자 선호 카테고리 개수 구간별 MMR lambda (다양성-정확성 트레이드오프)
+  # lambda가 높을수록 정확성(관련도) 우선, 낮을수록 다양성 우선
+  # 카테고리를 적게 선택한 유저일수록 관련도를, 많이 선택한 유저일수록 다양성을 우선한다는 가정
+  mmr_lambda:
+    few_categories: 0.8      # 1~2개 카테고리 선호
+    medium_categories: 0.7   # 3~4개 카테고리 선호
+    many_categories: 0.6     # 5개 이상 카테고리 선호
+    default: 0.7             # 선호 카테고리 미설정 시
 
 # 출력 및 로깅
 output:
