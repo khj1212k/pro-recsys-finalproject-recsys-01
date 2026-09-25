@@ -96,6 +96,9 @@ class NaverHyperCLOVAClient(BaseLLMClient):
         response_format: Optional[Dict] = None,
         purpose: str = "unknown"
     ) -> Optional[str]:
+        # core.llm이 이 모듈을 import하므로 순환 import를 피하려고 지연 import한다.
+        from core.llm.kill_switch import ensure_kill_switch_off
+        ensure_kill_switch_off()
         if self.use_apps_auth:
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
@@ -279,6 +282,9 @@ class OpenAIClient(BaseLLMClient):
         response_format: Optional[Dict] = None,
         purpose: str = "unknown"
     ) -> Optional[str]:
+        # core.llm이 이 모듈을 import하므로 순환 import를 피하려고 지연 import한다.
+        from core.llm.kill_switch import ensure_kill_switch_off
+        ensure_kill_switch_off()
         kwargs = {
             "model": self.model,
             "messages": messages,
