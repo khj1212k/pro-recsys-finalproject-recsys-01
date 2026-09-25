@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 import pandas as pd
 
 
@@ -202,6 +203,7 @@ def test_compute_history_embedding_matches_naive_unmemoized_values():
             np.testing.assert_allclose(fast, naive, atol=1e-5)
 
 
+@pytest.mark.benchmark
 def test_history_embedding_memoized_inference_is_faster_than_naive_benchmark(capsys):
     """CORRECTION #4 벤치마크: 300 유저 x 200 뉴스 추론 시나리오에서
     사전 분할 + 메모이즈 구현이 naive(수정 전) 구현보다 유의미하게 빨라야 한다."""
