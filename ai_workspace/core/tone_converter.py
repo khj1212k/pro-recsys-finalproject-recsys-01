@@ -9,6 +9,7 @@ import logging
 from core.llm import LLMClient, get_client
 from core.llm.schemas import ToneResult
 from core.llm_client import extract_json_from_response
+from config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
@@ -88,25 +89,34 @@ class ToneConverter:
     def convert(self, newsletter: Dict) -> Optional[Dict]:
         prompt = self.create_prompt(newsletter)
 
-        # 재시도/백오프는 LLMClient.complete() 내부에서 처리한다 (core/llm/adapters.py)
-        result = self.llm_client.complete(
-            messages=[{"role": "user", "content": prompt}],
-            schema=ToneResult,
-            temperature=0.4,
-            max_tokens=4096,
-            purpose="tone_convert",
-        )
+        # 콘텐츠 검증(validate_conversion) 실패 시에만 여기서 추가로 재생성한다
+        # (최초 1회 + Settings.MAX_RETRY_TONE_VALIDATION회). 429/5xx/timeout 같은
+        # 전송 계층 재시도는 LLMClient.complete() 내부에서 이미 처리된다
+        # (core/llm/adapters.py).
+        max_attempts = 1 + max(Settings.MAX_RETRY_TONE_VALIDATION, 0)
+        last_converted = None
 
-        converted = None
-        if result.parsed is not None:
-            converted = self._normalize_parsed(result.parsed.model_dump(), newsletter)
-        elif result.text:
-            converted = self._parse_response(result.text, newsletter)
+        for _attempt in range(max_attempts):
+            result = self.llm_client.complete(
+                messages=[{"role": "user", "content": prompt}],
+                schema=ToneResult,
+                temperature=0.4,
+                max_tokens=4096,
+                purpose="tone_convert",
+            )
 
-        if converted and self.validate_conversion(newsletter, converted):
-            return converted
+            converted = None
+            if result.parsed is not None:
+                converted = self._normalize_parsed(result.parsed.model_dump(), newsletter)
+            elif result.text:
+                converted = self._parse_response(result.text, newsletter)
 
-        return self._fallback_convert(newsletter, converted)
+            if converted and self.validate_conversion(newsletter, converted):
+                return converted
+
+            last_converted = converted or last_converted
+
+        return self._fallback_convert(newsletter, last_converted)
 
     def _normalize_parsed(self, result: Dict, original: Dict) -> Dict:
         """네이티브 구조화 출력으로 이미 필드가 채워져 있어도, keywords가 비어 있으면
