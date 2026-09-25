@@ -440,22 +440,7 @@ def handle_newsletter_max_retries(state: AgentState) -> Dict[str, Any]:
     }
 
 
-def finalize_workflow(state: AgentState) -> Dict[str, Any]:
-    completed = state.get("completed_newsletters", [])
-    failed = state.get("failed_clusters", [])
-    skipped = state.get("skipped_clusters", [])
-
-
-    return {"should_continue": False}
-
-
 # ========== Routing Functions ==========
-
-def should_continue_processing(state: AgentState) -> str:
-    if state["current_cluster_index"] >= len(state["all_cluster_ids"]):
-        return "end"
-    return "continue"
-
 
 def route_after_cluster_eval(state: AgentState) -> str:
     eval_result = state.get("cluster_eval", {})
