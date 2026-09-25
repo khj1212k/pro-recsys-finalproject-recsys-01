@@ -20,6 +20,10 @@
 - 부가 확인: Upstage 모델 목록(https://console.upstage.ai/docs/models, 접근일 2026-09-25)에는 `Solar Pro 4`가 현재 flagship으로 소개되고 있지만 `Solar Pro 3`("Powerful MoE model with 102B parameters")도 여전히 사용 가능한 모델로 나열되어 있다 - 과제에서 지정한 `solar-pro3`는 여전히 유효한 선택지다.
 - 로컬 환경 확인: 설치된 `openai` 파이썬 SDK(3.19.2)는 내부적으로 `httpx2`(pydantic/httpx 팀이 배포하는 httpx의 차세대 메이저 버전, PyPI 공개 패키지)를 쓴다(`openai/_base_client.py`에서 `import httpx2`). 이 SDK 버전에서는 `client.chat.completions.parse(...)`가 `beta` 네임스페이스 없이도 존재한다(둘 다 있음, 로컬에서 `hasattr`로 확인). 어댑터와 테스트 페이크는 이 사실에 맞춰 `openai.APIStatusError`/`RateLimitError`/`InternalServerError`/`APITimeoutError`/`APIConnectionError`와 `httpx2.Request`/`Response`를 사용한다.
 - Claude Haiku 4.5는 이번 조사에서 "OpenAI 호환 Chat Completions 엔드포인트 지원 여부"를 검증하지 않았다 - 과제 범위가 "Gemini/Upstage/OpenAI 셋 다 OpenAI 호환"이라는 전제를 확인하는 것이었고, Claude는 그 전제에 포함되지 않았기 때문이다. 이 PR은 challenger로 OpenAI 소형 모델(`gpt-4o-mini`)을 선택했다 - 세 프로바이더 모두 동일한 어댑터로 통합 가능함이 확인됐기 때문에 어댑터 종류를 하나 더 늘리지 않아도 됐다. Claude Haiku 4.5를 나중에 후보에 넣으려면 별도 어댑터(또는 Anthropic의 OpenAI 호환성 확인)가 먼저 필요하다.
+- **role 기본 모델을 Gemini 하나로 좁히며 모델 id 재확인** (WebFetch `https://ai.google.dev/gemini-api/docs/models`, 접근일 2026-09-25, 문서 자체 "Last updated 2026-09-24 UTC"): 사용자가 지금 보유한 키가 Gemini(Google Cloud 크레딧)뿐이라 GEN/JUDGE/TONE 세 role 모두 gemini를 기본 프로바이더로 바꿨다(아래 "결정" 참고). 이 ADR을 처음 채택했을 때 기본값으로 골랐던 `gemini-2.5-flash`는 이제 문서상 "Limited Access - 신규 프로젝트는 3.5 Flash-Lite 또는 3.8 Flash 사용 권장" 상태로 바뀌어 있어, 현재 유효한 id로 갱신했다:
+  - `gemini-3.5-flash-lite` - "Our fastest, most cost-effective 3.5 model for high-throughput execution." → GEN/TONE 기본값(초안 생성·문체 변환처럼 비용 민감한 작업).
+  - `gemini-3.5-flash` - "Our legacy Flash model, providing baseline speed and foundational performance for routine, high-throughput workloads." → JUDGE 기본값(generator보다 한 단계 위 모델이면서 과도하게 비싸지 않은 선택).
+  - 둘 다 같은 "3.5" 세대의 Gemini 모델이므로, 크기(Flash vs Flash-Lite)는 다르지만 벤더/학습 lineage는 같다 - self-preference bias 관점에서는 여전히 "같은 모델 계열"로 취급해야 한다(아래 "결정"의 경고 로직 참고). 최종 프로바이더/모델 조합(특히 judge를 정말 다른 벤더로 분리할지)은 여전히 후속 bake-off ADR의 몫이다.
 
 ## 검토한 대안
 
@@ -45,12 +49,12 @@
   - `client.py`: `LLMClient`(ABC) / `LLMResult` / `LLMUsage`.
   - `adapters.py`: `OpenAICompatLLMClient`(OpenAI/Gemini/Upstage 공용, `base_url`만 다름) + `HyperCLOVALLMClient`(레거시 `NaverHyperCLOVAClient`를 `LLMClient` 계약으로 감싼 어댑터, 기본 프로바이더 아님).
   - `schemas.py`: `ClusterEval`, `NewsletterContent`, `NewsletterMeta`, `NewsletterEval`, `ToneResult` - 각각 `core/reconstruction/prompts.py`, `workflow/evaluators.py`, `core/tone_converter.py`의 기존 프롬프트가 요구하던 출력 필드를 그대로 옮겼다. 이 PR에서 프롬프트 문구는 바꾸지 않는다.
-  - `registry.py`: `get_client(role)`, `role ∈ {generator, judge, tone}`. `<PREFIX>_PROVIDER`/`<PREFIX>_MODEL` 환경변수로 해석하고(`GEN_*`/`JUDGE_*`/`TONE_*`), `(provider, model)` 조합당 인스턴스 1개·프로바이더당 레이트리미터 1개를 전역 캐시로 공유한다. 기본값은 `generator=gemini`, `judge=openai`, `tone=upstage`로 둬서 judge가 기본적으로 generator와 다른 모델 계열이 되도록 했다.
+  - `registry.py`: `get_client(role)`, `role ∈ {generator, judge, tone}`. `<PREFIX>_PROVIDER`/`<PREFIX>_MODEL` 환경변수로 해석하고(`GEN_*`/`JUDGE_*`/`TONE_*`), `(provider, model)` 조합당 인스턴스 1개·프로바이더당 레이트리미터 1개를 전역 캐시로 공유한다. **기본 프로바이더는 세 role 모두 `gemini`다**(사용자가 지금 보유한 키가 Gemini뿐이라 - 위 "role 기본 모델을 Gemini 하나로 좁히며..." 참고). `judge`가 `generator`와 다른 모델을 쓰도록 `ROLE_DEFAULT_MODEL`로 role별 기본 모델을 따로 두었다(`generator`/`tone`=`gemini-3.5-flash-lite`, `judge`=`gemini-3.5-flash`). 다만 모델이 달라도 같은 벤더(계열)를 쓰는 것 자체가 self-preference bias 위험이라, `get_client("judge")`가 `_model_family(provider)`(현재는 provider 문자열 그대로)로 generator와 비교해 같은 계열이면 WARNING을 남긴다 - 기본 설정 그대로 쓰면 이 경고가 항상 뜬다는 뜻이고, 이는 의도된 것이다(경고만 하고 막지는 않음 - 최종 판단은 bake-off ADR로 미룬다).
 - 재시도/백오프(429·5xx·timeout, 지수 백오프, `Settings.MAX_LLM_CALL_RETRIES` 상한)와 실패 시에도 `LLMMetricsCollector.record_call()` 기록을 `OpenAICompatLLMClient.complete()` 내부 한 곳으로 모았다. 호출부(`ClusterEvaluator`/`NewsletterEvaluator`/`NewsReconstructor`/`ToneConverter`)는 이제 재시도 루프를 직접 돌리지 않고 `client.complete()`를 한 번만 호출한다.
 - `LLMMetricsCollector`에 `provider`/`model` 필드와 `by_model` 집계를 추가해 프로바이더별 성공률/비용을 나중에 비교할 수 있게 했다.
 - `workflow/nodes.py::initialize_cluster_processing`이 만드는 article dict에 `press_name`을 추가했다 - `NewsletterEvaluator`의 프롬프트(`source_summary`)가 이 필드를 참조하는데 지금까지 빈 문자열로 채워지고 있었다.
-- `ai_workspace/.env.example`을 `GEN_PROVIDER`/`GEN_MODEL`/`JUDGE_PROVIDER`/`JUDGE_MODEL`/`TONE_PROVIDER`/`TONE_MODEL`과 `GEMINI_API_KEY`/`UPSTAGE_API_KEY`/`OPENAI_API_KEY`로 갱신하고, `LLM_PROVIDER`/HyperCLOVA 관련 변수는 "레거시, 기본 프로바이더 아님" 절로 내렸다.
-- **모델 선정은 이 PR의 범위가 아니다.** `PROVIDER_CONFIG`의 `default_model`(`gemini-2.5-flash`, `gpt-4o-mini`, `solar-pro3`)은 "일단 동작하는" 안전한 폴백일 뿐이며, 실제 운영 모델 선정(정확도/비용/지연 bake-off)은 별도 ADR로 다룬다.
+- `ai_workspace/.env.example`을 `GEN_PROVIDER`/`GEN_MODEL`/`JUDGE_PROVIDER`/`JUDGE_MODEL`/`TONE_PROVIDER`/`TONE_MODEL`과 `GEMINI_API_KEY`/`UPSTAGE_API_KEY`/`OPENAI_API_KEY`로 갱신하고, `LLM_PROVIDER`/HyperCLOVA 관련 변수는 "레거시, 기본 프로바이더 아님" 절로 내렸다. 이후 Gemini 단일 키로도 파이프라인 전체가 동작하도록 기본값을 gemini로 좁히면서(`GEMINI_API_KEY`만 있으면 됨) 다시 갱신했고, `LLM_KILL_SWITCH`/`LLM_KILL_SWITCH_FILE` 절도 추가했다.
+- **모델 선정은 이 PR의 범위가 아니다.** `PROVIDER_CONFIG`/`ROLE_DEFAULT_MODEL`의 기본값(`gemini-3.5-flash-lite`, `gemini-3.5-flash`, `gpt-4o-mini`, `solar-pro3`)은 "일단 동작하는" 안전한 폴백일 뿐이며, 실제 운영 모델 선정(정확도/비용/지연 bake-off, judge를 정말 다른 벤더로 분리할지 포함)은 별도 ADR로 다룬다.
 
 ## 증거
 - `.venv/bin/python -m pytest -q -m "not integration and not benchmark"`: 119 passed (기존 82 + 이번 PR 37).
@@ -72,3 +76,35 @@
 - **Upstage 구조화 출력은 OpenAI 스펙의 부분집합만 지원**한다(`allOf`/`oneOf`/재귀 `$ref`/`patternProperties` 등 미지원, `additionalProperties: false` 필수, 중첩 10단계 제한). 이 PR의 5개 스키마(`schemas.py`)는 전부 평범한 flat/list 구조라 문제 없지만, 앞으로 스키마가 복잡해지면 이 제약을 다시 확인해야 한다.
 - **레이트리미터는 여전히 프로세스 내 최소 호출 간격만 제어**한다(`SimpleRateLimiter`, 기존 구현 재사용). 실제 분당 요청 한도(RPM) 기반 제어나 분산 환경에서의 공유는 다루지 않는다.
 - 이 PR은 `evaluate_cluster`/`evaluate_newsletter` 노드의 judge 입력(기사 제목+본문 500자 미리보기)을 바꾸지 않았다 - "judge-v2(기사 본문 포함)"는 과제 정의상 별도 PR이다.
+
+### 후속 커밋으로 닫은 갭
+
+이 ADR 채택 시점에는 없었지만, 실제로 이 fork를 돌려보면서 드러난 세 가지 갭을
+후속 커밋(같은 `feat/llm-client-v2` 브랜치)에서 닫았다:
+
+1. **비용 통제 수단 부재 → LLM 킬 스위치.** 이 PR이 병합된 시점에는 프로바이더
+   호출을 외부에서 즉시 끌 방법이 없었다 - 예정된 cron 비용 가드가 실제 Google
+   Cloud 과금 시작을 감지해도 파이프라인을 세울 방법이 로그를 보고 프로세스를
+   죽이는 것뿐이었다. `core/llm/kill_switch.py::check_kill_switch()`를 추가해
+   `OpenAICompatLLMClient.complete()`/`HyperCLOVALLMClient.complete()`가 실제
+   네트워크 요청 전에 env `LLM_KILL_SWITCH`(`"1"`/`"true"`/`"yes"`) 또는
+   `Settings.LLM_KILL_SWITCH_FILE`(기본 `<저장소 루트>/.ops/LLM_KILL_SWITCH`)
+   파일 존재를 확인하고, 켜져 있으면 프로바이더를 호출하지 않고
+   `LLMResult(error="kill_switch", attempts=0)`를 반환한다. LangGraph 쪽은 별도
+   특수 케이스 없이 기존 실패 처리 경로(judge는 FAIL, generator는 로컬 휴리스틱
+   폴백, tone은 결정론적 softener)를 그대로 타서 배치가 크래시 없이, 뉴스레터를
+   저장하지 않고 끝난다.
+2. **ToneConverter 콘텐츠 검증 재시도가 리팩터링 중 사라짐.** 이 PR 이전
+   구현(`core/llm_client.py` 기반)은 `validate_conversion()` 실패 시 최대 5회
+   재생성했는데, `core/llm/` 도입 리팩터링 과정에서 1회 호출 후 바로 결정론적
+   softener로 폴백하도록 축소돼 있었다(의도한 변경이 아니라 리팩터링 중 놓친
+   회귀였다). `Settings.MAX_RETRY_TONE_VALIDATION`(기본 2)로 조절 가능한 바운드
+   재시도를 복원했다 - 최초 1회 + 추가 최대 2회, `validate_conversion()`이 거부한
+   경우에만 재시도한다. 429/5xx/timeout 같은 전송 계층 재시도는 여전히
+   `OpenAICompatLLMClient.complete()` 내부 책임이다.
+3. **`openai.LengthFinishReasonError`/`ContentFilterFinishReasonError`가 뭉뚱그려짐.**
+   `chat.completions.parse()`가 던지는 이 두 예외는 범용 `except Exception`에
+   걸려 재시도 없이 종료되는 것까지는 맞았지만, `str(e)` 자유형 메시지만 남아
+   메트릭에서 "왜 종료됐는지" 구분할 방법이 없었다. 두 예외를 별도 `except` 절로
+   분리해 `LLMResult.error`에 안정적인 코드(`"length"`/`"content_filter"`)를 남기고,
+   `LLMMetricsCollector`에 `error_type` 필드를 추가해 같은 코드를 기록하게 했다.

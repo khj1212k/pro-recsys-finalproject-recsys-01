@@ -29,17 +29,29 @@ def _isolated_registry(monkeypatch):
     registry.reset_registry()
 
 
-def test_role_defaults_resolve_generator_judge_tone_to_different_providers():
+def test_role_defaults_resolve_all_roles_to_gemini_with_judge_using_a_different_model():
+    """사용자가 지금 보유한 키는 Gemini(Google Cloud 크레딧)뿐이므로(docs/adr/0005),
+    GEN/JUDGE/TONE 모두 gemini가 기본 프로바이더다. LLM-as-judge 요건은 "다른
+    프로바이더"가 아니라 "generator와 다른 모델"로 최소한 충족한다 - 벤더가 같다는
+    점 자체는 get_client()의 self-preference 경고로 별도 알린다."""
     gen_provider, gen_model = registry.resolve_role_config("generator")
     judge_provider, judge_model = registry.resolve_role_config("judge")
     tone_provider, tone_model = registry.resolve_role_config("tone")
 
     assert gen_provider == "gemini"
-    assert judge_provider == "openai"
-    assert tone_provider == "upstage"
-    # 요건: judge는 generator와 다른 모델 계열이어야 한다
-    assert judge_provider != gen_provider
+    assert judge_provider == "gemini"
+    assert tone_provider == "gemini"
+    assert judge_model != gen_model
     assert all([gen_model, judge_model, tone_model])
+
+
+def test_get_client_warns_by_default_because_gen_and_judge_share_gemini_family(caplog):
+    """기본값 그대로(env override 없이) get_client("judge")를 부르면, judge 모델이
+    generator와 달라도 같은 벤더(gemini) 계열이라는 이유로 WARNING이 떠야 한다."""
+    with caplog.at_level(logging.WARNING):
+        registry.get_client("judge")
+
+    assert any("같은 모델 계열" in r.message for r in caplog.records)
 
 
 def test_role_env_vars_override_defaults(monkeypatch):

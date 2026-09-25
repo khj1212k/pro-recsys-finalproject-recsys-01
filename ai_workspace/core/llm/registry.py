@@ -36,7 +36,11 @@ PROVIDER_CONFIG = {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "api_key_env": "GEMINI_API_KEY",
         "supports_json_schema": True,
-        "default_model": "gemini-2.5-flash",
+        # role별 기본값(ROLE_DEFAULT_MODEL)이 없는 경우의 범용 폴백. role별 기본값이
+        # 실제로는 항상 우선 적용되므로(GEN/JUDGE/TONE 전부 gemini가 기본 프로바이더),
+        # 이 값은 "GEN_PROVIDER=gemini인데 GEN_MODEL만 없는" 것처럼 role 기본
+        # 프로바이더가 아닌 경로로 gemini를 쓸 때만 쓰인다.
+        "default_model": "gemini-3.5-flash-lite",
     },
     "upstage": {
         "base_url": "https://api.upstage.ai/v1",
@@ -50,12 +54,24 @@ PROVIDER_CONFIG = {
     },
 }
 
-# 역할별 기본 프로바이더. judge 기본값(openai)은 generator 기본값(gemini)과
-# 다른 모델 계열이어야 한다는 요건(LLM-as-judge)을 기본 설정만으로 만족시킨다.
+# 역할별 기본 프로바이더. 사용자가 지금 보유한 키는 Gemini(Google Cloud 크레딧)뿐이라
+# (docs/adr/0005 "결과와 한계") GEN/JUDGE/TONE 모두 gemini를 기본값으로 둔다.
+# LLM-as-judge 요건("judge != generator")은 ROLE_DEFAULT_MODEL로 다른 모델을 써서
+# 최소한 충족하되, 같은 벤더라는 점 자체는 get_client()가 WARNING으로 알린다.
 ROLE_DEFAULT_PROVIDER = {
     "generator": "gemini",
-    "judge": "openai",
-    "tone": "upstage",
+    "judge": "gemini",
+    "tone": "gemini",
+}
+
+# role별 기본 모델(role이 위 ROLE_DEFAULT_PROVIDER를 그대로 쓸 때만 적용 - 다른
+# 프로바이더로 오버라이드하면 그 프로바이더의 PROVIDER_CONFIG.default_model을 쓴다).
+# 모델 id는 공식 문서(https://ai.google.dev/gemini-api/docs/models, 접근일
+# 2026-09-25)에서 확인한 현재 유효한 id다 - 상세 근거는 docs/adr/0005 참고.
+ROLE_DEFAULT_MODEL = {
+    "generator": "gemini-3.5-flash-lite",  # 초안 생성 - "가장 빠르고 비용 효율적인 3.5 모델"
+    "judge": "gemini-3.5-flash",  # 평가 - generator보다 한 단계 위 모델(Flash-Lite가 아닌 Flash)
+    "tone": "gemini-3.5-flash-lite",  # 문체 변환 - 생성과 비슷한 비용 프로필의 가벼운 재작성 작업
 }
 
 _instances: Dict[Tuple[str, str], LLMClient] = {}
@@ -83,7 +99,8 @@ def resolve_role_config(role: str) -> Tuple[str, str]:
         raise ValueError(f"알 수 없는 LLM 역할: {role!r} (허용: {sorted(ROLES)})")
 
     prefix = _ROLE_ENV_PREFIX[role]
-    provider = os.getenv(f"{prefix}_PROVIDER", ROLE_DEFAULT_PROVIDER[role]).lower()
+    default_provider = ROLE_DEFAULT_PROVIDER[role]
+    provider = os.getenv(f"{prefix}_PROVIDER", default_provider).lower()
 
     if provider not in PROVIDER_CONFIG:
         raise ValueError(
@@ -91,9 +108,25 @@ def resolve_role_config(role: str) -> Tuple[str, str]:
             f"(허용: {sorted(PROVIDER_CONFIG)})"
         )
 
-    default_model = PROVIDER_CONFIG[provider]["default_model"]
+    # role이 자기 기본 프로바이더를 그대로 쓰면 role별 기본 모델(ROLE_DEFAULT_MODEL)을
+    # 우선한다(judge가 generator와 다른 모델을 쓰게 하려는 것). 다른 프로바이더로
+    # 오버라이드했다면 그 프로바이더의 범용 기본 모델로 폴백한다.
+    if provider == default_provider and role in ROLE_DEFAULT_MODEL:
+        default_model = ROLE_DEFAULT_MODEL[role]
+    else:
+        default_model = PROVIDER_CONFIG[provider]["default_model"]
     model = os.getenv(f"{prefix}_MODEL", default_model)
     return provider, model
+
+
+def _model_family(provider: str) -> str:
+    """provider를 '모델 계열'로 정규화한다.
+
+    같은 프로바이더(벤더)를 쓰면 모델 크기/세대가 달라도(judge가 generator보다
+    작은/큰 모델을 써도) 같은 학습 lineage를 공유하는 self-preference bias 위험이
+    있다고 보고, 프로바이더 단위로 계열을 나눈다.
+    """
+    return provider
 
 
 def _build_client(provider: str, model: str) -> LLMClient:
@@ -125,12 +158,14 @@ def get_client(role: str) -> LLMClient:
     provider, model = resolve_role_config(role)
 
     if role == "judge":
-        gen_provider, _ = resolve_role_config("generator")
-        if provider == gen_provider:
+        gen_provider, gen_model = resolve_role_config("generator")
+        if _model_family(provider) == _model_family(gen_provider):
             logger.warning(
-                "JUDGE_PROVIDER(%s)가 GEN_PROVIDER(%s)와 같은 모델 계열입니다. "
-                "LLM-as-judge는 생성기와 다른 모델 계열을 쓰는 것을 권장합니다.",
-                provider, gen_provider,
+                "JUDGE(%s/%s)가 GEN(%s/%s)와 같은 모델 계열(%s)입니다. "
+                "모델이 서로 달라도 같은 벤더면 LLM-as-judge에서 자기선호편향"
+                "(self-preference bias) 위험이 있으니, 최종 프로바이더/모델 선정 시"
+                "(bake-off ADR) 서로 다른 계열을 쓰는 것을 권장합니다.",
+                provider, model, gen_provider, gen_model, _model_family(provider),
             )
 
     key = (provider, model)
