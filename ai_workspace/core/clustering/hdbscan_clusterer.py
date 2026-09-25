@@ -29,11 +29,12 @@ def parse_embedding(raw_value) -> np.ndarray:
 
 
 class NewsClusterer:
-    def __init__(self, min_cluster_size: int = 3, min_samples: int = 2):
+    def __init__(self, min_cluster_size: int = 3, min_samples: int = 2, lookback_hours: int = 24):
         if not HDBSCAN_AVAILABLE:
             raise ImportError("hdbscan library required: pip install hdbscan")
         self.min_cluster_size = min_cluster_size
         self.min_samples = min_samples
+        self.lookback_hours = lookback_hours
         self.labels_ = None
         self.data = None
 
@@ -76,27 +77,29 @@ class NewsClusterer:
                 final_groups.append((c_ids, c_titles))
         return final_groups
 
-    def _load_data_from_db(self, exclude_clustered: bool = True) -> Dict:
+    def _load_data_from_db(self, exclude_clustered: bool = True, lookback_hours: int = 24) -> Dict:
         from db.connection import get_connection, release_connection
         print("📥 DB에서 뉴스 데이터 로딩 중...", end="", flush=True)
         conn = get_connection()
         try:
             cur = conn.cursor()
             clustered_filter = "AND news_letter_id IS NULL" if exclude_clustered else ""
-            
+
             # 쿼리: 임베딩과 본문이 있는 기사만 조회
+            # lookback_hours는 SQL 파라미터(%s)로 바인딩한다 (문자열 포매팅으로 쿼리문에
+            # 직접 끼워넣지 않음 - 값 자체는 내부 설정값이라도 파라미터화된 쿼리를 유지).
             cur.execute(f"""
                 SELECT N.raw_news_id, N.raw_news_title, N.embedding_result, P.press_name, N.raw_news_content
-                FROM news_raw N 
+                FROM news_raw N
                 JOIN press P ON N.press_id = P.press_id
                 WHERE N.embedding_result IS NOT NULL
                   AND N.raw_news_content IS NOT NULL
                   AND N.raw_news_content != ''
-                  AND N.raw_news_crawled_at >= NOW() - INTERVAL '24 hours'
+                  AND N.raw_news_crawled_at >= NOW() - (%s * INTERVAL '1 hour')
                   {clustered_filter}
                 ORDER BY N.raw_news_id
-            """)
-            
+            """, (lookback_hours,))
+
             rows = cur.fetchall()
             ids, titles, embeddings, press_names, contents = [], [], [], [], []
             
@@ -122,9 +125,19 @@ class NewsClusterer:
         finally:
             release_connection(conn)
 
-    def cluster_news(self, min_cluster_size=None, min_samples=None) -> Dict[int, List[int]]:
+    def cluster_news(self, min_cluster_size=None, min_samples=None, lookback_hours=None) -> Dict[int, List[int]]:
         # Pipeline 연동용
-        self.data = self._load_data_from_db()
+        # 이전에는 이 인자들이 무시되고 __init__ 시점의 기본값(3, 2)이 항상 쓰였다.
+        # CLI/Settings에서 내려온 값이 실제로 hdbscan.HDBSCAN까지 도달하도록 인스턴스
+        # 상태를 갱신한다.
+        if min_cluster_size is not None:
+            self.min_cluster_size = min_cluster_size
+        if min_samples is not None:
+            self.min_samples = min_samples
+        if lookback_hours is not None:
+            self.lookback_hours = lookback_hours
+
+        self.data = self._load_data_from_db(lookback_hours=self.lookback_hours)
         if not self.data or len(self.data['ids']) == 0:
             return {}
             

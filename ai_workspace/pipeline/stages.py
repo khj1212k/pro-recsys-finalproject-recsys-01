@@ -113,33 +113,6 @@ class Stage3_NewsEmbedding(PipelineStage):
 
         return count
 
-def _compute_clustering_stats(clusterer, clusters, effective_params) -> Dict[str, Any]:
-    """클러스터링 실행 통계(전체 기사 수, 클러스터 수, noise 비율)를 계산.
-
-    clusterer.labels_가 없거나(예: 테스트 목) 길이를 알 수 없는 경우에도 파이프라인이
-    죽지 않도록 방어적으로 계산한다.
-    """
-    n_articles = None
-    noise_ratio = None
-    try:
-        labels = getattr(clusterer, "labels_", None)
-        if labels is not None:
-            labels_list = list(labels)
-            n_articles = len(labels_list)
-            if n_articles:
-                noise_count = sum(1 for label in labels_list if int(label) == -1)
-                noise_ratio = noise_count / n_articles
-    except Exception as e:
-        logger.warning(f"클러스터링 통계 계산 실패 (무시하고 계속 진행): {e}")
-
-    return {
-        "n_articles": n_articles,
-        "n_clusters": len(clusters),
-        "noise_ratio": noise_ratio,
-        "effective_params": effective_params,
-    }
-
-
 class Stage5_NewsletterGeneration(PipelineStage):
     """뉴스레터 생성 (Clustering + Workflow)"""
     def execute(self, limit=None, min_cluster_size=None, min_samples=None,
@@ -153,9 +126,37 @@ class Stage5_NewsletterGeneration(PipelineStage):
         metrics = get_metrics_collector()
         metrics.start_batch()
 
+        # 유효 파라미터 결정: CLI(명시적으로 넘어온 값) > Settings > 하드코딩 기본값
+        effective_min_cluster_size = (
+            min_cluster_size if min_cluster_size is not None
+            else getattr(self.settings, "HDBSCAN_MIN_CLUSTER_SIZE", 3)
+        )
+        effective_min_samples = (
+            min_samples if min_samples is not None
+            else getattr(self.settings, "HDBSCAN_MIN_SAMPLES", 2)
+        )
+        effective_min_target = (
+            min_target if min_target is not None
+            else getattr(self.settings, "MIN_NEWSLETTER_TARGET", 0)
+        )
+        effective_lookback_hours = (
+            lookback_hours if lookback_hours is not None
+            else getattr(self.settings, "CLUSTER_LOOKBACK_HOURS", 24)
+        )
+
+        logger.info(
+            "🎛️  클러스터링 유효 파라미터: "
+            f"min_cluster_size={effective_min_cluster_size}, min_samples={effective_min_samples}, "
+            f"min_target={effective_min_target}, lookback_hours={effective_lookback_hours}"
+        )
+
         # 1. 클러스터링
         clusterer = NewsClusterer()
-        clusters = clusterer.cluster_news(min_cluster_size=min_cluster_size, min_samples=min_samples)
+        clusters = clusterer.cluster_news(
+            min_cluster_size=effective_min_cluster_size,
+            min_samples=effective_min_samples,
+            lookback_hours=effective_lookback_hours,
+        )
 
         if not clusters:
             logger.info("생성된 클러스터가 없습니다.")
@@ -168,32 +169,46 @@ class Stage5_NewsletterGeneration(PipelineStage):
         # 3. 워크플로우 실행 (뉴스레터 생성)
         app = compile_workflow()
         count = 0
-        total = len(clusters) if not limit else min(len(clusters), limit)
-        
-        logger.info(f"🚀 뉴스레터 생성 워크플로우 시작 (대상 클러스터: {total}개)")
 
         # 데이터 준비 (한 번에 로드)
         data = clusterer.get_clustered_articles(list(clusters.keys()))
-        
-        all_ids = sorted(list(clusters.keys()), reverse=True) # 최신순? (ID가 크면 최신이라 가정)
-        if limit: all_ids = all_ids[:limit]
 
-        for i, cid in enumerate(all_ids):
+        all_ids = sorted(list(clusters.keys()), reverse=True) # 최신순? (ID가 크면 최신이라 가정)
+        attempt_ids = all_ids[:limit] if limit else all_ids
+
+        logger.info(
+            f"🚀 뉴스레터 생성 워크플로우 시작 (대상 클러스터: {len(attempt_ids)}개, "
+            f"min_target={effective_min_target})"
+        )
+
+        def process_cluster(cid, idx) -> bool:
             state = {
                 "current_cluster_id": cid,
-                "current_cluster_index": i,
+                "current_cluster_index": idx,
                 "all_cluster_ids": all_ids,
                 "all_cluster_groups": clusters,
                 "data": data,
                 "run_id": run_id,
             }
-            
             try:
                 final = app.invoke(state)
-                if final.get("completed_newsletters"):
-                    count += 1
+                return bool(final.get("completed_newsletters"))
             except Exception as e:
                 logger.error(f"Clubster {cid} 처리 중 에러: {e}")
+                return False
+
+        for i, cid in enumerate(attempt_ids):
+            if process_cluster(cid, i):
+                count += 1
+
+        # min_target 미달 시, limit으로 제외됐던 나머지 클러스터를 순서대로 추가 시도
+        # (min_target=0이면 기존과 동일하게 limit에서 정확히 끊긴다 - 기본 동작 보존).
+        if limit and effective_min_target and count < effective_min_target:
+            for i in range(len(attempt_ids), len(all_ids)):
+                if count >= effective_min_target:
+                    break
+                if process_cluster(all_ids[i], i):
+                    count += 1
 
         # End LLM metrics collection, print summary, and persist for later cost/latency 분석
         metrics.end_batch()
