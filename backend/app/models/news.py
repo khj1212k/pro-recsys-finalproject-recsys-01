@@ -1,7 +1,7 @@
 from typing import Optional, List
 from datetime import datetime, timezone
 from sqlmodel import Field, SQLModel, JSON, Column
-from sqlalchemy import DateTime
+from sqlalchemy import DateTime, SmallInteger, text
 from pgvector.sqlalchemy import Vector
 
 from sqlalchemy.dialects.postgresql import TSVECTOR
@@ -49,6 +49,15 @@ class NewsRaw(SQLModel, table=True):
     )
     news_letter_id: Optional[int] = Field(default=None, foreign_key="news_letter.news_letter_id")
     search_vector: Optional[str] = Field(default=None, sa_column=Column(TSVECTOR))
+    # 본문 추출 결과(f87f7378672e). NULL = 아직 시도 안 함. 'dropped'/'empty'도
+    # raw_news_content는 ''이므로 이 컬럼 없이는 "미처리"와 구분할 수 없다.
+    raw_news_extract_status: Optional[str] = Field(default=None, max_length=16)
+    raw_news_extracted_at: Optional[datetime] = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
+    raw_news_extract_attempts: int = Field(
+        default=0, sa_column=Column(SmallInteger, nullable=False, server_default=text("0"))
+    )
 
 # 5. 뉴스 레터 (News_Letter)
 class NewsLetter(SQLModel, table=True):
