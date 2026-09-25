@@ -61,6 +61,10 @@ class BaseSettings:
     # ========== Embedder ==========
     EMBEDDING_BATCH_SIZE: int = 8  # GPU 메모리 고려
     EMBEDDING_DIM: int = 1024
+    # BGE-M3 입력 토큰 상한 - 임베딩 의미가 바뀌는 값이라 ADR 0006의 사전 등록 규칙으로 정했다.
+    EMBEDDING_MAX_LENGTH: int = int(os.getenv("EMBEDDING_MAX_LENGTH", "8192"))
+    # 배치 크기 x (배치 내 최대 토큰 길이)^2 상한 = 1024토큰 8건. eager attention 점수 텐서 크기를 묶는다.
+    EMBEDDING_ATTENTION_BUDGET: int = int(os.getenv("EMBEDDING_ATTENTION_BUDGET", str(8 * 1024 ** 2)))
 
     # ========== Pipeline ==========
     DEFAULT_CLUSTER_LIMIT: int = None
