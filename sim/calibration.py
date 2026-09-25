@@ -154,3 +154,60 @@ def load_ebnerd_behaviors(split_dir: Path):
     import pandas as pd
 
     return pd.read_parquet(Path(split_dir) / "behaviors.parquet", columns=["article_ids_inview", "article_ids_clicked"])
+
+
+# ---------------------------------------------------------------------------
+# Team synthetic data (the circular LLM-inferred clicks this simulator replaces)
+# ---------------------------------------------------------------------------
+
+def team_click_rate(ctr_logs) -> Dict[str, float]:
+    """Click rate of the team's synthetic CTR log (user_id, news_letter_id, is_clicked)."""
+    per_user = ctr_logs.groupby("user_id")["is_clicked"].agg(["mean", "size"])
+    return {
+        "impressions": int(len(ctr_logs)),
+        "clicks": int(ctr_logs["is_clicked"].sum()),
+        "pooled_ctr": float(ctr_logs["is_clicked"].mean()),
+        "n_users": int(len(per_user)),
+        "impressions_per_user_median": float(per_user["size"].median()),
+        "user_ctr_min": float(per_user["mean"].min()),
+        "user_ctr_median": float(per_user["mean"].median()),
+        "user_ctr_max": float(per_user["mean"].max()),
+    }
+
+
+def main(argv=None) -> int:
+    """Base-rate report for ADR 0019: preset calibration + EB-NeRD + team data.
+
+        python -m sim.calibration --ebnerd-dir data/benchmarks/ebnerd/ebnerd_small \\
+            --team-ctr-csv data/team_archive/synthetic_dataset/synthetic_ctr_logs.csv
+
+    Prints aggregates only (EB-NeRD is research-licensed; no article fields are read).
+    """
+    import argparse
+    import json
+
+    import pandas as pd
+
+    from sim.click_model import preset, preset_names
+    from sim.reference import REFERENCE_NOW, reference_catalog, reference_profiles
+
+    p = argparse.ArgumentParser()
+    p.add_argument("--ebnerd-dir", type=Path, default=None, help="EB-NeRD split root (with train/ and validation/)")
+    p.add_argument("--team-ctr-csv", type=Path, default=None)
+    args = p.parse_args(argv)
+
+    report: Dict[str, object] = {"presets": {}}
+    for name in preset_names():
+        r = calibrate_bias(preset(name), reference_profiles(), reference_catalog(), REFERENCE_NOW)
+        report["presets"][name] = {**r.to_dict(), "shipped_bias": preset(name).bias}
+    if args.ebnerd_dir is not None:
+        report["ebnerd"] = {split: ebnerd_base_rate(load_ebnerd_behaviors(args.ebnerd_dir / split))
+                            for split in ("train", "validation") if (args.ebnerd_dir / split).is_dir()}
+    if args.team_ctr_csv is not None:
+        report["team_archive"] = team_click_rate(pd.read_csv(args.team_ctr_csv, usecols=["user_id", "is_clicked"]))
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
