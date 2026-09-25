@@ -1,5 +1,8 @@
 import hashlib
 import json
+import subprocess
+import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -12,6 +15,8 @@ from evaluation.clustering.metrics import (
     evaluate_run,
     stability_ari,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 # ---------------------------------------------------------------------------
@@ -432,3 +437,66 @@ class TestEvaluateRun:
         pred = hdbscan_cluster(X_well)
         report = evaluate_run(X_well, pred)
         assert report["params"] == {}
+
+
+# ---------------------------------------------------------------------------
+# CLI (`python -m evaluation.clustering.metrics`)
+# ---------------------------------------------------------------------------
+
+class TestCli:
+    def _run_cli(self, args):
+        return subprocess.run(
+            [sys.executable, "-m", "evaluation.clustering.metrics", *args],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+
+    def test_writes_json_report_from_npy_files(self, tmp_path):
+        X_well, y_well = make_sphere_blobs(**WELL_SEPARATED_KWARGS)
+        embeddings_path = tmp_path / "embeddings.npy"
+        labels_path = tmp_path / "labels.npy"
+        out_path = tmp_path / "report.json"
+        np.save(embeddings_path, X_well)
+        np.save(labels_path, hdbscan_cluster(X_well))
+
+        result = self._run_cli(
+            [
+                "--embeddings", str(embeddings_path),
+                "--labels", str(labels_path),
+                "--out", str(out_path),
+            ]
+        )
+
+        assert result.returncode == 0, result.stderr
+        report = json.loads(out_path.read_text(encoding="utf-8"))
+        assert report["n"] == X_well.shape[0]
+        assert "basic_stats" in report
+        assert "dbcv" in report
+        assert "dbcv_reason" in report
+        assert "cosine_silhouette" in report
+        assert report["bcubed"] is None
+        assert report["stability"] is None
+
+    def test_truth_argument_populates_bcubed(self, tmp_path):
+        X_well, y_well = make_sphere_blobs(**WELL_SEPARATED_KWARGS)
+        embeddings_path = tmp_path / "embeddings.npy"
+        labels_path = tmp_path / "labels.npy"
+        truth_path = tmp_path / "truth.npy"
+        out_path = tmp_path / "report.json"
+        np.save(embeddings_path, X_well)
+        np.save(labels_path, y_well)
+        np.save(truth_path, y_well)
+
+        result = self._run_cli(
+            [
+                "--embeddings", str(embeddings_path),
+                "--labels", str(labels_path),
+                "--truth", str(truth_path),
+                "--out", str(out_path),
+            ]
+        )
+
+        assert result.returncode == 0, result.stderr
+        report = json.loads(out_path.read_text(encoding="utf-8"))
+        assert report["bcubed"]["f1"] == pytest.approx(1.0)
