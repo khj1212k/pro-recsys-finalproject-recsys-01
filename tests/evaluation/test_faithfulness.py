@@ -242,6 +242,33 @@ class TestCheckAgainstSources:
         assert report.number_exact == 1
         assert report.unsupported_numbers == []
 
+    def test_unitless_number_does_not_match_usd_source(self):
+        # "12억" (unit-less) must not stand in for a USD-denominated source
+        # figure of the same bare magnitude -- cross-currency, no conversion.
+        report = check_against_sources(
+            "규모는 12억 수준이다.", ["해당 기업은 12억 달러를 유치했다."]
+        )
+        assert len(report.unsupported_numbers) == 1
+        assert report.passed is False
+
+    def test_usd_number_does_not_match_unitless_source(self):
+        # same bug, opposite direction: an explicit USD figure in the
+        # generated text must not match a unit-less source figure.
+        report = check_against_sources(
+            "해당 기업은 12억 달러를 유치했다.", ["규모는 12억 수준이다."]
+        )
+        assert len(report.unsupported_numbers) == 1
+        assert report.passed is False
+
+    def test_krw_number_does_not_match_usd_source(self):
+        # two explicit currencies must never cross-match, even at the same
+        # bare numeric value.
+        report = check_against_sources(
+            "매출은 12억원이었다.", ["매출은 12억 달러였다."]
+        )
+        assert len(report.unsupported_numbers) == 1
+        assert report.passed is False
+
     def test_entity_supported_via_fuzzy_match(self):
         report = check_against_sources(
             "삼성전자가 발표했다.", ["삼성전자(005930)가 실적을 공개했다."]
