@@ -61,7 +61,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-newsletter}
     volumes:
       - pgdata:/var/lib/postgresql/data
-    # 호스트 루프백에만 노출(호스트 MPS 임베딩, integration 테스트, psql 확인용).
+    # 호스트 루프백에만 노출(호스트 MPS 임베딩, psql 확인용). 이 DB는 실제 수집 데이터다 -
+    # integration 테스트는 여기가 아니라 일회용 테스트 DB에서 돌린다(docs/runbook.md).
     # 서버 배포에서는 DB_BIND=127.0.0.1을 유지하고 방화벽에서 5432를 열지 않는다.
     ports:
       - "${DB_BIND:-127.0.0.1}:${DB_HOST_PORT:-5433}:5432"

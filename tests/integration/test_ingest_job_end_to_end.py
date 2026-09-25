@@ -44,7 +44,7 @@ class _FakeEmbedder:
 
 
 @pytest.fixture
-def fake_world(pg_conn, monkeypatch):
+def fake_world(pg_conn, isolated_news_raw, monkeypatch):
     from config.settings import Settings
 
     suffix = uuid.uuid4().hex[:8]

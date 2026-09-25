@@ -197,3 +197,20 @@ API 이미지는 `backend/requirements.txt`만 설치한다. `backend/requiremen
   CPU 처리량이 수집량을 따라가는지는 `job_runs`의 embed `remaining`으로 본다(ADR 0006).
 - `DB_BIND`/`API_BIND`는 `127.0.0.1` 그대로 두고, 외부 공개는 리버스 프록시(TLS)로만 한다.
 - `SLACK_WEBHOOK_URL`을 설정해 실패 알림을 받는다.
+
+## 13. integration 테스트 (운영 DB 금지)
+
+`jobs.run` 잡은 `news_raw` 전체를 대상으로 돈다 - compose의 `db`(실제 수집 데이터, `127.0.0.1:5433`)에서
+integration 테스트를 돌리면 가짜 임베딩이 실제 기사에 저장된다. 테스트는 DB 이름에 `test`가 없거나
+`news_raw`에 테스트가 만들지 않은 행이 있으면 실패하도록 막혀 있다(`tests/integration/conftest.py`).
+로컬에서는 일회용 컨테이너를 쓴다:
+
+```bash
+docker run -d --rm --name newsletter-itest-pg -p 127.0.0.1:5434:5432 \
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=newsletter_test pgvector/pgvector:pg16
+export TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5434/newsletter_test DATABASE_URL=$TEST_DATABASE_URL
+.venv/bin/python -c "import os,psycopg2; c=psycopg2.connect(os.environ['DATABASE_URL']); c.autocommit=True; c.cursor().execute('CREATE EXTENSION IF NOT EXISTS vector')"
+(cd backend && ../.venv/bin/python -m alembic upgrade head)
+.venv/bin/python -m pytest -q -m integration tests/
+docker stop newsletter-itest-pg   # --rm이라 컨테이너와 데이터가 함께 사라진다
+```
