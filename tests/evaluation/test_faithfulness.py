@@ -1,5 +1,6 @@
 import pytest
 
+from evaluation.llm import faithfulness
 from evaluation.llm.faithfulness import (
     check_against_sources,
     compare_rewrite,
@@ -319,11 +320,16 @@ class TestCheckAgainstSources:
             "unsupported_numbers",
             "entity_total",
             "unsupported_entities",
+            "entity_extractor",
             "quote_total",
             "unsupported_quotes",
             "thresholds",
         }
         assert d["passed"] is True
+
+    def test_report_records_kiwi_as_extractor_by_default(self):
+        report = check_against_sources("매출은 500억원이었다.", ["매출은 500억원이었다."])
+        assert report.entity_extractor == "kiwi"
 
 
 # ---------------------------------------------------------------------------
@@ -391,3 +397,53 @@ class TestCompareRewrite:
             "dropped_entities",
             "has_drift",
         }
+
+
+# ---------------------------------------------------------------------------
+# Entity extraction when kiwipiepy is unavailable
+# ---------------------------------------------------------------------------
+
+class TestEntityExtractorMissingKiwi:
+    """kiwipiepy is monkeypatched away by replacing _get_kiwi so these run
+    the same whether or not kiwipiepy happens to be installed in the test
+    environment."""
+
+    @pytest.fixture(autouse=True)
+    def _no_kiwi(self, monkeypatch):
+        monkeypatch.setattr(faithfulness, "_get_kiwi", lambda: False)
+
+    def test_extract_facts_raises_import_error_by_default(self):
+        with pytest.raises(ImportError):
+            extract_facts("삼성전자는 오늘 발표했다.")
+
+    def test_extract_facts_falls_back_to_regex_when_opted_in(self):
+        facts = extract_facts("삼성전자는 오늘 발표했다.", allow_regex_fallback=True)
+        assert facts.entity_extractor == "regex_fallback"
+        # the regex fallback has no POS tagger, so it can't strip the "는"
+        # particle the way Kiwi would -- it just returns hangul/alnum runs.
+        assert any(e.surface.startswith("삼성전자") for e in facts.entities)
+        assert all(e.tag == "REGEX" for e in facts.entities)
+
+    def test_check_against_sources_raises_import_error_by_default(self):
+        with pytest.raises(ImportError):
+            check_against_sources("삼성전자가 발표했다.", ["삼성전자가 발표했다."])
+
+    def test_check_against_sources_reports_regex_fallback_extractor(self):
+        report = check_against_sources(
+            "삼성전자가 발표했다.",
+            ["삼성전자가 발표했다."],
+            allow_regex_fallback=True,
+        )
+        assert report.entity_extractor == "regex_fallback"
+
+    def test_compare_rewrite_raises_import_error_by_default(self):
+        with pytest.raises(ImportError):
+            compare_rewrite("삼성전자가 발표했다.", "삼성전자가 발표했어요.")
+
+    def test_compare_rewrite_succeeds_with_fallback_opted_in(self):
+        # the regex fallback has no POS tagger, so it treats every
+        # hangul/alnum run (verbs included) as "entity-like" -- identical
+        # text is the only case guaranteed to have zero drift under it.
+        text = "삼성전자가 발표했다."
+        report = compare_rewrite(text, text, allow_regex_fallback=True)
+        assert report.has_drift is False

@@ -66,6 +66,7 @@ class Facts:
     dates: List[DateFact] = field(default_factory=list)
     entities: List[EntityFact] = field(default_factory=list)
     quotes: List[QuoteFact] = field(default_factory=list)
+    entity_extractor: str = "kiwi"
 
     def to_dict(self) -> dict:
         return {
@@ -73,6 +74,7 @@ class Facts:
             "dates": [d.to_dict() for d in self.dates],
             "entities": [e.to_dict() for e in self.entities],
             "quotes": [q.to_dict() for q in self.quotes],
+            "entity_extractor": self.entity_extractor,
         }
 
 
@@ -85,6 +87,7 @@ class Report:
     unsupported_numbers: List[dict]
     entity_total: int
     unsupported_entities: List[dict]
+    entity_extractor: str
     quote_total: int
     unsupported_quotes: List[dict]
     thresholds: dict
@@ -276,11 +279,46 @@ def _extract_dates(text: str) -> List[DateFact]:
 
 _ENTITY_TAGS = {"NNP", "SL", "SH"}
 
+# Coarse regex approximation of "entity-like token", reusing the same shape
+# as ai_workspace/core/clustering/split_v2.py's _tokenize_title fallback
+# (`re.findall(r"[가-힣A-Za-z0-9]{2,}", ...)`). Unlike Kiwi's tagger it
+# cannot tell a proper noun (NNP/SL/SH) apart from an ordinary noun, so it
+# is only ever used when a caller explicitly opts in -- see
+# _extract_entities.
+_ENTITY_FALLBACK_RE = re.compile(r"[가-힣A-Za-z0-9]{2,}")
 
-def _extract_entities(text: str) -> List[EntityFact]:
+
+def _extract_entities_fallback(text: str) -> List[EntityFact]:
+    return [
+        EntityFact(surface=m.group(0), tag="REGEX", span=m.span())
+        for m in _ENTITY_FALLBACK_RE.finditer(text)
+    ]
+
+
+def _extract_entities(
+    text: str, *, allow_regex_fallback: bool = False
+) -> Tuple[List[EntityFact], str]:
+    """Returns (entities, extractor_name) where extractor_name is "kiwi"
+    or "regex_fallback".
+
+    Raises ImportError when kiwipiepy is unavailable and
+    `allow_regex_fallback` is False (the default): silently returning an
+    empty list would be indistinguishable from "kiwi ran and found no
+    entities", hiding a broken/missing dependency from callers. Passing
+    `allow_regex_fallback=True` opts into the much weaker regex
+    approximation instead of failing.
+    """
     kiwi = _get_kiwi()
     if not kiwi:
-        return []
+        if not allow_regex_fallback:
+            raise ImportError(
+                "kiwipiepy is required for named-entity extraction but is "
+                "not installed. Install kiwipiepy, or pass "
+                "allow_regex_fallback=True to use a coarser regex-based "
+                "approximation (no POS tagging, so ordinary nouns are not "
+                "filtered out)."
+            )
+        return _extract_entities_fallback(text), "regex_fallback"
 
     tokens = kiwi.analyze(text)[0][0]
     entities = []
@@ -301,7 +339,7 @@ def _extract_entities(text: str) -> List[EntityFact]:
             i = j
         else:
             i += 1
-    return entities
+    return entities, "kiwi"
 
 
 # ---------------------------------------------------------------------------
@@ -337,13 +375,21 @@ def _extract_quotes(text: str) -> List[QuoteFact]:
 # Public API
 # ---------------------------------------------------------------------------
 
-def extract_facts(text: str) -> Facts:
+def extract_facts(text: str, *, allow_regex_fallback: bool = False) -> Facts:
     text = text or ""
     dates = _extract_dates(text)
     numbers = _extract_numbers(text, exclude_spans=[d.span for d in dates])
-    entities = _extract_entities(text)
+    entities, entity_extractor = _extract_entities(
+        text, allow_regex_fallback=allow_regex_fallback
+    )
     quotes = _extract_quotes(text)
-    return Facts(numbers=numbers, dates=dates, entities=entities, quotes=quotes)
+    return Facts(
+        numbers=numbers,
+        dates=dates,
+        entities=entities,
+        quotes=quotes,
+        entity_extractor=entity_extractor,
+    )
 
 
 def _units_compatible(u1: str, u2: str) -> bool:
@@ -385,9 +431,12 @@ def check_against_sources(
     max_unsupported_numbers: int = 0,
     max_unsupported_entities: int = 0,
     max_unsupported_quotes: int = 0,
+    allow_regex_fallback: bool = False,
 ) -> Report:
-    gen_facts = extract_facts(generated)
-    source_facts = [extract_facts(s) for s in sources]
+    gen_facts = extract_facts(generated, allow_regex_fallback=allow_regex_fallback)
+    source_facts = [
+        extract_facts(s, allow_regex_fallback=allow_regex_fallback) for s in sources
+    ]
     sources = sources or []
 
     number_exact = 0
@@ -438,6 +487,7 @@ def check_against_sources(
         unsupported_numbers=unsupported_numbers,
         entity_total=len(gen_facts.entities),
         unsupported_entities=unsupported_entities,
+        entity_extractor=gen_facts.entity_extractor,
         quote_total=len(gen_facts.quotes),
         unsupported_quotes=unsupported_quotes,
         thresholds={
@@ -471,9 +521,10 @@ def compare_rewrite(
     *,
     number_approx_tol: float = 0.01,
     entity_match_threshold: float = 90.0,
+    allow_regex_fallback: bool = False,
 ) -> DriftReport:
-    orig_facts = extract_facts(original)
-    rewr_facts = extract_facts(rewritten)
+    orig_facts = extract_facts(original, allow_regex_fallback=allow_regex_fallback)
+    rewr_facts = extract_facts(rewritten, allow_regex_fallback=allow_regex_fallback)
 
     def number_eq(a: NumberFact, b: NumberFact) -> bool:
         return _number_match_status(a, b, number_approx_tol) is not None
