@@ -6,11 +6,36 @@ from typing import Optional, Generator
 import psycopg2
 from psycopg2 import pool
 from psycopg2.extensions import connection as Connection
+from pgvector.psycopg2 import register_vector
 from dotenv import load_dotenv
 
 from config.settings import Settings
 
 load_dotenv()
+
+
+class VectorExtensionMissingError(RuntimeError):
+    """pgvector의 `vector` extension이 설치되지 않은 DB에 연결했을 때 발생한다."""
+
+
+def _register_pgvector_adapter(conn: Connection) -> Connection:
+    """이 커넥션에 pgvector 타입 어댑터를 등록한다.
+
+    등록하지 않으면 vector 컬럼을 raw SQL(psycopg2 cursor)로 읽을 때 값이 문자열로
+    돌아온다 - ai_workspace/core/user_embedder.py가 `np.array(<str>)`를 만들다
+    깨지는 원인. extension이 없는 DB에 연결된 경우, 이후 벡터 쿼리가 알 수 없는
+    시점에 이상한 값(문자열)을 조용히 돌려주는 대신 커넥션을 내주는 시점에 바로
+    실패시킨다.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT 1 FROM pg_extension WHERE extname = 'vector'")
+        if cur.fetchone() is None:
+            raise VectorExtensionMissingError(
+                "pgvector extension('vector')이 설치되어 있지 않습니다. "
+                "먼저 `CREATE EXTENSION vector;`를 실행한 뒤 다시 연결하세요."
+            )
+    register_vector(conn)
+    return conn
 
 
 def _build_db_config() -> dict:
@@ -66,11 +91,15 @@ class DatabasePool:
     def get_connection(self) -> Connection:
         if self._pool:
             try:
-                return self._pool.getconn()
+                conn = self._pool.getconn()
             except pool.PoolError:
-                pass
+                conn = None
+            if conn is not None:
+                # PoolError만 direct connection으로 폴백한다 - 여기서 발생하는
+                # VectorExtensionMissingError까지 삼켜서 폴백해버리면 안 된다.
+                return _register_pgvector_adapter(conn)
 
-        return self._create_direct_connection()
+        return _register_pgvector_adapter(self._create_direct_connection())
 
     def release_connection(self, conn: Connection) -> None:
         if self._pool and conn:
