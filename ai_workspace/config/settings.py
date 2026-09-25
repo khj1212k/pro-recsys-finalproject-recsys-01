@@ -4,10 +4,16 @@
 # - RSS 피드 소스 목록 관리
 
 import os
+from pathlib import Path
 from typing import Dict, Tuple
 from dotenv import load_dotenv
 
 load_dotenv(override=False)
+
+# ai_workspace/config/settings.py -> parents[2]가 저장소 루트.
+# LLM_KILL_SWITCH_FILE 기본값을 CWD가 아닌 저장소 루트 기준으로 고정하기 위함
+# (배치가 어느 디렉터리에서 실행되든 항상 같은 파일을 본다).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Environment:
@@ -86,6 +92,17 @@ class BaseSettings:
     # core/llm/adapters.py::OpenAICompatLLMClient.complete() 내부에서 이미 처리되므로
     # 이 값은 "콘텐츠가 검증을 통과하지 못했을 때"만 적용된다.
     MAX_RETRY_TONE_VALIDATION: int = 2
+
+    # ========== LLM Kill Switch ==========
+    # 예정된 비용 가드(cron)가 실제 Google Cloud 과금이 시작되면 이 파일을 만들어
+    # 킬 스위치를 켠다. env LLM_KILL_SWITCH("1"/"true"/"yes")는
+    # core/llm/kill_switch.py가 호출마다 직접 os.getenv로 읽는다(여기 캐싱하면
+    # 테스트/런타임에서 즉시 반영되지 않음). 파일 경로만 저장소 루트 기준 기본값으로
+    # 여기서 정의한다 - CWD가 pipeline 실행 위치에 따라 달라져도 항상 같은 파일을
+    # 가리켜야 하기 때문.
+    LLM_KILL_SWITCH_FILE: str = os.getenv(
+        "LLM_KILL_SWITCH_FILE", str(_REPO_ROOT / ".ops" / "LLM_KILL_SWITCH")
+    )
     
     # ========== Crawler Settings ==========
     PARALLEL_WORKERS: int = 8  # 병렬 크롤링 워커

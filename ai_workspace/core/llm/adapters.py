@@ -12,6 +12,7 @@ from openai import OpenAI
 from pydantic import BaseModel, ValidationError
 
 from core.llm.client import LLMClient, LLMResult, LLMUsage
+from core.llm.kill_switch import check_kill_switch
 from core.llm_client import (
     BACKOFF_MULTIPLIER,
     INITIAL_BACKOFF,
@@ -65,6 +66,10 @@ class OpenAICompatLLMClient(LLMClient):
         temperature: float = 0.2,
         max_tokens: int = 4096,
     ) -> LLMResult:
+        killed = check_kill_switch(self.provider, self.model, purpose)
+        if killed is not None:
+            return killed
+
         backoff = INITIAL_BACKOFF
         last_error = "unknown error"
 
@@ -282,6 +287,10 @@ class HyperCLOVALLMClient(LLMClient):
         temperature: float = 0.2,
         max_tokens: int = 4096,
     ) -> LLMResult:
+        killed = check_kill_switch(self.provider, self.model, purpose)
+        if killed is not None:
+            return killed
+
         start = time.time()
         response_format = {"type": "json_object"} if schema is not None else None
         text = self._legacy_client.chat_completion(
