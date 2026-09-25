@@ -248,3 +248,18 @@ def test_sigterm_handler_raises_job_terminated():
     with pytest.raises(JobTerminated) as exc:
         _raise_terminated(signal.SIGTERM, None)
     assert exc.value.signum == signal.SIGTERM
+
+
+def test_job_listed_in_jobs_disabled_exits_zero_without_touching_the_db(monkeypatch):
+    """Mac 개발 환경에서는 임베딩을 호스트 MPS(launchd)가 맡으므로 같은 crontab을 쓰는
+    컨테이너 스케줄러의 embed 줄은 JOBS_DISABLED로 끈다 - DB 연결·실행 기록 없이 0으로 끝나야 한다."""
+    import jobs.run as run_cli
+    import jobs.store as store
+
+    def no_db(*a, **k):
+        raise AssertionError("disabled job must not connect to the DB")
+
+    monkeypatch.setattr(store.PostgresJobRunStore, "connect", classmethod(no_db))
+    monkeypatch.setenv("JOBS_DISABLED", "popularity, embed")
+
+    assert run_cli.main(["embed", "--time-budget-s", "10"]) == 0

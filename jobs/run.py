@@ -6,6 +6,7 @@ import argparse
 import importlib
 import json
 import logging
+import os
 import signal
 import sys
 from typing import List, Optional
@@ -51,17 +52,28 @@ def _configure_logging() -> None:
     )
 
 
+def disabled_jobs() -> set:
+    """JOBS_DISABLED(쉼표 구분)에 있는 잡 이름. 같은 crontab을 환경마다 다르게 끄는 데 쓴다."""
+    return {name.strip() for name in os.getenv("JOBS_DISABLED", "").split(",") if name.strip()}
+
+
 def _raise_terminated(signum, frame):
     raise JobTerminated(signum)
 
 
 def main(argv: Optional[List[str]] = None) -> int:
     _configure_logging()
+    args = build_parser().parse_args(argv)
+    if args.job in disabled_jobs():
+        # 실행 기록을 남기지 않는다 - 매시 도는 줄이면 job_runs가 skipped 행으로 채워진다.
+        logging.getLogger("jobs.run").info(f"job={args.job}: JOBS_DISABLED에 있어 실행하지 않음")
+        print(json.dumps({"job": args.job, "run_id": None, "status": "disabled"}))
+        return 0
+
     # 기본 SIGTERM 처리는 실행 기록 없이 프로세스를 끝낸다(컨테이너 PID 1이면 아예 무시된다) -
     # 예외로 바꿔 run_job이 중단을 job_runs에 남기고 advisory lock을 풀게 한다.
     signal.signal(signal.SIGTERM, _raise_terminated)
     signal.signal(signal.SIGINT, _raise_terminated)
-    args = build_parser().parse_args(argv)
     module = importlib.import_module(JOBS[args.job])
 
     from jobs.store import PostgresJobRunStore
