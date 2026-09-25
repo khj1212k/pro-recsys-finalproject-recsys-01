@@ -30,6 +30,27 @@ class JobSkipped(Exception):
         self.stats = stats or {}
 
 
+class JobTerminated(BaseException):
+    """jobs.run이 SIGTERM/SIGINT를 받으면 메인 스레드에서 던진다.
+
+    BaseException인 이유: 잡 코드의 `except Exception`(예: 임베딩 배치 하나가 실패해도
+    계속 진행)이 중단 신호를 삼켜 계속 돌지 않게 하기 위함 - KeyboardInterrupt와 같은 취급.
+    """
+
+    def __init__(self, signum: int):
+        super().__init__(signum)
+        self.signum = signum
+
+    @property
+    def signal_name(self) -> str:
+        import signal
+
+        try:
+            return signal.Signals(self.signum).name
+        except ValueError:
+            return str(self.signum)
+
+
 @dataclass
 class JobContext:
     job: str
@@ -161,6 +182,12 @@ def _execute(job, fn, ctx: JobContext, store, notify) -> JobResult:
         if returned:
             ctx.stats.update(returned)
         status = "succeeded"
+    except JobTerminated as term:
+        # docker stop / compose stop - 지금까지 채운 stats와 함께 실패로 남기고 락을 푼다.
+        status = "failed"
+        error = f"terminated by {term.signal_name}"
+        logger.error(f"job={job}: {error}")
+        failure_summary = error
     except JobSkipped as skip:
         ctx.stats.update(skip.stats)
         ctx.stats["reason"] = skip.reason

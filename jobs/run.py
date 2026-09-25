@@ -6,11 +6,12 @@ import argparse
 import importlib
 import json
 import logging
+import signal
 import sys
 from typing import List, Optional
 
 from jobs import setup_import_paths
-from jobs.runtime import resolve_git_sha, run_job
+from jobs.runtime import JobTerminated, resolve_git_sha, run_job
 
 setup_import_paths()
 
@@ -49,8 +50,16 @@ def _configure_logging() -> None:
     )
 
 
+def _raise_terminated(signum, frame):
+    raise JobTerminated(signum)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     _configure_logging()
+    # 기본 SIGTERM 처리는 실행 기록 없이 프로세스를 끝낸다(컨테이너 PID 1이면 아예 무시된다) -
+    # 예외로 바꿔 run_job이 중단을 job_runs에 남기고 advisory lock을 풀게 한다.
+    signal.signal(signal.SIGTERM, _raise_terminated)
+    signal.signal(signal.SIGINT, _raise_terminated)
     args = build_parser().parse_args(argv)
     module = importlib.import_module(JOBS[args.job])
 

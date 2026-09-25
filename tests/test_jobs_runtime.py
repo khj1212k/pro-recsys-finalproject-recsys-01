@@ -208,3 +208,43 @@ def test_non_json_native_stats_values_are_normalized():
     assert stats["n"] == 7 and type(stats["n"]) is int
     assert stats["ratio"] == 0.5 and type(stats["ratio"]) is float
     assert stats["arr"] == [0, 1]
+
+
+def test_termination_signal_is_recorded_as_failed_with_partial_stats_and_unlocks():
+    from jobs.runtime import JobTerminated
+
+    store = FakeStore()
+    notified = []
+
+    def job(ctx):
+        ctx.stats["embed"] = {"embedded": 40}
+        raise JobTerminated(15)
+
+    result = _run(job, store, notified, job="embed")
+
+    assert result.status == "failed"
+    assert result.exit_code != 0
+    row = store.rows[result.run_id]
+    assert row["stats"]["embed"] == {"embedded": 40}
+    assert "SIGTERM" in row["error"]
+    assert store.unlocked == ["embed"]
+    assert len(notified) == 1 and "SIGTERM" in notified[0]
+
+
+def test_termination_is_not_swallowed_by_generic_exception_handlers():
+    """잡 코드 곳곳의 `except Exception`(예: 배치 실패 후 계속)이 중단 신호를 삼키면
+    SIGTERM을 받고도 계속 돈다 - JobTerminated는 Exception이 아니어야 한다."""
+    from jobs.runtime import JobTerminated
+
+    assert not issubclass(JobTerminated, Exception)
+
+
+def test_sigterm_handler_raises_job_terminated():
+    import signal
+
+    from jobs.run import _raise_terminated
+    from jobs.runtime import JobTerminated
+
+    with pytest.raises(JobTerminated) as exc:
+        _raise_terminated(signal.SIGTERM, None)
+    assert exc.value.signum == signal.SIGTERM
