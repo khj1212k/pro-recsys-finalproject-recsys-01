@@ -54,8 +54,11 @@ jobs:
             kiwipiepy \
             hdbscan \
             rapidfuzz \
-            fastapi \
-            httpx
+            "fastapi==0.117.1" \
+            httpx \
+            "python-jose==3.5.0" \
+            "passlib==1.7.4" \
+            "bcrypt==3.2.2"
 
       - name: Install ai_workspace package (no deps, editable)
         run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace
@@ -135,7 +138,12 @@ jobs:
             pydantic \
             kiwipiepy \
             hdbscan \
-            rapidfuzz
+            rapidfuzz \
+            "fastapi==0.117.1" \
+            httpx \
+            "python-jose==3.5.0" \
+            "passlib==1.7.4" \
+            "bcrypt==3.2.2"
 
       - name: Install ai_workspace package (no deps, editable)
         run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace
@@ -167,6 +175,9 @@ jobs:
 
       - name: Run integration tests
         run: .venv/bin/python -m pytest -q -m integration tests/
+
+      - name: Report realtime recsys SQL-path latency (p50/p95)
+        run: .venv/bin/python -m pytest -q -s -m integration tests/integration/test_realtime_recsys_seeded_db.py -k "latency or click_moves"
 
   # Dockerfile이 깨지지 않게 linux/amd64로 이미지를 빌드만 한다(푸시 없음). 배포 대상(Oracle A1)은
   # arm64지만 GitHub 호스티드 러너에서 arm64 에뮬레이션 빌드는 느려서 amd64로 문법/의존성만 검증하고,
