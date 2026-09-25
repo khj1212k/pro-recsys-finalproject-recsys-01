@@ -2,6 +2,7 @@
 # - 각 노드는 State를 받아 처리 후 업데이트된 State 반환
 from typing import Dict, Any
 import logging
+import threading
 from datetime import datetime
 import json
 
@@ -308,21 +309,27 @@ def evaluate_newsletter(state: AgentState) -> Dict[str, Any]:
 
 
 _CACHED_EMBEDDER = None
+# Stage5가 클러스터를 스레드 풀로 병렬 처리한다(ADR 0010). BGE-M3(~2GB)를 스레드마다
+# 따로 올리지 않도록 초기화를 잠그고, 한 모델 인스턴스에 추론이 겹치지 않게
+# 호출도 직렬화한다 - 뉴스레터당 임베딩 1회라 LLM 대기에 비해 병목이 아니다.
+_EMBEDDER_LOCK = threading.Lock()
 
 def get_shared_embedder():
     global _CACHED_EMBEDDER
-    if _CACHED_EMBEDDER is None:
-        logger.info("🔌 Loading shared NewsEmbedder for workflow...")
-        from core.embedder import NewsEmbedder
-        _CACHED_EMBEDDER = NewsEmbedder(l2_normalize=True)
-    return _CACHED_EMBEDDER
+    with _EMBEDDER_LOCK:
+        if _CACHED_EMBEDDER is None:
+            logger.info("🔌 Loading shared NewsEmbedder for workflow...")
+            from core.embedder import NewsEmbedder
+            _CACHED_EMBEDDER = NewsEmbedder(l2_normalize=True)
+        return _CACHED_EMBEDDER
 
 def cleanup_workflow_embedder():
     global _CACHED_EMBEDDER
-    if _CACHED_EMBEDDER:
-        logger.info("🧹 Cleaning up shared NewsEmbedder...")
-        _CACHED_EMBEDDER.cleanup()
-        _CACHED_EMBEDDER = None
+    with _EMBEDDER_LOCK:
+        if _CACHED_EMBEDDER:
+            logger.info("🧹 Cleaning up shared NewsEmbedder...")
+            _CACHED_EMBEDDER.cleanup()
+            _CACHED_EMBEDDER = None
 
 
 def embed_newsletter_node(state: AgentState) -> Dict[str, Any]:
@@ -346,7 +353,8 @@ def embed_newsletter_node(state: AgentState) -> Dict[str, Any]:
         text_to_embed = f"{draft.get('title', '')} {draft.get('content', '')}"
         
         # 단일 문자열 임베딩 (배치 함수 재사용)
-        embeddings, _ = embedder.generate_embeddings_batch([text_to_embed])
+        with _EMBEDDER_LOCK:
+            embeddings, _ = embedder.generate_embeddings_batch([text_to_embed])
         
         if not embeddings:
             raise ValueError("임베딩 반환값 없음")

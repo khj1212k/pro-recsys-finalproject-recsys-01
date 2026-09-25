@@ -68,6 +68,8 @@ class BaseSettings:
 
     # ========== Pipeline ==========
     DEFAULT_CLUSTER_LIMIT: int = None
+    # Stage5 클러스터 병렬 처리 스레드 수 (pipeline/stages.py에서 1~4로 제한, ADR 0010)
+    NEWSLETTER_WORKERS: int = int(os.getenv("NEWSLETTER_WORKERS", "3"))
 
     # ========== Quality Thresholds ==========
     # (미사용) 실제 PASS 기준은 아래 JUDGE_* 값이다. MIN_CLUSTER_CONFIDENCE를 게이트로

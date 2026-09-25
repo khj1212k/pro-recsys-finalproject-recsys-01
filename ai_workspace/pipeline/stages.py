@@ -3,10 +3,16 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Callable, Dict, List, Sequence, Tuple
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
+
+# 클러스터 병렬 처리 상한. 프로바이더 레이트리미터는 레지스트리가 프로바이더 단위로
+# 공유하지만(core/llm/registry.py), 동시 요청이 많아지면 429 백오프만 늘고 처리량은
+# 늘지 않는다. DB 커넥션 풀(dev 최대 5)도 넘지 않게 4로 묶는다 (ADR 0010).
+MAX_NEWSLETTER_WORKERS = 4
 
 class PipelineStage(ABC):
     """파이프라인 단계 기본 클래스"""
@@ -211,6 +217,71 @@ def _compute_clustering_stats(clusterer, clusters, effective_params) -> Dict[str
     }
 
 
+def summarize_cluster_outcome(final_state: Dict[str, Any], cid) -> Dict[str, Any]:
+    """LangGraph 최종 state를 cluster_history에 남길 작은 요약으로 줄인다.
+
+    평가셋 추출기(evaluation/llm/evalset.py)가 이 값으로 "ClusterEvaluator가 떨어뜨린
+    어려운 사례"를 고른다.
+    """
+    completed = final_state.get("completed_newsletters") or []
+    if completed:
+        status = "completed"
+    elif cid in (final_state.get("skipped_clusters") or []):
+        status = "skipped"
+    elif cid in (final_state.get("failed_clusters") or []):
+        status = "failed"
+    else:
+        status = "unknown"
+    ce = final_state.get("cluster_eval") or {}
+    return {
+        "status": status,
+        "newsletter_id": completed[0] if completed else None,
+        "cluster_eval": {"decision": ce.get("decision"), "confidence": ce.get("confidence")},
+        "failure_reason": final_state.get("failure_reason"),
+        "faithfulness_passed": (final_state.get("faithfulness_report") or {}).get("passed"),
+        "tone_fallback": final_state.get("tone_fallback"),
+    }
+
+
+def run_clusters_bounded(
+    process: Callable[[Any, int], Dict[str, Any]],
+    attempt: Sequence[Tuple[Any, int]],
+    fill: Sequence[Tuple[Any, int]],
+    max_workers: int,
+    min_target: int = 0,
+) -> Dict[Any, Dict[str, Any]]:
+    """클러스터들을 최대 max_workers개 스레드로 처리하고 cid -> 결과 요약을 반환한다.
+
+    min_target이 있으면 attempt 처리 후 모자란 만큼만 fill에서 보충한다. 한 번에
+    min(부족분, max_workers)개씩만 띄우므로 목표를 넘겨 LLM 비용을 쓰지 않는다
+    (각 클러스터는 뉴스레터를 최대 1개 만든다).
+    """
+
+    def safe(item):
+        cid, idx = item
+        try:
+            return cid, process(cid, idx)
+        except Exception as e:  # noqa: BLE001 - 한 클러스터 실패가 배치 전체를 멈추면 안 된다
+            logger.error(f"Cluster {cid} 처리 중 에러: {e}")
+            return cid, {"status": "error", "error": str(e)}
+
+    outcomes: Dict[Any, Dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=max(1, max_workers), thread_name_prefix="cluster") as pool:
+        for cid, outcome in pool.map(safe, attempt):
+            outcomes[cid] = outcome
+
+        remaining = list(fill)
+        while min_target and remaining:
+            done = sum(1 for o in outcomes.values() if o.get("status") == "completed")
+            need = min_target - done
+            if need <= 0:
+                break
+            batch, remaining = remaining[: min(need, max_workers)], remaining[min(need, max_workers):]
+            for cid, outcome in pool.map(safe, batch):
+                outcomes[cid] = outcome
+    return outcomes
+
+
 class Stage5_NewsletterGeneration(PipelineStage):
     """뉴스레터 생성 (Clustering + Workflow)"""
     def execute(self, limit=None, min_cluster_size=None, min_samples=None,
@@ -218,7 +289,7 @@ class Stage5_NewsletterGeneration(PipelineStage):
         from core.clusterer import NewsClusterer
         from workflow.graph import compile_workflow
         from core.llm_metrics import get_metrics_collector
-        from db.batch_manager import create_new_batch
+        from db.batch_manager import create_new_batch, update_cluster_log
 
         # Start LLM metrics collection
         metrics = get_metrics_collector()
@@ -274,6 +345,9 @@ class Stage5_NewsletterGeneration(PipelineStage):
         # (all_cluster_groups로도 그대로 재사용되기 때문).
         cluster_log = dict(clusters)
         cluster_log["clustering_stats"] = clustering_stats
+        cluster_meta = getattr(clusterer, "cluster_meta", None)
+        if isinstance(cluster_meta, dict):
+            cluster_log["cluster_meta"] = cluster_meta
         run_id = create_new_batch(cluster_log)
         logger.info(f"🆔 배치 run_id={run_id} 발급 완료")
 
@@ -292,7 +366,7 @@ class Stage5_NewsletterGeneration(PipelineStage):
             f"min_target={effective_min_target})"
         )
 
-        def process_cluster(cid, idx) -> bool:
+        def process_cluster(cid, idx) -> Dict[str, Any]:
             state = {
                 "current_cluster_id": cid,
                 "current_cluster_index": idx,
@@ -301,25 +375,30 @@ class Stage5_NewsletterGeneration(PipelineStage):
                 "data": data,
                 "run_id": run_id,
             }
-            try:
-                final = app.invoke(state)
-                return bool(final.get("completed_newsletters"))
-            except Exception as e:
-                logger.error(f"Clubster {cid} 처리 중 에러: {e}")
-                return False
-
-        for i, cid in enumerate(attempt_ids):
-            if process_cluster(cid, i):
-                count += 1
+            return summarize_cluster_outcome(app.invoke(state), cid)
 
         # min_target 미달 시, limit으로 제외됐던 나머지 클러스터를 순서대로 추가 시도
         # (min_target=0이면 기존과 동일하게 limit에서 정확히 끊긴다 - 기본 동작 보존).
-        if limit and effective_min_target and count < effective_min_target:
-            for i in range(len(attempt_ids), len(all_ids)):
-                if count >= effective_min_target:
-                    break
-                if process_cluster(all_ids[i], i):
-                    count += 1
+        fill = [(all_ids[i], i) for i in range(len(attempt_ids), len(all_ids))] if limit else []
+        requested_workers = int(getattr(self.settings, "NEWSLETTER_WORKERS", 3) or 1)
+        workers = max(1, min(requested_workers, MAX_NEWSLETTER_WORKERS))
+        if workers != requested_workers:
+            logger.warning(f"NEWSLETTER_WORKERS={requested_workers} -> {workers}로 제한")
+        outcomes = run_clusters_bounded(
+            process_cluster,
+            [(cid, i) for i, cid in enumerate(attempt_ids)],
+            fill,
+            max_workers=workers,
+            min_target=effective_min_target,
+        )
+        count = sum(1 for o in outcomes.values() if o.get("status") == "completed")
+
+        # 클러스터별 결과를 cluster_history에 남긴다(평가셋의 "어려운 사례" 추출용, ADR 0009).
+        # 부가 메타데이터라 저장 실패가 이미 끝난 생성 결과를 무르게 하지 않는다.
+        try:
+            update_cluster_log(run_id, {**cluster_log, "cluster_outcomes": outcomes})
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"cluster_outcomes 저장 실패 (무시): {e}")
 
         # End LLM metrics collection, print summary, and persist for later cost/latency 분석
         metrics.end_batch()
