@@ -1,7 +1,7 @@
 # ADR 0003: 추천에 LightGBM(LambdaRank) + MMR 조합 사용
 
 ## 상태
-채택됨 (2026-07, `objective`를 `binary`에서 `lambdarank`로 전환하며 갱신됨 — `FIX_LOG.md` #5)
+채택됨 (2026-07, `objective`를 `binary`에서 `lambdarank`로 전환하며 갱신됨 — `docs/fix-log-2026-07.md` #5)
 
 ## 컨텍스트
 사용자별로 후보 뉴스레터를 관련도 순으로 정렬해 추천해야 한다. 동시에 README에 명시된 목표 중 하나가 "편향 우려 해결 — 다양한 언론사 조합으로 균형 잡힌 시각 제공"이므로, 단순히 관련도 1등부터 K개를 뽑으면 비슷비슷한 기사만 노출되는 문제(다양성 부족)도 함께 풀어야 한다.
@@ -26,7 +26,7 @@
 - 카테고리 개수 기반 적응형 λ는 "카테고리를 좁게 고른 사람일수록 정확한 추천을, 넓게 고른 사람일수록 다양한 추천을 원할 것"이라는 합리적 가정에 기반
 
 **부정적/한계 (리뷰에서 발견):**
-- `history_cosine_similarity` 피처가 초기 구현에서 학습 시점 이전/이후 클릭을 구분하지 않고 계산되어 data leakage가 있었다(수정 완료, `FIX_LOG.md` #4)
-- `negative_sample_ratio`의 negative sampling에 랜덤 시드가 없어 실행마다 학습 데이터 구성이 달라졌다(수정 완료, `FIX_LOG.md` #16)
+- `history_cosine_similarity` 피처가 초기 구현에서 학습 시점 이전/이후 클릭을 구분하지 않고 계산되어 data leakage가 있었다(수정 완료, `docs/fix-log-2026-07.md` #4)
+- `negative_sample_ratio`의 negative sampling에 랜덤 시드가 없어 실행마다 학습 데이터 구성이 달라졌다(수정 완료, `docs/fix-log-2026-07.md` #16)
 - λ 구간별 값(0.8/0.7/0.6)이 실제 사용자 행동 데이터 분석(EDA)이 아니라 직관적 가정으로 설정되어 있다 — `scripts/generate_daily_stats.py`의 `analyze_user_diversity()` 결과와 연결해 데이터 기반으로 재검증할 필요가 있다.
 - `user_age_band`/`user_gender` 피처가 DB에 실제 컬럼이 없어 항상 0으로 고정된 상수 피처다 — 모델 성능에 기여하지 못하는 죽은 피처.
