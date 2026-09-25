@@ -11,6 +11,11 @@ from config.settings import Settings
 logger = logging.getLogger(__name__)
 
 
+def _fetch_feed(url):
+    # 한국경제는 feedparser 기본 UA("feedparser/x.y ...")에 403을 준다 - UA를 명시한다.
+    return feedparser.parse(url, agent=Settings.HTTP_USER_AGENT)
+
+
 def parse_feed_with_retry(url, parse_fn=None, max_attempts=None, sleep_fn=time.sleep):
     """feedparser.parse를 지수 백오프로 재시도한다.
 
@@ -18,7 +23,7 @@ def parse_feed_with_retry(url, parse_fn=None, max_attempts=None, sleep_fn=time.s
     이를 재시도 트리거로 사용한다. parse_fn/sleep_fn은 테스트에서 실제 네트워크
     호출/대기 없이 검증하기 위해 주입 가능하게 열어둔다.
     """
-    parse_fn = parse_fn or feedparser.parse
+    parse_fn = parse_fn or _fetch_feed
     max_attempts = max_attempts or Settings.MAX_FETCH_RETRIES
     delay = 1.0
     feed = None
@@ -78,7 +83,10 @@ def collect_rss(hours: int = 100) -> Dict[str, Any]:
                     feed_stats["entries"] = len(feed.entries)
                     if getattr(feed, 'bozo', 0) and not feed.entries:
                         # 재시도 후에도 bozo + 항목 0건이면 피드를 못 읽은 것(네트워크/차단 등)
-                        feed_stats["error"] = f"feed unreadable: {getattr(feed, 'bozo_exception', 'bozo')}"[:300]
+                        status = getattr(feed, 'status', None)
+                        http = f" (HTTP {status})" if status else ""
+                        feed_stats["error"] = f"feed unreadable{http}: {getattr(feed, 'bozo_exception', 'bozo')}"[:300]
+                        logger.error(f"❌ {feed_name} 피드를 읽지 못함{http}")
                     entries = []
 
                     # 1. 파싱 및 날짜 필터링

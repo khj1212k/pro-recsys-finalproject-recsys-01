@@ -83,6 +83,10 @@ class BaseSettings:
     # ========== Retry Configuration ==========
     RETRY_EXPONENTIAL_BASE: float = 2.0
     MAX_RETRY_WAIT_SECONDS: int = 64
+    # RSS/본문 요청에 쓰는 User-Agent. 라이브러리 기본 UA를 막는 언론사가 있다(한국경제 RSS: feedparser UA에 403).
+    HTTP_USER_AGENT: str = os.getenv(
+        "HTTP_USER_AGENT", "Mozilla/5.0 (compatible; newsletter-recsys/1.0)"
+    )
     MAX_FETCH_RETRIES: int = 3  # RSS/본문 크롤링 네트워크 요청 최대 재시도 횟수
     # 본문 다운로드가 (위 재시도까지) 실패한 기사를 이후 실행에서 다시 시도하는 총 횟수 상한.
     # news_raw.raw_news_extract_attempts로 센다 - 막힌 URL을 2시간마다 영원히 두드리지 않게.
