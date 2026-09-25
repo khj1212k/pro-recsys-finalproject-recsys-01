@@ -113,6 +113,33 @@ class Stage3_NewsEmbedding(PipelineStage):
 
         return count
 
+def _compute_clustering_stats(clusterer, clusters, effective_params) -> Dict[str, Any]:
+    """클러스터링 실행 통계(전체 기사 수, 클러스터 수, noise 비율)를 계산.
+
+    clusterer.labels_가 없거나(예: 테스트 목) 길이를 알 수 없는 경우에도 파이프라인이
+    죽지 않도록 방어적으로 계산한다.
+    """
+    n_articles = None
+    noise_ratio = None
+    try:
+        labels = getattr(clusterer, "labels_", None)
+        if labels is not None:
+            labels_list = list(labels)
+            n_articles = len(labels_list)
+            if n_articles:
+                noise_count = sum(1 for label in labels_list if int(label) == -1)
+                noise_ratio = noise_count / n_articles
+    except Exception as e:
+        logger.warning(f"클러스터링 통계 계산 실패 (무시하고 계속 진행): {e}")
+
+    return {
+        "n_articles": n_articles,
+        "n_clusters": len(clusters),
+        "noise_ratio": noise_ratio,
+        "effective_params": effective_params,
+    }
+
+
 class Stage5_NewsletterGeneration(PipelineStage):
     """뉴스레터 생성 (Clustering + Workflow)"""
     def execute(self, limit=None, min_cluster_size=None, min_samples=None,
@@ -162,8 +189,21 @@ class Stage5_NewsletterGeneration(PipelineStage):
             logger.info("생성된 클러스터가 없습니다.")
             return 0
 
-        # 2. 정식 run_id 발급 (cluster_history에 이번 배치 기록)
-        run_id = create_new_batch(clusters)
+        effective_params = {
+            "min_cluster_size": effective_min_cluster_size,
+            "min_samples": effective_min_samples,
+            "min_target": effective_min_target,
+            "lookback_hours": effective_lookback_hours,
+        }
+        clustering_stats = _compute_clustering_stats(clusterer, clusters, effective_params)
+        logger.info(f"📊 클러스터링 통계: {clustering_stats}")
+
+        # 2. 정식 run_id 발급 (cluster_history에 이번 배치 기록 + 클러스터링 통계 첨부)
+        # clusters 원본을 그대로 변형하지 않도록 얕은 복사 후 통계 항목을 추가한다
+        # (all_cluster_groups로도 그대로 재사용되기 때문).
+        cluster_log = dict(clusters)
+        cluster_log["clustering_stats"] = clustering_stats
+        run_id = create_new_batch(cluster_log)
         logger.info(f"🆔 배치 run_id={run_id} 발급 완료")
 
         # 3. 워크플로우 실행 (뉴스레터 생성)
