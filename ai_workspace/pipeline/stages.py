@@ -55,7 +55,7 @@ def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=Non
 
     batch_size = batch_size or settings.EMBEDDING_BATCH_SIZE
     stats: Dict[str, Any] = {
-        "targets": 0, "embedded": 0, "failed_batches": 0, "pending_no_content": 0,
+        "targets": 0, "embedded": 0, "failed_batches": 0, "awaiting_extraction": 0, "no_content": 0,
         "batch_size": batch_size, "device": None, "model_load_s": 0.0, "encode_s": 0.0,
         "articles_per_s": None,
     }
@@ -77,15 +77,26 @@ def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=Non
             """, (limit,))
             rows = cur.fetchall() # 임베딩 없는 기사 목록 (본문 있는 것만)
 
+            # 본문이 없어 임베딩하지 않는 기사: 아직 추출 전(다음 실행에서 채워질 수 있음)과
+            # 추출했지만 본문이 없는 것(dropped/empty/다운로드 재시도 소진 - 영구 제외)을 나눠 센다.
             cur.execute("""
-                SELECT COUNT(*) FROM news_raw
+                SELECT
+                    COUNT(*) FILTER (
+                        WHERE raw_news_extract_status IS NULL
+                           OR (raw_news_extract_status = 'fetch_failed'
+                               AND raw_news_extract_attempts < %s)),
+                    COUNT(*) FILTER (
+                        WHERE raw_news_extract_status IN ('dropped', 'empty')
+                           OR (raw_news_extract_status = 'fetch_failed'
+                               AND raw_news_extract_attempts >= %s))
+                FROM news_raw
                 WHERE embedding_result IS NULL
                   AND (raw_news_content IS NULL OR raw_news_content = '')
-            """)
-            stats["pending_no_content"] = cur.fetchone()[0]
-            if stats["pending_no_content"]:
+            """, (settings.MAX_EXTRACT_ATTEMPTS, settings.MAX_EXTRACT_ATTEMPTS))
+            stats["awaiting_extraction"], stats["no_content"] = cur.fetchone()
+            if stats["awaiting_extraction"]:
                 logger.info(
-                    f"⏭️  본문 없음/미수집으로 임베딩 보류: {stats['pending_no_content']}건 "
+                    f"⏭️  본문 추출 전이라 임베딩 보류: {stats['awaiting_extraction']}건 "
                     f"(본문이 채워지면 다음 실행에서 처리됩니다)"
                 )
 

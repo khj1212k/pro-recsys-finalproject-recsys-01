@@ -36,7 +36,7 @@ def _make_cursor(rows):
     cursor.__exit__ = MagicMock(return_value=False)
     # 첫 execute -> rows(SELECT), 두번째 execute -> COUNT(*) 조회에 대한 fetchone
     cursor.fetchall.return_value = rows
-    cursor.fetchone.return_value = (0,)
+    cursor.fetchone.return_value = (0, 0)
     return cursor
 
 
@@ -92,6 +92,7 @@ def test_failed_batch_is_logged_and_skipped_run_continues(monkeypatch):
 
     settings = MagicMock()
     settings.EMBEDDING_BATCH_SIZE = 2
+    settings.MAX_EXTRACT_ATTEMPTS = 3
 
     with patch("db.connection.get_connection", return_value=conn), \
          patch("db.connection.release_connection"):
@@ -160,7 +161,8 @@ def test_embed_pending_articles_reports_throughput_stats_and_binds_numpy_vectors
 
     rows = [(1, "제목1", "본문1"), (2, "제목2", "본문2"), (3, "제목3", "본문3")]
     cursor = _make_cursor(rows=rows)
-    cursor.fetchone.return_value = (4,)  # 본문 미수집으로 보류된 건수
+    # (본문 추출 대기, 추출했지만 본문 없음(dropped/empty/재시도 소진)) 건수
+    cursor.fetchone.return_value = (4, 26)
     conn = MagicMock()
     conn.cursor.return_value = cursor
 
@@ -174,7 +176,8 @@ def test_embed_pending_articles_reports_throughput_stats_and_binds_numpy_vectors
     assert stats["targets"] == 3
     assert stats["embedded"] == 3
     assert stats["failed_batches"] == 0
-    assert stats["pending_no_content"] == 4
+    assert stats["awaiting_extraction"] == 4
+    assert stats["no_content"] == 26
     assert stats["device"] == "cpu"
     assert stats["batch_size"] == 2
     assert stats["encode_s"] == 0.75
