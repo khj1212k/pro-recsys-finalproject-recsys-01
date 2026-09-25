@@ -37,6 +37,9 @@ class BaseSettings:
     # ========== LangGraph ==========
     MAX_RETRY_CLUSTER_EVAL: int = 2
     MAX_RETRY_NEWSLETTER_EVAL: int = 3
+    # LLM 응답의 JSON 파싱이 실패했을 때 재시도할 최대 횟수 (이전에는 1000000으로
+    # 사실상 무제한이었음 - 비용 폭주 위험 방지를 위해 유한한 상한으로 교체)
+    MAX_JSON_PARSE_RETRIES: int = 5
 
     # ========== HDBSCAN ==========
     HDBSCAN_MIN_CLUSTER_SIZE: int = 3
