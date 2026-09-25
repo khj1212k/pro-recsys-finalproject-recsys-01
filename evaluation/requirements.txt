@@ -3,3 +3,8 @@ scikit-learn==1.9.1
 hdbscan==0.8.44
 kiwipiepy==0.23.2
 rapidfuzz==3.14.6
+scipy==1.17.1
+pydantic==2.13.5
+pyyaml==6.0.3
+fastapi==0.141.1
+uvicorn==0.54.0

@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>뉴스레터 라벨링</title>
+<style>
+  :root { --bg: #fafaf8; --fg: #1d1d1b; --muted: #6b6b66; --line: #deded8; --accent: #2458a6;
+          --warn: #b3261e; --mark: #ffe08a; --card: #ffffff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --fg: #ececea; --muted: #a3a39d; --line: #3a3a37; --accent: #8fb4ff;
+            --warn: #ff8a80; --mark: #6b5a1a; --card: #1f1f1d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.6 system-ui, -apple-system, "Apple SD Gothic Neo", sans-serif; }
+  header { display: flex; gap: 16px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--bg); z-index: 1; }
+  header h1 { font-size: 16px; margin: 0; }
+  header .spacer { flex: 1; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 16px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; min-width: 0; }
+  h2 { font-size: 15px; margin: 4px 0 8px; }
+  .article { border-top: 1px solid var(--line); padding: 8px 0; }
+  .article:first-child { border-top: none; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .body { white-space: pre-wrap; max-height: 260px; overflow: auto; }
+  .field { white-space: pre-wrap; border: 1px dashed var(--line); padding: 6px 8px; margin: 4px 0 10px; border-radius: 4px; }
+  .field mark { background: var(--mark); color: inherit; }
+  fieldset { border: 1px solid var(--line); border-radius: 6px; margin: 10px 0; }
+  legend { font-weight: 600; }
+  textarea { width: 100%; min-height: 48px; font: inherit; }
+  button { font: inherit; padding: 4px 12px; }
+  .primary { background: var(--accent); color: #fff; border: none; border-radius: 4px; padding: 6px 16px; }
+  #error { color: var(--warn); font-weight: 600; }
+  .fact { border-bottom: 1px solid var(--line); padding: 6px 0; }
+  .hint { color: var(--muted); font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>뉴스레터 라벨링</h1>
+  <span id="round-label"></span>
+  <span id="error" role="alert"></span>
+  <span class="spacer"></span>
+  <span id="progress" class="meta"></span>
+</header>
+<main>
+  <section>
+    <h2>원문 기사</h2>
+    <div id="articles"></div>
+  </section>
+  <section>
+    <div id="task"></div>
+  </section>
+</main>
+<script>
+"use strict";
+const ROUND = Number(new URLSearchParams(location.search).get("round") || "1");
+document.getElementById("round-label").textContent = ROUND === 2 ? "2차(재라벨) - 1차 라벨은 보이지 않습니다" : "1차";
+let current = null;
+
+function el(tag, attrs = {}, ...children) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "text") n.textContent = v; else if (k.startsWith("on")) n.addEventListener(k.slice(2), v); else n.setAttribute(k, v);
+  }
+  for (const c of children) if (c != null) n.append(c);
+  return n;
+}
+
+async function api(path, opts) {
+  const sep = path.includes("?") ? "&" : "?";
+  const res = await fetch(`${path}${sep}round=${ROUND}`, opts);
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail || res.statusText);
+  return body;
+}
+
+function renderProgress(p) {
+  if (!p) return;
+  document.getElementById("progress").textContent =
+    `클러스터 ${p.cluster.done}/${p.cluster.total} · 출력 ${p.output.done}/${p.output.total}`;
+}
+
+function renderArticles(articles) {
+  const box = document.getElementById("articles");
+  box.replaceChildren(...articles.map(a => el("div", {class: "article"},
+    el("div", {class: "meta", text: `id ${a.raw_news_id} · ${a.press_name || ""}`}),
+    el("div", {text: a.title || ""}),
+    el("div", {class: "body", text: a.body || ""}))));
+}
+
+function radio(name, value, label, checked) {
+  const input = el("input", {type: "radio", name, value});
+  input.checked = !!checked;
+  return el("label", {}, input, " " + label + "  ");
+}
+
+function checked(name) {
+  const n = document.querySelector(`input[name="${name}"]:checked`);
+  return n ? n.value : null;
+}
+
+// ---------------- 클러스터 라벨 ----------------
+function renderCluster(task) {
+  const ex = task.existing || {single_event: null, outlier_ids: [], key_facts: [], notes: ""};
+  const ids = task.articles.map(a => a.raw_news_id);
+  const facts = el("div");
+  const addFact = (f = {text: "", source_ids: []}) => {
+    const row = el("div", {class: "fact"},
+      el("textarea", {placeholder: "핵심 사실 한 문장 (예: 삼성전자가 평택 HBM 라인에 2조 원을 투자한다)"}),
+      el("div", {class: "hint", text: "근거 기사:"}),
+      ...ids.map(id => { const c = el("input", {type: "checkbox", value: id}); c.checked = f.source_ids.includes(id);
+                          return el("label", {}, c, ` ${id}  `); }),
+      el("button", {type: "button", onclick: () => row.remove(), text: "삭제"}));
+    row.querySelector("textarea").value = f.text;
+    facts.append(row);
+  };
+  (ex.key_facts.length ? ex.key_facts : [{text: "", source_ids: []}]).forEach(addFact);
+
+  const notes = el("textarea", {placeholder: "메모(선택)"});
+  notes.value = ex.notes || "";
+  const form = el("div", {},
+    el("h2", {text: `클러스터 라벨 · ${task.target_id}`}),
+    el("fieldset", {}, el("legend", {text: "하나의 사건인가?"}),
+      radio("single_event", "true", "예", ex.single_event === true), radio("single_event", "false", "아니오", ex.single_event === false)),
+    el("fieldset", {}, el("legend", {text: "이상치(다른 사건) 기사"}),
+      ...ids.map(id => { const c = el("input", {type: "checkbox", name: "outlier", value: id}); c.checked = ex.outlier_ids.includes(id);
+                          return el("label", {}, c, ` ${id}  `); })),
+    el("fieldset", {}, el("legend", {text: "핵심 사실 3~6개 (단일 사건일 때 필수)"}), facts,
+      el("button", {type: "button", onclick: () => addFact(), text: "+ 핵심 사실"})),
+    notes,
+    el("p", {}, el("button", {class: "primary", onclick: () => submit("cluster", task.target_id, {
+      single_event: checked("single_event") === "true",
+      outlier_ids: [...document.querySelectorAll('input[name="outlier"]:checked')].map(c => Number(c.value)),
+      key_facts: [...facts.querySelectorAll(".fact")].map(r => ({
+        text: r.querySelector("textarea").value,
+        source_ids: [...r.querySelectorAll("input:checked")].map(c => Number(c.value)),
+      })).filter(f => f.text.trim()),
+      notes: notes.value,
+    }, () => checked("single_event") !== null), text: "저장하고 다음"})));
+  document.getElementById("task").replaceChildren(form);
+}
+
+// ---------------- 출력 라벨 ----------------
+function renderOutput(task) {
+  const ex = task.existing || {fact_errors: [], key_facts_covered: [], style: null, publishable: null, tone_drift: null, notes: ""};
+  let errors = ex.fact_errors.slice();
+  const fields = {};
+  const fieldBox = (name, label) => {
+    fields[name] = el("div", {class: "field", "data-field": name});
+    return el("div", {}, el("div", {class: "meta", text: label}), fields[name]);
+  };
+  const paint = () => {
+    for (const name of ["title", "sentence", "content"]) {
+      const text = task.draft[name] || "";
+      const spans = errors.filter(e => e.field === name).sort((a, b) => a.start - b.start);
+      const parts = []; let pos = 0;
+      for (const s of spans) { if (s.start < pos) continue; parts.push(text.slice(pos, s.start), el("mark", {text: text.slice(s.start, s.end)})); pos = s.end; }
+      parts.push(text.slice(pos));
+      fields[name].replaceChildren(...parts);
+    }
+    errList.replaceChildren(...errors.map((e, i) => el("div", {class: "fact"},
+      el("span", {text: `[${e.field}/${e.type}] "${e.text}" ${e.note ? "- " + e.note : ""}  `}),
+      el("button", {type: "button", text: "삭제", onclick: () => { errors.splice(i, 1); paint(); }}))));
+  };
+  // 선택 영역 -> (필드, 시작, 끝). 표시(mark)가 섞여 있어도 필드 전체 텍스트 기준 오프셋을 구한다.
+  const selectionSpan = () => {
+    const sel = getSelection();
+    if (!sel.rangeCount || sel.isCollapsed) return null;
+    const range = sel.getRangeAt(0);
+    const fieldEl = range.commonAncestorContainer.nodeType === 1
+      ? range.commonAncestorContainer.closest(".field") : range.commonAncestorContainer.parentElement.closest(".field");
+    if (!fieldEl) return null;
+    const pre = document.createRange();
+    pre.selectNodeContents(fieldEl);
+    pre.setEnd(range.startContainer, range.startOffset);
+    const start = pre.toString().length;
+    const text = range.toString();
+    return {field: fieldEl.dataset.field, start, end: start + text.length, text};
+  };
+  const errType = el("select", {}, ...["number", "date", "entity", "quote", "other"].map(t => el("option", {value: t, text: t})));
+  const errNote = el("input", {placeholder: "무엇이 틀렸나(선택)"});
+  const errList = el("div");
+  const facts = task.key_facts.map((f, i) => {
+    const c = el("input", {type: "checkbox", name: "covered", value: i});
+    c.checked = ex.key_facts_covered.includes(i);
+    return el("div", {}, el("label", {}, c, ` ${i + 1}. ${f.text}`));
+  });
+  const notes = el("textarea", {placeholder: "메모(선택)"});
+  notes.value = ex.notes || "";
+
+  const form = el("div", {},
+    el("h2", {text: `출력 라벨 · ${task.target_id}`}),
+    el("p", {class: "hint", text: "아래 형식체 초안을 원문과 대조하세요. 틀린 부분을 드래그로 선택한 뒤 '사실 오류로 표시'."}),
+    fieldBox("title", "제목"), fieldBox("sentence", "한줄소개"), fieldBox("content", "본문"),
+    el("div", {}, errType, " ", errNote, " ",
+      el("button", {type: "button", text: "사실 오류로 표시", onclick: () => {
+        const s = selectionSpan();
+        if (!s || !s.text) { showError("초안의 한 필드 안에서 텍스트를 선택하세요"); return; }
+        errors.push({...s, type: errType.value, note: errNote.value}); errNote.value = ""; paint(); showError("");
+      }})),
+    errList,
+    el("fieldset", {}, el("legend", {text: "핵심 사실 커버리지 (담긴 것 체크)"}), ...facts),
+    el("fieldset", {}, el("legend", {text: "문체 (1~5, 형식체 초안 기준)"}),
+      ...[1, 2, 3, 4, 5].map(v => radio("style", v, String(v), ex.style === v))),
+    el("fieldset", {}, el("legend", {text: "발행 가능한가? (형식체 초안)"}),
+      radio("publishable", "true", "예", ex.publishable === true), radio("publishable", "false", "아니오", ex.publishable === false)),
+    el("h2", {text: "문체 변환본"}),
+    el("div", {class: "meta", text: "제목"}), el("div", {class: "field", text: task.converted.title || ""}),
+    el("div", {class: "meta", text: "요약"}), el("div", {class: "field", text: task.converted.summary || ""}),
+    el("div", {class: "meta", text: "본문"}), el("div", {class: "field", text: task.converted.content || ""}),
+    el("fieldset", {}, el("legend", {text: "변환본이 초안의 사실(수치·날짜·이름·인용)을 바꿨나?"}),
+      radio("tone_drift", "true", "예(바뀜)", ex.tone_drift === true), radio("tone_drift", "false", "아니오", ex.tone_drift === false)),
+    notes,
+    el("p", {}, el("button", {class: "primary", text: "저장하고 다음", onclick: () => submit("output", task.target_id, {
+      fact_errors: errors,
+      key_facts_covered: [...document.querySelectorAll('input[name="covered"]:checked')].map(c => Number(c.value)),
+      style: Number(checked("style")),
+      publishable: checked("publishable") === "true",
+      tone_drift: checked("tone_drift") === "true",
+      notes: notes.value,
+    }, () => checked("style") && checked("publishable") && checked("tone_drift"))})));
+  document.getElementById("task").replaceChildren(form);
+  paint();
+}
+
+function showError(msg) { document.getElementById("error").textContent = msg; }
+
+async function submit(kind, id, payload, complete) {
+  if (!complete()) { showError("필수 항목(라디오 버튼)을 모두 고르세요"); return; }
+  try {
+    const res = await api(`/api/labels/${kind}/${encodeURIComponent(id)}`, {
+      method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(payload)});
+    showError("");
+    show(res);
+  } catch (e) { showError(e.message); }
+}
+
+function show(res) {
+  renderProgress(res.progress);
+  current = res.task;
+  if (!current) {
+    renderArticles([]);
+    document.getElementById("task").replaceChildren(el("p", {text: ROUND === 2
+      ? "지금 재라벨할 항목이 없습니다 (모두 끝났거나 1차 라벨 후 최소 간격이 지나지 않았습니다)."
+      : "모든 라벨을 마쳤습니다."}));
+    return;
+  }
+  renderArticles(current.articles);
+  window.scrollTo(0, 0);
+  if (current.kind === "cluster") renderCluster(current); else renderOutput(current);
+}
+
+api("/api/next").then(show).catch(e => showError(e.message));
+</script>
+</body>
+</html>
