@@ -115,8 +115,12 @@ class PipelineRunner:
         logger.info("📊 Pipeline Execution Summary")
         logger.info("=" * 60)
         
+        rss_result = results.get('rss_collection') or {}
         logger.info(f"User Embeddings Updated: {results.get('user_embedding', {}).get('success', 0)}")
-        logger.info(f"RSS Articles Collected: {results.get('rss_collection', 0)}")
+        logger.info(
+            f"RSS Articles Collected: 신규 {rss_result.get('inserted', 0)}건 / "
+            f"스킵(중복) {rss_result.get('skipped', 0)}건"
+        )
         logger.info(f"Content Extracted: {results.get('content_extraction', 0)}")
         logger.info(f"Article Embeddings: {results.get('article_embedding', 0)}")
         logger.info(f"Newsletters Created: {results.get('newsletters_created', 0)}")
