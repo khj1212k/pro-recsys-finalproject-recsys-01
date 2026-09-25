@@ -26,6 +26,12 @@ class LLMResult:
     provider: str
     model: str
     error: Optional[str] = None
+    # 이번 complete() 동안 모델 응답이 스키마 검증에 실패한 횟수(전송 계층 재시도는 제외).
+    # 0이면서 parsed가 있으면 "첫 응답이 스키마를 통과"했다는 뜻이다 (ADR 0009 G3 게이트).
+    schema_failures: int = 0
+    # 재시도하지 않고 끝난 HTTP 오류의 상태 코드(402 선불 미결제 등). 인프라 실패와
+    # 모델 품질 실패를 구분하는 데 쓴다.
+    http_status: Optional[int] = None
 
     @property
     def ok(self) -> bool:

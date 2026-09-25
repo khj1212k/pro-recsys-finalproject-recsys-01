@@ -80,6 +80,8 @@ class OpenAICompatLLMClient(LLMClient):
         last_error = "unknown error"
         call_start = time.time()
         attempt = 0
+        schema_failures = 0
+        last_status: Optional[int] = None
 
         for attempt in range(1, MAX_RETRIES + 1):
             attempt_start = time.time()
@@ -119,12 +121,14 @@ class OpenAICompatLLMClient(LLMClient):
                     provider=self.provider,
                     model=self.model,
                     error=None,
+                    schema_failures=schema_failures,
                 )
 
             except (ValidationError, ValueError) as e:
                 # 모델이 스키마를 못 지켰거나(JSON 모드 폴백) 검증에 실패한 경우.
                 # 429/5xx는 아니지만 재시도할 가치가 있다(다음 시도에서 형식을 지킬 수 있음).
                 last_error = str(e)
+                schema_failures += 1
                 latency = time.time() - attempt_start
                 get_metrics_collector().record_call(
                     purpose=purpose, input_tokens=0, output_tokens=0,
@@ -142,6 +146,7 @@ class OpenAICompatLLMClient(LLMClient):
 
             except openai.APIStatusError as e:
                 last_error = str(e)
+                last_status = e.status_code
                 latency = time.time() - attempt_start
                 get_metrics_collector().record_call(
                     purpose=purpose, input_tokens=0, output_tokens=0,
@@ -162,6 +167,7 @@ class OpenAICompatLLMClient(LLMClient):
                 return LLMResult(
                     text=None, parsed=None, usage=LLMUsage(), latency_s=latency,
                     attempts=attempt, provider=self.provider, model=self.model, error=last_error,
+                    schema_failures=schema_failures, http_status=e.status_code,
                 )
 
             except openai.LengthFinishReasonError as e:
@@ -180,6 +186,7 @@ class OpenAICompatLLMClient(LLMClient):
                 return LLMResult(
                     text=None, parsed=None, usage=LLMUsage(), latency_s=latency,
                     attempts=attempt, provider=self.provider, model=self.model, error="length",
+                    schema_failures=schema_failures,
                 )
 
             except openai.ContentFilterFinishReasonError as e:
@@ -198,6 +205,7 @@ class OpenAICompatLLMClient(LLMClient):
                 return LLMResult(
                     text=None, parsed=None, usage=LLMUsage(), latency_s=latency,
                     attempts=attempt, provider=self.provider, model=self.model, error="content_filter",
+                    schema_failures=schema_failures,
                 )
 
             except (openai.APITimeoutError, openai.APIConnectionError) as e:
@@ -229,6 +237,7 @@ class OpenAICompatLLMClient(LLMClient):
                 return LLMResult(
                     text=None, parsed=None, usage=LLMUsage(), latency_s=latency,
                     attempts=attempt, provider=self.provider, model=self.model, error=last_error,
+                    schema_failures=schema_failures,
                 )
 
         elapsed = time.time() - call_start
@@ -241,6 +250,7 @@ class OpenAICompatLLMClient(LLMClient):
             text=None, parsed=None, usage=LLMUsage(), latency_s=elapsed,
             attempts=attempt, provider=self.provider, model=self.model,
             error=f"{reason}: {last_error}",
+            schema_failures=schema_failures, http_status=last_status,
         )
 
     @staticmethod
