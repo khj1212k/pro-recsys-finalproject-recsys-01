@@ -20,6 +20,14 @@ def fmt_effect(d: dict) -> str:
     return f"{d['effect']:+.4f} (95% CI [{d['ci_lo']:+.4f}, {d['ci_hi']:+.4f}], n={d['n_users']})"
 
 
+def fmt_effect_val(d: dict) -> str:
+    return f"{d['effect']:+.4f}"
+
+
+def fmt_ci_only(d: dict) -> str:
+    return f"95% CI [{d['ci_lo']:+.4f}, {d['ci_hi']:+.4f}], n={d['n_users']}"
+
+
 def main() -> None:
     data = json.loads((REPORT_DIR / "team_repro_v1.json").read_text(encoding="utf-8"))
     meta = data["meta"]
@@ -64,6 +72,12 @@ def main() -> None:
         "195건 전체가 클릭 로그 시작(2026-01-30 19:26) 이전에 이미 작성되어 있어서 "
         "(가장 최근 생성일도 2026-01-29) 그 정의로는 195건이 그대로 나온다. 대신 "
         "가장 최근 생성일(15건)로 '작은 후보 풀'을 조작적으로 정의했다."
+    )
+    A(
+        "- `generator_split`(1-2절)은 문서 제목과 달리 상호작용의 무작위 분할이 아니라 "
+        "뉴스레터 자체를 학습/검증 두 집합으로 쪼갠 것으로 실측 확인됐다(1-2절 본문 참고) - "
+        "'생성기가 어떻게 분할했는가'를 그대로 재현할 뿐, 팀이 실제로 이 분할을 썼다는 "
+        "근거는 없다(로더 스크립트 접근 불가, 위 참고)."
     )
     A("")
 
@@ -118,7 +132,24 @@ def main() -> None:
             f"| {pct(ci['coverage@5']['mean'])} [{pct(ci['coverage@5']['ci_lo'])}, {pct(ci['coverage@5']['ci_hi'])}] |"
         )
     A("")
-    A("### 1-2. generator_split 프로토콜 (`ctr_logs_train.csv` / `ctr_logs_valid.csv`, 생성기 자체 랜덤 분할)")
+    A("### 1-2. generator_split 프로토콜 (`ctr_logs_train.csv` / `ctr_logs_valid.csv`, 생성기 자체 분할)")
+    A("")
+    A(
+        "**주의 - 이 분할은 상호작용의 무작위 분할이 아니라 뉴스레터 자체의 분할이다.** "
+        "직접 대조해 보면 `ctr_logs_train.csv`는 `news_letter_id` 4~154(151건)만, "
+        "`ctr_logs_valid.csv`는 155~198(44건)만 담고 있고 두 집합은 완전히 겹치지 않는다 "
+        "(반면 두 파일의 상호작용 타임스탬프 구간은 거의 동일하게 겹친다 - `19:26~01:41` "
+        "대 `19:41~01:42` - 그리고 유저 100명도 동일하다). 즉 이건 로그를 무작위로 "
+        "나눈 게 아니라 **뉴스레터를 학습군/검증군으로 나눈 뒤 그 뉴스레터에 대한 모든 "
+        "상호작용을 해당 split에 배정한 것**이다 - 사실상 '검증 시점에 학습 때 전혀 "
+        "보지 못한(cold) 뉴스레터만 등장하는' 평가에 가깝다. 이는 다음 두 가지를 바로 "
+        "설명한다: (1) 아래 2절의 `popularity` 베이스라인이 정확히 0.0000인 이유 - "
+        "train 상위 인기 뉴스레터(id 4~154)는 정의상 valid의 정답(id 155~198)에 "
+        "포함될 수 없다; (2) `recency` 베이스라인이 이 프로토콜에서 유독 잘 되는 이유 - "
+        "가장 최근에 작성된 뉴스레터들이 우연히 id 185~198 대역에 몰려 있어 valid 집합과 "
+        "크게 겹친다. 따라서 1-2/2절의 generator_split 수치는 '팀이 실제로 쓴 일반적인 "
+        "검증 방식'이 아니라 '전혀 새 뉴스레터에 대한 콜드 아이템 일반화' 하나의 특수 "
+        "케이스로 읽어야 한다.")
     A("")
     A("| 코드 버전 | 시드 수 | MRR | Precision@5 | nDCG@5 | nDCG@10 | Coverage@5 | AUC |")
     A("|---|---|---|---|---|---|---|---|")
@@ -171,10 +202,10 @@ def main() -> None:
         b = boot[name]
         A(
             f"| {name} | {a_label} | {b_label} "
-            f"| {fmt_effect(b['mrr']).split(' (95%')[0]} | 95% {fmt_effect(b['mrr']).split('95% ')[1]} "
-            f"| {fmt_effect(b['precision@5']).split(' (95%')[0]} | 95% {fmt_effect(b['precision@5']).split('95% ')[1]} "
-            f"| {fmt_effect(b['ndcg@5']).split(' (95%')[0]} | 95% {fmt_effect(b['ndcg@5']).split('95% ')[1]} "
-            f"| {fmt_effect(b['coverage@5']).split(' (95%')[0]} | 95% {fmt_effect(b['coverage@5']).split('95% ')[1]} |"
+            f"| {fmt_effect_val(b['mrr'])} | {fmt_ci_only(b['mrr'])} "
+            f"| {fmt_effect_val(b['precision@5'])} | {fmt_ci_only(b['precision@5'])} "
+            f"| {fmt_effect_val(b['ndcg@5'])} | {fmt_ci_only(b['ndcg@5'])} "
+            f"| {fmt_effect_val(b['coverage@5'])} | {fmt_ci_only(b['coverage@5'])} |"
         )
     A("")
     A("### 3-1. 후보 풀 크기 (full_195 기준 대비)")
