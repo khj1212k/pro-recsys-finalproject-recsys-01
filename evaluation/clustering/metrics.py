@@ -32,32 +32,49 @@ def _non_noise_cluster_ids(labels: np.ndarray) -> List[Any]:
     return sorted({label for label in labels.tolist() if label != -1})
 
 
-def dbcv(X: np.ndarray, labels: np.ndarray) -> Tuple[Optional[float], Optional[str]]:
+def dbcv(
+    X: np.ndarray, labels: np.ndarray, metric: str = "euclidean"
+) -> Tuple[Optional[float], Optional[str]]:
     """Density-Based Clustering Validation via hdbscan.validity.validity_index.
 
     `X` is assumed to already be L2-normalized (unit-norm rows), as produced
-    by the BGE-M3 embedding step. For unit vectors,
-    ||a - b||^2 == 2 - 2*cos(a, b), so euclidean distance is a strictly
-    monotonic function of cosine distance on the sphere: nearest-neighbour
-    and MST structure -- which is all DBCV depends on -- is identical
-    whether computed with metric='euclidean' on normalized vectors or with
-    a genuine cosine metric. We therefore pass metric='euclidean', since
-    hdbscan's Cython validity implementation only special-cases a handful
-    of metrics for its internal core-distance computation and does not
-    include 'cosine'.
+    by the BGE-M3 embedding step. `metric` defaults to 'euclidean', not
+    because hdbscan lacks a 'cosine' option -- it forwards `metric` straight
+    through to scipy/sklearn's pairwise-distance machinery, which does
+    support 'cosine', and passing metric='cosine' here works. 'euclidean'
+    is the deliberate default because for unit vectors
+    ||a - b||^2 == 2 - 2*cos(a, b): euclidean distance on L2-normalized
+    rows is a strictly monotonic function of cosine distance on the
+    sphere, so nearest-neighbour and MST structure -- which is all DBCV
+    depends on -- is identical either way, and 'euclidean' is what this
+    pipeline's embeddings have been validated against. Pass
+    metric='cosine' explicitly if a caller wants genuine cosine distances
+    instead of relying on that equivalence (e.g. on vectors that are not
+    already unit-normalized).
 
     hdbscan's validity_index requires float64 input (its Cython code is
     compiled against `double_t`; float32 raises a buffer dtype mismatch).
 
     Returns (score, None) on success, or (None, reason) for degenerate
     inputs (empty input, all points labeled noise, only a single cluster,
-    or any other configuration -- e.g. a singleton cluster -- that makes
-    hdbscan's own validity_index computation ill-defined).
+    or a configuration -- e.g. a singleton cluster -- that makes hdbscan's
+    own validity_index computation ill-defined, which surfaces as a
+    ValueError from its internal MST construction).
+
+    Raises ValueError if `X` and `labels` don't have the same number of
+    rows: that is a caller bug, not a degenerate-but-valid clustering, so
+    it is not swallowed into a (None, reason) result.
     """
     X = np.asarray(X, dtype=np.float64)
     labels = np.asarray(labels)
 
-    if X.shape[0] == 0 or labels.shape[0] == 0:
+    if X.shape[0] != labels.shape[0]:
+        raise ValueError(
+            "X and labels must have the same number of rows, got "
+            f"X.shape[0]={X.shape[0]} and labels.shape[0]={labels.shape[0]}"
+        )
+
+    if X.shape[0] == 0:
         return None, "empty_input"
 
     cluster_ids = _non_noise_cluster_ids(labels)
@@ -69,8 +86,13 @@ def dbcv(X: np.ndarray, labels: np.ndarray) -> Tuple[Optional[float], Optional[s
     import hdbscan.validity as hdbscan_validity
 
     try:
-        value = hdbscan_validity.validity_index(X, labels, metric="euclidean")
-    except Exception as exc:  # pragma: no cover - defensive, exact type varies
+        value = hdbscan_validity.validity_index(X, labels, metric=metric)
+    except ValueError as exc:
+        # a configuration that passed the checks above (e.g. a singleton
+        # cluster) can still make hdbscan's internal MST construction
+        # raise ValueError; treat that as another degenerate case rather
+        # than letting it propagate. Anything other than ValueError is a
+        # real bug (bad `metric`, wrong dtype, etc.) and should surface.
         return None, f"computation_error: {exc}"
 
     if value is None or (isinstance(value, float) and np.isnan(value)):
