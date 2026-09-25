@@ -87,6 +87,16 @@ class BaseSettings:
     LOG_LEVEL: str = "INFO"
     LOG_TO_FILE: bool = False
 
+    # ========== Database Connection ==========
+    # db/connection.py가 os.getenv를 직접 호출하지 않고 이 값을 참조하도록 중앙화함
+    # (이전에는 db/connection.py가 자체 os.getenv 기본값("password")을 갖고 있어
+    # .env.example의 기본값("recsyspeople")과 서로 달랐음)
+    DB_HOST: str = os.getenv("DB_HOST", "localhost")
+    DB_PORT: str = os.getenv("DB_PORT", "5432")
+    DB_USER: str = os.getenv("DB_USER", "postgres")
+    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "")
+    DB_NAME: str = os.getenv("DB_NAME", "final_db")
+
     # ========== Database Pool ==========
     DB_POOL_MIN: int = 2
     DB_POOL_MAX: int = 10

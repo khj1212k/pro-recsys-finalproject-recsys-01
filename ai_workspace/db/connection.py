@@ -8,7 +8,26 @@ from psycopg2 import pool
 from psycopg2.extensions import connection as Connection
 from dotenv import load_dotenv
 
+from config.settings import Settings
+
 load_dotenv()
+
+
+def _build_db_config() -> dict:
+    """DB 접속 정보를 Settings(config/settings.py)에서 읽어온다.
+
+    이전에는 이 파일이 os.getenv를 직접 호출해 기본값("password")을 자체적으로
+    갖고 있었고, 이는 .env.example/recommend_engine의 config.yaml이 쓰는 기본값과
+    서로 달랐다. Settings를 단일 진실 공급원으로 통일한다.
+    """
+    return {
+        "host": Settings.DB_HOST,
+        "port": Settings.DB_PORT,
+        "user": Settings.DB_USER,
+        "password": Settings.DB_PASSWORD,
+        "dbname": Settings.DB_NAME,
+        "options": "-c client_encoding=UTF8",
+    }
 
 
 class DatabasePool:
@@ -29,17 +48,10 @@ class DatabasePool:
 
     def _initialize_pool(self) -> None:
         # 커넥션 풀 초기화
-        config = {
-            "host": os.getenv("DB_HOST", "localhost"),
-            "port": os.getenv("DB_PORT", "5432"),
-            "user": os.getenv("DB_USER", "postgres"),
-            "password": os.getenv("DB_PASSWORD", "password"),
-            "dbname": os.getenv("DB_NAME", "final_db"),
-            "options": "-c client_encoding=UTF8"
-        }
+        config = _build_db_config()
 
-        min_conn = int(os.getenv("DB_POOL_MIN", "2"))
-        max_conn = int(os.getenv("DB_POOL_MAX", "10"))
+        min_conn = int(os.getenv("DB_POOL_MIN", str(Settings.DB_POOL_MIN)))
+        max_conn = int(os.getenv("DB_POOL_MAX", str(Settings.DB_POOL_MAX)))
 
         try:
             self._pool = pool.ThreadedConnectionPool(
@@ -77,15 +89,7 @@ class DatabasePool:
 
     @staticmethod
     def _create_direct_connection() -> Connection:
-        config = {
-            "host": os.getenv("DB_HOST", "localhost"),
-            "port": os.getenv("DB_PORT", "5432"),
-            "user": os.getenv("DB_USER", "postgres"),
-            "password": os.getenv("DB_PASSWORD", "password"),
-            "dbname": os.getenv("DB_NAME", "final_db"),
-            "options": "-c client_encoding=UTF8"
-        }
-        return psycopg2.connect(**config)
+        return psycopg2.connect(**_build_db_config())
 
 
 # Global pool instance
