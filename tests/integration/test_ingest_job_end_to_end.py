@@ -137,3 +137,46 @@ def test_ingest_job_collects_extracts_embeds_and_is_idempotent(database_url, pg_
     finally:
         with pg_conn.cursor() as cur:
             cur.execute("DELETE FROM job_runs WHERE id = ANY(%s)", (run_ids,))
+
+
+def _latest_run(pg_conn, job):
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT id, status, stats FROM job_runs WHERE job = %s ORDER BY id DESC LIMIT 1", (job,))
+        return cur.fetchone()
+
+
+def _embedding_dims(pg_conn, url):
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT CASE WHEN embedding_result IS NULL THEN NULL ELSE vector_dims(embedding_result) END "
+            "FROM news_raw WHERE raw_news_url = %s",
+            (url,),
+        )
+        return cur.fetchone()[0]
+
+
+def test_scheduler_split_collects_without_embedding_then_embed_job_fills_vectors(database_url, pg_conn, fake_world):
+    """스케줄러 구성(docker/crontab): 수집 잡은 rss,extract만 돌고 임베딩은 embed 잡이 따로 한다.
+    두 잡은 각자 job_runs 행과 advisory lock을 쓴다."""
+    from jobs.run import main
+
+    run_ids = []
+    ok_url = fake_world["urls"]["ok"]
+    try:
+        assert main(["ingest", "--stages", "rss,extract", "--workers", "1"]) == 0
+        run_id, status, stats = _latest_run(pg_conn, "ingest")
+        run_ids.append(run_id)
+        assert status == "succeeded"
+        assert "embed" not in stats
+        assert _embedding_dims(pg_conn, ok_url) is None
+
+        assert main(["embed", "--time-budget-s", "60"]) == 0
+        run_id, status, stats = _latest_run(pg_conn, "embed")
+        run_ids.append(run_id)
+        assert status == "succeeded"
+        assert stats["embed"]["embedded"] >= 1
+        assert stats["embed"]["remaining"] == 0 and stats["embed"]["stopped_by_budget"] is False
+        assert _embedding_dims(pg_conn, ok_url) == DIM
+    finally:
+        with pg_conn.cursor() as cur:
+            cur.execute("DELETE FROM job_runs WHERE id = ANY(%s)", (run_ids,))
