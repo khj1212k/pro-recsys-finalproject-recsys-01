@@ -17,15 +17,25 @@ except ImportError:
 
 
 def parse_embedding(raw_value) -> np.ndarray:
-    """DB에서 읽은 임베딩 값(문자열 또는 리스트)을 numpy array로 안전하게 변환.
+    """DB에서 읽은 임베딩 값을 1차원 float32 numpy array로 변환.
 
-    pgvector 컬럼은 드라이버에 따라 '[0.1, 0.2, ...]' 형태의 문자열로 반환될 수 있다.
-    ast.literal_eval은 eval()과 달리 리터럴(숫자/리스트/튜플 등)만 평가하므로
-    임의 코드 실행 위험이 없다.
+    - pgvector.Vector: db.connection의 연결은 register_vector가 걸려 있어 vector 컬럼이
+      이 객체로 온다. np.array(Vector)는 값이 아니라 객체를 감싼 0차원 object 배열이 돼
+      HDBSCAN에서 TypeError로 죽으므로 to_numpy()로 꺼낸다.
+    - 문자열 '[0.1, 0.2, ...]': 어댑터가 없는 연결(레거시 경로). ast.literal_eval은
+      리터럴만 평가하므로 eval()과 달리 임의 코드 실행 위험이 없다.
+    - list/tuple/ndarray: 그대로 변환.
     """
     if isinstance(raw_value, str):
-        return np.array(ast.literal_eval(raw_value))
-    return np.array(raw_value)
+        values = ast.literal_eval(raw_value)
+    elif hasattr(raw_value, "to_numpy"):
+        values = raw_value.to_numpy()
+    else:
+        values = raw_value
+    arr = np.asarray(values, dtype=np.float32)
+    if arr.ndim != 1:
+        raise ValueError(f"임베딩은 1차원이어야 합니다 (shape={arr.shape}, type={type(raw_value).__name__})")
+    return arr
 
 
 class NewsClusterer:
@@ -104,7 +114,7 @@ class NewsClusterer:
             ids, titles, embeddings, press_names, contents = [], [], [], [], []
             
             for r in rows:
-                if not r[2]: continue
+                if r[2] is None: continue
                 # 임베딩 파싱
                 emb = parse_embedding(r[2])
                 
