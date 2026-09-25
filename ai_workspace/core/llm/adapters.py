@@ -149,6 +149,42 @@ class OpenAICompatLLMClient(LLMClient):
                     attempts=attempt, provider=self.provider, model=self.model, error=last_error,
                 )
 
+            except openai.LengthFinishReasonError as e:
+                # 길이 제한으로 구조화 출력을 못 채운 경우 - 프롬프트/max_tokens을 안 바꾸면
+                # 재시도해도 같은 이유로 또 실패할 가능성이 높으므로 즉시 종료한다.
+                latency = time.time() - attempt_start
+                get_metrics_collector().record_call(
+                    purpose=purpose, input_tokens=0, output_tokens=0,
+                    latency_seconds=latency, success=False,
+                    provider=self.provider, model=self.model, error_type="length",
+                )
+                logger.error(
+                    "%s/%s: 길이 제한으로 구조화 출력 실패 (재시도 불가): %s",
+                    self.provider, self.model, e,
+                )
+                return LLMResult(
+                    text=None, parsed=None, usage=LLMUsage(), latency_s=latency,
+                    attempts=attempt, provider=self.provider, model=self.model, error="length",
+                )
+
+            except openai.ContentFilterFinishReasonError as e:
+                # 콘텐츠 필터가 응답을 막은 경우 - 같은 프롬프트로 재시도해도 다시
+                # 걸릴 가능성이 높으므로 즉시 종료한다.
+                latency = time.time() - attempt_start
+                get_metrics_collector().record_call(
+                    purpose=purpose, input_tokens=0, output_tokens=0,
+                    latency_seconds=latency, success=False,
+                    provider=self.provider, model=self.model, error_type="content_filter",
+                )
+                logger.error(
+                    "%s/%s: 콘텐츠 필터에 의해 응답 거부됨 (재시도 불가): %s",
+                    self.provider, self.model, e,
+                )
+                return LLMResult(
+                    text=None, parsed=None, usage=LLMUsage(), latency_s=latency,
+                    attempts=attempt, provider=self.provider, model=self.model, error="content_filter",
+                )
+
             except (openai.APITimeoutError, openai.APIConnectionError) as e:
                 last_error = str(e)
                 latency = time.time() - attempt_start

@@ -28,6 +28,9 @@ class LLMCallRecord:
     # 레거시 HyperCLOVA 경로 등 값을 안 넘기는 호출도 있으므로 기본값을 둔다.
     provider: str = "unknown"
     model: str = "unknown"
+    # 재시도 불가능한 특정 실패 사유를 안정적인 코드로 남긴다("length", "content_filter",
+    # "kill_switch" 등). 성공 호출이나 코드화되지 않은 실패는 빈 문자열로 남는다.
+    error_type: str = ""
 
 
 class LLMMetricsCollector:
@@ -79,7 +82,8 @@ class LLMMetricsCollector:
         latency_seconds: float,
         success: bool = True,
         provider: str = "unknown",
-        model: str = "unknown"
+        model: str = "unknown",
+        error_type: str = ""
     ):
         """Record a single LLM API call"""
         record = LLMCallRecord(
@@ -90,7 +94,8 @@ class LLMMetricsCollector:
             timestamp=time.time(),
             success=success,
             provider=provider,
-            model=model
+            model=model,
+            error_type=error_type
         )
         with self._lock:
             self.calls.append(record)
