@@ -49,10 +49,14 @@ jobs:
             lxml_html_clean \
             pydantic \
             kiwipiepy \
-            hdbscan
+            hdbscan \
+            rapidfuzz
 
       - name: Install ai_workspace package (no deps, editable)
         run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace
 
+      - name: Install recommend_engine package (no deps, editable)
+        run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace/recommend_engine
+
       - name: Run tests (excluding integration)
-        run: .venv/bin/python -m pytest -q -m "not integration"
+        run: .venv/bin/python -m pytest -q -m "not integration" tests/
