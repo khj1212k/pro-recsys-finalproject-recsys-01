@@ -86,3 +86,47 @@ def test_batch_update_all_users_computes_embedding_from_pgvector_wrapper_rows():
     assert uid == 1
     np.testing.assert_allclose(embedding_list, [1.0, 0.0, 0.0], atol=1e-6)
     conn.commit.assert_called_once()
+
+
+def test_refresh_recently_active_users_recomputes_users_with_recent_clicks_even_if_embedded():
+    """요청 시점 추천이 읽는 장기 벡터(user.user_embedding)는 NULL일 때만 채워져 한 번
+    만들어지면 다시 갱신되지 않았다. refresh_recently_active_users(since)는 since 이후
+    클릭한 사용자를 대상으로 같은 가중식으로 다시 계산해야 한다."""
+    from datetime import datetime, timedelta, timezone
+
+    from pgvector import Vector
+
+    conn, cur = _make_cursor_conn()
+    since = datetime(2026, 9, 25, 0, 0, tzinfo=timezone.utc)
+    clicked_at = datetime.now() - timedelta(hours=1)
+
+    def execute_side_effect(sql, params=None):
+        execute_side_effect.calls.append((sql, params))
+    execute_side_effect.calls = []
+    cur.execute.side_effect = execute_side_effect
+
+    def fetchall_side_effect():
+        sql, _ = execute_side_effect.calls[-1]
+        if "SELECT DISTINCT user_id FROM user_newsletter_ctr_log" in sql:
+            return [(5,)]
+        if "user_preferred_newsletter" in sql:
+            return []
+        if "FROM user_newsletter_ctr_log" in sql:
+            return [(5, 200, clicked_at)]
+        if "news_letter_embedding" in sql:
+            return [(200, Vector([0.0, 1.0, 0.0]))]
+        return []
+
+    cur.fetchall.side_effect = fetchall_side_effect
+
+    with patch("core.user_embedder.get_connection", return_value=conn), \
+         patch("core.user_embedder.release_connection"):
+        stats = UserEmbedder().refresh_recently_active_users(since)
+
+    target_sql, target_params = execute_side_effect.calls[0]
+    assert "user_embedding IS NULL" not in target_sql
+    assert target_params == (since,)
+    assert stats == {"success": 1, "failed": 0, "skipped": 0}
+    (_, updates), _ = cur.executemany.call_args
+    assert updates[0][1] == 5
+    np.testing.assert_allclose(updates[0][0], [0.0, 1.0, 0.0], atol=1e-6)
