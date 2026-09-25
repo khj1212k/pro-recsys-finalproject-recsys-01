@@ -6,6 +6,7 @@ imports it from here so runtime never depends on the evaluation tree.
 """
 
 import re
+import threading
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -119,16 +120,24 @@ class DriftReport:
 # ---------------------------------------------------------------------------
 
 _KIWI = None
+# The workflow runs clusters on a thread pool (docs/adr/0010); the first callers
+# would otherwise race to build several ~100MB Kiwi instances, and one shared
+# instance's analyze() is not documented as re-entrant, so calls are serialized
+# too (milliseconds per newsletter, negligible next to LLM latency).
+_KIWI_INIT_LOCK = threading.Lock()
+_KIWI_CALL_LOCK = threading.Lock()
 
 
 def _get_kiwi():
     global _KIWI
     if _KIWI is None:
-        try:
-            from kiwipiepy import Kiwi
-            _KIWI = Kiwi()
-        except ImportError:
-            _KIWI = False
+        with _KIWI_INIT_LOCK:
+            if _KIWI is None:
+                try:
+                    from kiwipiepy import Kiwi
+                    _KIWI = Kiwi()
+                except ImportError:
+                    _KIWI = False
     return _KIWI
 
 
@@ -329,7 +338,8 @@ def _extract_entities(
             )
         return _extract_entities_fallback(text), "regex_fallback"
 
-    tokens = kiwi.analyze(text)[0][0]
+    with _KIWI_CALL_LOCK:
+        tokens = kiwi.analyze(text)[0][0]
     entities = []
     i, n = 0, len(tokens)
     while i < n:
@@ -510,9 +520,17 @@ def check_against_sources(
     )
 
 
-def _diff_facts(original: list, rewritten: list, eq_fn) -> Tuple[list, list]:
+def _diff_facts(original: list, rewritten: list, eq_fn, multiset: bool = True) -> Tuple[list, list]:
     """Multiset diff: greedily pair each original item with an equivalent
-    rewritten item; whatever is left over on each side is added/dropped."""
+    rewritten item; whatever is left over on each side is added/dropped.
+
+    With multiset=False a fact only counts as added/dropped when no
+    equivalent exists anywhere on the other side, so mentioning a fact
+    fewer times is not drift."""
+    if not multiset:
+        added = [r for r in rewritten if not any(eq_fn(o, r) for o in original)]
+        dropped = [o for o in original if not any(eq_fn(o, r) for r in rewritten)]
+        return added, dropped
     remaining = list(rewritten)
     dropped = []
     for o in original:
@@ -531,6 +549,7 @@ def compare_rewrite(
     number_approx_tol: float = 0.01,
     entity_match_threshold: float = 90.0,
     allow_regex_fallback: bool = False,
+    multiset: bool = True,
 ) -> DriftReport:
     orig_facts = extract_facts(original, allow_regex_fallback=allow_regex_fallback)
     rewr_facts = extract_facts(rewritten, allow_regex_fallback=allow_regex_fallback)
@@ -548,9 +567,9 @@ def compare_rewrite(
             return True
         return fuzz.ratio(a.surface, b.surface) >= entity_match_threshold
 
-    added_numbers, dropped_numbers = _diff_facts(orig_facts.numbers, rewr_facts.numbers, number_eq)
-    added_dates, dropped_dates = _diff_facts(orig_facts.dates, rewr_facts.dates, date_eq)
-    added_entities, dropped_entities = _diff_facts(orig_facts.entities, rewr_facts.entities, entity_eq)
+    added_numbers, dropped_numbers = _diff_facts(orig_facts.numbers, rewr_facts.numbers, number_eq, multiset)
+    added_dates, dropped_dates = _diff_facts(orig_facts.dates, rewr_facts.dates, date_eq, multiset)
+    added_entities, dropped_entities = _diff_facts(orig_facts.entities, rewr_facts.entities, entity_eq, multiset)
 
     added_numbers = [n.to_dict() for n in added_numbers]
     dropped_numbers = [n.to_dict() for n in dropped_numbers]
