@@ -57,7 +57,7 @@ def test_vector_write_read_roundtrip_and_cosine_distance_query(database_url, pg_
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT embedding <=> %s AS distance FROM pgvector_roundtrip_test WHERE id != %s",
-                    ([1.0, 0.0, 0.0, 0.0], nearest_id),
+                    (np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32), nearest_id),
                 )
                 (orth_distance,) = cur.fetchone()
             assert orth_distance == pytest.approx(1.0, abs=1e-6)
