@@ -5,6 +5,7 @@ import json
 from typing import Dict, List, Optional
 
 from core.llm_client import get_llm_client, extract_json_from_response, BaseLLMClient
+from config.settings import Settings
 
 
 class ClusterEvaluator:
@@ -95,7 +96,7 @@ Content Preview: {content_preview}...
             {"role": "user", "content": prompt}
         ]
 
-        max_retries = 1000000  # effectively until parse succeeds
+        max_retries = Settings.MAX_JSON_PARSE_RETRIES
         last_response = None
         for _ in range(max_retries):
             response = self.client.chat_completion(
@@ -230,7 +231,7 @@ If unsure, still return valid JSON with empty strings/lists."""
             {"role": "user", "content": prompt}
         ]
 
-        max_retries = 1000000
+        max_retries = Settings.MAX_JSON_PARSE_RETRIES
         last_response = None
         for _ in range(max_retries):
             response = self.client.chat_completion(
