@@ -17,7 +17,7 @@ from datetime import datetime
 from typing import Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
-from sqlalchemy import insert, text
+from sqlalchemy import create_engine, insert, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -185,6 +185,24 @@ class SqlRecsysRepository:
             return None
         created_at, ids = rows[0]
         return created_at, [int(i) for i in (ids or [])]
+
+
+def create_recsys_engine(database_url: str, workers: int, time_budget_ms: int) -> Engine:
+    """실시간 경로 전용 커넥션 풀(벌크헤드). API 요청은 인증 조회 때부터 앱 풀 커넥션을 쥔 채
+    추천 결과를 기다리므로, 작업 스레드가 같은 풀에서 빌리면 동시 요청이 풀 크기에 닿을 때
+    순환 대기가 생긴다. 작업 스레드 수만큼 따로 두면 작업 스레드는 풀을 기다리지 않고,
+    앱 풀 사용량은 요청당 1개로 이전과 같다."""
+    from app.database import register_pgvector_on_connect
+
+    eng = create_engine(
+        database_url,
+        connect_args={"options": "-c client_encoding=utf8"},
+        pool_size=workers,
+        max_overflow=0,
+        pool_timeout=max(0.001, time_budget_ms / 1000.0),
+    )
+    register_pgvector_on_connect(eng)
+    return eng
 
 
 @contextmanager
