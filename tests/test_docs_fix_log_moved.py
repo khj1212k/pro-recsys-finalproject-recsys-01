@@ -50,3 +50,15 @@ def test_adr_files_ported_under_docs_adr():
 
 def test_portfolio_md_not_ported():
     assert not os.path.exists(os.path.join(REPO_ROOT, "PORTFOLIO.md"))
+
+
+def test_adr_docs_cite_moved_fix_log_path_not_old_root_filename():
+    """self-review #2: ADR이 이동 전 경로인 `FIX_LOG.md`를 그대로 인용하고 있으면
+    독자가 존재하지 않는 파일을 찾게 된다. 이동한 `docs/fix-log-2026-07.md`를
+    인용해야 한다(ADR 본문 내용 자체는 그대로 유지)."""
+    adr_dir = os.path.join(REPO_ROOT, "docs", "adr")
+    for name in ("0001-langgraph-for-newsletter-generation.md", "0003-lightgbm-mmr-for-recommendation.md"):
+        with open(os.path.join(adr_dir, name), encoding="utf-8") as f:
+            content = f.read()
+        assert "FIX_LOG.md" not in content, f"{name}가 여전히 옛 경로 FIX_LOG.md를 인용합니다"
+        assert "fix-log-2026-07.md" in content, f"{name}가 이동된 경로를 인용하지 않습니다"
