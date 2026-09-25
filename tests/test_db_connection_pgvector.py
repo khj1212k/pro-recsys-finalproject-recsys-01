@@ -180,3 +180,20 @@ def test_get_connection_still_falls_back_to_direct_connection_on_pool_error():
     finally:
         DatabasePool._instance = None
         DatabasePool._pool = None
+
+
+def test_original_error_propagates_even_if_putconn_fails(monkeypatch):
+    import db.connection as connection
+
+    fake_conn = MagicMock()
+    fake_pool = MagicMock()
+    fake_pool.getconn.return_value = fake_conn
+    fake_pool.putconn.side_effect = RuntimeError("pool already closed")
+    pool = connection.DatabasePool.__new__(connection.DatabasePool)
+    pool._pool = fake_pool
+    monkeypatch.setattr(
+        connection, "_register_pgvector_adapter",
+        MagicMock(side_effect=connection.VectorExtensionMissingError("no vector")),
+    )
+    with pytest.raises(connection.VectorExtensionMissingError):
+        pool.get_connection()

@@ -1,3 +1,4 @@
+import logging
 import os
 import threading
 from contextlib import contextmanager
@@ -10,6 +11,8 @@ from pgvector.psycopg2 import register_vector
 from dotenv import load_dotenv
 
 from config.settings import Settings
+
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 
@@ -100,14 +103,20 @@ class DatabasePool:
                 try:
                     return _register_pgvector_adapter(conn)
                 except Exception:
-                    self._pool.putconn(conn, close=True)
+                    try:
+                        self._pool.putconn(conn, close=True)
+                    except Exception:
+                        logger.exception("pgvector 등록 실패 후 커넥션 반납에도 실패했습니다")
                     raise
 
         direct_conn = self._create_direct_connection()
         try:
             return _register_pgvector_adapter(direct_conn)
         except Exception:
-            direct_conn.close()
+            try:
+                direct_conn.close()
+            except Exception:
+                logger.exception("pgvector 등록 실패 후 직접 연결 종료에도 실패했습니다")
             raise
 
     def release_connection(self, conn: Connection) -> None:
