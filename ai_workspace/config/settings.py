@@ -70,6 +70,7 @@ class BaseSettings:
     # ========== Retry Configuration ==========
     RETRY_EXPONENTIAL_BASE: float = 2.0
     MAX_RETRY_WAIT_SECONDS: int = 64
+    MAX_FETCH_RETRIES: int = 3  # RSS/본문 크롤링 네트워크 요청 최대 재시도 횟수
     
     # ========== Crawler Settings ==========
     PARALLEL_WORKERS: int = 8  # 병렬 크롤링 워커
