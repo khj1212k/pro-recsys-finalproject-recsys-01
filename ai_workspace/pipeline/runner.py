@@ -28,26 +28,28 @@ class PipelineRunner:
         num_workers: int = 8,
         force_cpu: bool = False,
         limit: Optional[int] = None,
-        min_cluster_size: int = 3,
-        min_samples: int = 2,
-        min_target: int = 0,
+        min_cluster_size: Optional[int] = None,
+        min_samples: Optional[int] = None,
+        min_target: Optional[int] = None,
+        lookback_hours: Optional[int] = None,
         batch_size: Optional[int] = None,
         start_stage: int = 1,
         end_stage: int = 5
     ) -> Dict[str, Any]:
         """
         전체 파이프라인을 처음부터 끝까지 실행
-        
+
         Args:
             reset_db: 데이터베이스 초기화 여부 (test_db 전용)
             num_workers: 병렬 처리를 위한 작업자(Process) 수
             force_cpu: 강제로 CPU를 사용할지 여부 (GPU 미사용 시)
             limit: 처리할 클러스터 최대 개수 제한 (디버깅용)
-            min_cluster_size: HDBSCAN 군집화 최소 크기
-            min_samples: HDBSCAN 군집화 최소 샘플 수
-            min_target: 생성할 뉴스레터 최소 목표 수량
+            min_cluster_size: HDBSCAN 군집화 최소 크기 (None이면 Settings 값 사용)
+            min_samples: HDBSCAN 군집화 최소 샘플 수 (None이면 Settings 값 사용)
+            min_target: 생성할 뉴스레터 최소 목표 수량 (None이면 Settings 값 사용)
+            lookback_hours: 클러스터링 대상 기사의 crawled_at lookback 시간 (None이면 Settings 값 사용)
             batch_size: 임베딩 생성 시 배치 크기
-            
+
         Returns:
             Dict: 각 단계별 실행 결과 요약 정보
         """
@@ -91,7 +93,8 @@ class PipelineRunner:
                 limit=limit,
                 min_cluster_size=min_cluster_size,
                 min_samples=min_samples,
-                min_target=min_target
+                min_target=min_target,
+                lookback_hours=lookback_hours
             )
         
         # Stage 6: Newsletter Embedding
