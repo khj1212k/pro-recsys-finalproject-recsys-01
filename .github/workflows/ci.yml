@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Python 3.11
+        run: uv python install 3.11
+
+      - name: Create virtualenv
+        run: uv venv --python 3.11 .venv
+
+      - name: Install test dependencies
+        run: |
+          uv pip install --python .venv/bin/python \
+            pytest \
+            langgraph \
+            langchain-openai \
+            openai \
+            tiktoken \
+            numpy \
+            pandas \
+            scikit-learn \
+            lightgbm \
+            optuna \
+            pgvector \
+            psycopg2-binary \
+            python-dotenv \
+            sqlalchemy \
+            sqlmodel \
+            alembic \
+            feedparser \
+            requests \
+            python-dateutil \
+            trafilatura \
+            tqdm \
+            pyyaml \
+            lxml_html_clean \
+            pydantic \
+            kiwipiepy \
+            hdbscan \
+            rapidfuzz
+
+      - name: Install ai_workspace package (no deps, editable)
+        run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace
+
+      - name: Install recommend_engine package (no deps, editable)
+        run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace/recommend_engine
+
+      - name: Run tests (excluding integration)
+        run: .venv/bin/python -m pytest -q -m "not integration and not benchmark" tests/

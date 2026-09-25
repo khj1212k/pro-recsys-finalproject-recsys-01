@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
+from _callbacks import notify_failure
+
 PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
 env_path = PROJECT_ROOT / '.env'
 load_dotenv(env_path)
@@ -19,6 +21,7 @@ default_args = {
     'email_on_retry': False,
     'retries': 1,
     'retry_delay': timedelta(minutes=5),
+    'on_failure_callback': notify_failure,
 }
 
 with DAG(
@@ -33,7 +36,7 @@ with DAG(
 
     PYTHON_EXEC = f"{PROJECT_ROOT}/.venv/bin/python"
     SCRIPT_PATH = f"{PROJECT_ROOT}/scheduler/calculate_ranking.py"
-    AI_PATH = f"/data/ephemeral/home/pro-recsys-finalproject-recsys-01/ai_workspace"
+    AI_PATH = f"{PROJECT_ROOT}/ai_workspace"
 
     pipeline_runner = BashOperator(
         task_id='pipeline_runner',

@@ -1,5 +1,6 @@
 """Pipeline Stages: 간소화된 파이프라인 단계 정의"""
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 from tqdm import tqdm
@@ -38,7 +39,7 @@ class Stage3_NewsEmbedding(PipelineStage):
     """기사 임베딩 (NewsEmbedder -> news_raw 테이블에 저장)"""
     def execute(self, force_cpu=False, batch_size=None, **kwargs) -> int:
         from core.embedder import NewsEmbedder
-        from db.connection import get_connection
+        from db.connection import get_connection, release_connection
         
         batch_size = batch_size or self.settings.EMBEDDING_BATCH_SIZE
         count = 0
@@ -79,7 +80,7 @@ class Stage3_NewsEmbedding(PipelineStage):
                 conn.rollback()
                 logger.error(f"임베딩 실패: {e}")
             finally:
-                conn.close()
+                release_connection(conn)
                 
         return count
 
@@ -89,20 +90,25 @@ class Stage5_NewsletterGeneration(PipelineStage):
         from core.clusterer import NewsClusterer
         from workflow.graph import compile_workflow
         from core.llm_metrics import get_metrics_collector
-        
+        from db.batch_manager import create_new_batch
+
         # Start LLM metrics collection
         metrics = get_metrics_collector()
         metrics.start_batch()
-        
+
         # 1. 클러스터링
         clusterer = NewsClusterer()
         clusters = clusterer.cluster_news(min_cluster_size=min_cluster_size, min_samples=min_samples)
-        
+
         if not clusters:
             logger.info("생성된 클러스터가 없습니다.")
             return 0
-            
-        # 2. 워크플로우 실행 (뉴스레터 생성)
+
+        # 2. 정식 run_id 발급 (cluster_history에 이번 배치 기록)
+        run_id = create_new_batch(clusters)
+        logger.info(f"🆔 배치 run_id={run_id} 발급 완료")
+
+        # 3. 워크플로우 실행 (뉴스레터 생성)
         app = compile_workflow()
         count = 0
         total = len(clusters) if not limit else min(len(clusters), limit)
@@ -122,7 +128,7 @@ class Stage5_NewsletterGeneration(PipelineStage):
                 "all_cluster_ids": all_ids,
                 "all_cluster_groups": clusters,
                 "data": data,
-                "run_id": int(logging.getLogger().name) if logging.getLogger().name.isdigit() else 0 # 임시 run_id
+                "run_id": run_id,
             }
             
             try:
@@ -132,10 +138,11 @@ class Stage5_NewsletterGeneration(PipelineStage):
             except Exception as e:
                 logger.error(f"Clubster {cid} 처리 중 에러: {e}")
 
-        # End LLM metrics collection and print summary
+        # End LLM metrics collection, print summary, and persist for later cost/latency 분석
         metrics.end_batch()
         metrics.print_summary()
-        
-        logger.info(f"✨ 뉴스레터 생성 완료: {count}건")
+        metrics.save_summary(os.path.join("logs", f"llm_metrics_run{run_id}.json"))
+
+        logger.info(f"✨ 뉴스레터 생성 완료: {count}건 (run_id={run_id})")
         return count
 

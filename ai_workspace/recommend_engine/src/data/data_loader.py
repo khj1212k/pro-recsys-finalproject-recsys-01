@@ -1,4 +1,5 @@
 # src/data/data_loader.py
+import bisect
 import os
 import pickle
 import json
@@ -37,20 +38,39 @@ class NewsItem:
     embedding: np.ndarray   # BGE-M3 Vector (1024d)
     timestamp: datetime     # 발행 시각
 
+
+def resolve_db_config(yaml_db_conf: Dict = None) -> Dict[str, str]:
+    """DB 접속 정보를 결정한다. 환경변수(DB_HOST 등)가 있으면 최우선으로 쓰고,
+    없으면 config.yaml의 database 섹션 값으로 폴백한다.
+
+    ai_workspace/db/connection.py(상위 파이프라인)와 동일한 환경변수 이름을 공유해,
+    두 서브 프로젝트가 같은 .env 하나로 동일한 DB를 가리키도록 한다. 이전에는
+    config.yaml에 비밀번호(recsyspeople)가 평문으로 하드코딩되어 있었다.
+    """
+    yaml_db_conf = yaml_db_conf or {}
+    return {
+        "host": os.getenv("DB_HOST", yaml_db_conf.get("host", "localhost")),
+        "port": os.getenv("DB_PORT", str(yaml_db_conf.get("port", 5432))),
+        "user": os.getenv("DB_USER", yaml_db_conf.get("user", "postgres")),
+        "password": os.getenv("DB_PASSWORD", yaml_db_conf.get("password", "")),
+        "dbname": os.getenv("DB_NAME", yaml_db_conf.get("dbname", "final_db")),
+    }
+
+
 # =============================================================================
 # DataLoader 클래스
 # =============================================================================
 
 class DataLoader:
-    
+
     def __init__(self, config: Dict = None):
         if config is None:
             self.config = load_config()
         else:
             self.config = config
-            
-        # DB 연결 설정
-        db_conf = self.config['database']
+
+        # DB 연결 설정 (환경변수가 config.yaml보다 우선)
+        db_conf = resolve_db_config(self.config.get('database'))
         # URL 끝에 client_encoding 추가
         url = f"postgresql://{db_conf['user']}:{db_conf['password']}@{db_conf['host']}:{db_conf['port']}/{db_conf['dbname']}?client_encoding=utf8"
         
@@ -191,72 +211,132 @@ class DataLoader:
     # 2. User Profile Builder
     # -------------------------------------------------------------------------
 
+    def _ensure_history_index(self, logs_df: pd.DataFrame) -> None:
+        """logs_df를 user_id별 시간순 정렬 배열로 1회만 사전 분할하고,
+        compute_history_embedding()의 (user_id, cutoff_time) 메모이즈 캐시를 준비한다.
+
+        logs_df 객체가 바뀌면(id() 기준) 인덱스/캐시를 다시 구축한다. 같은 로그로
+        여러 유저 x 여러 cutoff를 반복 조회하는 추론/학습 경로에서, 매 호출마다
+        DataFrame을 필터링하지 않고 이 사전 분할된 배열을 재사용한다.
+        """
+        key = id(logs_df)
+        if getattr(self, "_history_index_key", None) == key:
+            return
+
+        self._history_index_key = key
+        self._history_embedding_cache: Dict[Any, np.ndarray] = {}
+        index: Dict[int, Any] = {}
+        if logs_df is not None and not logs_df.empty:
+            for uid, group in logs_df.groupby('user_id'):
+                sorted_group = group.sort_values('timestamp')
+                index[int(uid)] = (
+                    sorted_group['timestamp'].tolist(),
+                    sorted_group['news_letter_id'].tolist(),
+                )
+        self._history_user_logs = index
+
+    def _compute_history_embedding_uncached(
+        self, user_id: int, cutoff_time: datetime, news_dict: Dict[int, "NewsItem"]
+    ) -> np.ndarray:
+        """실제 히스토리 임베딩 계산 (사전 정렬된 배열 + bisect로 cutoff 이전 로그만 선택).
+        메모이즈 캐시를 우회하는 내부 헬퍼 - 테스트에서 호출 횟수를 스파이하기 위해 분리."""
+        news_half_life = self.config['time_decay']['news_half_life_days']
+        min_weight = self.config['time_decay']['min_weight']
+        hist_emb = np.zeros(1024, dtype=np.float32)
+
+        timestamps, news_ids = self._history_user_logs.get(user_id, ([], []))
+        if not timestamps:
+            return hist_emb
+
+        # bisect_left: timestamps는 오름차순 정렬되어 있으므로, 반환값은
+        # "cutoff_time보다 앞선(< cutoff_time)" 로그의 개수와 같다.
+        cut_idx = bisect.bisect_left(timestamps, cutoff_time)
+        if cut_idx == 0:
+            return hist_emb
+
+        vectors, weights = [], []
+        for i in range(cut_idx):
+            nid = int(news_ids[i])
+            if nid not in news_dict:
+                continue
+            vec = news_dict[nid].embedding
+
+            days_ago = (cutoff_time - timestamps[i]).days
+            w = pow(0.5, days_ago / news_half_life)
+            w = max(w, min_weight)
+
+            vectors.append(vec)
+            weights.append(w)
+
+        if vectors:
+            hist_emb = np.average(vectors, axis=0, weights=weights)
+        return hist_emb
+
+    def compute_history_embedding(
+        self,
+        user_id: int,
+        cutoff_time: datetime,
+        logs_df: pd.DataFrame,
+        news_dict: Dict[int, "NewsItem"],
+    ) -> np.ndarray:
+        """
+        주어진 cutoff_time '이전' 로그만 사용해 point-in-time 히스토리 임베딩을 계산한다.
+
+        Data Leakage 방지: 학습 데이터의 각 row는 그 row가 발생한 시점(cutoff_time) 이후의
+        클릭을 히스토리 feature로 사용해서는 안 된다. cutoff_time=datetime.now()로 호출하면
+        (실서비스 추론 시나리오) 기존 build_user_profiles()와 동일하게 '현재까지의 전체 히스토리'가 된다.
+
+        성능(CORRECTION): create_inference_dataset()은 (user, news) 전체 조합에 동일한
+        eval_timestamp를 넘기므로 timestamps가 항상 채워져 있어, 메모이즈 없이는 O(유저수 x 뉴스수)로
+        같은 (user_id, cutoff_time) 히스토리를 반복 계산하게 된다. (user_id, cutoff_time) 단위로
+        결과를 캐시해, 실제 계산은 unique (user_id, cutoff_time) 조합당 1회만 수행되도록 한다 -
+        추론 시엔 유저당 1회, 학습 시엔 같은 클릭시각을 공유하는 positive+negative 묶음당 1회.
+        """
+        self._ensure_history_index(logs_df)
+        cache_key = (user_id, cutoff_time)
+        if cache_key in self._history_embedding_cache:
+            return self._history_embedding_cache[cache_key]
+
+        result = self._compute_history_embedding_uncached(user_id, cutoff_time, news_dict)
+        self._history_embedding_cache[cache_key] = result
+        return result
+
     def build_user_profiles(self) -> Dict[int, UserProfile]:
         """
-        유저 프로필 생성
+        유저 프로필 생성 (실시간 추론 시나리오: cutoff_time = 지금)
         (참고: category_half_life_days 로직은 여기서 제거됨 - Todo 1번 반영)
         """
         if self._user_profiles is not None: return self._user_profiles
-            
+
         logger.info("👤 사용자 프로필 빌드 중...")
-        
+
         # 유저 목록 조회 (메타데이터가 있다면)
         user_query = 'SELECT user_id FROM "user"' # user는 예약어
         users_df = self._load_from_db(user_query)
-        
+
         # 선호 카테고리
         pref_cat_df = self.load_user_preferred_categories()
         user_cat_map = pref_cat_df.groupby('user_id')['category_id'].apply(list).to_dict()
-        
+
         # 뉴스 임베딩 (히스토리 계산용)
         news_dict = self.load_embedded_news()
-        
+
         # 로그 (히스토리 계산용 - 전체 로드)
         logs_df = self.load_ctr_logs()
-        
-        # 로그가 있으면 히스토리 임베딩 계산
-        user_logs_map = None
-        if not logs_df.empty:
-            user_logs_map = logs_df.groupby('user_id')
-            
+
         profiles = {}
-        
-        # Time Decay 설정
-        news_half_life = self.config['time_decay']['news_half_life_days']
-        min_weight = self.config['time_decay']['min_weight']
         now = datetime.now()
 
         for _, row in users_df.iterrows():
             uid = int(row['user_id'])
-            
-            # History Embedding Calculation
-            hist_emb = np.zeros(1024, dtype=np.float32)
-            
-            if user_logs_map is not None and uid in user_logs_map.groups:
-                u_logs = user_logs_map.get_group(uid)
-                vectors = []
-                weights = []
-                
-                for _, log in u_logs.iterrows():
-                    nid = int(log['news_letter_id'])
-                    if nid in news_dict:
-                        vec = news_dict[nid].embedding
-                        
-                        # [뉴스 신선도 반감기 적용]
-                        # 로그 발생 시점이 아니라 '현재 시점' 기준 과거 클릭의 가중치 감소
-                        days_ago = (now - log['timestamp']).days
-                        w = pow(0.5, days_ago / news_half_life)
-                        w = max(w, min_weight)
-                        
-                        vectors.append(vec)
-                        weights.append(w)
-                
-                if vectors:
-                    hist_emb = np.average(vectors, axis=0, weights=weights)
+
+            hist_emb = self.compute_history_embedding(
+                user_id=uid, cutoff_time=now, logs_df=logs_df, news_dict=news_dict
+            )
 
             # [수정] category_half_life_days 관련 로직 제거됨.
             # DB에 있는 onboarding_categories를 그대로 사용.
-            
+
             profiles[uid] = UserProfile(
                 user_id=uid,
                 # 현재 DB "user" 테이블에 age/gender 컬럼이 명시되지 않아 기본값(0) 처리
