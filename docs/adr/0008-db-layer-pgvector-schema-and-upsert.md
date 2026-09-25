@@ -177,7 +177,7 @@
 
 ## 증거
 - 단위 테스트(mock 기반, 이 워크트리에서 실행 가능):
-  - `tests/test_db_connection_pgvector.py` (6건): `_register_pgvector_adapter`의
+  - `tests/test_db_connection_pgvector.py` (7건): `_register_pgvector_adapter`의
     guard(등록 성공/실패), `get_connection()`이 풀 커넥션과 direct fallback
     커넥션 모두에 등록을 호출하는지, extension 누락 에러가 `PoolError`
     폴백에 삼켜지지 않는지, 기존 `PoolError` 폴백 동작이 유지되는지.
