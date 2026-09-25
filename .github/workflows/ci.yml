@@ -59,4 +59,4 @@ jobs:
         run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace/recommend_engine
 
       - name: Run tests (excluding integration)
-        run: .venv/bin/python -m pytest -q -m "not integration" tests/
+        run: .venv/bin/python -m pytest -q -m "not integration and not benchmark" tests/

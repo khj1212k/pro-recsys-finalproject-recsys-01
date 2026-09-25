@@ -53,7 +53,7 @@
 ## 증거
 - `port/fix-snapshot`에서 7월 테스트 57개가 통과한다(Python 3.11). 최신 scipy와 충돌하는 torch 스텁 1줄만 고쳤다.
 - 이식 후 테스트 수, 교정 항목별 테스트, #4 memoize 전후 실행 시간(이 워크트리에서 재측정):
-  - **전체 테스트**: `port/july-self-review` 브랜치(이 ADR을 추가하기 직전 커밋 기준) `.venv/bin/python -m pytest -q` 115개 전부 통과.
+  - **전체 테스트**: `port/july-self-review` 브랜치에서 `pytest -q` 89개 전부 통과. 문서·설정 파일의 문자열만 검사하던 메타 테스트는 기능을 검증하지 않고 테스트 수만 부풀려 제외했다. 실행 시간 벤치마크(#4)는 `benchmark` 마커로 분리해 CI에서는 제외한다.
   - **#4 (추론 시 O(사용자×뉴스) 재계산 회귀 → 메모이즈)**: `tests/recommend_engine/test_history_embedding_leakage.py` 6건.
     - 호출 횟수 검증(`test_compute_history_embedding_is_memoized_per_user_and_cutoff`): `_compute_history_embedding_uncached`를 spy로 감싸, 유저 5명 × 뉴스 20건을 반복 호출해도 실제 계산은 unique (user_id, cutoff) 조합 수(5회)만 발생함을 확인.
     - 값 동치성 검증(`test_compute_history_embedding_matches_naive_unmemoized_values`): 메모이즈 전 구현(iterrows 기반 naive 참조 구현)과 메모이즈 후 구현이 유저 15명 × cutoff 3개 조합에서 동일한 결과를 냄을 확인(atol=1e-5).
