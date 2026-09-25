@@ -37,20 +37,39 @@ class NewsItem:
     embedding: np.ndarray   # BGE-M3 Vector (1024d)
     timestamp: datetime     # 발행 시각
 
+
+def resolve_db_config(yaml_db_conf: Dict = None) -> Dict[str, str]:
+    """DB 접속 정보를 결정한다. 환경변수(DB_HOST 등)가 있으면 최우선으로 쓰고,
+    없으면 config.yaml의 database 섹션 값으로 폴백한다.
+
+    ai_workspace/db/connection.py(상위 파이프라인)와 동일한 환경변수 이름을 공유해,
+    두 서브 프로젝트가 같은 .env 하나로 동일한 DB를 가리키도록 한다. 이전에는
+    config.yaml에 비밀번호(recsyspeople)가 평문으로 하드코딩되어 있었다.
+    """
+    yaml_db_conf = yaml_db_conf or {}
+    return {
+        "host": os.getenv("DB_HOST", yaml_db_conf.get("host", "localhost")),
+        "port": os.getenv("DB_PORT", str(yaml_db_conf.get("port", 5432))),
+        "user": os.getenv("DB_USER", yaml_db_conf.get("user", "postgres")),
+        "password": os.getenv("DB_PASSWORD", yaml_db_conf.get("password", "")),
+        "dbname": os.getenv("DB_NAME", yaml_db_conf.get("dbname", "final_db")),
+    }
+
+
 # =============================================================================
 # DataLoader 클래스
 # =============================================================================
 
 class DataLoader:
-    
+
     def __init__(self, config: Dict = None):
         if config is None:
             self.config = load_config()
         else:
             self.config = config
-            
-        # DB 연결 설정
-        db_conf = self.config['database']
+
+        # DB 연결 설정 (환경변수가 config.yaml보다 우선)
+        db_conf = resolve_db_config(self.config.get('database'))
         # URL 끝에 client_encoding 추가
         url = f"postgresql://{db_conf['user']}:{db_conf['password']}@{db_conf['host']}:{db_conf['port']}/{db_conf['dbname']}?client_encoding=utf8"
         

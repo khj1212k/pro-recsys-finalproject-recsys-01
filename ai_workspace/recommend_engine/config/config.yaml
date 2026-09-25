@@ -30,14 +30,16 @@ data:
   # 시간순 정렬 후 최신 20%를 검증용으로 사용 (날짜 하드코딩 제거)
   validation_ratio: 0.2        
 
-# DB 연결 설정 (PostgreSQL)
+# DB 연결 설정 (PostgreSQL) - 로컬 개발용 기본값. 실제 비밀번호는 여기에 쓰지 않고
+# DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME 환경변수(ai_workspace/.env)로 덮어쓴다.
+# (src/data/data_loader.py의 resolve_db_config가 env var를 우선 사용)
 database:
   host: "localhost"
   port: 5432
   dbname: "final_db"
   user: "recsys01"
-  password: "recsyspeople"
-  
+  password: ""
+
 # 카테고리 매핑
 categories:
   1: "정치"
