@@ -50,7 +50,12 @@ jobs:
             pydantic \
             kiwipiepy \
             hdbscan \
-            rapidfuzz
+            rapidfuzz \
+            "fastapi==0.117.1" \
+            httpx \
+            "python-jose==3.5.0" \
+            "passlib==1.7.4" \
+            "bcrypt==3.2.2"
 
       - name: Install ai_workspace package (no deps, editable)
         run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace
@@ -130,7 +135,12 @@ jobs:
             pydantic \
             kiwipiepy \
             hdbscan \
-            rapidfuzz
+            rapidfuzz \
+            "fastapi==0.117.1" \
+            httpx \
+            "python-jose==3.5.0" \
+            "passlib==1.7.4" \
+            "bcrypt==3.2.2"
 
       - name: Install ai_workspace package (no deps, editable)
         run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace
@@ -162,3 +172,6 @@ jobs:
 
       - name: Run integration tests
         run: .venv/bin/python -m pytest -q -m integration tests/
+
+      - name: Report realtime recsys SQL-path latency (p50/p95)
+        run: .venv/bin/python -m pytest -q -s -m integration tests/integration/test_realtime_recsys_seeded_db.py -k "latency or click_moves"

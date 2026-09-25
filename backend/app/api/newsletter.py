@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, Query, HTTPException, Header
+from functools import partial
+
+from fastapi import APIRouter, BackgroundTasks, Depends, Query, HTTPException, Header, Response
 from sqlmodel import Session, select, SQLModel
 from typing import List, Optional
 from datetime import datetime
@@ -8,6 +10,9 @@ from app.models.batch import NewsLettersCategory, NewsLetterTodayBatch
 
 from app.models.user import User
 from app.api.user_check import get_current_user
+from app.recsys.runtime import get_recommendation_service
+from app.recsys.service import RecommendationService
+from app.recsys.sql_repository import SqlRecsysRepository
 
 router = APIRouter(prefix="/newsletters", tags=["newsletters"])
 
@@ -25,47 +30,37 @@ class TodayNewsResponse(NewsResponse):
     category_id: int
     category_name: str
 
-@router.get("/today", response_model=List[TodayNewsResponse])
-def get_today_news(
-    user: User = Depends(get_current_user),
-    session: Session = Depends(get_session)
-):
-    # 1. 사용자별 오늘의 뉴스레터 Batch ID 조회
-    today_batch = session.exec(
-        select(NewsLetterTodayBatch)
-        .where(NewsLetterTodayBatch.user_id == user.user_id)
-        .order_by(NewsLetterTodayBatch.created_at.desc())
-        .limit(1)
-    ).first()
-    
-    if not today_batch or not today_batch.news_letter_ids:
+def hydrate_today_news(
+    session: Session, target_ids: List[int], limit: int = 20
+) -> List[TodayNewsResponse]:
+    """추천 ID 순서를 유지한 채 화면 응답으로 바꾼다. 카테고리 매핑이 없는 뉴스레터는
+    (기존 배치 경로와 동일하게) 빠지고, 최대 limit개까지만 돌려준다."""
+    if not target_ids:
         return []
-    
-    target_ids = today_batch.news_letter_ids
-    
-    # 2. 뉴스레터-카테고리 정보 조회
+
+    # 1. 뉴스레터-카테고리 정보 조회
     results = session.exec(
         select(NewsLetter, Category)
         .join(NewsLetterCategories, NewsLetter.news_letter_id == NewsLetterCategories.news_letter_id)
         .join(Category, NewsLetterCategories.category_id == Category.category_id)
         .where(NewsLetter.news_letter_id.in_(target_ids))
     ).all()
-    
-    # 3. 응답 생성
+
+    # 2. 응답 생성
     news_map = {}
     for nl, cat in results:
         news_map[nl.news_letter_id] = {
             "news": nl,
             "category": cat
         }
-        
+
     response_list = []
     for nid in target_ids:
         if nid in news_map:
             item = news_map[nid]
             nl = item["news"]
             cat = item["category"]
-            
+
             response_list.append(TodayNewsResponse(
                 news_letter_id=nl.news_letter_id,
                 news_letter_title=nl.news_letter_title,
@@ -76,11 +71,42 @@ def get_today_news(
                 category_id=cat.category_code,
                 category_name=cat.category_name
             ))
-            
-            if len(response_list) >= 20: # 화면에 출력되는 뉴스레터 개수
+
+            if len(response_list) >= limit: # 화면에 출력되는 뉴스레터 개수
                 break
-                
+
     return response_list
+
+
+def get_request_repo(session: Session = Depends(get_session)) -> SqlRecsysRepository:
+    return SqlRecsysRepository(session)
+
+
+def get_today_hydrator(session: Session = Depends(get_session)):
+    return partial(hydrate_today_news, session)
+
+
+@router.get("/today", response_model=List[TodayNewsResponse])
+def get_today_news(
+    response: Response,
+    background_tasks: BackgroundTasks,
+    user: User = Depends(get_current_user),
+    service: RecommendationService = Depends(get_recommendation_service),
+    request_repo: SqlRecsysRepository = Depends(get_request_repo),
+    hydrate=Depends(get_today_hydrator),
+):
+    # RECSYS_MODE=realtime이면 요청 시점에 계산하고, 실패/시간 초과면 배치 행 -> 인기
+    # -> 최신 순으로 폴백한다(app/recsys/service.py, ADR 0015). 응답 본문 형식은 그대로다.
+    rec = service.recommend(user.user_id, fallback_repo=request_repo)
+    items = hydrate(rec.news_letter_ids)
+
+    response.headers["X-Rec-Source"] = rec.source
+    response.headers["X-Model-Version"] = rec.model_version
+    response.headers["X-Request-Id"] = rec.request_id
+    background_tasks.add_task(
+        service.log_impressions, user.user_id, rec, [i.news_letter_id for i in items]
+    )
+    return items
 
 @router.get("", response_model=List[NewsResponse])
 def get_category_news(

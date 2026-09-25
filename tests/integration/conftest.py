@@ -5,8 +5,10 @@ import pytest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 AI_WORKSPACE = os.path.join(REPO_ROOT, "ai_workspace")
-if AI_WORKSPACE not in sys.path:
-    sys.path.insert(0, AI_WORKSPACE)
+BACKEND = os.path.join(REPO_ROOT, "backend")
+for _path in (AI_WORKSPACE, BACKEND):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
