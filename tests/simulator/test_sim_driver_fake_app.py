@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from sim.catalog import Item, synthetic_catalog
 from sim.click_model import ClickModel, preset
 from sim.driver import ApiClient, SimAgent, SimulationConfig, VirtualClock, run_simulation
-from sim.fake_app import FakeBackend, create_fake_app
+from sim.fake_app import EXPLORE_SLOTS, FakeBackend, create_fake_app
 from sim.metrics import compute_metrics
 from sim.personas import PopulationConfig, generate_population
 
@@ -145,3 +145,20 @@ def test_item_payload_roundtrip_matches_today_contract():
     assert (back.news_letter_id, back.category_id, back.keywords, back.created_at, back.raw_news_count) == (
         it.news_letter_id, it.category_id, it.keywords, it.created_at, it.raw_news_count)
     assert back.press_names == ()
+
+
+def test_reactive_explore_gives_fixed_slots_to_categories_outside_top_affinities():
+    clock = VirtualClock(START + timedelta(days=1, hours=12))
+
+    def top10_categories(policy):
+        backend = FakeBackend(CATALOG, policy=policy, clock=clock, seed=0)
+        api = ApiClient(TestClient(create_fake_app(backend)))
+        user = generate_population(PopulationConfig(n_users=1, seed=0))[0]
+        api.signup(user)
+        api.login(user.email, user.password)
+        api.put_categories([200])
+        return [it.category_id for it in api.today().items[:10]]
+
+    assert top10_categories("reactive") == [200] * 10
+    explore = top10_categories("reactive_explore")
+    assert [i for i, c in enumerate(explore) if c != 200] == list(EXPLORE_SLOTS)
