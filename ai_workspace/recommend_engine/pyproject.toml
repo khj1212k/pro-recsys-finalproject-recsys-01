@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "newsletter-recsys-engine"
+version = "0.1.0"
+description = "LightGBM(LambdaRank) + MMR 기반 뉴스레터 추천 엔진 (독립적으로 학습/추론 가능한 서브 프로젝트)"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "scikit-learn>=1.3.0",
+    "lightgbm",
+    "sqlalchemy>=2.0.46",
+    "psycopg2-binary>=2.9.11",
+    "pyyaml",
+    "tqdm>=4.65.0",
+]
+
+# torch/FlagEmbedding은 scripts/generate_embeddings.py(BGEEmbedder)에서만 필요하고
+# 학습/추론/평가 경로(main_lgbm.py 등)는 이 둘 없이도 전부 동작한다. 두 패키지는
+# 수 GB급 다운로드를 요구하므로, 임베딩을 직접 생성할 때만 선택적으로 설치하도록
+# 필수 의존성에서 분리했다.
+[project.optional-dependencies]
+embed = ["torch>=2.0.0", "FlagEmbedding==1.2.5"]
+test = ["pytest", "pytest-cov"]
+tuning = ["optuna"]
+tracking = ["mlflow"]
+
+# 원래 recommend_engine은 별도 requirements.txt/패키징 없이 ai_workspace 전체 환경에
+# 얹혀 있었습니다. 여기서는 독립적으로 pip install -e 가능하도록 별도 pyproject.toml로
+# 분리해, 추천 엔진만 따로 학습/배포하고 싶을 때 ai_workspace 전체를 설치할 필요가
+# 없도록 만들었습니다. scripts/*.py는 `from src.data.data_loader import ...` 형태로
+# 이 디렉토리 자신을 루트로 하는 절대 임포트를 쓰므로, ai_workspace.recommend_engine.src가
+# 아니라 src를 최상위 패키지로 등록합니다(기존 임포트 문장은 전혀 바꾸지 않음).
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "scripts*"]
