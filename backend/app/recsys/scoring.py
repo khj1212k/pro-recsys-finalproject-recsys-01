@@ -37,16 +37,19 @@ def item_ages_hours(items: Sequence[Item], now: datetime) -> np.ndarray:
 
 @dataclass(frozen=True)
 class HeuristicWeights:
-    """데이터로 튜닝한 값이 아니라 사전(prior) 가중치다 (ADR 0015).
+    """실사용 데이터로 튜닝한 값이 아니라 사전(prior) 가중치다 (ADR 0015).
 
-    장기 프로필이 목록의 대부분을 정하고, 방금 클릭한 주제(단기)는 클릭 한 번으로
-    순위를 눈에 띄게 끌어올릴 만큼만 준다. 신선도/인기는 코사인이 비슷할 때의
-    동점 깨기 역할이라 작게 둔다. 신선도·인기 식은 배치 인기 랭킹
+    장기:단기 = 0.45:0.35는 합성 점검(evaluation/serving/click_shift_sensitivity.py)에서
+    고른 값이다. MMR이 후보 풀 안에서 점수를 min-max 정규화하기 때문에 반응이 계단형이라,
+    0.5:0.3은 다른 주제를 3번 클릭해도 상위 10개에 그 주제가 10%만 들어오고 0.4:0.4
+    이상은 클릭 한 번에 80~90%로 뒤집혔다. 0.45:0.35는 클릭 1/2/3회에 평균 15/29/39%로
+    근거가 쌓일수록 늘어난다 - 실수 클릭 한 번에 피드가 장악되지 않으면서 반응은 한다.
+    신선도/인기는 코사인이 비슷할 때의 동점 깨기 역할이라 작게 두고, 식은 배치 인기 랭킹
     (scheduler/calculate_ranking.compute_scores)과 같은 척도를 쓴다.
     """
 
-    long_term: float = 0.5
-    short_term: float = 0.3
+    long_term: float = 0.45
+    short_term: float = 0.35
     recency: float = 0.15
     popularity: float = 0.05
     recency_tau_hours: float = 48.0

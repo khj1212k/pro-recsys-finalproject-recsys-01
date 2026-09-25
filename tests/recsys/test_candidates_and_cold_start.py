@@ -143,3 +143,42 @@ def test_expired_deadline_aborts_before_scoring():
     with pytest.raises(BudgetExceeded):
         _recommender().recommend(repo, 1, NOW, Deadline(0.0))
     assert "items" not in repo.calls
+
+
+def test_clicks_on_another_topic_pull_it_into_the_top10_as_evidence_accumulates():
+    """장기 프로필(주제 0+2)과 다른 주제 1을 클릭할수록 다음 목록 상위 10개의 주제 1 비율이
+    늘어야 한다 - 한 번에 0이면 반응이 없는 것이고, 한 번에 대부분을 차지하면 실수 클릭
+    하나에 피드가 장악된다. 1024차원, 주제 내 코사인 ~0.7인 합성 데이터."""
+    rng = np.random.default_rng(7)
+    dim, per_topic = 1024, 12
+
+    def noisy(axis):
+        v = np.zeros(dim, dtype=np.float32)
+        v[axis] = 1.0
+        v += rng.normal(0, 0.02, dim).astype(np.float32)
+        return v / np.linalg.norm(v)
+
+    corpus, topic_of = [], {}
+    for t in range(4):
+        for j in range(per_topic):
+            nid = t * per_topic + j + 1
+            corpus.append(FakeNewsletter(nid, noisy(t), NOW - timedelta(hours=1 + j), 1 + j % 3, (t + 1,)))
+            topic_of[nid] = t
+    vec = {n.id: n.embedding for n in corpus}
+    long_term = vec[1] + 0.6 * vec[2 * per_topic + 1]
+    repo = FakeRepo(corpus, [FakeUser(1, long_term=long_term / np.linalg.norm(long_term))])
+    recommender = _recommender()
+
+    def topic1_share():
+        top = recommender.recommend(repo, 1, NOW, _deadline()).news_letter_ids[:10]
+        return sum(topic_of[n] == 1 for n in top) / len(top)
+
+    shares = [topic1_share()]
+    for k in range(3):
+        repo.click(1, per_topic + 1 + k, NOW - timedelta(minutes=5 + k))
+        shares.append(topic1_share())
+
+    assert shares[0] == 0.0
+    assert 0.0 < shares[1] <= 0.5
+    assert shares[1] <= shares[2] <= shares[3]
+    assert shares[3] > shares[1]
