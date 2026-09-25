@@ -17,6 +17,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 for p in (ROOT, os.path.join(ROOT, "backend")):
     if p not in sys.path:
         sys.path.insert(0, p)
+# pipeline -> scheduler.calculate_ranking -> app.database가 임포트 시점에 create_engine을
+# 부른다. 이 점검은 DB에 접속하지 않으므로 URL 파싱만 통과하면 된다.
+os.environ.setdefault("DATABASE_URL", "postgresql://unused:unused@localhost:5432/unused")
 
 from app.recsys.config import RecsysConfig  # noqa: E402
 from app.recsys.pipeline import Deadline, RealtimeRecommender  # noqa: E402
