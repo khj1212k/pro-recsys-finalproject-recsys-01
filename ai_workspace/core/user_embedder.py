@@ -54,14 +54,32 @@ class UserEmbedder:
         self.MIN_INTE = min_inte
 
     def batch_update_all_users(self) -> Dict[str, int]:
+        """아직 장기 벡터가 없는 사용자만 채운다 (파이프라인 Stage0)."""
+        return self._update_users('SELECT user_id FROM "user" WHERE user_embedding IS NULL', ())
+
+    def refresh_recently_active_users(self, since: datetime) -> Dict[str, int]:
+        """since 이후 클릭한 사용자의 장기 벡터를 같은 가중식으로 다시 계산한다.
+
+        batch_update_all_users는 NULL인 사용자만 채우므로 한 번 만들어진 벡터는 클릭이
+        쌓여도 바뀌지 않았다. 요청 시점 추천(backend/app/recsys, ADR 0015)은 이 벡터를
+        장기 선호로 읽으므로 주기적으로 이 함수를 돌려 최근 활동을 반영한다(스케줄링은
+        별도 잡). since는 tz-aware datetime을 권장한다 - psycopg2가 timestamptz로 넘겨
+        DB 서버 TimeZone 기준으로 비교된다.
+        """
+        return self._update_users(
+            "SELECT DISTINCT user_id FROM user_newsletter_ctr_log WHERE created_at >= %s",
+            (since,),
+        )
+
+    def _update_users(self, target_sql: str, target_params: tuple) -> Dict[str, int]:
         stats = {'success': 0, 'failed': 0, 'skipped': 0}
         updates = []
-        
+
         conn = get_connection()
         try:
             with conn.cursor() as cur:
                 # 1. 대상 사용자 조회
-                cur.execute('SELECT user_id FROM "user" WHERE user_embedding IS NULL')
+                cur.execute(target_sql, target_params)
                 targets = [r[0] for r in cur.fetchall()]
                 if not targets: return stats
 
