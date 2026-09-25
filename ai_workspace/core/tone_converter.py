@@ -72,7 +72,7 @@ class ToneConverter:
     
     def __init__(self, settings: Optional[BaseSettings] = None):
         self.settings = settings if settings is not None else Settings
-        self.llm_client = get_llm_client(self.settings)
+        self.llm_client = get_llm_client(self.settings.LLM_PROVIDER)
         
     def create_prompt(self, newsletter: Dict) -> str:
         prompt = TONE_CONVERSION_PROMPT.format(

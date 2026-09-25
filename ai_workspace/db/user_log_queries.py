@@ -238,7 +238,7 @@ def has_user_read_newsletter(
 # 테스트 함수
 def test_log_functions():
     """로그 함수 테스트"""
-    from db.connection import get_connection
+    from db.connection import get_connection, release_connection
     
     conn = get_connection()
     
@@ -267,7 +267,7 @@ def test_log_functions():
     for nl_id, count in popular:
         print(f"   뉴스레터 {nl_id}: {count}명 읽음")
     
-    conn.close()
+    release_connection(conn)
     print("\n✅ 테스트 완료")
 
 

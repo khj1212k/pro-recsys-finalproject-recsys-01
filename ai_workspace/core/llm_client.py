@@ -12,11 +12,12 @@ from typing import Dict, List, Optional, Any, Tuple
 from abc import ABC, abstractmethod
 
 from core.llm_metrics import get_metrics_collector
+from config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
 # Retry configuration
-MAX_RETRIES = 10  # 최대 재생성 횟수 제한
+MAX_RETRIES = Settings.MAX_LLM_CALL_RETRIES  # 최대 재생성 횟수 제한
 INITIAL_BACKOFF = 1.0  # 초기 생성 대기 시간
 MAX_BACKOFF = 60.0  # 최대 대기 시간
 BACKOFF_MULTIPLIER = 2.0  # 대기 시간 증가 비율
@@ -135,10 +136,11 @@ class NaverHyperCLOVAClient(BaseLLMClient):
         url = f"{self.base_url}/{self.model}"
 
         backoff = INITIAL_BACKOFF
-        attempt = 0
 
-        while True: 
-            attempt += 1
+        # 원래 `while True`로 무제한 재시도했음(감사에서 발견) - 상한 없는 루프는
+        # 서버가 계속 429/5xx를 반환하면 프로세스가 영원히 멈추지 않음.
+        for attempt in range(1, MAX_RETRIES + 1):
+            attempt_start = time.time()  # 실패/재시도 메트릭 기록용 (성공 latency와는 별개)
             try:
                 self.rate_limiter.wait()
                 start_time = time.time()  # Latency measurement
@@ -154,6 +156,10 @@ class NaverHyperCLOVAClient(BaseLLMClient):
                     retry_after = response.headers.get('Retry-After')
                     wait_time = float(retry_after) if retry_after else backoff
                     logger.warning("Rate limited (429). Waiting %.1fs before retry #%s", wait_time, attempt)
+                    get_metrics_collector().record_call(
+                        purpose=purpose, input_tokens=0, output_tokens=0,
+                        latency_seconds=latency, success=False
+                    )
                     time.sleep(wait_time)
                     backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                     continue
@@ -185,20 +191,36 @@ class NaverHyperCLOVAClient(BaseLLMClient):
 
                     if error_code.startswith("5"):
                         logger.warning("Server error (%s): %s. Retrying #%s...", error_code, error_msg, attempt)
+                        get_metrics_collector().record_call(
+                            purpose=purpose, input_tokens=0, output_tokens=0,
+                            latency_seconds=latency, success=False
+                        )
                         time.sleep(backoff)
                         backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                         continue
 
                     logger.error("HyperCLOVA API client error (%s): %s", error_code, error_msg)
+                    get_metrics_collector().record_call(
+                        purpose=purpose, input_tokens=0, output_tokens=0,
+                        latency_seconds=latency, success=False
+                    )
                     return None
 
             except requests.exceptions.Timeout:
                 logger.warning("Request timeout. Retrying #%s...", attempt)
+                get_metrics_collector().record_call(
+                    purpose=purpose, input_tokens=0, output_tokens=0,
+                    latency_seconds=time.time() - attempt_start, success=False
+                )
                 time.sleep(backoff)
                 backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                 continue
 
             except requests.exceptions.RequestException as e:
+                get_metrics_collector().record_call(
+                    purpose=purpose, input_tokens=0, output_tokens=0,
+                    latency_seconds=time.time() - attempt_start, success=False
+                )
                 if hasattr(e, 'response') and e.response is not None:
                     status_code = e.response.status_code
                     if status_code == 429 or status_code >= 500:
@@ -220,7 +242,14 @@ class NaverHyperCLOVAClient(BaseLLMClient):
 
             except Exception as e:
                 logger.error("HyperCLOVA API unexpected error: %s", e)
+                get_metrics_collector().record_call(
+                    purpose=purpose, input_tokens=0, output_tokens=0,
+                    latency_seconds=time.time() - attempt_start, success=False
+                )
                 return None
+
+        logger.error("HyperCLOVA max retries (%s) exhausted.", MAX_RETRIES)
+        return None
 
 
 class OpenAIClient(BaseLLMClient):
@@ -264,6 +293,7 @@ class OpenAIClient(BaseLLMClient):
         last_error = None
 
         for attempt in range(MAX_RETRIES):
+            attempt_start = time.time()  # 실패/재시도 메트릭 기록용
             try:
                 self.rate_limiter.wait()
                 start_time = time.time()
@@ -291,6 +321,11 @@ class OpenAIClient(BaseLLMClient):
             except Exception as e:
                 last_error = str(e)
                 error_str = str(e).lower()
+
+                get_metrics_collector().record_call(
+                    purpose=purpose, input_tokens=0, output_tokens=0,
+                    latency_seconds=time.time() - attempt_start, success=False
+                )
 
                 if "rate_limit" in error_str or "429" in error_str or "500" in error_str or "503" in error_str:
                     logger.warning("OpenAI API error. Retrying %s/%s...", attempt + 1, MAX_RETRIES)
@@ -349,7 +384,7 @@ def extract_json_from_response(content: str) -> Optional[Dict]:
                     escape = False
                     i += 1
                     continue
-                if ch == '\\\\':
+                if ch == '\\':
                     out.append(ch)
                     escape = True
                     i += 1
@@ -398,7 +433,7 @@ def extract_json_from_response(content: str) -> Optional[Dict]:
             if in_str:
                 if escape:
                     escape = False
-                elif ch == '\\\\':
+                elif ch == '\\':
                     escape = True
                 elif ch == '"':
                     in_str = False

@@ -21,10 +21,13 @@ class FeatureEngineer:
         # 데이터 미리 로드 (Memory Caching)
         # NewsItem 객체 내에 category_ids와 embedding이 이미 포함되어 있음
         self.news_dict = self.data_loader.load_embedded_news()
-        
-        # 유저 프로필 로드 (카테고리 정보 포함)
+
+        # 유저 프로필 로드 (카테고리 정보 포함, history_embedding은 '현재 시점' 기준)
         self.user_profiles = self.data_loader.build_user_profiles()
-        
+
+        # [New] Point-in-Time 히스토리 임베딩 재계산을 위한 원본 로그 캐싱
+        self.logs_df = self.data_loader.load_ctr_logs()
+
     def _calculate_cosine_sim(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
         """코사인 유사도 안전하게 계산"""
         if vec1 is None or vec2 is None:
@@ -111,9 +114,22 @@ class FeatureEngineer:
             row['is_fresh_7d'] = 1 if diff_hours <= 168 else 0
 
             # ---------------------------------------------------------
-            # 2. Semantic Features (Embedding Similarity)
+            # 2. Semantic Features (Embedding Similarity, Point-in-Time)
             # ---------------------------------------------------------
-            sim_score = self._calculate_cosine_sim(user_profile.history_embedding, news_item.embedding)
+            # timestamps가 제공된 경우(학습 데이터 생성)는 그 시점 이전 로그만으로
+            # 히스토리 임베딩을 재계산해 data leakage를 방지한다. compute_history_embedding이
+            # (user_id, cutoff_time) 단위로 메모이즈하므로, 같은 클릭시각을 공유하는
+            # positive+negative 묶음(lgbm_dataset.py)에 대해서는 실제 계산이 1회만 일어난다.
+            # timestamps가 없는 경우(실시간 추론, ref_time=default_now)는 이미
+            # build_user_profiles()가 '현재 시점' 기준으로 계산해둔 값을 재사용한다.
+            if timestamps is not None:
+                hist_emb = self.data_loader.compute_history_embedding(
+                    user_id=uid, cutoff_time=ref_time, logs_df=self.logs_df, news_dict=self.news_dict
+                )
+            else:
+                hist_emb = user_profile.history_embedding
+
+            sim_score = self._calculate_cosine_sim(hist_emb, news_item.embedding)
             row['history_cosine_similarity'] = sim_score
 
             # ---------------------------------------------------------

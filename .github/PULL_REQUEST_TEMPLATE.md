@@ -11,3 +11,8 @@
 ## 📝 기타 참고 사항 (선택)
 - 리뷰어가 알면 좋은 내용
 - 추후 작업 예정 사항
+
+## 🧾 Evidence / ADR
+- 테스트 실행 결과 (`pytest -q` 또는 `pytest -q -m "not integration"` 출력 요약, before/after 테스트 개수 등)
+- 관련 `docs/fix-log-2026-07.md` 항목 번호 (해당하는 경우)
+- 설계/기술 선택에 영향을 주는 변경이라면 관련 `docs/adr/000N-*.md` 링크, 또는 새 ADR 필요 여부

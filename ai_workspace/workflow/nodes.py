@@ -8,7 +8,7 @@ import json
 from workflow.state import AgentState
 from core.reconstructor import NewsReconstructor
 from core.tone_converter import ToneConverter
-from db.connection import get_connection
+from db.connection import get_connection, release_connection
 from db.batch_manager import save_news_letter
 from workflow.helpers import initialize_generation_history, log_generation_attempt
 from workflow.evaluators import ClusterEvaluator, NewsletterEvaluator
@@ -115,33 +115,34 @@ def handle_cluster_eval_failure(state: AgentState) -> Dict[str, Any]:
     sub_groups = eval_result.get("sub_groups", [])
     
     retry_count = state.get("cluster_retry_count", 0)
-    
-    # 1. LLM이 서브 그룹(쪼개기)을 제안한 경우
+
+    # 1. Constraint: limit retries first — 서브그룹 분할 경로도 이 가드를 반드시
+    #    거치도록 분기 순서를 조정함(기존에는 이 체크가 서브그룹 분기 아래에 있어
+    #    서브그룹 경로에서는 도달 불가능했고, MAX_RETRIES 가드가 무력화되어 있었음).
+    if retry_count >= Settings.MAX_RETRY_CLUSTER_EVAL:
+        skipped = list(state.get("skipped_clusters", []))
+        skipped.append(cluster_id)
+        return {"skipped_clusters": skipped}
+
+    # 2. LLM이 서브 그룹(쪼개기)을 제안한 경우
     if sub_groups and len(sub_groups) >= 2:
         # 가장 큰 서브 그룹을 선택하여 진행 (현재 1:1 구조상 대표 그룹 1개만 살림)
         sub_groups.sort(key=len, reverse=True)
         best_indices = sub_groups[0]
-        
+
         current_articles = state["current_articles"]
         valid_indices = [i for i in best_indices if 0 <= i < len(current_articles)]
-        
+
         if len(valid_indices) >= 3:
             new_articles = [current_articles[i] for i in valid_indices]
             logger.info(f"♻️  [Cluster {cluster_id}] LLM 제안으로 그룹 쪼개기: Top 그룹({len(new_articles)}개)으로 재시도")
-            
+
             return {
                 "current_articles": new_articles,
                 # 재시도 횟수 증가 (무한 루프 방지)
-                # "cluster_retry_count": retry_count + 1 
+                "cluster_retry_count": retry_count + 1,
             }
 
-    # 2. Constraint: limit retries (e.g. 2 times)
-    MAX_RETRIES = 2
-    if retry_count >= MAX_RETRIES:
-        skipped = list(state.get("skipped_clusters", []))
-        skipped.append(cluster_id)
-        return {"skipped_clusters": skipped}
-        
     # 3. 아웃라이어 제거 로직 (기존)
     if not outlier_indices:
         # 아웃라이어도 없고 서브그룹도 없는데 FAIL이면 스킵
@@ -168,9 +169,10 @@ def handle_cluster_eval_failure(state: AgentState) -> Dict[str, Any]:
         return {"skipped_clusters": skipped}
     
     logger.info(f"♻️  [Cluster {cluster_id}] Refining: Removed {len(valid_indices)} outliers, retrying with {len(new_articles)} articles")
-    
+
     return {
-        "current_articles": new_articles
+        "current_articles": new_articles,
+        "cluster_retry_count": retry_count + 1,
     }
 
 
@@ -405,8 +407,8 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
             except Exception as e:
                 logger.info(f"ℹ️ 임베딩 저장 실패: {e}")
         
-        conn.close()
-        
+        release_connection(conn)
+
         completed = list(state.get("completed_newsletters", []))
         completed.append(saved_id)
         
@@ -438,22 +440,7 @@ def handle_newsletter_max_retries(state: AgentState) -> Dict[str, Any]:
     }
 
 
-def finalize_workflow(state: AgentState) -> Dict[str, Any]:
-    completed = state.get("completed_newsletters", [])
-    failed = state.get("failed_clusters", [])
-    skipped = state.get("skipped_clusters", [])
-    
-    
-    return {"should_continue": False}
-
-
 # ========== Routing Functions ==========
-
-def should_continue_processing(state: AgentState) -> str:
-    if state["current_cluster_index"] >= len(state["all_cluster_ids"]):
-        return "end"
-    return "continue"
-
 
 def route_after_cluster_eval(state: AgentState) -> str:
     eval_result = state.get("cluster_eval", {})

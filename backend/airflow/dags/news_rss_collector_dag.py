@@ -2,10 +2,17 @@ from airflow import DAG
 from airflow.providers.standard.operators.bash import BashOperator
 import pendulum
 from datetime import datetime, timedelta
-import os
+from pathlib import Path
+
+from _callbacks import notify_failure
 
 # KST Timezone settings
 kst = pendulum.timezone("Asia/Seoul")
+
+# 프로젝트 루트 (부스트캠프 서버 전용 절대경로 하드코딩 대신 파일 위치 기준 상대경로)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.absolute()
+AI_PATH = PROJECT_ROOT / "ai_workspace"
+PYTHON_EXEC = PROJECT_ROOT / ".venv" / "bin" / "python"
 
 default_args = {
     'owner': 'admin',
@@ -14,6 +21,7 @@ default_args = {
     'email_on_retry': False,
     'retries': 1,
     'retry_delay': timedelta(minutes=5),
+    'on_failure_callback': notify_failure,
 }
 
 with DAG(
@@ -28,7 +36,7 @@ with DAG(
 
     news_collector = BashOperator(
         task_id='news_collector',
-        bash_command='cd /data/ephemeral/home/pro-recsys-finalproject-recsys-01/ai_workspace && python main.py --from-stage 1 --to-stage 3',
+        bash_command=f'cd {AI_PATH} && {PYTHON_EXEC} main.py --from-stage 1 --to-stage 3',
         do_xcom_push=False,
     )
 

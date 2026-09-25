@@ -7,7 +7,7 @@ import logging
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict
-from db.connection import get_connection
+from db.connection import get_connection, release_connection
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +112,6 @@ class UserEmbedder:
                      'failed': len(targets) if 'targets' in locals() else 0, 
                      'skipped': 0}
         finally:
-            conn.close() 
+            release_connection(conn)
             
         return stats

@@ -165,16 +165,39 @@ npm install
 npm run dev
 ```
 
+### 4. 테스트 실행
+`ai_workspace`와 `recommend_engine`은 각각 `pyproject.toml`을 가진 독립 설치 단위다. 개발/테스트 환경은 다음과 같이 구성한다.
+
+```bash
+# ai_workspace 파이프라인 설치 (editable, 테스트용)
+pip install -e "ai_workspace[test]"
+
+# BGE-M3 임베딩 모델까지 실제로 돌려야 한다면(torch 등 무거운 의존성 포함)
+pip install -e "ai_workspace[test,embed]"
+
+# 추천 엔진만 따로 설치하고 싶다면
+pip install -e "ai_workspace/recommend_engine[test]"
+
+# 저장소 루트에서 전체 테스트 실행 (pytest.ini가 tests/를 자동 탐색)
+pytest
+
+# DB/네트워크 등 외부 서비스가 필요한 테스트를 제외하고 실행 (CI와 동일)
+pytest -m "not integration"
+```
+
+각 수정사항의 원인/해결방법/검증 결과는 [`docs/fix-log-2026-07.md`](docs/fix-log-2026-07.md)에 기록되어 있다.
+
 ---
 
 ## 📊 성능 지표
 
 | 항목 | 측정값 | 비고 |
 |------|--------|------|
-| 일일 처리 뉴스 | ~1000건 | 10개 언론사 RSS 기준 |
-| 뉴스레터 생성 | ~100건/일 | 클러스터 품질 필터 통과 기준 |
-| 추천 응답 시간 | < 100ms | pgvector 인덱스 활용 |
-| 소스 다양성 | 56.4% | 평균 2.5개 언론사/뉴스레터 |
+| 일일 처리 뉴스 | 10개 언론사 RSS 기준 일 수백~1,000건 규모 | 정확한 카운트 스크립트는 추가 예정 |
+| 뉴스레터 생성 | 클러스터 품질 필터 통과 기준 일 수십~100건 규모 | 정확한 카운트 스크립트는 추가 예정 |
+| 추천 품질 (오프라인) | `ai_workspace/recommend_engine/scripts/evaluate_results.py`로 재현 가능 | Precision@K, Recall@K, nDCG@K, MRR, Coverage 산출 (K=5,10,20) |
+
+> ⚠️ 이전 버전에는 "추천 응답 시간 <100ms", "소스 다양성 56.4%" 수치가 있었으나, 이를 산출하는 코드가 저장소에 없어 재현 불가능함을 확인하고 제거했습니다. 응답시간/소스 다양성 측정 스크립트는 추가 개발 예정입니다.
 
 ---
 

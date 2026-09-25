@@ -37,6 +37,9 @@ class BaseSettings:
     # ========== LangGraph ==========
     MAX_RETRY_CLUSTER_EVAL: int = 2
     MAX_RETRY_NEWSLETTER_EVAL: int = 3
+    # LLM 응답의 JSON 파싱이 실패했을 때 재시도할 최대 횟수 (이전에는 1000000으로
+    # 사실상 무제한이었음 - 비용 폭주 위험 방지를 위해 유한한 상한으로 교체)
+    MAX_JSON_PARSE_RETRIES: int = 5
 
     # ========== HDBSCAN ==========
     HDBSCAN_MIN_CLUSTER_SIZE: int = 3
@@ -67,6 +70,10 @@ class BaseSettings:
     # ========== Retry Configuration ==========
     RETRY_EXPONENTIAL_BASE: float = 2.0
     MAX_RETRY_WAIT_SECONDS: int = 64
+    MAX_FETCH_RETRIES: int = 3  # RSS/본문 크롤링 네트워크 요청 최대 재시도 횟수
+    # LLM 채팅 API(HyperCLOVA/OpenAI) 호출 재시도 최대 횟수 (감사에서 발견: HyperCLOVA
+    # 클라이언트의 `while True` 루프가 이 상한 없이 무제한 재시도했음)
+    MAX_LLM_CALL_RETRIES: int = 10
     
     # ========== Crawler Settings ==========
     PARALLEL_WORKERS: int = 8  # 병렬 크롤링 워커
@@ -79,6 +86,16 @@ class BaseSettings:
     # ========== Logging ==========
     LOG_LEVEL: str = "INFO"
     LOG_TO_FILE: bool = False
+
+    # ========== Database Connection ==========
+    # db/connection.py가 os.getenv를 직접 호출하지 않고 이 값을 참조하도록 중앙화함
+    # (이전에는 db/connection.py가 자체 os.getenv 기본값("password")을 갖고 있어
+    # .env.example의 기본값("recsyspeople")과 서로 달랐음)
+    DB_HOST: str = os.getenv("DB_HOST", "localhost")
+    DB_PORT: str = os.getenv("DB_PORT", "5432")
+    DB_USER: str = os.getenv("DB_USER", "postgres")
+    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "")
+    DB_NAME: str = os.getenv("DB_NAME", "final_db")
 
     # ========== Database Pool ==========
     DB_POOL_MIN: int = 2
