@@ -12,6 +12,7 @@ from db.connection import get_connection, release_connection
 from db.batch_manager import save_news_letter
 from workflow.helpers import initialize_generation_history, log_generation_attempt
 from workflow.evaluators import ClusterEvaluator, NewsletterEvaluator
+from workflow.gates import check_newsletter_faithfulness, check_tone_drift
 from config.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,12 @@ def initialize_cluster_processing(state: AgentState) -> Dict[str, Any]:
         "newsletter_eval": None,
         "cluster_retry_count": 0,
         "newsletter_retry_count": 0,
+        "faithfulness_report": None,
+        "tone_drift_report": None,
+        "tone_retry_count": 0,
+        "tone_feedback": None,
+        "tone_fallback": None,
+        "failure_reason": None,
         "error_message": None
     }
 
@@ -210,6 +217,53 @@ def generate_newsletter(state: AgentState) -> Dict[str, Any]:
     }
 
 
+def check_faithfulness(state: AgentState) -> Dict[str, Any]:
+    """생성 초안의 수치/인용/개체명을 클러스터 원문과 결정론적으로 대조한다 (ADR 0010).
+
+    LLM judge보다 먼저 돈다: 원문에 없는 수치처럼 규칙으로 확실히 잡히는 오류는 judge
+    호출 비용을 쓰기 전에 걸러 구체적인 피드백으로 재생성한다.
+    """
+    mode = Settings.FAITHFULNESS_GATE_MODE
+    draft = state.get("newsletter_draft")
+    if mode == "off" or not draft:
+        return {"faithfulness_report": None}
+
+    result = check_newsletter_faithfulness(
+        draft, state.get("current_articles") or [], blocking_types=Settings.FAITHFULNESS_BLOCKING_TYPES
+    )
+    report = {**result.to_dict(), "mode": mode, "gate_passed": result.passed or mode == "shadow"}
+
+    history = state.get("generation_history") or {"attempts": []}
+    if history.get("attempts"):
+        history["attempts"][-1]["faithfulness"] = {
+            "passed": result.passed,
+            "blocking": result.blocking,
+            "advisory_entities": sorted({e["surface"] for e in result.advisory.get("entities", [])}),
+            "entity_extractor": result.entity_extractor,
+        }
+
+    update: Dict[str, Any] = {"faithfulness_report": report, "generation_history": history}
+    if not report["gate_passed"]:
+        logger.info(
+            f"🔎 [Cluster {state.get('current_cluster_id')}] 사실성 게이트 실패: "
+            + ", ".join(f"{k}={len(v)}" for k, v in result.blocking.items() if v)
+        )
+        prev = state.get("newsletter_feedback") or ""
+        update["newsletter_feedback"] = (
+            f"{prev}\n\nAttempt {state.get('newsletter_retry_count', 0)} 사실성 검사:\n{result.feedback}"
+        ).strip()
+    return update
+
+
+def route_after_faithfulness(state: AgentState) -> str:
+    report = state.get("faithfulness_report")
+    if not report or report.get("gate_passed"):
+        return "pass"
+    if state.get("newsletter_retry_count", 0) >= Settings.MAX_RETRY_NEWSLETTER_EVAL:
+        return "max_retries"
+    return "retry"
+
+
 def evaluate_newsletter(state: AgentState) -> Dict[str, Any]:
     """
     Evaluate newsletter quality.
@@ -320,13 +374,13 @@ def convert_tone_node(state: AgentState) -> Dict[str, Any]:
     """
     draft = state["newsletter_draft"]
     
-    # 이미 변환된 것이 있다면 스킵 (재시도 로직 등)
+    # 이미 변환된 것이 있다면 스킵 (드리프트 재변환 시에는 check_tone_drift가 비워 둔다)
     if state.get("converted_newsletter"):
         return {}
         
     try:
         converter = ToneConverter()
-        converted = converter.convert(draft)
+        converted = converter.convert(draft, feedback=state.get("tone_feedback"))
         
         if not converted:
             logger.info("ℹ️ 문체 변환 실패, 원본 사용")
@@ -350,6 +404,50 @@ def convert_tone_node(state: AgentState) -> Dict[str, Any]:
             "conversion_feedback": f"Conversion error: {e}, using original",
             "error_message": f"Tone conversion failed: {e}"
         }
+
+
+def check_tone_drift_node(state: AgentState) -> Dict[str, Any]:
+    """문체 변환본이 형식체 초안의 수치/날짜/고유명사를 바꿨는지 확인한다 (ADR 0010).
+
+    드리프트가 있으면 피드백과 함께 최대 MAX_RETRY_TONE_DRIFT회 다시 변환하고, 그래도
+    남으면 캐주얼본을 버리고 형식체 초안을 저장한다 - 사실이 바뀐 친근한 문장보다
+    딱딱하지만 정확한 문장이 낫다.
+    """
+    mode = Settings.TONE_DRIFT_GATE_MODE
+    draft = state.get("newsletter_draft")
+    converted = state.get("converted_newsletter")
+    if mode == "off" or not draft or not converted:
+        return {"tone_drift_report": None}
+
+    result = check_tone_drift(draft, converted, blocking_types=Settings.TONE_DRIFT_BLOCKING_TYPES)
+    retries = state.get("tone_retry_count", 0)
+    report = {**result.to_dict(), "mode": mode, "gate_passed": result.passed or mode == "shadow",
+              "retries": retries, "fallback": None}
+    update: Dict[str, Any] = {"tone_drift_report": report}
+
+    if not report["gate_passed"]:
+        if retries < Settings.MAX_RETRY_TONE_DRIFT:
+            logger.info(f"🎨 [Cluster {state.get('current_cluster_id')}] 문체 드리프트 - 재변환 ({retries + 1})")
+            update.update({"tone_retry_count": retries + 1, "tone_feedback": result.feedback,
+                           "converted_newsletter": None})
+        else:
+            logger.info(f"🎨 [Cluster {state.get('current_cluster_id')}] 문체 드리프트 지속 - 형식체 초안 저장")
+            report["fallback"] = "formal"
+            update.update({"tone_fallback": "formal", "converted_newsletter": None,
+                           "conversion_feedback": "tone drift persisted: saving formal draft"})
+
+    history = state.get("generation_history") or {"attempts": []}
+    history["tone_drift"] = {"passed": result.passed, "blocking": result.blocking,
+                             "retries": update.get("tone_retry_count", retries), "fallback": report["fallback"]}
+    update["generation_history"] = history
+    return update
+
+
+def route_after_tone_drift(state: AgentState) -> str:
+    report = state.get("tone_drift_report")
+    if report and not report.get("gate_passed") and state.get("tone_fallback") != "formal":
+        return "retry"
+    return "save"
 
 
 def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
@@ -439,9 +537,12 @@ def handle_newsletter_max_retries(state: AgentState) -> Dict[str, Any]:
     
     
     last_feedback = state.get("newsletter_feedback", "No feedback")
+    report = state.get("faithfulness_report")
+    reason = "faithfulness" if report and not report.get("gate_passed") else "judge"
     return {
         "failed_clusters": failed,
-        "error_message": f"Max retries reached. Feedback: {last_feedback}"
+        "failure_reason": reason,
+        "error_message": f"Max retries reached ({reason}). Feedback: {last_feedback}"
     }
 
 

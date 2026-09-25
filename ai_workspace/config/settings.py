@@ -81,6 +81,17 @@ class BaseSettings:
     JUDGE_MAX_UNSUPPORTED_CLAIMS: int = int(os.getenv("JUDGE_MAX_UNSUPPORTED_CLAIMS", "0"))
     # "enforce": FAIL이면 재생성 / "shadow": 기록만 하고 통과(OOF kappa < 0.40일 때, ADR 0009)
     JUDGE_GATE_MODE: str = os.getenv("JUDGE_GATE_MODE", "enforce").lower()
+
+    # ========== 결정론적 게이트 (docs/adr/0010) ==========
+    # 모드: "enforce"(막고 재생성) / "shadow"(기록만) / "off"
+    FAITHFULNESS_GATE_MODE: str = os.getenv("FAITHFULNESS_GATE_MODE", "enforce").lower()
+    # 개체명은 한국어 형태소 분석 기반 퍼지 매칭이라 정밀도가 아직 측정되지 않았다 -
+    # 사람 사실 오류 라벨로 정밀도를 재기 전까지는 참고용(피드백에만 포함)으로 둔다.
+    FAITHFULNESS_BLOCKING_TYPES: str = os.getenv("FAITHFULNESS_BLOCKING_TYPES", "numbers,quotes")
+    TONE_DRIFT_GATE_MODE: str = os.getenv("TONE_DRIFT_GATE_MODE", "enforce").lower()
+    TONE_DRIFT_BLOCKING_TYPES: str = os.getenv("TONE_DRIFT_BLOCKING_TYPES", "numbers,dates,entities_added")
+    # 드리프트가 난 문체 변환을 다시 시도하는 횟수. 소진하면 형식체 초안을 저장한다.
+    MAX_RETRY_TONE_DRIFT: int = int(os.getenv("MAX_RETRY_TONE_DRIFT", "1"))
     
     # ========== Pipeline Stages ==========
     STAGE_NAMES: Dict[int, str] = {
