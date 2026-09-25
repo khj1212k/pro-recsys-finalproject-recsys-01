@@ -3,6 +3,7 @@
 # - 1차 클러스터링 후 필요시 2차 분할
 
 import numpy as np
+import ast
 import warnings
 from collections import Counter
 from typing import Dict, List, Tuple
@@ -13,6 +14,19 @@ try:
     HDBSCAN_AVAILABLE = True
 except ImportError:
     HDBSCAN_AVAILABLE = False
+
+
+def parse_embedding(raw_value) -> np.ndarray:
+    """DB에서 읽은 임베딩 값(문자열 또는 리스트)을 numpy array로 안전하게 변환.
+
+    pgvector 컬럼은 드라이버에 따라 '[0.1, 0.2, ...]' 형태의 문자열로 반환될 수 있다.
+    ast.literal_eval은 eval()과 달리 리터럴(숫자/리스트/튜플 등)만 평가하므로
+    임의 코드 실행 위험이 없다.
+    """
+    if isinstance(raw_value, str):
+        return np.array(ast.literal_eval(raw_value))
+    return np.array(raw_value)
+
 
 class NewsClusterer:
     def __init__(self, min_cluster_size: int = 3, min_samples: int = 2):
@@ -89,7 +103,7 @@ class NewsClusterer:
             for r in rows:
                 if not r[2]: continue
                 # 임베딩 파싱
-                emb = np.array(eval(r[2])) if isinstance(r[2], str) else np.array(r[2])
+                emb = parse_embedding(r[2])
                 
                 ids.append(r[0])
                 titles.append(r[1])
