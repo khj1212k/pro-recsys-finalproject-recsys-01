@@ -14,21 +14,7 @@ from typing import Optional, Sequence
 
 import numpy as np
 
-
-def group_ids(ptr: np.ndarray) -> np.ndarray:
-    ptr = np.asarray(ptr, dtype=np.int64)
-    return np.repeat(np.arange(len(ptr) - 1, dtype=np.int64), np.diff(ptr))
-
-
-def rank_within_groups(scores: np.ndarray, ptr: np.ndarray, seed: int = 0) -> np.ndarray:
-    """그룹 내 내림차순 0-based 순위. 동점은 seed 고정 무작위로 깬다."""
-    scores = np.asarray(scores, dtype=np.float64)
-    g = group_ids(ptr)
-    tiebreak = np.random.default_rng(seed).random(len(scores))
-    order = np.lexsort((tiebreak, -scores, g))
-    ranks = np.empty(len(scores), dtype=np.int64)
-    ranks[order] = np.arange(len(scores)) - np.asarray(ptr, dtype=np.int64)[g[order]]
-    return ranks
+from recsys_core.candidates import group_ids, rank_within_groups  # noqa: F401 (재노출)
 
 
 def group_auc(scores: np.ndarray, labels: np.ndarray, ptr: np.ndarray) -> np.ndarray:
