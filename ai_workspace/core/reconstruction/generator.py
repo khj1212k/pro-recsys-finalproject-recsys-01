@@ -133,8 +133,6 @@ class NewsReconstructor:
         )
         if result.parsed is not None:
             return cleanup_content_text(result.parsed.content)
-        if result.text:
-            return cleanup_content_text(result.text)
 
         return fallback_content()
 
