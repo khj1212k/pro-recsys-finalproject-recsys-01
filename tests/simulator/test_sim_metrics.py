@@ -113,3 +113,15 @@ def test_fallback_rate_is_unknown_without_a_source_header():
     m = compute_metrics(make_log([], views))
     assert m["serving"]["fallback_rate"] is None
     assert m["serving"]["empty_rate"] == 0.5
+
+
+def test_fallback_rate_counts_the_request_time_api_fallback_chain():
+    # X-Rec-Source values of the request-time /today (ADR 0015 branch): realtime and
+    # cold-start paths are answers by design; batch/popular/recent/empty come from
+    # the failure chain, but batch is also the normal answer in RECSYS_MODE=batch,
+    # so it is reported in source_counts and not counted as fallback.
+    sources = ["realtime", "cold_start_onboarding", "batch", "popular", "recent", "empty", "realtime", "realtime"]
+    views = [view(i, 0, 0, 0, [1], source=s) for i, s in enumerate(sources)]
+    m = compute_metrics(make_log([], views))
+    assert m["serving"]["fallback_rate"] == pytest.approx(3 / 8)
+    assert m["serving"]["source_counts"]["realtime"] == 3
