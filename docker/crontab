@@ -2,8 +2,10 @@
 # supercronic은 같은 줄의 이전 실행이 아직 돌고 있으면 새 실행을 시작하지 않고,
 # jobs.run은 Postgres advisory lock으로 다른 컨테이너/호스트의 동시 실행도 막는다.
 
-# 수집: RSS -> 본문 추출 -> BGE-M3 임베딩, 2시간마다
-5 */2 * * * python -m jobs.run ingest
+# 수집: RSS -> 본문 추출, 매시 5분. 임베딩은 따로 돈다(아래) - 몇 시간 걸릴 수 있는 CPU 임베딩이
+# ingest 락을 잡고 있으면 그동안의 수집 실행이 건너뛰어진다. RSS 창이 짧은 피드가 있어(세계일보는
+# 최근 20건이 약 2.7시간 분량, 2026-09-26 첫 수집) 수집은 매시 돌린다.
+5 * * * * python -m jobs.run ingest --stages rss,extract
 
 # 인기도 랭킹(KST 하루 단위 UPSERT), 매시 35분
 35 * * * * python -m jobs.run popularity

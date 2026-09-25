@@ -24,6 +24,9 @@ x-worker: &worker
     args:
       GIT_SHA: ${GIT_SHA:-unknown}
   image: newsletter-recsys/worker:${IMAGE_TAG:-local}
+  # PID 1인 파이썬은 기본 SIGTERM 처리가 없어 `docker stop`이 10초 뒤 SIGKILL로 끝난다 -
+  # tini가 신호를 전달하게 해 jobs.run이 중단을 job_runs에 기록할 수 있게 한다.
+  init: true
   environment:
     <<: *db-env
     ENV: prod
