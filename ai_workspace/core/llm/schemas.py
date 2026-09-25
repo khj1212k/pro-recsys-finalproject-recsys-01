@@ -6,7 +6,7 @@
 
 from typing import List, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ClusterEval(BaseModel):
@@ -49,6 +49,38 @@ class NewsletterEval(BaseModel):
     issues: List[str] = Field(default_factory=list)
 
 
+class CriterionScores(BaseModel):
+    """judge v2 기준별 점수(1~5). 정의는 docs/eval/labeling-guide.md와 같다 - 사람
+    라벨과 judge를 같은 척도로 비교(보정)하기 위해서다(ADR 0009/0010)."""
+
+    faithfulness: int
+    coverage: int
+    coherence: int
+    style: int
+
+    # 범위 제약을 JSON 스키마(minimum/maximum)로 걸지 않고 여기서 자른다: 프로바이더별
+    # 구조화 출력이 지원하는 JSON 스키마 키워드가 달라(Upstage는 OpenAI 스펙의 부분집합)
+    # 스키마를 가장 단순한 형태로 유지하기 위함.
+    @field_validator("faithfulness", "coverage", "coherence", "style", mode="after")
+    @classmethod
+    def _clamp(cls, v: int) -> int:
+        return max(1, min(5, int(v)))
+
+
+class UnsupportedClaim(BaseModel):
+    claim: str
+    reason: str = ""
+
+
+class NewsletterEvalV2(BaseModel):
+    """workflow/evaluators.py::NewsletterEvaluator(judge v2)의 출력. PASS/FAIL은 모델이
+    아니라 코드가 Settings의 임계값으로 결정한다."""
+
+    scores: CriterionScores
+    unsupported_claims: List[UnsupportedClaim] = Field(default_factory=list)
+    feedback: str = ""
+
+
 class ToneResult(BaseModel):
     """core/tone_converter.py::TONE_CONVERSION_PROMPT의 출력 JSON"""
 
@@ -63,5 +95,8 @@ __all__ = [
     "NewsletterContent",
     "NewsletterMeta",
     "NewsletterEval",
+    "CriterionScores",
+    "UnsupportedClaim",
+    "NewsletterEvalV2",
     "ToneResult",
 ]

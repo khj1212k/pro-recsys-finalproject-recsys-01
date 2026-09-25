@@ -15,7 +15,7 @@ sys.path.insert(
 
 from tests.llm_fakes import FakeLLMClient
 
-from workflow.evaluators import ClusterEvaluator, NewsletterEvaluator
+from workflow.evaluators import ClusterEvaluator, NewsletterEvaluatorV1
 from core.llm.schemas import ClusterEval, NewsletterEval
 
 
@@ -66,10 +66,10 @@ def test_cluster_evaluator_passes_schema_and_purpose_to_llm_client():
     assert call["purpose"] == "cluster_eval"
 
 
-def test_newsletter_evaluator_calls_llm_client_exactly_once_and_uses_parsed_result():
+def test_newsletter_evaluator_v1_calls_llm_client_exactly_once_and_uses_parsed_result():
     parsed = NewsletterEval(decision="PASS", score=8, feedback="", issues=[])
     fake = FakeLLMClient(results=[{"parsed": parsed}])
-    evaluator = NewsletterEvaluator(llm_client=fake)
+    evaluator = NewsletterEvaluatorV1(llm_client=fake)
 
     result = evaluator.evaluate(
         {"title": "t", "content": "c", "sentence": "s"}, [{"title": "a", "press_name": "p"}]
@@ -80,9 +80,9 @@ def test_newsletter_evaluator_calls_llm_client_exactly_once_and_uses_parsed_resu
     assert result["score"] == 8
 
 
-def test_newsletter_evaluator_falls_back_to_fail_when_llm_client_exhausts_retries():
+def test_newsletter_evaluator_v1_falls_back_to_fail_when_llm_client_exhausts_retries():
     fake = FakeLLMClient(results=[{"parsed": None, "text": None, "error": "max retries exhausted"}])
-    evaluator = NewsletterEvaluator(llm_client=fake)
+    evaluator = NewsletterEvaluatorV1(llm_client=fake)
 
     result = evaluator.evaluate(
         {"title": "t", "content": "c", "sentence": "s"}, [{"title": "a", "press_name": "p"}]
@@ -93,10 +93,10 @@ def test_newsletter_evaluator_falls_back_to_fail_when_llm_client_exhausts_retrie
     assert result["issues"] == ["API call returned empty"]
 
 
-def test_newsletter_evaluator_passes_schema_and_purpose_to_llm_client():
+def test_newsletter_evaluator_v1_passes_schema_and_purpose_to_llm_client():
     parsed = NewsletterEval(decision="FAIL", score=1)
     fake = FakeLLMClient(results=[{"parsed": parsed}])
-    evaluator = NewsletterEvaluator(llm_client=fake)
+    evaluator = NewsletterEvaluatorV1(llm_client=fake)
 
     evaluator.evaluate({"title": "t", "content": "c", "sentence": "s"}, [{"title": "a", "press_name": "p"}])
 

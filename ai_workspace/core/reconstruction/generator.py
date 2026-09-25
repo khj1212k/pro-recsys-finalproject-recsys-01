@@ -10,6 +10,23 @@ from core.llm.schemas import NewsletterContent, NewsletterMeta
 from .prompts import SYSTEM_EDITOR_ROLE, SYSTEM_META_ROLE, CONTENT_GEN_PROMPT, META_GEN_PROMPT
 from .validator import cleanup_content_text, normalize_meta
 
+# 생성 프롬프트에 넣는 기사 수/기사당 본문 길이. judge v2(workflow/evaluators.py)도
+# 같은 값·같은 선택 규칙을 써서 "생성기가 본 것과 같은 원문"으로 평가한다 - judge가
+# 더 적게 보면 생성기가 올바르게 옮긴 사실을 근거 없음으로 오판한다.
+MAX_PROMPT_ARTICLES = 10
+ARTICLE_PROMPT_CHARS = 1500
+
+
+def select_prompt_articles(articles: List[Dict]) -> List[Dict]:
+    """컨텍스트 길이 제한용 기사 선택: 본문이 긴 순서로 MAX_PROMPT_ARTICLES개.
+
+    articles는 LangGraph state["current_articles"]를 그대로 참조하므로 in-place 정렬
+    (articles.sort())하면 호출자의 state가 변형된다. sorted()로 새 리스트를 만든다.
+    """
+    if len(articles) <= MAX_PROMPT_ARTICLES:
+        return list(articles)
+    return sorted(articles, key=lambda x: len(x.get('content') or ''), reverse=True)[:MAX_PROMPT_ARTICLES]
+
 
 class NewsReconstructor:
     """
@@ -32,12 +49,7 @@ class NewsReconstructor:
             return None
 
         # 기사 개수 제한 (컨텍스트 길이 초과 방지)
-        # 주의: articles는 LangGraph state["current_articles"]를 그대로 참조하므로
-        # 원본 리스트를 in-place 정렬(articles.sort())하면 호출자의 state가 의도치 않게
-        # 변형된다. sorted()로 새 리스트를 만들어 원본은 건드리지 않는다.
-        MAX_ARTICLES = 10
-        if len(articles) > MAX_ARTICLES:
-            articles = sorted(articles, key=lambda x: len(x.get('content') or ''), reverse=True)[:MAX_ARTICLES]
+        articles = select_prompt_articles(articles)
 
         # 프롬프트에 넣을 기사 텍스트 구성
         articles_text = self._build_articles_text(articles)
@@ -76,7 +88,7 @@ class NewsReconstructor:
         """기사 목록을 프롬프트용 텍스트로 변환"""
         articles_text = ""
         for i, art in enumerate(articles, 1):
-            content_preview = art.get('content', '')[:1500] if art.get('content') else "(본문 없음)"
+            content_preview = art.get('content', '')[:ARTICLE_PROMPT_CHARS] if art.get('content') else "(본문 없음)"
             articles_text += f"""
 ---
 [기사 {i}]

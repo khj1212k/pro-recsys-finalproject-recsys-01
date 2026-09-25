@@ -24,7 +24,9 @@ import workflow.nodes as nodes_module
 import core.reconstruction.generator as generator_module
 import core.tone_converter as tone_module
 from workflow.graph import compile_workflow
-from core.llm.schemas import ClusterEval, NewsletterContent, NewsletterMeta, NewsletterEval, ToneResult
+from core.llm.schemas import (
+    ClusterEval, CriterionScores, NewsletterContent, NewsletterMeta, NewsletterEvalV2, ToneResult,
+)
 
 
 def _build_initial_state():
@@ -60,7 +62,10 @@ def test_subgraph_runs_end_to_end_with_fake_llm_clients_for_every_role(monkeypat
             decision="PASS", confidence=0.92, summary="반도체 업황 개선",
             feedback="", outlier_indices=[], sub_groups=[],
         )},
-        {"parsed": NewsletterEval(decision="PASS", score=8, feedback="", issues=[])},
+        {"parsed": NewsletterEvalV2(
+            scores=CriterionScores(faithfulness=5, coverage=4, coherence=4, style=4),
+            unsupported_claims=[], feedback="",
+        )},
     ])
 
     # role="generator" - NewsReconstructor의 Call#1(본문), Call#2(메타) 순서

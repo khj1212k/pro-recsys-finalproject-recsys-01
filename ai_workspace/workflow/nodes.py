@@ -462,7 +462,12 @@ def route_after_newsletter_eval(state: AgentState) -> str:
     
     if eval_result.get("decision") == "PASS":
         return "pass"
-    
+
+    # judge가 사람 라벨과 충분히 맞지 않으면(OOF kappa < 0.40, ADR 0009) 판정을 기록만
+    # 하고 발행을 막지 않는다 - 사실성은 결정론적 게이트(check_faithfulness)가 맡는다.
+    if Settings.JUDGE_GATE_MODE == "shadow":
+        return "pass"
+
     if retry_count >= Settings.MAX_RETRY_NEWSLETTER_EVAL:
         return "max_retries"
     

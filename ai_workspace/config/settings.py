@@ -70,8 +70,17 @@ class BaseSettings:
     DEFAULT_CLUSTER_LIMIT: int = None
 
     # ========== Quality Thresholds ==========
-    MIN_NEWSLETTER_SCORE: int = 7
+    # (미사용) 실제 PASS 기준은 아래 JUDGE_* 값이다. MIN_CLUSTER_CONFIDENCE를 게이트로
+    # 연결할지는 ClusterEvaluator confidence ROC로 정한다(ADR 0009) - 그 전까지 미사용.
     MIN_CLUSTER_CONFIDENCE: float = 0.7
+
+    # ========== Judge v2 (docs/adr/0010) ==========
+    # 기준별(1~5) 최저 점수와 허용할 근거 없는 주장 수. 사람 라벨로 보정하기 전의
+    # 잠정값이다(ADR 0009의 2-fold 선택 결과로 교체).
+    JUDGE_MIN_CRITERION_SCORE: int = int(os.getenv("JUDGE_MIN_CRITERION_SCORE", "3"))
+    JUDGE_MAX_UNSUPPORTED_CLAIMS: int = int(os.getenv("JUDGE_MAX_UNSUPPORTED_CLAIMS", "0"))
+    # "enforce": FAIL이면 재생성 / "shadow": 기록만 하고 통과(OOF kappa < 0.40일 때, ADR 0009)
+    JUDGE_GATE_MODE: str = os.getenv("JUDGE_GATE_MODE", "enforce").lower()
     
     # ========== Pipeline Stages ==========
     STAGE_NAMES: Dict[int, str] = {
