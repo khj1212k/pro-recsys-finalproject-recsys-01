@@ -1,0 +1,84 @@
+# 요청 시점 추천(backend/app/recsys)의 SQL 경로·단기 상태 저장소 규모 벤치마크 (ADR 0015/0017).
+# 부하가 없는 러너에서 같은 조건으로 다시 재기 위해 CI에 둔다. 데이터는 전부 합성이다.
+name: recsys-bench
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "backend/app/recsys/**"
+      - "evaluation/serving/request_path_bench.py"
+      - ".github/workflows/recsys-bench.yml"
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Python 3.11
+        run: uv python install 3.11
+
+      - name: Create virtualenv
+        run: uv venv --python 3.11 .venv
+
+      - name: Install dependencies
+        run: |
+          uv pip install --python .venv/bin/python \
+            numpy \
+            pandas \
+            scikit-learn \
+            lightgbm \
+            pgvector \
+            psycopg2-binary \
+            python-dotenv \
+            sqlalchemy \
+            sqlmodel \
+            alembic \
+            pyyaml \
+            tqdm \
+            redis
+          uv pip install --python .venv/bin/python --no-deps -e ai_workspace/recommend_engine
+
+      - name: Run request-path benchmark
+        run: |
+          .venv/bin/python -m evaluation.serving.request_path_bench \
+            --server-url postgresql://postgres:postgres@localhost:5432/postgres \
+            --redis-url redis://localhost:6379/0 \
+            --out recsys-bench.json
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: recsys-bench
+          path: recsys-bench.json
