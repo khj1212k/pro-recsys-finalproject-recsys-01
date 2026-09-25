@@ -22,6 +22,7 @@ from core.llm_client import (
     SimpleRateLimiter,
     extract_json_from_response,
 )
+from config.settings import Settings
 from core.llm_metrics import get_metrics_collector
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,12 @@ class OpenAICompatLLMClient(LLMClient):
         else:
             if not api_key:
                 raise ValueError(f"{provider} 프로바이더에 API 키가 설정되지 않았습니다")
-            self._client = OpenAI(api_key=api_key, base_url=base_url)
+            self._client = OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                timeout=Settings.LLM_REQUEST_TIMEOUT_S,
+                max_retries=0,
+            )
 
     def complete(
         self,
@@ -72,6 +78,8 @@ class OpenAICompatLLMClient(LLMClient):
 
         backoff = INITIAL_BACKOFF
         last_error = "unknown error"
+        call_start = time.time()
+        attempt = 0
 
         for attempt in range(1, MAX_RETRIES + 1):
             attempt_start = time.time()
@@ -127,7 +135,8 @@ class OpenAICompatLLMClient(LLMClient):
                     "%s/%s: 구조화 출력 검증 실패 (attempt %s/%s): %s",
                     self.provider, self.model, attempt, MAX_RETRIES, e,
                 )
-                time.sleep(backoff)
+                if not self._wait_before_retry(backoff, call_start):
+                    break
                 backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                 continue
 
@@ -144,7 +153,8 @@ class OpenAICompatLLMClient(LLMClient):
                         "%s/%s: HTTP %s (attempt %s/%s), 재시도",
                         self.provider, self.model, e.status_code, attempt, MAX_RETRIES,
                     )
-                    time.sleep(backoff)
+                    if not self._wait_before_retry(backoff, call_start):
+                        break
                     backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                     continue
 
@@ -202,7 +212,8 @@ class OpenAICompatLLMClient(LLMClient):
                     "%s/%s: 연결/타임아웃 오류 (attempt %s/%s), 재시도: %s",
                     self.provider, self.model, attempt, MAX_RETRIES, e,
                 )
-                time.sleep(backoff)
+                if not self._wait_before_retry(backoff, call_start):
+                    break
                 backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                 continue
 
@@ -220,11 +231,24 @@ class OpenAICompatLLMClient(LLMClient):
                     attempts=attempt, provider=self.provider, model=self.model, error=last_error,
                 )
 
-        return LLMResult(
-            text=None, parsed=None, usage=LLMUsage(), latency_s=0.0,
-            attempts=MAX_RETRIES, provider=self.provider, model=self.model,
-            error=f"max retries ({MAX_RETRIES}) exhausted: {last_error}",
+        elapsed = time.time() - call_start
+        reason = (
+            f"call deadline ({Settings.LLM_CALL_DEADLINE_S:.0f}s) reached"
+            if attempt < MAX_RETRIES
+            else f"max retries ({MAX_RETRIES}) exhausted"
         )
+        return LLMResult(
+            text=None, parsed=None, usage=LLMUsage(), latency_s=elapsed,
+            attempts=attempt, provider=self.provider, model=self.model,
+            error=f"{reason}: {last_error}",
+        )
+
+    @staticmethod
+    def _wait_before_retry(backoff: float, call_start: float) -> bool:
+        if time.time() - call_start + backoff > Settings.LLM_CALL_DEADLINE_S:
+            return False
+        time.sleep(backoff)
+        return True
 
     def _call_structured(self, messages, schema, temperature, max_tokens):
         response = self._client.chat.completions.parse(

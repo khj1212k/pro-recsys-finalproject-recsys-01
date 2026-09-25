@@ -22,7 +22,7 @@
 - Claude Haiku 4.5는 이번 조사에서 "OpenAI 호환 Chat Completions 엔드포인트 지원 여부"를 검증하지 않았다 - 과제 범위가 "Gemini/Upstage/OpenAI 셋 다 OpenAI 호환"이라는 전제를 확인하는 것이었고, Claude는 그 전제에 포함되지 않았기 때문이다. 이 PR은 challenger로 OpenAI 소형 모델(`gpt-4o-mini`)을 선택했다 - 세 프로바이더 모두 동일한 어댑터로 통합 가능함이 확인됐기 때문에 어댑터 종류를 하나 더 늘리지 않아도 됐다. Claude Haiku 4.5를 나중에 후보에 넣으려면 별도 어댑터(또는 Anthropic의 OpenAI 호환성 확인)가 먼저 필요하다.
 - **role 기본 모델을 Gemini 하나로 좁히며 모델 id 재확인** (WebFetch `https://ai.google.dev/gemini-api/docs/models`, 접근일 2026-09-25, 문서 자체 "Last updated 2026-09-24 UTC"): 사용자가 지금 보유한 키가 Gemini(Google Cloud 크레딧)뿐이라 GEN/JUDGE/TONE 세 role 모두 gemini를 기본 프로바이더로 바꿨다(아래 "결정" 참고). 이 ADR을 처음 채택했을 때 기본값으로 골랐던 `gemini-2.5-flash`는 이제 문서상 "Limited Access - 신규 프로젝트는 3.5 Flash-Lite 또는 3.8 Flash 사용 권장" 상태로 바뀌어 있어, 현재 유효한 id로 갱신했다:
   - `gemini-3.5-flash-lite` - "Our fastest, most cost-effective 3.5 model for high-throughput execution." → GEN/TONE 기본값(초안 생성·문체 변환처럼 비용 민감한 작업).
-  - `gemini-3.5-flash` - "Our legacy Flash model, providing baseline speed and foundational performance for routine, high-throughput workloads." → JUDGE 기본값(generator보다 한 단계 위 모델이면서 과도하게 비싸지 않은 선택).
+  - `gemini-3.5-flash` - "Our legacy Flash model, providing baseline speed and foundational performance for routine, high-throughput workloads." → 처음 JUDGE 기본값으로 골랐으나, 아래 "부록: 2026-09-25 실제 호출 확인"의 결과로 `gemini-3.1-flash-lite`로 교체했다.
   - 둘 다 같은 "3.5" 세대의 Gemini 모델이므로, 크기(Flash vs Flash-Lite)는 다르지만 벤더/학습 lineage는 같다 - self-preference bias 관점에서는 여전히 "같은 모델 계열"로 취급해야 한다(아래 "결정"의 경고 로직 참고). 최종 프로바이더/모델 조합(특히 judge를 정말 다른 벤더로 분리할지)은 여전히 후속 bake-off ADR의 몫이다.
 
 ## 검토한 대안
@@ -108,3 +108,22 @@
    메트릭에서 "왜 종료됐는지" 구분할 방법이 없었다. 두 예외를 별도 `except` 절로
    분리해 `LLMResult.error`에 안정적인 코드(`"length"`/`"content_filter"`)를 남기고,
    `LLMMetricsCollector`에 `error_type` 필드를 추가해 같은 코드를 기록하게 했다.
+
+## 부록: 2026-09-25 실제 호출 확인
+
+선불 크레딧 충전 후 실제 키로 확인했다(구조화 출력 스키마 1개, `timeout=30s`, SDK 재시도 없음).
+
+| 모델 | 결과 |
+|---|---|
+| `gemini-3.5-flash-lite` (generator) | 정상, 1.8초, 입력 27 / 출력 54 토큰, 스키마 파싱 성공 |
+| `gemini-3.5-flash` (당시 judge 기본값) | 30초 타임아웃. 앞선 실행에서는 HTTP 503이 연속으로 나 재시도 10회 동안 수 분간 멈췄다 |
+| `gemini-flash-latest` | HTTP 503 (수요 과부하) |
+| `gemini-2.5-flash` | HTTP 404 (이 계정에서 사용 불가) |
+| `gemini-3-flash-preview` | 응답은 오지만 출력이 4토큰에서 잘림 |
+| `gemini-3.1-flash-lite` | 정상, 8.1초, 스키마 준수 → judge 기본값으로 채택 |
+
+이 과정에서 두 가지 결함이 드러나 함께 고쳤다.
+- OpenAI SDK의 기본 타임아웃(600초)과 SDK 자체 재시도(2회)가 이 클라이언트의 재시도와 겹쳤다. SDK는 `timeout=LLM_REQUEST_TIMEOUT_S`(기본 60초), `max_retries=0`으로 만들고 재시도는 이 클라이언트만 담당한다.
+- 재시도 횟수만 제한하고 전체 대기 시간은 제한하지 않았다. 호출 1건의 전체 제한 시간 `LLM_CALL_DEADLINE_S`(기본 180초)를 두어, 다음 대기가 이를 넘으면 `call deadline reached` 오류로 종료한다.
+
+같은 계열(gemini) 모델을 generator와 judge에 함께 쓰는 것은 여전히 임시다. 최종 선택은 bake-off ADR(0009)에서 한다.
