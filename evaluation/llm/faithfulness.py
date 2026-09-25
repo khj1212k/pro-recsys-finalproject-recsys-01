@@ -218,7 +218,14 @@ def _extract_numbers(text: str, exclude_spans: Optional[List[Span]] = None) -> L
         else:
             value = float(gd["bare"].replace(",", ""))
             unit = _UNIT_TAG[gd["unit2"]]
-        facts.append(NumberFact(surface=m.group(0).strip(), value=value, unit=unit, span=span))
+        # _SEGMENT's trailing \s* can pull whitespace before a unit word
+        # into the match (e.g. "1,200억 " before "수준"); strip it from
+        # both surface and span so span always delimits surface exactly.
+        raw = m.group(0)
+        surface = raw.strip()
+        start = span[0] + (len(raw) - len(raw.lstrip()))
+        end = span[1] - (len(raw) - len(raw.rstrip()))
+        facts.append(NumberFact(surface=surface, value=value, unit=unit, span=(start, end)))
     return facts
 
 

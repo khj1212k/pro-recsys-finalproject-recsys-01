@@ -65,6 +65,15 @@ class TestNumberExtraction:
         facts = extract_facts("상품권 1만2000원이 지급된다.")
         assert [(n.value, n.unit) for n in facts.numbers] == [(12000.0, "KRW")]
 
+    def test_span_exactly_delimits_surface_when_no_trailing_unit(self):
+        # a scaled number with no trailing unit word (e.g. "1,200억")
+        # leaves a trailing space consumed by the regex before the next
+        # word ("수준") -- span must not include it.
+        text = "거래 규모는 1,200억 수준이다."
+        facts = extract_facts(text)
+        n = facts.numbers[0]
+        assert text[n.span[0]:n.span[1]] == n.surface
+
 
 # ---------------------------------------------------------------------------
 # False-positive traps: things that must NOT be extracted as numeric claims
