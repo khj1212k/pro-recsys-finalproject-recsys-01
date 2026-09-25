@@ -7,7 +7,11 @@ ai_workspace/crawler/rss_collector.py가 psycopg2의 datetime 어댑터가 만�
 timestamptz로 캐스팅 가능하지만, 이 컬럼을 채우는 경로가 하나뿐이라는 보장이
 없어 안전하게 파싱 실패 시 NULL로 처리하는 함수를 통해 변환한다.
 user_newsletter_ctr_log(user_id, created_at DESC)에는 "유저의 최근 클릭
-로그" 조회(recommend_engine DataLoader.load_ctr_logs 등)를 위한 인덱스를 추가한다.
+로그" 조회(ai_workspace/core/user_embedder.py의
+UserEmbedder.batch_update_all_users, WHERE user_id IN %s AND created_at >= %s)를
+위한 인덱스를 추가한다. recommend_engine의 DataLoader.load_ctr_logs는
+user_id로 필터링하지 않는 시간 범위 전체 스캔(WHERE created_at >= NOW() -
+INTERVAL ...)이라 이 인덱스의 대상이 아니다.
 
 Revision ID: e725a62ffef1
 Revises: c97fb5709513

@@ -20,9 +20,13 @@
 - `news_raw.raw_news_created_at`이 VARCHAR였다. `backend/app/models/news.py`의
   `NewsRaw.raw_news_created_at: str` 타입도 이를 그대로 반영하고 있었다.
 - `user_newsletter_ctr_log`에 `(user_id, created_at DESC)` 인덱스가 없어
-  "유저의 최근 클릭 로그" 조회(`recommend_engine`의
-  `DataLoader.load_ctr_logs`, `ai_workspace/db/user_log_queries.py` 등)가
-  전체 스캔에 의존했다.
+  "유저의 최근 클릭 로그" 조회(`ai_workspace/core/user_embedder.py`의
+  `UserEmbedder.batch_update_all_users`, `WHERE user_id IN %s AND
+  created_at >= %s`; `ai_workspace/db/user_log_queries.py`의
+  `get_user_read_history` 등)가 전체 스캔에 의존했다. `recommend_engine`의
+  `DataLoader.load_ctr_logs`는 `user_id`로 필터링하지 않는 시간 범위 전체
+  스캔(`WHERE created_at >= NOW() - INTERVAL ...`)이라 이 인덱스의 대상이
+  아니다.
 - 이 Mac 워크트리에는 Postgres/Docker가 없어 로컬에서 실제 DB로 검증할 수
   없다. 통합 테스트는 GitHub Actions 서비스 컨테이너에서만 실행 가능해야
   하고, 로컬에서는 `TEST_DATABASE_URL`/`DATABASE_URL`이 없으면(또는 접속이
