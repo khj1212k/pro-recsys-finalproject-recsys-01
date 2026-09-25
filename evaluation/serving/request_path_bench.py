@@ -412,27 +412,35 @@ def _measure(args, rng, now, url) -> dict:
     from app.recsys.runtime import build_sql_service
 
     cfg = RecsysConfig(cache_ttl_s=0)  # 운영 기본 예산(300ms), 결과 캐시만 끈다
-    e2e = {"time_budget_ms": cfg.time_budget_ms}
-    for wiring in ("dedicated_pool", "shared_pool"):
-        # 앱 엔진은 backend/app/database.py와 같은 기본 풀(5+10). 대기 한도만 10초로 줄인다.
-        app_engine = create_engine(url, pool_timeout=10)
-        register_pgvector_on_connect(app_engine)
-        if wiring == "dedicated_pool":
-            service = build_sql_service(cfg, app_engine, url)
-        else:
-            service = build_service(cfg, repo_factory=partial(sql_repo_scope, app_engine, cfg.time_budget_ms))
-        row = {}
-        t0 = time.perf_counter()
-        first = one_request(service, app_engine, active[1])
-        row["cold_first_request_ms"] = round((time.perf_counter() - t0) * 1000, 1)
-        row["cold_first_source"] = first.source
-        row["1_client"] = load(service, app_engine, 1, R)
-        for clients in (4, 8, 16):
-            row[f"{clients}_clients"] = load(service, app_engine, clients, max(25, R // clients))
-        row["counters"] = service.counters.snapshot()
-        service.shutdown()
-        app_engine.dispose()
-        e2e[wiring] = row
+    levels = (1, 4, 8, 16, 32)  # FastAPI 동기 엔드포인트 스레드풀 기본값은 40
+    e2e = {"time_budget_ms": cfg.time_budget_ms, "rounds": []}
+    for rnd in range(args.e2e_rounds):
+        # 순서 효과(캐시 온도, 러너 상태)를 줄이려고 라운드마다 배선 순서를 바꾼다.
+        order = ("dedicated_pool", "shared_pool") if rnd % 2 == 0 else ("shared_pool", "dedicated_pool")
+        round_rows = {}
+        for wiring in order:
+            # 앱 엔진은 backend/app/database.py와 같은 기본 풀(5+10). 대기 한도만 10초로 줄인다.
+            app_engine = create_engine(url, pool_timeout=10)
+            register_pgvector_on_connect(app_engine)
+            if wiring == "dedicated_pool":
+                service = build_sql_service(cfg, app_engine, url)
+            else:
+                service = build_service(
+                    cfg, repo_factory=partial(sql_repo_scope, app_engine, cfg.time_budget_ms)
+                )
+            row = {}
+            t0 = time.perf_counter()
+            first = one_request(service, app_engine, active[1])
+            row["cold_first_request_ms"] = round((time.perf_counter() - t0) * 1000, 1)
+            row["cold_first_source"] = first.source
+            for clients in levels:
+                per_client = R if clients == 1 else max(25, R // clients)
+                row[f"{clients}_clients"] = load(service, app_engine, clients, per_client)
+            row["counters"] = service.counters.snapshot()
+            service.shutdown()
+            app_engine.dispose()
+            round_rows[wiring] = row
+        e2e["rounds"].append(round_rows)
     result["end_to_end"] = e2e
 
     # 3) 단기 상태 저장소 비교: 같은 사용자, 같은(워밍된) 아이템 임베딩 캐시 조건.
@@ -536,15 +544,18 @@ def print_report(res: dict) -> None:
     print("\n## explain")
     for name, e in res["explain"].items():
         print(f"{name:<18} exec={e['execution_ms']:.3f}ms plan={' > '.join(e['nodes'])}")
-    print("\n## end_to_end (budget %sms)" % res["end_to_end"]["time_budget_ms"])
-    for wiring in ("dedicated_pool", "shared_pool"):
-        e = res["end_to_end"][wiring]
-        print(f"[{wiring}] cold_first={e['cold_first_request_ms']}ms ({e['cold_first_source']})")
-        for k in ("1_client", "4_clients", "8_clients", "16_clients"):
-            c = e[k]
-            print(f"   {k:<11} p50={c.get('p50_ms')} p95={c.get('p95_ms')} rps={c['rps']} "
-                  f"sources={c['sources']} errors={c['errors']}")
-        print(f"   counters={e['counters']}")
+    e2e = res["end_to_end"]
+    print("\n## end_to_end (budget %sms)" % e2e["time_budget_ms"])
+    for i, rnd in enumerate(e2e["rounds"]):
+        for wiring in ("dedicated_pool", "shared_pool"):
+            e = rnd[wiring]
+            print(f"[round {i} {wiring}] cold_first={e['cold_first_request_ms']}ms ({e['cold_first_source']})")
+            for k, c in e.items():
+                if not k.endswith("_clients"):
+                    continue
+                fb = sum(v for src, v in c["sources"].items() if src in ("batch", "popular", "recent", "empty"))
+                print(f"   {k:<11} p50={c.get('p50_ms')} p95={c.get('p95_ms')} rps={c['rps']} "
+                      f"fallback={fb}/{c['n']} errors={c['errors']}")
 
 
 def main(argv=None):
@@ -558,6 +569,7 @@ def main(argv=None):
     ap.add_argument("--click-days", type=int, default=90)
     ap.add_argument("--heavy-users", type=int, default=500)
     ap.add_argument("--reps", type=int, default=400)
+    ap.add_argument("--e2e-rounds", type=int, default=3)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--keep", action="store_true", help="측정 후 벤치 DB를 지우지 않는다")
     ap.add_argument("--out", help="결과 JSON 경로")
