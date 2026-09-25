@@ -98,7 +98,7 @@ def fake_report_json(tmp_path, monkeypatch):
             "team-final": {"summary": _metric_summary(0.40)},
         },
         "baselines": {
-            "team_split": {"random": _baseline_row(0.32), "popularity": _baseline_row(0.48), "cosine_history": _baseline_row(0.6)},
+            "team_split": {"random": _baseline_row(0.32), "popularity": _baseline_row(0.48), "cosine_history": _baseline_row(0.6), "onboarding_newsletter_cosine": _baseline_row(0.45)},
             "generator_split": {"random": {"aggregate": {"mrr": 0.1, "precision@5": 0.1, "ndcg@5": 0.1, "coverage@5": 0.1}}},
         },
         "decomposition_summary": {
@@ -157,3 +157,15 @@ def test_claims_to_avoid_section_lists_leaky_headline_gap(fake_report_json):
     make_report_v2.main()
     text = (report_dir / "team_repro_v2.md").read_text(encoding="utf-8")
     assert "0.849" in text and "0.772" in text
+
+
+def test_summary_reports_team_final_written_mrr_not_na(fake_report_json):
+    """요약(0절) 3번 문장은 team_final_written_summary["mrr"]의 mean±std를 써야 한다.
+    dict 전체를 fmt_mean_std에 그대로 넘기는 회귀(키가 'mean'/'std'가 아니라 'mrr'/
+    'precision@5'라 조용히 'N/A'로 빠짐)가 있었다 - 실제 값(0.99)이 요약에 나와야 한다."""
+    make_report_v2, report_dir = fake_report_json
+    make_report_v2.main()
+    text = (report_dir / "team_repro_v2.md").read_text(encoding="utf-8")
+    summary_section = text.split("## 0. 요약", 1)[1].split("## 1.", 1)[0]
+    assert "N/A" not in summary_section, f"요약에 N/A가 남아있음:\n{summary_section}"
+    assert "0.9900" in summary_section
