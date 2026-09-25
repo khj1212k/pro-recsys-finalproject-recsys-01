@@ -1,5 +1,10 @@
 # Stage5: 뉴스레터 생성 워크플로우 그래프 정의
 # - 클러스터 평가 → 뉴스레터 생성 → 품질 평가 → 임베딩 → 문체 변환 → 저장
+#
+# 설계 범위: 이 그래프는 '단일 클러스터'의 생성-평가-재시도 서브그래프만 담당한다.
+# 여러 클러스터를 순회하는 상위 오케스트레이션(run 전체 종료 처리 포함)은
+# LangGraph 밖에서 pipeline/stages.py의 Stage5_NewsletterGeneration이 클러스터마다
+# compile_workflow()로 만든 그래프를 app.invoke(state)로 반복 실행하는 방식으로 담당한다.
 from langgraph.graph import StateGraph, END
 
 from workflow.state import AgentState
