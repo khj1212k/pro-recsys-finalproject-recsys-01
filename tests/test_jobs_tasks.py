@@ -116,3 +116,25 @@ def test_daily_report_text_flags_a_silent_scheduler():
         "totals": {"news_raw": 10, "embedded": 8, "newsletters_24h": 0},
     }
     assert "실행된 잡 없음" in format_report(report)
+
+
+def test_embed_job_passes_budget_and_limit_and_fails_when_nothing_could_be_saved(monkeypatch):
+    from jobs.tasks import embed
+
+    seen = {}
+
+    def fake_embed(settings, **kwargs):
+        seen.update(kwargs)
+        kwargs["stats"].update({"targets": 3, "embedded": 0, "failed_batches": 1})
+        return kwargs["stats"]
+
+    import pipeline.stages as stages
+    monkeypatch.setattr(stages, "embed_pending_articles", fake_embed)
+
+    parser = build_parser()
+    ctx = JobContext(job="embed", args=parser.parse_args(
+        ["embed", "--limit", "50", "--time-budget-s", "600", "--batch-size", "4"]))
+    with pytest.raises(RuntimeError, match="0건 저장"):
+        embed.run(ctx)
+    assert seen["limit"] == 50 and seen["time_budget_s"] == 600 and seen["batch_size"] == 4
+    assert ctx.stats["embed"]["failed_batches"] == 1

@@ -20,6 +20,7 @@ setup_import_paths()
 # 모든 모듈을 임포트하므로.
 JOBS = {
     "ingest": "jobs.tasks.ingest",
+    "embed": "jobs.tasks.embed",
     "cluster": "jobs.tasks.cluster",
     "generate": "jobs.tasks.generate",
     "popularity": "jobs.tasks.popularity",

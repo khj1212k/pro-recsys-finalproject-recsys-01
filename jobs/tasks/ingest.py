@@ -1,5 +1,9 @@
 """ingest: RSS 수집 -> 본문 추출 -> BGE-M3 임베딩 (기존 main.py --from-stage 1 --to-stage 3).
 
+스케줄러는 `--stages rss,extract`로 수집만 돌리고 임베딩은 embed 잡이 따로 한다(docker/crontab).
+세 단계를 한 번에 도는 기본값은 수동 부트스트랩용이다 - 스케줄러의 embed 잡과 동시에 돌리면
+같은 기사를 두 번 임베딩할 수 있다(결과는 같고 CPU만 낭비).
+
 세 단계 모두 재실행 안전하다: RSS는 ON CONFLICT DO NOTHING, 추출은
 raw_news_extract_status가 비어 있는(또는 재시도 여지가 남은) 기사만, 임베딩은
 embedding_result IS NULL인 기사만 처리한다.
@@ -19,6 +23,8 @@ def add_arguments(parser) -> None:
     parser.add_argument("--workers", type=int, default=None, help="본문 추출 프로세스 수 (기본: Settings.PARALLEL_WORKERS)")
     parser.add_argument("--embed-batch-size", type=int, default=None, help="임베딩 배치 크기 (기본: Settings.EMBEDDING_BATCH_SIZE)")
     parser.add_argument("--embed-limit", type=int, default=None, help="이번 실행에서 임베딩할 최대 기사 수 (오래된 것부터)")
+    parser.add_argument("--embed-time-budget-s", type=float, default=None,
+                        help="임베딩 단계 시간 예산(초). 넘으면 새 배치를 시작하지 않음")
     parser.add_argument("--force-cpu", action="store_true", help="GPU/MPS가 있어도 CPU로 임베딩")
 
 
@@ -87,18 +93,14 @@ def run(ctx) -> Dict[str, Any]:
         ctx.stats["extract"] = _timed(ContentExtractor().extract_parallel_with_stats, args.workers)
 
     if "embed" in stages:
-        from pipeline.stages import embed_pending_articles
+        from jobs.tasks.embed import run_embedding
 
-        embed = _timed(
-            embed_pending_articles, Settings,
-            force_cpu=args.force_cpu, batch_size=args.embed_batch_size, limit=args.embed_limit,
+        started = time.monotonic()
+        run_embedding(
+            ctx, limit=args.embed_limit, time_budget_s=args.embed_time_budget_s,
+            batch_size=args.embed_batch_size, force_cpu=args.force_cpu,
         )
-        ctx.stats["embed"] = embed
-        if embed.get("error") or (embed["targets"] and not embed["embedded"]):
-            raise RuntimeError(
-                f"임베딩 실패: 대상 {embed['targets']}건 중 0건 저장 "
-                f"(failed_batches={embed['failed_batches']}, error={embed.get('error')})"
-            )
+        ctx.stats["embed"]["duration_s"] = round(time.monotonic() - started, 3)
 
     ctx.stats["news_raw"] = news_raw_snapshot()
     return {}
