@@ -44,21 +44,41 @@ class Stage3_NewsEmbedding(PipelineStage):
         )["embedded"]
 
 
-def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=None) -> Dict[str, Any]:
+def _length_sorted_batches(rows, batch_size: int, sort_window: int):
+    """오래된 순서의 rows를 sort_window개씩 창으로 나누고, 창 안에서만 본문 길이순으로 배치를 만든다.
+
+    FlagEmbedding 1.2.5의 BGEM3FlagModel.encode는 배치를 가장 긴 텍스트 길이로 패딩하고
+    정렬하지 않는다 - 길이가 섞인 배치는 짧은 기사도 긴 기사 길이만큼 계산한다. 창 단위로만
+    정렬해 오래된 기사부터 처리하는 순서(시간 예산으로 끊겨도 백로그가 앞에서부터 줄어듦)는 지킨다.
+    """
+    for w in range(0, len(rows), sort_window):
+        window = sorted(rows[w:w + sort_window], key=lambda r: len(r[1] or "") + len(r[2] or ""))
+        for i in range(0, len(window), batch_size):
+            yield window[i:i + batch_size]
+
+
+def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=None,
+                           time_budget_s=None, stats=None, sort_window=None,
+                           clock=time.monotonic) -> Dict[str, Any]:
     """임베딩이 없는 기사를 BGE-M3로 임베딩해 news_raw.embedding_result에 저장하고 통계를 반환한다.
 
-    limit: 한 번에 처리할 최대 건수(오래된 것부터). CPU에서 첫 백로그를 여러 실행에
-    나눠 처리할 때 쓴다 - 남은 건 다음 실행이 이어서 처리한다.
+    limit: 한 번에 처리할 최대 건수(오래된 것부터).
+    time_budget_s: 인코딩 시작 후 이 시간이 지나면 새 배치를 시작하지 않는다. CPU 임베딩이
+        느린 환경에서 스케줄 실행 하나가 끝없이 길어지지 않게 한다 - 남은 건 다음 실행이 잇는다.
+    stats: 호출자가 넘기면 그 dict를 배치마다 갱신한다(잡이 중간에 끊겨도 진행 상황이 남는다).
+    sort_window: 길이순 정렬 창 크기(기본 batch_size*8). 1이면 정렬하지 않는다.
     """
     from db.connection import get_connection, release_connection
     import numpy as np
 
     batch_size = batch_size or settings.EMBEDDING_BATCH_SIZE
-    stats: Dict[str, Any] = {
+    sort_window = sort_window or batch_size * 8
+    stats = stats if stats is not None else {}
+    stats.update({
         "targets": 0, "embedded": 0, "failed_batches": 0, "awaiting_extraction": 0, "no_content": 0,
         "batch_size": batch_size, "device": None, "model_load_s": 0.0, "encode_s": 0.0,
-        "articles_per_s": None,
-    }
+        "articles_per_s": None, "stopped_by_budget": False, "remaining": 0,
+    })
 
     conn = get_connection()
     try:
@@ -100,7 +120,7 @@ def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=Non
                     f"(본문이 채워지면 다음 실행에서 처리됩니다)"
                 )
 
-            stats["targets"] = len(rows)
+            stats["targets"] = stats["remaining"] = len(rows)
             if not rows:
                 logger.info("건너뜀: 임베딩할 새로운 기사가 없습니다.")
                 return stats
@@ -108,17 +128,21 @@ def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=Non
             # 대상이 있을 때만 모델을 올린다(BGE-M3 로드만 CPU에서 수십 초).
             from core.embedder import NewsEmbedder
 
-            load_started = time.monotonic()
+            load_started = clock()
             with NewsEmbedder(force_cpu=force_cpu, verbose=True) as embedder:
-                stats["model_load_s"] = round(time.monotonic() - load_started, 3)
+                stats["model_load_s"] = round(clock() - load_started, 3)
                 stats["device"] = str(getattr(embedder, "device", None))
                 logger.info(f"🚀 기사 {len(rows)}건 임베딩 시작 (Batch: {batch_size}, device={stats['device']})...")
 
                 # 배치 처리: 배치 하나가 실패해도 나머지 배치는 계속 처리한다
                 # (이전에는 예외가 루프 전체를 중단시켜 이후 배치가 전부 스킵됐음).
                 encode_s = 0.0
-                for i in tqdm(range(0, len(rows), batch_size), desc="🚀 Embedding Articles", unit="batch"):
-                    batch = rows[i:i+batch_size]
+                encode_started = clock()
+                for batch_no, batch in enumerate(_length_sorted_batches(rows, batch_size, sort_window)):
+                    if time_budget_s is not None and clock() - encode_started >= time_budget_s:
+                        stats["stopped_by_budget"] = True
+                        logger.info(f"⏱️  시간 예산 {time_budget_s}s 소진 - 남은 {stats['remaining']}건은 다음 실행에서")
+                        break
                     try:
                         # 제목 + 본문 결합
                         texts = [f"{r[1]} {r[2]}"[:8000] for r in batch]
@@ -137,11 +161,11 @@ def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=Non
                     except Exception as e:
                         conn.rollback()
                         stats["failed_batches"] += 1
-                        logger.error(f"❌ 배치 임베딩 실패 (batch {i // batch_size}), 건너뛰고 계속 진행: {e}")
-
-            stats["encode_s"] = round(encode_s, 3)
-            if encode_s > 0:
-                stats["articles_per_s"] = round(stats["embedded"] / encode_s, 3)
+                        logger.error(f"❌ 배치 임베딩 실패 (batch {batch_no}), 건너뛰고 계속 진행: {e}")
+                    stats["remaining"] -= len(batch)
+                    stats["encode_s"] = round(encode_s, 3)
+                    if encode_s > 0:
+                        stats["articles_per_s"] = round(stats["embedded"] / encode_s, 3)
     except Exception as e:
         # 배치 루프 진입 전(쿼리 준비 단계 등) 실패 - 지금까지 커밋된 count는 보존한다
         conn.rollback()
