@@ -30,10 +30,12 @@ class NewsReconstructor:
             return None
 
         # 기사 개수 제한 (컨텍스트 길이 초과 방지)
+        # 주의: articles는 LangGraph state["current_articles"]를 그대로 참조하므로
+        # 원본 리스트를 in-place 정렬(articles.sort())하면 호출자의 state가 의도치 않게
+        # 변형된다. sorted()로 새 리스트를 만들어 원본은 건드리지 않는다.
         MAX_ARTICLES = 10
         if len(articles) > MAX_ARTICLES:
-            articles.sort(key=lambda x: len(x.get('content') or ''), reverse=True)
-            articles = articles[:MAX_ARTICLES]
+            articles = sorted(articles, key=lambda x: len(x.get('content') or ''), reverse=True)[:MAX_ARTICLES]
 
         # 프롬프트에 넣을 기사 텍스트 구성
         articles_text = self._build_articles_text(articles)
