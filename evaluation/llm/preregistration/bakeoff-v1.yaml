@@ -5,6 +5,11 @@
 id: bakeoff-v1
 registered_at: "2026-09-25"
 adr: docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md
+amendments:
+  - id: A1
+    date: "2026-09-26"
+    results_viewed: false  # bake-off 미실행
+    change: "judge 후보 gemini-3.1-flash-lite-v2 추가 (PR #6이 운영 judge 기본값을 이 모델로 교체)"
 
 evalset:
   n_clusters: 40
@@ -29,6 +34,7 @@ judges:
   - {name: gemini-3.5-flash-v2, provider: gemini, model: gemini-3.5-flash, version: v2}
   - {name: gpt-4.1-mini-v2, provider: openai, model: gpt-4.1-mini, version: v2}
   - {name: solar-pro3-v2, provider: upstage, model: solar-pro3, version: v2}
+  - {name: gemini-3.1-flash-lite-v2, provider: gemini, model: gemini-3.1-flash-lite, version: v2}  # A1
   - {name: haiku-4.5-v1, provider: anthropic, model: claude-haiku-4-5, version: v1}
 
 replicates: 1

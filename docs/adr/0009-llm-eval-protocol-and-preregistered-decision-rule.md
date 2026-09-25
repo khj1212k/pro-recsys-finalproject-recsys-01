@@ -195,4 +195,17 @@
   `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`.
 
 ## Addendum
-(없음 — 규칙을 바꿀 때 날짜, 사유, 그 시점에 결과를 열람했는지 여부를 여기에 추가한다.)
+규칙을 바꿀 때 날짜, 사유, 그 시점에 결과를 열람했는지 여부를 여기에 추가한다.
+
+### A1 (2026-09-26) — judge 후보 1개 추가. 결과 열람: 해당 없음(bake-off 미실행, 결과 파일 없음)
+- 사유: 이 ADR을 쓴 뒤 main에 병합된 PR #6(ADR 0005 부록)이 실제 호출 결과로 judge 기본값을
+  `gemini-3.5-flash` → `gemini-3.1-flash-lite`로 바꿨다(3.5-flash는 30초 타임아웃과 연속 503).
+  "컨텍스트"의 "현재 기본값" 서술은 그 전 상태다.
+- 변경: judge 후보에 `gemini-3.1-flash-lite-v2`를 추가한다. 운영 기본 judge라 기준선으로
+  빠질 수 없다. `gemini-3.5-flash-v2`는 남겨 두고, pre-flight에서 타임아웃/503이 설정으로
+  풀리지 않으면 기존 pre-flight 규칙대로 본 실행 전에 빼고 여기에 기록한다.
+- 가격: `gemini-3.1-flash-lite` 입력 $0.25 / 출력 $1.50 (1M 토큰, paid standard, 텍스트 입력.
+  https://ai.google.dev/gemini-api/docs/pricing, WebFetch 접근일 2026-09-26, 문서 "Last updated
+  2026-09-24 UTC"). `llm_pricing.yaml`에 추가했다.
+- 생성 후보·게이트·임계값·승자 결정·표본 크기는 바꾸지 않았다. 실행 전 변경이라 새 id 파일을
+  만들지 않고 `bakeoff-v1.yaml`의 `amendments`에 같은 내용을 남겼다(git 이력으로 원문 대조 가능).

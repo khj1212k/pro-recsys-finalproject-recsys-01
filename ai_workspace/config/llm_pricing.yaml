@@ -22,6 +22,14 @@ models:
         output_per_1m: 9.00
         source: https://ai.google.dev/gemini-api/docs/pricing
         accessed: "2026-09-25"
+  gemini-3.1-flash-lite:
+    provider: gemini
+    prices:
+      - input_per_1m: 0.25
+        output_per_1m: 1.50
+        source: https://ai.google.dev/gemini-api/docs/pricing
+        accessed: "2026-09-26"
+        note: "Paid tier standard, text 입력(오디오 입력은 $0.50). 문서 'Last updated 2026-09-24 UTC'. 현재 judge 기본값(ADR 0005 부록)"
   gemini-3.8-flash:
     provider: gemini
     prices:
