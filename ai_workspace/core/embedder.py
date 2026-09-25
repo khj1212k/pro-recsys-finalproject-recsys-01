@@ -24,7 +24,16 @@ class NewsEmbedder:
     # BGE-M3 기반 텍스트 임베딩 모델 (1024차원)
     
 
-    def __init__(self, force_cpu: bool = False, verbose: bool = True, l2_normalize: bool = True):
+    def __init__(
+        self,
+        force_cpu: bool = False,
+        verbose: bool = True,
+        l2_normalize: bool = True,
+        use_fp16: Optional[bool] = None,
+    ):
+        # use_fp16=None이면 기존 동작(CUDA에서만 fp16). MPS에서 True로 주면 BGE-M3 dense
+        # 벡터가 fp32와 사실상 동일(코사인 ~1.0)하면서 처리량이 늘어난다 - 측정치는
+        # reports/recsys/ebnerd_v1.md 참고.
         self.verbose = verbose
         self.l2_normalize = l2_normalize
         self.device = self._get_device(force_cpu)
@@ -38,7 +47,7 @@ class NewsEmbedder:
         start_time = time.time()
         self.model = BGEM3FlagModel(
             'BAAI/bge-m3',
-            use_fp16=(self.device == 'cuda'),
+            use_fp16=(self.device == 'cuda') if use_fp16 is None else use_fp16,
             device=self.device
         )
         load_time = time.time() - start_time
@@ -66,7 +75,11 @@ class NewsEmbedder:
             return 'mps'
         return 'cpu'
 
-    def generate_embeddings_batch(self, texts: List[str], batch_size: int = 20) -> Tuple[List[Any], float]:
+    def generate_embeddings_batch(
+        self, texts: List[str], batch_size: int = 20, max_length: int = 8192
+    ) -> Tuple[List[Any], float]:
+        # max_length: 토큰 단위 절단 길이. 기본값 8192는 기존 파이프라인 동작 그대로이고,
+        # 대량 오프라인 임베딩(예: EB-NeRD 벤치마크)은 attention 비용 때문에 512 등으로 줄여 쓴다.
         if not texts or not self.model:
             return [], 0.0
 
@@ -81,7 +94,7 @@ class NewsEmbedder:
                 output = self.model.encode(
                     batch_texts, 
                     batch_size=batch_size, 
-                    max_length=8192,
+                    max_length=max_length,
                     return_dense=True, 
                     return_sparse=False, 
                     return_colbert_vecs=False
