@@ -1,0 +1,85 @@
+# LLM 토큰 단가표 (USD, 1M 토큰당). bake-off 비용 계산(ADR 0009)과 배치 비용
+# 추정에 쓴다. 모든 항목은 공식 가격 페이지 URL과 접근일을 남겨야 한다
+# (core/llm/pricing.py가 누락 시 로드를 거부한다). 가격이 바뀌면 기존 항목에
+# until을 달고 from이 있는 새 항목을 추가한다 - 과거 실행의 비용을 재계산할 수 있게.
+# 세금(VAT 등)은 포함하지 않는다. 캐시 입력 단가는 이 파이프라인이 프롬프트
+# 캐싱을 쓰지 않아 기록하지 않는다.
+currency: USD
+
+models:
+  gemini-3.5-flash-lite:
+    provider: gemini
+    prices:
+      - input_per_1m: 0.30
+        output_per_1m: 2.50
+        source: https://ai.google.dev/gemini-api/docs/pricing
+        accessed: "2026-09-25"
+        note: "Paid tier standard, text input. 문서 'Last updated 2026-09-24 UTC'"
+  gemini-3.5-flash:
+    provider: gemini
+    prices:
+      - input_per_1m: 1.50
+        output_per_1m: 9.00
+        source: https://ai.google.dev/gemini-api/docs/pricing
+        accessed: "2026-09-25"
+  gemini-3.8-flash:
+    provider: gemini
+    prices:
+      - input_per_1m: 0.75
+        output_per_1m: 3.75
+        until: "2026-12-31"
+        source: https://ai.google.dev/gemini-api/docs/pricing
+        accessed: "2026-09-25"
+        note: "문서에 2026-12-31까지의 가격으로 명시"
+      - input_per_1m: 1.50
+        output_per_1m: 7.50
+        from: "2027-01-01"
+        source: https://ai.google.dev/gemini-api/docs/pricing
+        accessed: "2026-09-25"
+  solar-pro3:
+    provider: upstage
+    prices:
+      - input_per_1m: 0.15
+        output_per_1m: 0.60
+        source: https://www.upstage.ai/pricing
+        accessed: "2026-09-25"
+        note: "VAT 10% 별도"
+  gpt-4.1-mini:
+    provider: openai
+    prices:
+      - input_per_1m: 0.40
+        output_per_1m: 1.60
+        source: https://developers.openai.com/api/docs/pricing
+        accessed: "2026-09-25"
+        note: "Standard tier"
+  gpt-4o-mini:
+    provider: openai
+    prices:
+      - input_per_1m: 0.15
+        output_per_1m: 0.60
+        source: https://developers.openai.com/api/docs/pricing
+        accessed: "2026-09-25"
+        note: "Standard tier"
+  gpt-5-mini:
+    provider: openai
+    prices:
+      - input_per_1m: 0.25
+        output_per_1m: 2.00
+        source: https://developers.openai.com/api/docs/pricing
+        accessed: "2026-09-25"
+        note: "Standard tier. reasoning 모델이라 출력 토큰에 reasoning 토큰이 포함된다"
+  claude-haiku-4-5:
+    provider: anthropic
+    prices:
+      - input_per_1m: 1.00
+        output_per_1m: 5.00
+        source: https://platform.claude.com/docs/en/about-claude/pricing
+        accessed: "2026-09-25"
+        note: "alias. 스냅샷 id claude-haiku-4-5-20251001. retirement not sooner than 2026-10-15"
+  claude-haiku-4-5-20251001:
+    provider: anthropic
+    prices:
+      - input_per_1m: 1.00
+        output_per_1m: 5.00
+        source: https://platform.claude.com/docs/en/about-claude/pricing
+        accessed: "2026-09-25"
