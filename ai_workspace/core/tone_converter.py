@@ -70,6 +70,13 @@ TONE_CONVERSION_PROMPT = """당신은 뉴스를 대중에게 쉽고 친근하게
 4) 규칙을 지키기 어려우면 빈 문자열로라도 JSON 형식을 먼저 지키세요."""
 
 
+def _original_summary(newsletter: Dict) -> str:
+    """파이프라인 초안의 한 줄 요약 키는 `sentence`다(core/reconstruction/generator.py,
+    DB 컬럼 news_letter_sentence). 이 모듈의 LLM 스키마(ToneResult)만 `summary`를 쓰므로
+    입력 쪽에서는 둘 다 받아들인다 - 예전엔 `summary`만 읽어 프롬프트의 요약 칸이 항상 비었다."""
+    return newsletter.get("summary") or newsletter.get("sentence") or ""
+
+
 class ToneConverter:
 
     def __init__(self, llm_client: Optional[LLMClient] = None):
@@ -79,7 +86,7 @@ class ToneConverter:
     def create_prompt(self, newsletter: Dict) -> str:
         prompt = TONE_CONVERSION_PROMPT.format(
             title=newsletter.get("title", ""),
-            summary=newsletter.get("summary", ""),
+            summary=_original_summary(newsletter),
             content=newsletter.get("content", ""),
             keywords=json.dumps(newsletter.get("keywords", []), ensure_ascii=False)
         )
@@ -112,11 +119,18 @@ class ToneConverter:
                 converted = self._parse_response(result.text, newsletter)
 
             if converted and self.validate_conversion(newsletter, converted):
-                return converted
+                return self._with_sentence_key(converted)
 
             last_converted = converted or last_converted
 
-        return self._fallback_convert(newsletter, last_converted)
+        return self._with_sentence_key(self._fallback_convert(newsletter, last_converted))
+
+    @staticmethod
+    def _with_sentence_key(converted: Dict) -> Dict:
+        """변환된 요약을 파이프라인 키 `sentence`로도 내보낸다. save 노드는 {**draft, **converted}로
+        병합하므로, 이 키가 없으면 초안의 격식체 sentence가 그대로 저장되고 캐주얼 요약은 버려진다."""
+        converted["sentence"] = converted.get("summary", "")
+        return converted
 
     def _normalize_parsed(self, result: Dict, original: Dict) -> Dict:
         """네이티브 구조화 출력으로 이미 필드가 채워져 있어도, keywords가 비어 있으면
@@ -148,7 +162,7 @@ class ToneConverter:
         for field in ("title", "summary", "content"):
             val = result.get(field)
             if not isinstance(val, str) or not val.strip():
-                result[field] = original.get(field, "") or ""
+                result[field] = (_original_summary(original) if field == "summary" else original.get(field, "")) or ""
 
         return result
 
@@ -171,7 +185,7 @@ class ToneConverter:
 
         base = last or {}
         title = soften(base.get("title") or original.get("title", "")).strip()
-        summary = soften(base.get("summary") or original.get("summary", "")).strip()
+        summary = soften(base.get("summary") or _original_summary(original)).strip()
         content = soften(base.get("content") or original.get("content", "")).strip()
 
         if title and not title.startswith(("📰", "📌", "🔥", "✅", "⭐")):
