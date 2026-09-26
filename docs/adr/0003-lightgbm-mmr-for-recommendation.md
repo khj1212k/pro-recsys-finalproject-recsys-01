@@ -29,4 +29,4 @@
 - `history_cosine_similarity` 피처가 초기 구현에서 학습 시점 이전/이후 클릭을 구분하지 않고 계산되어 data leakage가 있었다(수정 완료, `docs/fix-log-2026-07.md` #4)
 - `negative_sample_ratio`의 negative sampling에 랜덤 시드가 없어 실행마다 학습 데이터 구성이 달라졌다(수정 완료, `docs/fix-log-2026-07.md` #16)
 - λ 구간별 값(0.8/0.7/0.6)이 실제 사용자 행동 데이터 분석(EDA)이 아니라 직관적 가정으로 설정되어 있다 — `scripts/generate_daily_stats.py`의 `analyze_user_diversity()` 결과와 연결해 데이터 기반으로 재검증할 필요가 있다.
-- `user_age_band`/`user_gender` 피처가 DB에 실제 컬럼이 없어 항상 0으로 고정된 상수 피처다 — 모델 성능에 기여하지 못하는 죽은 피처. (2026-09-26 제거: LightGBM 4.7은 상수 열을 학습 전에 걸러내므로, 합성 데이터에서 같은 파라미터·3시드·열 위치 3가지·학습 방식 2가지로 비교한 제거 전후 예측이 비트 단위로 같았다 — `reports/recsys/constant_feature_ablation_v1.md`.)
+- `user_age_band`/`user_gender` 피처는 `DataLoader`가 DB에서 읽지 않고 항상 0으로 채운 상수 피처였다 — 모델 성능에 기여하지 못하는 죽은 피처. (정정 2026-09-27: 처음에는 "DB에 실제 컬럼이 없어서"라고 적었으나, `user` 테이블에는 초기 마이그레이션 `78742dce5010`부터 `user_gender_code`·`user_birth_year` 컬럼이 있다. 로더가 읽지 않았을 뿐이다. 실제 값을 피처로 쓸지는 온보딩 입력률·결측률을 확인한 뒤 따로 정한다.) (2026-09-26 제거: LightGBM 4.7은 상수 열을 학습 전에 걸러내므로, 합성 데이터에서 같은 파라미터·3시드·열 위치 3가지·학습 방식 2가지로 비교한 제거 전후 예측이 비트 단위로 같았다 — `reports/recsys/constant_feature_ablation_v1.md`.)
