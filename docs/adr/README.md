@@ -10,7 +10,7 @@
 | [0004](0004-continue-in-fork-and-port-july-fixes.md) | 기존 fork에서 계속 개선하고, 7월 셀프 리뷰 수정을 주제별로 다시 이식한다 | 채택됨 | 2026-09-25 |
 | [0005](0005-llm-provider-abstraction.md) | HyperCLOVA X 이후 - OpenAI 호환 어댑터 하나로 여러 LLM 프로바이더 통합 | 채택됨 (모델 선정은 후속 bake-off ADR로 이관) | 2026-09-25 |
 | [0006](0006-runtime-compose-and-scheduler.md) | 런타임 구성 - docker compose + supercronic(Airflow 제거), Mac 개발 중 임베딩은 호스트 MPS, BGE-M3 max_length 8192 유지(사전 등록 규칙), 본문 해시 중복 제거·잡 종료 신호 전달 | 채택됨 (7일 수집 성공률로 재확인 예정) | 2026-09-26 |
-| [0007](0007-recsys-offline-evaluation-protocol.md) | 추천 시스템 오프라인 평가 프로토콜 | 채택됨 | 2026-09-25 |
+| [0007](0007-recsys-offline-evaluation-protocol.md) | 추천 시스템 오프라인 평가 프로토콜 | 채택됨 (2026-09-26 개정: 증거를 실측 수치로, 학습 붕괴 표시·같은 조건 비교·CI 기반 결론 추가) | 2026-09-25 |
 | [0008](0008-db-layer-pgvector-schema-and-upsert.md) | pgvector 어댑터 등록, news_raw 스키마 정합성(UNIQUE·timestamptz), RSS 수집기 UPSERT | 채택됨 | 2026-09-25 |
 | [0009](0009-llm-eval-protocol-and-preregistered-decision-rule.md) | LLM 평가 프로토콜과 사전 등록한 모델 선정 규칙 (bake-off v1) | 채택됨 (사전 등록, 결과 없음) | 2026-09-25 |
 | [0010](0010-faithfulness-gate-and-judge-v2.md) | 결정론적 사실성 게이트, 문체 드리프트 게이트, judge v2 | 채택됨 (차단 유형·judge 임계값·모드는 잠정, ADR 0009로 보정) | 2026-09-26 |
