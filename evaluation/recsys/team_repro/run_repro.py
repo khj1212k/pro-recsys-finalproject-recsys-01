@@ -473,6 +473,53 @@ def team_final_written_random_reference(bundle, random_draws: int = RANDOM_DRAWS
     return out
 
 
+# ------------------------------------------------------------------ v2 재현 대조
+
+V2_RAW_COMMIT = "1585ce6"  # v2 리포트 원자료를 생성·커밋한 커밋
+
+
+def reproduction_check_vs_v2(runs: Dict[str, List[dict]], gen_runs: Dict[str, List[dict]]) -> dict:
+    """v2.1 실행과 v2 원자료(git에 커밋된 team_repro_v2_raw.json)를 같은 시드끼리 대조한다.
+    기본 경로(학습/추론)를 바꾸지 않았으므로 같은 시드는 소수 4자리까지 같아야 한다.
+    impression arm은 v2.1에서 inner 분할(그룹 소속 검사)을 고쳤으므로 달라지는 게 정상이다."""
+    try:
+        raw = json.loads(subprocess.run(
+            ["git", "-C", str(WORKTREE_ROOT), "show", f"{V2_RAW_COMMIT}:reports/recsys/team_repro_v2_raw.json"],
+            capture_output=True, text=True, check=True,
+        ).stdout)
+    except Exception as e:  # noqa: BLE001 - 대조는 부가 정보라 실패해도 본 실행은 계속
+        return {"error": str(e)}
+    pairs = {
+        "current": (raw["headline"]["current"]["runs"], runs["current"], ["primary", "as_written"]),
+        "team-final": (raw["headline"]["team-final"]["runs"], runs["team-final"], ["primary", "as_written"]),
+        "fix-snapshot": (raw["headline"]["fix-snapshot"]["runs"], runs["fix-snapshot"], ["primary", "as_written"]),
+        "leaky": (raw["decomposition"]["leakage"]["leaky"], runs["leaky"], ["primary"]),
+        "binary": (raw["decomposition"]["objective"]["binary"], runs["binary"], ["primary"]),
+        "small_recent_15": (raw["decomposition"]["candidate_pool"]["small_recent_15"], runs["small_recent_15"], ["primary"]),
+        "impression (v2.1에서 inner 분할 수정 - 달라지는 게 정상)": (raw["decomposition"]["negatives"]["impression"], runs["impression"], ["primary"]),
+        "generator_split current": (raw["generator_split"]["current"]["runs"], gen_runs["current"], ["primary"]),
+        "generator_split team-final": (raw["generator_split"]["team-final"]["runs"], gen_runs["team-final"], ["primary"]),
+    }
+    out = {"v2_raw_commit": V2_RAW_COMMIT, "arms": {}}
+    for name, (old_runs, new_runs, fields) in pairs.items():
+        new_by_seed = {r["seed"]: r for r in new_runs}
+        diffs, seeds = [], []
+        for old in old_runs:
+            new = new_by_seed.get(old["seed"])
+            if new is None:
+                continue
+            seeds.append(old["seed"])
+            for f in fields:
+                for mk in ("mrr", "precision@5"):
+                    diffs.append(abs(new[f]["aggregate_metrics"][mk] - old[f]["aggregate_metrics"][mk]))
+        out["arms"][name] = {
+            "shared_seeds": seeds,
+            "max_abs_diff_mrr_p5": float(max(diffs)) if diffs else None,
+            "identical_to_4dp": bool(diffs) and max(diffs) < 5e-5,
+        }
+    return out
+
+
 # ------------------------------------------------------------------ 데이터 진단
 
 
@@ -694,6 +741,10 @@ def _main(args) -> int:
         name: {
             "primary": summarize_field(runs[name], "primary"),
             "primary_tie_random": summarize_field(runs[name], "primary.tie_random"),
+            "primary_seen_filtered": summarize_field(runs[name], "primary.seen_filtered"),
+            "primary_unshown_filtered": summarize_field(runs[name], "primary.unshown_filtered"),
+            "primary_cold": _mean_of(runs[name], "primary.cold"),
+            "primary_warm": _mean_of(runs[name], "primary.warm"),
         }
         for name in ["leaky", "binary", "leaky_binary", "fixed100", "leaky_fixed100", "impression", "small_recent_15"]
     }
@@ -826,6 +877,7 @@ def _main(args) -> int:
         "small_pool_model_vs_baseline": small_vs_baseline,
         "decomposition_summary": decomposition_summary,
         "decomposition_bootstrap": decomposition_bootstrap,
+        "reproduction_check_vs_v2": reproduction_check_vs_v2(runs, gen_runs),
     }
     (REPORT_DIR / "team_repro_v2.json").write_text(
         json.dumps(final, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
