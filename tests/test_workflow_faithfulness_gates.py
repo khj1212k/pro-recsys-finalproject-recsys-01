@@ -376,3 +376,15 @@ def test_tone_drift_relative_dates_are_advisory_absolute_dates_block():
     assert relative.passed is True
     absolute = check_tone_drift(formal, {"title": "t", "content": "지난해 9월 26일 발표했어요."})
     assert absolute.passed is False
+
+
+def test_tone_drift_does_not_flag_a_word_that_is_already_in_the_formal_draft():
+    # 문체 변환 폴백이 붙이는 "📰 " 때문에 Kiwi가 바로 뒤의 일반명사를 고유명사로 태깅한다.
+    # 형식체 초안에 글자 그대로 있는 단어는 "새로 생긴 고유명사"가 아니다(팀 뉴스레터 프로브, ADR 0010).
+    formal = {"title": "압수수색이 소식", "content": "압수수색이 진행됐다. 서울 중앙지검이 맡았다."}
+    casual = {"title": "📰 압수수색이 소식", "content": "📰 압수수색이 진행됐다. 서울 중앙지검이 맡았다."}
+    assert check_tone_drift(formal, casual).passed
+
+    added = {**casual, "content": casual["content"] + " 카카오도 참여했다."}
+    result = check_tone_drift(formal, added)
+    assert [e["surface"] for e in result.blocking["entities_added"]] == ["카카오"]

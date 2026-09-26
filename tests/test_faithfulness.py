@@ -37,6 +37,15 @@ class TestNumberExtraction:
         facts = extract_facts("실업률이 2.3퍼센트포인트 낮아졌다.")
         assert [(n.value, n.unit) for n in facts.numbers] == [(2.3, "%p")]
 
+    def test_percent_followed_by_point_word_is_a_percentage_point(self):
+        # 한국 기사에서 흔한 "2.5%포인트" 표기. %로 읽으면 같은 값을 "2.5%p"/"2.5퍼센트포인트"로
+        # 옮긴 초안이 단위 불일치로 사실성 게이트에 막힌다(팀 뉴스레터 프로브에서 발견, ADR 0010).
+        facts = extract_facts("격차가 2.5%포인트 벌어졌다.")
+        assert [(n.value, n.unit, n.surface) for n in facts.numbers] == [(2.5, "%p", "2.5%포인트")]
+        report = check_against_sources("격차는 2.5%p다. 즉 2.5퍼센트포인트다.", ["격차가 2.5%포인트 벌어졌다."])
+        assert report.unsupported_numbers == []
+        assert check_against_sources("격차는 2.5%다.", ["격차가 2.5%포인트 벌어졌다."]).unsupported_numbers
+
     def test_person_count_with_scale(self):
         facts = extract_facts("참가자는 10만 명을 넘었다.")
         assert [(n.value, n.unit) for n in facts.numbers] == [(100000.0, "명")]

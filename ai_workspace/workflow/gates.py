@@ -7,9 +7,14 @@ import logging
 from dataclasses import asdict, dataclass
 from typing import Dict, Iterable, List, Sequence, Tuple
 
+from rapidfuzz import fuzz
+
 from core.faithfulness import check_against_sources, compare_rewrite
 
 logger = logging.getLogger(__name__)
+
+# check_against_sources의 개체명 기본 임계값과 같다 - "원문에 있다"의 기준을 두 게이트가 공유한다
+ENTITY_PRESENT_THRESHOLD = 85.0
 
 FAITHFULNESS_FIELDS: Tuple[str, ...] = ("title", "sentence", "content")
 # 한줄소개(sentence)는 문체 변환 결과가 저장되지 않으므로(save_newsletter_to_db는 초안의
@@ -146,6 +151,11 @@ def check_tone_drift(
         logger.warning("kiwipiepy 없음: 문체 드리프트 게이트가 개체명 검사를 건너뜁니다")
         drift = compare_rewrite(orig_text, conv_text, multiset=False, allow_regex_fallback=True)
         drift.added_entities, drift.dropped_entities = [], []
+
+    # Kiwi 태깅은 문맥에 따라 달라진다(예: 폴백 변환이 붙이는 "📰 " 바로 뒤의 일반명사가 NNP로
+    # 태깅됨). 형식체 초안에 글자 그대로(퍼지 기준) 있는 단어는 새로 생긴 고유명사가 아니다.
+    drift.added_entities = [e for e in drift.added_entities
+                            if fuzz.partial_ratio(e["surface"], orig_text) < ENTITY_PRESENT_THRESHOLD]
 
     def absolute(dates):
         return [d for d in dates if not d["relative"]]
