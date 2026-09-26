@@ -60,7 +60,7 @@ jobs:
         run: |
           uv pip install --python .venv/bin/python \
             fastapi \
-            httpx2 \
+            httpx \
             python-jose \
             passlib \
             "bcrypt==3.2.2" \
