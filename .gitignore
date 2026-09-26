@@ -156,5 +156,5 @@ reports/**/raw/
 mlruns/
 # 학습 체크포인트
 checkpoints/
-# Claude Code 로컬 상태 (AGENTS.md: AI 도구 상태, 리팩터링 대상 아님 - 여기서는 무시만)
+# 로컬 도구 상태 (커밋하지 않음)
 .claude/
