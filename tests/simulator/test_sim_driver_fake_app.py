@@ -66,7 +66,8 @@ def test_static_batch_leaves_new_users_empty_and_ignores_clicks(static):
     assert m["reactivity"]["n_after_click_pairs"] > 0
     assert m["reactivity"]["after_click_jaccard_mean"] == 1.0
     assert m["serving"]["empty_rate"] > 0
-    assert m["serving"]["fallback_rate"] == 0.0
+    # an empty answer is labelled like the request-time API's end of chain ("empty")
+    assert m["serving"]["fallback_rate"] == m["serving"]["empty_rate"]
 
 
 def test_reactive_policy_covers_new_users_reacts_and_follows_drift(reactive, static):
