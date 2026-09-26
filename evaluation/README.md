@@ -18,6 +18,11 @@ DB나 LLM 호출 없이 동작하는 함수들로만 구성되어 있어 CI에�
   (단위 벡터에서 euclidean은 cosine과 단조 동치), `metric="cosine"`도
   그대로 지원한다. 빈 입력/전부 노이즈/클러스터 1개/싱글톤 클러스터처럼
   정의가 안 되는 경우에는 예외 대신 `(None, reason)`을 반환한다.
+  라이브러리는 core distance를 `(1/d)^차원`으로 직접 거듭제곱해서 1024차원에서는
+  거리 1 미만 쌍이 inf로 넘치고 core distance가 전부 0으로 퇴화한다 - 그래서
+  기본값(`stable=True`)은 같은 식을 로그 공간(`stable_all_points_core_distance`)에서
+  계산한다. `evaluate_run`은 비교용으로 라이브러리 원값을
+  `dbcv_hdbscan_unstabilized`에 함께 남긴다.
 - `basic_stats(labels)` — 클러스터 개수, 노이즈 비율, 클러스터 크기
   분포(최소/중앙값/최대, 크기 구간별 히스토그램).
 - `cosine_silhouette(X, labels)` — 노이즈를 제외한 실루엣 점수(cosine

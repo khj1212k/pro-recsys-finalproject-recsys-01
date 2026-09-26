@@ -20,6 +20,7 @@ from sklearn.metrics import adjusted_rand_score, silhouette_score
 
 __all__ = [
     "dbcv",
+    "stable_all_points_core_distance",
     "basic_stats",
     "cosine_silhouette",
     "bcubed",
@@ -32,8 +33,44 @@ def _non_noise_cluster_ids(labels: np.ndarray) -> List[Any]:
     return sorted({label for label in labels.tolist() if label != -1})
 
 
+def stable_all_points_core_distance(distance_matrix: np.ndarray, d: float = 2.0) -> np.ndarray:
+    """DBCV all-points core distance ``((1/(n-1)) * sum_j (1/d_ij)^d)^(-1/d)`` in log space.
+
+    Same definition as ``hdbscan.validity.all_points_core_distance`` (zero distances are
+    skipped, an all-zero matrix gives zeros), but computed with logsumexp. The library
+    raises distances to the power of the data dimension directly; with BGE-M3's d=1024
+    any pair closer than 1.0 overflows ``(1/d_ij)^1024`` to inf, every core distance
+    collapses to 0 and DBCV silently degrades to a raw-distance variant.
+    The input matrix is not modified.
+    """
+    from scipy.special import logsumexp
+
+    D = np.asarray(distance_matrix, dtype=np.float64)
+    n = D.shape[0]
+    nonzero = D != 0
+    if not nonzero.any():
+        return np.zeros(n)
+    log_terms = np.where(nonzero, -d * np.log(np.where(nonzero, D, 1.0)), -np.inf)
+    with np.errstate(divide="ignore"):
+        log_mean = logsumexp(log_terms, axis=1) - np.log(n - 1)
+    return np.exp(-log_mean / d)
+
+
+def _validity_index(X: np.ndarray, labels: np.ndarray, metric: str, stable: bool) -> float:
+    import hdbscan.validity as hdbscan_validity
+
+    if not stable:
+        return hdbscan_validity.validity_index(X, labels, metric=metric)
+    original = hdbscan_validity.all_points_core_distance
+    hdbscan_validity.all_points_core_distance = stable_all_points_core_distance
+    try:
+        return hdbscan_validity.validity_index(X, labels, metric=metric)
+    finally:
+        hdbscan_validity.all_points_core_distance = original
+
+
 def dbcv(
-    X: np.ndarray, labels: np.ndarray, metric: str = "euclidean"
+    X: np.ndarray, labels: np.ndarray, metric: str = "euclidean", stable: bool = True
 ) -> Tuple[Optional[float], Optional[str]]:
     """Density-Based Clustering Validation via hdbscan.validity.validity_index.
 
@@ -54,6 +91,12 @@ def dbcv(
 
     hdbscan's validity_index requires float64 input (its Cython code is
     compiled against `double_t`; float32 raises a buffer dtype mismatch).
+
+    `stable=True` (default) swaps in `stable_all_points_core_distance` for the
+    duration of the call: the library computes core distances with a direct
+    power of the data dimension, which overflows for 1024-d embeddings and
+    collapses every core distance to 0. `stable=False` returns the library's
+    value as-is (kept only for comparison).
 
     Returns (score, None) on success, or (None, reason) for degenerate
     inputs (empty input, all points labeled noise, only a single cluster,
@@ -83,10 +126,9 @@ def dbcv(
     if len(cluster_ids) < 2:
         return None, "single_cluster"
 
-    import hdbscan.validity as hdbscan_validity
-
     try:
-        value = hdbscan_validity.validity_index(X, labels, metric=metric)
+        with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+            value = _validity_index(X, labels, metric, stable)
     except ValueError as exc:
         # a configuration that passed the checks above (e.g. a singleton
         # cluster) can still make hdbscan's internal MST construction
@@ -300,6 +342,7 @@ def evaluate_run(
     input_hash = hashlib.sha256(np.ascontiguousarray(X).tobytes()).hexdigest()
 
     dbcv_score, dbcv_reason = dbcv(X, labels)
+    dbcv_raw, _ = dbcv(X, labels, stable=False)
 
     report: Dict[str, Any] = {
         "n": int(X.shape[0]),
@@ -308,6 +351,8 @@ def evaluate_run(
         "basic_stats": basic_stats(labels),
         "dbcv": dbcv_score,
         "dbcv_reason": dbcv_reason,
+        # hdbscan.validity 그대로의 값 - 고차원에서 core distance가 넘쳐 0으로 퇴화한 값일 수 있다
+        "dbcv_hdbscan_unstabilized": dbcv_raw,
         "cosine_silhouette": cosine_silhouette(X, labels),
         "bcubed": bcubed(labels, labels_true) if labels_true is not None else None,
         "stability": (
