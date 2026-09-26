@@ -77,7 +77,7 @@ uv run python scripts/evaluate_results.py
 
 > 팀 시절(2026-02) 이 자리에 적혀 있던 벤치마크 수치는 철회했다. 두 가지 이유다.
 > (1) 평가 로그가 LLM 페르소나로 만든 합성 클릭이라 절대 성능을 말할 수 없다.
-> (2) 정답 기간을 `NOW()-6일`로 잡았는데 로그 전체가 몇 시간 분량이라 학습 구간이 정답에 섞였다(추론 시점 누출).
+> (2) 정답을 `created_at >= NOW()-6일`로 뽑았다. 같은 쿼리가 지금도 `scripts/evaluate_results.py`의 폴백 경로(`valid_period.json`이 없을 때)에 남아 있다. 그런데 팀 로그 아카이브 전체가 약 6시간 분량이라 이 창이 로그 전체와 같아졌고, 학습 구간이 정답에 섞였다(추론 시점 누출). 아카이브 기간과 재현 결과의 근거는 ADR 0007과 `reports/recsys/team_repro_v2.md`다. 둘 다 평가 브랜치 `eval/team-baseline-repro-v1`에 있고, 병합하면 여기서 링크한다.
 > 재현·분석은 평가 브랜치 병합 후 `reports/recsys/`에 싣는다. 이 스크립트의 출력은 같은 데이터 위에서 코드 변경의 상대 효과를 비교하는 용도로만 쓴다.
 
 ### 지표 상세 설명
@@ -89,7 +89,7 @@ uv run python scripts/evaluate_results.py
     * 예: Precision@5 = 0.4는 상위 5개 중 평균 2개가 클릭한 아이템이라는 뜻이다.
 3.  **Recall@K:**
     * 유저가 클릭한 **전체** 뉴스 중 추천 시스템이 찾아낸 비율.
-    * *Note:* 현재 검증셋 기간(약 6일)이 길기 때문에, 유저가 클릭한 뉴스가 매우 많아 Recall 수치는 상대적으로 낮게 나옵니다 (정상).
+    * *Note:* 분모가 정답 기간에 유저가 클릭한 뉴스 전체라서, 정답 기간이 길수록(클릭이 많을수록) Recall@K는 낮게 나온다.
 4.  **nDCG (Normalized Discounted Cumulative Gain):**
     * 순위의 가중치를 고려한 점수. 상위권에 정답을 맞출수록 점수가 높습니다.
 5.  **Coverage:**
