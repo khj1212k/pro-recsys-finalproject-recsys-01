@@ -118,3 +118,36 @@ def test_onboarding_newsletter_similarity_baseline_uses_selected_newsletters():
         user_ids=[1], candidate_ids=[20, 30], top_k=2, preferred_newsletters=prefs, emb_by_id=emb_by_id
     )
     assert out[1][0] == 20
+
+
+def test_fixed_order_baseline_gives_candidate_order_to_everyone():
+    out = BL.fixed_order_baseline(user_ids=[1, 2], candidate_ids=[30, 10, 20], top_k=2)
+    assert out == {1: [30, 10], 2: [30, 10]}
+
+
+def test_cosine_history_cold_user_uses_fallback_order_not_candidate_order():
+    """히스토리 없는 유저가 CSV 행 순서(우연히 좋은 고정 리스트)를 받지 않고 넘겨받은
+    폴백 순서(인기도)를 받아야 한다 - v2 리뷰 MINOR 회귀 테스트."""
+    now = datetime(2026, 2, 1)
+    logs = pd.DataFrame({"user_id": [1], "news_letter_id": [10], "timestamp": [now - timedelta(days=1)]})
+    emb_by_id = {10: np.array([1.0, 0.0]), 20: np.array([1.0, 0.01]), 30: np.array([0.0, 1.0])}
+    out = BL.cosine_history_baseline(
+        user_ids=[1, 2], candidate_ids=[20, 30], top_k=2, logs_df=logs, emb_by_id=emb_by_id, cutoff=now,
+        fallback_order=[30, 20],
+    )
+    assert out[2] == [30, 20]  # user 2: 히스토리 없음 -> 폴백 순서
+    assert out[1][0] == 20  # user 1: 여전히 유사도 순
+    legacy = BL.cosine_history_baseline(
+        user_ids=[2], candidate_ids=[20, 30], top_k=2, logs_df=logs, emb_by_id=emb_by_id, cutoff=now
+    )
+    assert legacy[2] == [20, 30]  # fallback_order 미지정 시 레거시 동작(후보 순서) 유지
+
+
+def test_onboarding_baseline_user_without_selection_uses_fallback_order():
+    prefs = pd.DataFrame({"user_id": [1], "news_letter_id": [10]})
+    emb_by_id = {10: np.array([1.0, 0.0]), 20: np.array([0.99, 0.01]), 30: np.array([0.0, 1.0])}
+    out = BL.onboarding_newsletter_similarity_baseline(
+        user_ids=[1, 2], candidate_ids=[20, 30], top_k=2, preferred_newsletters=prefs, emb_by_id=emb_by_id,
+        fallback_order=[30, 20],
+    )
+    assert out[2] == [30, 20]
