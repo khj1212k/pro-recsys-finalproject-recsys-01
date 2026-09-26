@@ -50,7 +50,9 @@ jobs:
             pydantic \
             kiwipiepy \
             hdbscan \
-            rapidfuzz
+            rapidfuzz \
+            fastapi \
+            httpx
 
       - name: Install ai_workspace package (no deps, editable)
         run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace
@@ -162,3 +164,40 @@ jobs:
 
       - name: Run integration tests
         run: .venv/bin/python -m pytest -q -m integration tests/
+
+  # Dockerfile이 깨지지 않게 linux/amd64로 이미지를 빌드만 한다(푸시 없음). 배포 대상(Oracle A1)은
+  # arm64지만 GitHub 호스티드 러너에서 arm64 에뮬레이션 빌드는 느려서 amd64로 문법/의존성만 검증하고,
+  # arm64 빌드는 로컬 colima(Apple Silicon)에서 확인한다(docs/adr/0006).
+  docker-build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [api, worker]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate docker-compose.yml
+        if: matrix.image == 'api'
+        env:
+          POSTGRES_PASSWORD: ci-only-not-a-secret
+          API_SECRET_KEY: ci-only-not-a-secret
+        run: |
+          docker compose config -q
+          docker compose --profile tools config -q
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ${{ matrix.image }} image (linux/amd64, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/${{ matrix.image }}.Dockerfile
+          platforms: linux/amd64
+          push: false
+          build-args: GIT_SHA=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

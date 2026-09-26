@@ -17,6 +17,7 @@ dependencies = [
     "scikit-learn>=1.3.0",
     "hdbscan",
     "kiwipiepy",
+    "rapidfuzz",
     "psycopg2-binary>=2.9.11",
     "python-dotenv>=1.2.1",
     "sqlalchemy>=2.0.46",
@@ -52,3 +53,7 @@ embed = [
 where = ["."]
 include = ["config*", "core*", "crawler*", "db*", "pipeline*", "utils*", "workflow*"]
 exclude = ["recommend_engine*", "*.__pycache__*"]
+
+# core/llm/pricing.py가 읽는 단가표(config/llm_pricing.yaml)를 비-editable 설치에도 포함
+[tool.setuptools.package-data]
+config = ["*.yaml"]

@@ -1,0 +1,22 @@
+# Mac(colima) 개발용 오버레이. .env에 다음을 넣으면 자동 적용된다:
+#   COMPOSE_FILE=docker-compose.yml:docker/compose.mac.yaml
+# 서버(Oracle A1 등)에서는 쓰지 않는다 - 첫 임베딩 실행이 hf_cache 볼륨에 모델을 받는다.
+#
+# 1) 호스트에 이미 받아둔 BGE-M3 가중치를 읽기 전용으로 재사용(컨테이너가 2.2GB를 다시 받지 않게).
+# 2) 스케줄러의 embed 줄을 끈다 - Mac에서는 호스트 MPS로 도는 launchd 에이전트
+#    (scripts/mac_embed_agent.sh)가 임베딩을 맡는다. 컨테이너 안에서는 MPS를 쓸 수 없고,
+#    CPU 임베딩은 MPS보다 약 2~2.3배 느린 데다 모델 로드에만 3.6GB가 필요해 4GB VM에서는
+#    OOM으로 죽는다(ADR 0006 증거 3·5).
+x-hf-volumes: &hf-volumes
+  - ${HOST_HF_HUB:-${HOME}/.cache/huggingface/hub}/models--BAAI--bge-m3:/hf/hub/models--BAAI--bge-m3:ro
+
+services:
+  worker:
+    volumes: *hf-volumes
+    environment:
+      HF_HUB_OFFLINE: "1"
+  scheduler:
+    volumes: *hf-volumes
+    environment:
+      HF_HUB_OFFLINE: "1"
+      JOBS_DISABLED: ${SCHEDULER_JOBS_DISABLED:-embed}

@@ -61,13 +61,42 @@ class BaseSettings:
     # ========== Embedder ==========
     EMBEDDING_BATCH_SIZE: int = 8  # GPU 메모리 고려
     EMBEDDING_DIM: int = 1024
+    # BGE-M3 입력 토큰 상한 - 임베딩 의미가 바뀌는 값이라 ADR 0006의 사전 등록 규칙으로 정했다.
+    EMBEDDING_MAX_LENGTH: int = int(os.getenv("EMBEDDING_MAX_LENGTH", "8192"))
+    # 배치 크기 x (배치 내 최대 토큰 길이)^2 상한 = 1024토큰 8건. eager attention 점수 텐서 크기를 묶는다.
+    EMBEDDING_ATTENTION_BUDGET: int = int(os.getenv("EMBEDDING_ATTENTION_BUDGET", str(8 * 1024 ** 2)))
 
     # ========== Pipeline ==========
     DEFAULT_CLUSTER_LIMIT: int = None
+    # Stage5 클러스터 병렬 처리 스레드 수 (pipeline/stages.py에서 1~4로 제한, ADR 0010)
+    NEWSLETTER_WORKERS: int = int(os.getenv("NEWSLETTER_WORKERS", "3"))
 
-    # 품질 판정 기준은 설정이 아니라 workflow/evaluators.py에 있다(뉴스레터 PASS: score >= 5).
-    # 클러스터 평가 confidence는 아직 게이트로 쓰지 않는다.
+    # ========== Quality Thresholds ==========
+    # (미사용) 실제 PASS 기준은 아래 JUDGE_* 값이다. MIN_CLUSTER_CONFIDENCE를 게이트로
+    # 연결할지는 ClusterEvaluator confidence ROC로 정한다(ADR 0009) - 그 전까지 미사용.
+    MIN_CLUSTER_CONFIDENCE: float = 0.7
 
+    # ========== Judge v2 (docs/adr/0010) ==========
+    # 기준별(1~5) 최저 점수와 허용할 근거 없는 주장 수. 사람 라벨로 보정하기 전의
+    # 잠정값이다(ADR 0009의 2-fold 선택 결과로 교체).
+    JUDGE_MIN_CRITERION_SCORE: int = int(os.getenv("JUDGE_MIN_CRITERION_SCORE", "3"))
+    JUDGE_MAX_UNSUPPORTED_CLAIMS: int = int(os.getenv("JUDGE_MAX_UNSUPPORTED_CLAIMS", "0"))
+    # "enforce": FAIL이면 재생성 / "shadow": 채점된 FAIL은 기록만 하고 통과(점수 없는 FAIL은 막음).
+    # 기본 shadow: ADR 0009는 사람 라벨 대비 OOF kappa >= 0.40이 확인된 judge만 게이트로 쓰게
+    # 정했고(아직 미측정), 현재 기본 judge는 생성기와 같은 Gemini 계열이다 (ADR 0010).
+    JUDGE_GATE_MODE: str = os.getenv("JUDGE_GATE_MODE", "shadow").lower()
+
+    # ========== 결정론적 게이트 (docs/adr/0010) ==========
+    # 모드: "enforce"(막고 재생성) / "shadow"(기록만) / "off"
+    FAITHFULNESS_GATE_MODE: str = os.getenv("FAITHFULNESS_GATE_MODE", "enforce").lower()
+    # 개체명은 한국어 형태소 분석 기반 퍼지 매칭이라 정밀도가 아직 측정되지 않았다 -
+    # 사람 사실 오류 라벨로 정밀도를 재기 전까지는 참고용(피드백에만 포함)으로 둔다.
+    FAITHFULNESS_BLOCKING_TYPES: str = os.getenv("FAITHFULNESS_BLOCKING_TYPES", "numbers,quotes")
+    TONE_DRIFT_GATE_MODE: str = os.getenv("TONE_DRIFT_GATE_MODE", "enforce").lower()
+    TONE_DRIFT_BLOCKING_TYPES: str = os.getenv("TONE_DRIFT_BLOCKING_TYPES", "numbers,dates,entities_added")
+    # 드리프트가 난 문체 변환을 다시 시도하는 횟수. 소진하면 형식체 초안을 저장한다.
+    MAX_RETRY_TONE_DRIFT: int = int(os.getenv("MAX_RETRY_TONE_DRIFT", "1"))
+    
     # ========== Pipeline Stages ==========
     STAGE_NAMES: Dict[int, str] = {
         0: "User Embedding",
@@ -82,7 +111,14 @@ class BaseSettings:
     # ========== Retry Configuration ==========
     RETRY_EXPONENTIAL_BASE: float = 2.0
     MAX_RETRY_WAIT_SECONDS: int = 64
+    # RSS/본문 요청에 쓰는 User-Agent. 라이브러리 기본 UA를 막는 언론사가 있다(한국경제 RSS: feedparser UA에 403).
+    HTTP_USER_AGENT: str = os.getenv(
+        "HTTP_USER_AGENT", "Mozilla/5.0 (compatible; newsletter-recsys/1.0)"
+    )
     MAX_FETCH_RETRIES: int = 3  # RSS/본문 크롤링 네트워크 요청 최대 재시도 횟수
+    # 본문 다운로드가 (위 재시도까지) 실패한 기사를 이후 실행에서 다시 시도하는 총 횟수 상한.
+    # news_raw.raw_news_extract_attempts로 센다 - 막힌 URL을 2시간마다 영원히 두드리지 않게.
+    MAX_EXTRACT_ATTEMPTS: int = int(os.getenv("MAX_EXTRACT_ATTEMPTS", "3"))
     # LLM 채팅 API(HyperCLOVA/OpenAI) 호출 재시도 최대 횟수 (감사에서 발견: HyperCLOVA
     # 클라이언트의 `while True` 루프가 이 상한 없이 무제한 재시도했음)
     MAX_LLM_CALL_RETRIES: int = 10

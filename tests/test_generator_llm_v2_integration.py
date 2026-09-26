@@ -65,3 +65,17 @@ def test_reconstruct_falls_back_to_heuristic_content_and_meta_when_both_calls_fa
     # fallback_meta()는 제목이 없으면 본문 첫 줄을 title로 쓴다
     assert result["title"]
     assert len(result["keywords"]) == 5
+    # 워크플로우가 폴백 초안을 발행하지 않도록 어떤 부분이 폴백인지 표시한다
+    assert result["_fallback"] == ["content", "meta"]
+
+
+def test_reconstruct_marks_meta_only_fallback_and_leaves_clean_drafts_unmarked():
+    content = {"parsed": NewsletterContent(content="AI 반도체 수요가 늘고 있다. " * 10)}
+    meta_fail = {"parsed": None, "text": None, "error": "schema"}
+    partial = NewsReconstructor(llm_client=FakeLLMClient(results=[content, meta_fail])).reconstruct(ARTICLES)
+    assert partial["_fallback"] == ["meta"]
+
+    meta = {"parsed": NewsletterMeta(title="t", sentence="s", keywords=["a", "b", "c", "d", "e"],
+                                     categories=["IT/과학"])}
+    clean = NewsReconstructor(llm_client=FakeLLMClient(results=[content, meta])).reconstruct(ARTICLES)
+    assert "_fallback" not in clean

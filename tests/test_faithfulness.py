@@ -1,7 +1,7 @@
 import pytest
 
-from evaluation.llm import faithfulness
-from evaluation.llm.faithfulness import (
+from core import faithfulness
+from core.faithfulness import (
     check_against_sources,
     compare_rewrite,
     extract_facts,
@@ -36,6 +36,15 @@ class TestNumberExtraction:
     def test_percentage_point_word_normalizes_same_as_symbol(self):
         facts = extract_facts("실업률이 2.3퍼센트포인트 낮아졌다.")
         assert [(n.value, n.unit) for n in facts.numbers] == [(2.3, "%p")]
+
+    def test_percent_followed_by_point_word_is_a_percentage_point(self):
+        # 한국 기사에서 흔한 "2.5%포인트" 표기. %로 읽으면 같은 값을 "2.5%p"/"2.5퍼센트포인트"로
+        # 옮긴 초안이 단위 불일치로 사실성 게이트에 막힌다(팀 뉴스레터 프로브에서 발견, ADR 0010).
+        facts = extract_facts("격차가 2.5%포인트 벌어졌다.")
+        assert [(n.value, n.unit, n.surface) for n in facts.numbers] == [(2.5, "%p", "2.5%포인트")]
+        report = check_against_sources("격차는 2.5%p다. 즉 2.5퍼센트포인트다.", ["격차가 2.5%포인트 벌어졌다."])
+        assert report.unsupported_numbers == []
+        assert check_against_sources("격차는 2.5%다.", ["격차가 2.5%포인트 벌어졌다."]).unsupported_numbers
 
     def test_person_count_with_scale(self):
         facts = extract_facts("참가자는 10만 명을 넘었다.")
@@ -456,3 +465,73 @@ class TestEntityExtractorMissingKiwi:
         text = "삼성전자가 발표했다."
         report = compare_rewrite(text, text, allow_regex_fallback=True)
         assert report.has_drift is False
+
+
+# ---------------------------------------------------------------------------
+# Set semantics for rewrite drift (used by the tone-drift gate, ADR 0010)
+# ---------------------------------------------------------------------------
+
+class TestCompareRewriteSetSemantics:
+    """A casual rewrite legitimately mentions a fact fewer times than the
+    formal draft (it condenses sentences). Multiset diffing reports that as a
+    dropped fact; set semantics only reports a fact that vanished entirely or
+    appeared from nowhere."""
+
+    def test_repeated_number_mentioned_once_is_drift_only_in_multiset_mode(self):
+        original = "매출은 1조 원이다. 영업이익도 1조 원으로 집계됐다."
+        rewritten = "매출과 영업이익이 모두 1조 원이에요."
+
+        multiset = compare_rewrite(original, rewritten)
+        as_set = compare_rewrite(original, rewritten, multiset=False)
+
+        assert len(multiset.dropped_numbers) == 1
+        assert as_set.dropped_numbers == []
+        assert as_set.added_numbers == []
+
+    def test_new_number_is_added_in_set_mode(self):
+        report = compare_rewrite("매출은 1조 원이다.", "매출은 1조 원, 이익은 300억 원이에요.", multiset=False)
+        assert [n["value"] for n in report.added_numbers] == [3e10]
+        assert report.has_drift is True
+
+    def test_number_that_vanished_is_dropped_in_set_mode(self):
+        report = compare_rewrite("매출 1조 원, 이익 300억 원.", "매출은 1조 원이에요.", multiset=False)
+        assert [n["value"] for n in report.dropped_numbers] == [3e10]
+
+    def test_repeated_entity_mentioned_once_is_not_dropped_in_set_mode(self):
+        original = "삼성전자가 발표했다. 삼성전자는 투자를 늘린다."
+        rewritten = "삼성전자가 투자를 늘린대요."
+        assert compare_rewrite(original, rewritten, multiset=False).dropped_entities == []
+
+
+class TestKiwiLazyInitIsThreadSafe:
+    def test_concurrent_first_use_constructs_a_single_kiwi(self, monkeypatch):
+        import sys
+        import threading
+        import time
+        import types
+
+        created = []
+
+        class SlowKiwi:
+            def __init__(self):
+                time.sleep(0.05)  # widen the check-then-set window
+                created.append(self)
+
+        monkeypatch.setattr(faithfulness, "_KIWI", None)
+        monkeypatch.setitem(sys.modules, "kiwipiepy", types.SimpleNamespace(Kiwi=SlowKiwi))
+
+        barrier = threading.Barrier(8)
+        results = []
+
+        def worker():
+            barrier.wait()
+            results.append(faithfulness._get_kiwi())
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(created) == 1
+        assert all(r is created[0] for r in results)

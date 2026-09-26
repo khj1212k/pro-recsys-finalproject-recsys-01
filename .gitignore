@@ -158,3 +158,6 @@ mlruns/
 checkpoints/
 # 로컬 도구 상태 (커밋하지 않음)
 .claude/
+
+# 로컬 운영 상태(LLM 킬 스위치, 예산 가드 상태 등) - docs/runbook.md 6절
+.ops/

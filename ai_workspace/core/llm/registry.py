@@ -48,6 +48,16 @@ PROVIDER_CONFIG = {
         "supports_json_schema": True,
         "default_model": "solar-pro3",
     },
+    # Anthropic의 OpenAI SDK 호환 계층. response_format을 "Ignored"로 처리하므로
+    # (https://platform.claude.com/docs/en/api/openai-sdk, 접근일 2026-09-25)
+    # json_schema 대신 JSON 모드 + extract_json_from_response 복구 경로를 탄다.
+    # 문서가 "test and compare" 용도라고 밝히므로 bake-off judge 후보로만 쓴다 (ADR 0009).
+    "anthropic": {
+        "base_url": "https://api.anthropic.com/v1/",
+        "api_key_env": "ANTHROPIC_API_KEY",
+        "supports_json_schema": False,
+        "default_model": "claude-haiku-4-5",
+    },
     "naver": {
         "legacy": True,
         "default_model": "HCX-003",
@@ -168,6 +178,19 @@ def get_client(role: str) -> LLMClient:
                 provider, model, gen_provider, gen_model, _model_family(provider),
             )
 
+    return client_for(provider, model)
+
+
+def client_for(provider: str, model: str) -> LLMClient:
+    """role 환경변수와 무관하게 (provider, model)을 직접 지정해 클라이언트를 얻는다.
+
+    bake-off처럼 실행마다 후보 모델을 바꿔 끼우는 경우용이다. role 클라이언트와 같은
+    인스턴스 캐시·프로바이더 레이트리미터를 공유하므로 병렬 실행에서도 호출 간격 제한이
+    프로바이더 단위로 지켜진다.
+    """
+    provider = provider.lower()
+    if provider not in PROVIDER_CONFIG:
+        raise ValueError(f"알 수 없는 프로바이더: {provider!r} (허용: {sorted(PROVIDER_CONFIG)})")
     key = (provider, model)
     with _instances_lock:
         if key not in _instances:

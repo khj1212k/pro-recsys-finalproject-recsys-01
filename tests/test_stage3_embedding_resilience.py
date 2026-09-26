@@ -36,7 +36,7 @@ def _make_cursor(rows):
     cursor.__exit__ = MagicMock(return_value=False)
     # 첫 execute -> rows(SELECT), 두번째 execute -> COUNT(*) 조회에 대한 fetchone
     cursor.fetchall.return_value = rows
-    cursor.fetchone.return_value = (0,)
+    cursor.fetchone.return_value = (0, 0)
     return cursor
 
 
@@ -92,6 +92,7 @@ def test_failed_batch_is_logged_and_skipped_run_continues(monkeypatch):
 
     settings = MagicMock()
     settings.EMBEDDING_BATCH_SIZE = 2
+    settings.MAX_EXTRACT_ATTEMPTS = 3
 
     with patch("db.connection.get_connection", return_value=conn), \
          patch("db.connection.release_connection"):
@@ -141,3 +142,191 @@ def test_all_batches_succeed_commits_per_batch(monkeypatch):
     assert cursor.executemany.call_count == 2
     assert conn.commit.call_count == 2
     assert not conn.rollback.called
+
+
+def test_embed_pending_articles_reports_throughput_stats_and_binds_numpy_vectors(monkeypatch):
+    """ingest 잡이 job_runs.stats에 남길 임베딩 처리량(건/초)과, pgvector 규칙
+    (벡터 파라미터는 numpy 배열로 바인딩 - 리스트는 numeric[]로 바인딩됨)을 확인한다."""
+    import numpy as np
+    from pipeline.stages import embed_pending_articles
+
+    embedder = _make_embedder_double(
+        generate_side_effect=[
+            ([[0.1, 0.2], [0.3, 0.4]], 0.5),
+            ([[0.5, 0.6]], 0.25),
+        ]
+    )
+    embedder.device = "cpu"
+    _install_fake_news_embedder(monkeypatch, embedder)
+
+    rows = [(1, "제목1", "본문1"), (2, "제목2", "본문2"), (3, "제목3", "본문3")]
+    cursor = _make_cursor(rows=rows)
+    # (본문 추출 대기, 추출했지만 본문 없음(dropped/empty/재시도 소진)) 건수
+    cursor.fetchone.return_value = (4, 26)
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    settings = MagicMock()
+    settings.EMBEDDING_BATCH_SIZE = 2
+
+    with patch("db.connection.get_connection", return_value=conn), \
+         patch("db.connection.release_connection"):
+        stats = embed_pending_articles(settings, batch_size=2, limit=10)
+
+    assert stats["targets"] == 3
+    assert stats["embedded"] == 3
+    assert stats["failed_batches"] == 0
+    assert stats["awaiting_extraction"] == 4
+    assert stats["no_content"] == 26
+    assert stats["device"] == "cpu"
+    assert stats["batch_size"] == 2
+    assert stats["encode_s"] == 0.75
+    assert stats["articles_per_s"] == 4.0
+    assert stats["model_load_s"] >= 0
+
+    select_sql, select_params = cursor.execute.call_args_list[0][0]
+    assert "ORDER BY raw_news_id" in select_sql and "LIMIT %s" in select_sql
+    assert select_params == (10,)
+
+    first_batch_updates = cursor.executemany.call_args_list[0][0][1]
+    vec, raw_news_id = first_batch_updates[0]
+    assert isinstance(vec, np.ndarray) and vec.dtype == np.float32
+    assert raw_news_id == 1
+
+
+def test_embed_pending_articles_skips_model_load_when_nothing_to_embed(monkeypatch):
+    from pipeline.stages import embed_pending_articles
+
+    embedder = _make_embedder_double(generate_return=([], 0.0))
+    news_embedder_cls = _install_fake_news_embedder(monkeypatch, embedder)
+
+    cursor = _make_cursor(rows=[])
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    settings = MagicMock()
+    settings.EMBEDDING_BATCH_SIZE = 8
+
+    with patch("db.connection.get_connection", return_value=conn), \
+         patch("db.connection.release_connection"):
+        stats = embed_pending_articles(settings)
+
+    assert stats["targets"] == 0 and stats["embedded"] == 0
+    news_embedder_cls.assert_not_called()
+
+
+def _settings(batch_size=2):
+    settings = MagicMock()
+    settings.EMBEDDING_BATCH_SIZE = batch_size
+    settings.MAX_EXTRACT_ATTEMPTS = 3
+    return settings
+
+
+def _echo_embedder():
+    """배치마다 (텍스트 수만큼 벡터, 1초)를 돌려주는 임베더 - 호출된 배치 구성을 기록한다."""
+    calls = []
+
+    def generate(texts, batch_size):
+        calls.append(list(texts))
+        return [[0.0, 1.0] for _ in texts], 1.0
+
+    return _make_embedder_double(generate_side_effect=generate), calls
+
+
+def test_batches_group_similar_lengths_within_oldest_first_windows(monkeypatch):
+    """BGE-M3(FlagEmbedding 1.2.5)는 배치를 가장 긴 텍스트 길이로 패딩한다 - 오래된 순서로
+    뽑은 창(window) 안에서 길이순으로 묶어 패딩 계산을 줄이되, 창 순서는 유지한다."""
+    from pipeline.stages import embed_pending_articles
+
+    embedder, calls = _echo_embedder()
+    _install_fake_news_embedder(monkeypatch, embedder)
+    long, short = "가" * 3000, "나" * 10
+    rows = [(1, "t", long), (2, "t", short), (3, "t", long), (4, "t", short), (5, "t", short)]
+    cursor = _make_cursor(rows=rows)
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    with patch("db.connection.get_connection", return_value=conn), \
+         patch("db.connection.release_connection"):
+        stats = embed_pending_articles(_settings(), batch_size=2, sort_window=4)
+
+    saved_ids = [
+        [raw_id for _, raw_id in call[0][1]] for call in cursor.executemany.call_args_list
+    ]
+    # 첫 창(1-4): 짧은 것(2,4)끼리, 긴 것(1,3)끼리. 둘째 창(5)은 그 뒤.
+    assert saved_ids == [[2, 4], [1, 3], [5]]
+    assert stats["embedded"] == 5
+
+
+def test_time_budget_stops_starting_new_batches_and_reports_remaining(monkeypatch):
+    from pipeline.stages import embed_pending_articles
+
+    embedder, calls = _echo_embedder()
+    _install_fake_news_embedder(monkeypatch, embedder)
+    rows = [(i, "t", "본문") for i in range(1, 7)]
+    cursor = _make_cursor(rows=rows)
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    ticks = iter(range(0, 1000, 10))  # 호출될 때마다 10초씩 흐르는 가짜 시계
+
+    with patch("db.connection.get_connection", return_value=conn), \
+         patch("db.connection.release_connection"):
+        stats = embed_pending_articles(
+            _settings(), batch_size=2, time_budget_s=25, clock=lambda: next(ticks)
+        )
+
+    assert 0 < stats["embedded"] < 6
+    assert stats["stopped_by_budget"] is True
+    assert stats["remaining"] == 6 - stats["embedded"]
+    assert len(calls) == stats["embedded"] // 2
+
+
+def test_progress_is_written_into_caller_stats_before_an_interrupt(monkeypatch):
+    """잡이 SIGTERM 등으로 중간에 끊겨도 그때까지 저장한 건수가 job_runs에 남도록,
+    호출자가 넘긴 stats dict를 배치마다 갱신한다. BaseException(중단)은 배치 실패로
+    삼키지 않고 그대로 올린다."""
+    import pytest
+    from jobs.runtime import JobTerminated
+    from pipeline.stages import embed_pending_articles
+
+    outputs = [([[0.0, 1.0], [0.0, 1.0]], 1.5), JobTerminated(15)]
+    embedder = _make_embedder_double(generate_side_effect=outputs)
+    _install_fake_news_embedder(monkeypatch, embedder)
+    rows = [(i, "t", "본문") for i in range(1, 5)]
+    cursor = _make_cursor(rows=rows)
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    progress = {}
+    with patch("db.connection.get_connection", return_value=conn), \
+         patch("db.connection.release_connection"), \
+         pytest.raises(JobTerminated):
+        embed_pending_articles(_settings(), batch_size=2, stats=progress)
+
+    assert progress["targets"] == 4
+    assert progress["embedded"] == 2
+    assert progress["encode_s"] == 1.5
+    assert progress["failed_batches"] == 0
+
+
+def test_on_batch_callback_sees_progress_after_each_batch(monkeypatch):
+    """jobs.run은 이 콜백으로 job_runs.stats를 배치마다 갱신한다 - OOM/SIGKILL로 죽어도 진행 상황이 남는다."""
+    from pipeline.stages import embed_pending_articles
+
+    embedder, _ = _echo_embedder()
+    _install_fake_news_embedder(monkeypatch, embedder)
+    cursor = _make_cursor(rows=[(i, "t", "본문") for i in range(1, 6)])
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    progress, snapshots = {}, []
+    with patch("db.connection.get_connection", return_value=conn), \
+         patch("db.connection.release_connection"):
+        embed_pending_articles(
+            _settings(), batch_size=2, stats=progress,
+            on_batch=lambda: snapshots.append((progress["embedded"], progress["remaining"])),
+        )
+
+    # 모델을 올리기 전(대상 확정) 한 번 + 배치 3개
+    assert snapshots == [(0, 5), (2, 3), (4, 1), (5, 0)]

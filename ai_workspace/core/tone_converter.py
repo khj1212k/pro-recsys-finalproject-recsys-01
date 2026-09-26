@@ -100,8 +100,11 @@ class ToneConverter:
         
         return prompt
     
-    def convert(self, newsletter: Dict) -> Optional[Dict]:
+    def convert(self, newsletter: Dict, feedback: Optional[str] = None) -> Optional[Dict]:
         prompt = self.create_prompt(newsletter)
+        if feedback:
+            # workflow/gates.py::check_tone_drift가 만든 "무엇이 바뀌었는지" 목록
+            prompt += f"\n\n⚠️ 다시 변환 요청:\n{feedback}"
 
         # 콘텐츠 검증(validate_conversion) 실패 시에만 여기서 추가로 재생성한다
         # (최초 1회 + Settings.MAX_RETRY_TONE_VALIDATION회). 429/5xx/timeout 같은
