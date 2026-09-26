@@ -126,13 +126,45 @@ def test_running_row_left_by_a_dead_process_is_marked_abandoned(database_url, pg
     with pg_conn.cursor() as cur:
         cur.execute("INSERT INTO job_runs (job, status) VALUES (%s, 'running')", (job,))
 
+    notified = []
     result = run_job(job, lambda ctx: {}, args=argparse.Namespace(),
-                     store_factory=lambda: _store(database_url), notify=lambda m: None)
+                     store_factory=lambda: _store(database_url), notify=notified.append)
 
     (stale_status, _, stale_error, _, stale_finished), (new_status, new_stats, _, _, _) = _rows(pg_conn, job)
     assert stale_status == "abandoned" and stale_finished and "without recording" in stale_error
     assert new_status == "succeeded" and new_stats["abandoned_previous_runs"] == 1
     assert result.status == "succeeded"
+    assert len(notified) == 1 and "abandoned" in notified[0]
+
+
+def test_checkpoint_is_visible_to_other_sessions_while_running_and_survives_a_kill(
+    database_url, pg_conn, cleanup_jobs
+):
+    """SIGKILL/OOM으로 죽으면 finish가 불리지 않는다 - 배치마다 쓴 중간 stats가 남아 있어야
+    다음 실행이 abandoned로 바꾼 뒤에도 어디까지 했는지 알 수 있다."""
+    job = _job_name()
+    cleanup_jobs.append(job)
+    seen = {}
+
+    class Killed(BaseException):
+        pass
+
+    def fn(ctx):
+        ctx.stats["embed"] = {"embedded": 40, "remaining": 60}
+        ctx.checkpoint()
+        [(status, stats, _, _, _)] = _rows(pg_conn, job)
+        seen.update(status=status, stats=stats)
+        raise Killed()  # finish 전에 프로세스가 사라진 상황 흉내
+
+    store = _store(database_url)
+    with pytest.raises(Killed):
+        run_job(job, fn, args=argparse.Namespace(), store_factory=lambda: store, notify=lambda m: None)
+
+    assert seen == {"status": "running", "stats": {"embed": {"embedded": 40, "remaining": 60}}}
+    run_job(job, lambda ctx: {}, args=argparse.Namespace(),
+            store_factory=lambda: _store(database_url), notify=lambda m: None)
+    (killed_status, killed_stats, _, _, _), _ = _rows(pg_conn, job)
+    assert killed_status == "abandoned" and killed_stats["embed"]["embedded"] == 40
 
 
 def test_job_runs_status_check_constraint_rejects_unknown_status(pg_conn):

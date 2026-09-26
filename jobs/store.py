@@ -68,6 +68,14 @@ class PostgresJobRunStore:
                 (status, Json(stats), error, run_id),
             )
 
+    def update_stats(self, run_id: int, stats: Dict[str, Any]) -> None:
+        """실행 중 진행 상황 기록. 이미 끝난(다른 상태가 된) 행은 건드리지 않는다."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "UPDATE job_runs SET stats = %s WHERE id = %s AND status = 'running'",
+                (Json(stats), run_id),
+            )
+
     def record(self, job: str, status: str, stats: Dict[str, Any], git_sha: Optional[str],
                error: Optional[str] = None) -> int:
         (run_id,) = self._one(

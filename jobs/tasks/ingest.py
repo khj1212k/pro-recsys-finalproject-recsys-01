@@ -13,6 +13,13 @@ from typing import Any, Dict
 
 STAGES = ("rss", "extract", "embed")
 
+# 본문 다운로드 실패(fetch_failed + error)가 대상의 절반 이상이면 네트워크/차단 문제로 보고 실패시킨다.
+# 2026-09-26 첫날 ingest 9회 실측은 fetch_failed·error 0건 - 정상 수집에서는 걸리지 않는다.
+EXTRACT_FAILURE_RATIO_LIMIT = 0.5
+EXTRACT_MIN_TARGETS = 5
+# 한 언론사 기사가 이 건수 이상 전부 실패하면(사이트 개편·차단) 실패는 아니어도 경고한다.
+PRESS_ALL_FAILED_MIN = 3
+
 
 def add_arguments(parser) -> None:
     parser.add_argument(
@@ -72,6 +79,21 @@ def news_raw_snapshot() -> Dict[str, Any]:
     }
 
 
+def check_extract_health(ctx, stats: Dict[str, Any]) -> None:
+    for press, counts in sorted((stats.get("per_press") or {}).items()):
+        attempted = sum(counts.values())
+        failed = counts.get("fetch_failed", 0) + counts.get("error", 0)
+        if attempted >= PRESS_ALL_FAILED_MIN and failed == attempted:
+            ctx.warn(f"{press}: 기사 {attempted}건 본문 다운로드 전부 실패 (차단/사이트 개편 확인)")
+
+    targets = stats.get("targets", 0)
+    failed = stats.get("fetch_failed", 0) + stats.get("error", 0)
+    if targets >= EXTRACT_MIN_TARGETS and failed / targets >= EXTRACT_FAILURE_RATIO_LIMIT:
+        raise RuntimeError(
+            f"본문 추출 대상 {targets}건 중 {failed}건 실패({failed / targets:.0%}) - 네트워크/차단을 확인하세요"
+        )
+
+
 def run(ctx) -> Dict[str, Any]:
     from config.settings import Settings
 
@@ -86,11 +108,14 @@ def run(ctx) -> Dict[str, Any]:
         ctx.stats["rss"] = rss
         if rss["per_feed"] and rss["failed_feeds"] == len(rss["per_feed"]):
             raise RuntimeError(f"모든 RSS 피드({rss['failed_feeds']}개) 수집 실패 - 네트워크/DNS를 확인하세요")
+        ctx.checkpoint()
 
     if "extract" in stages:
         from crawler.content_extractor import ContentExtractor
 
         ctx.stats["extract"] = _timed(ContentExtractor().extract_parallel_with_stats, args.workers)
+        ctx.checkpoint()
+        check_extract_health(ctx, ctx.stats["extract"])
 
     if "embed" in stages:
         from jobs.tasks.embed import run_embedding

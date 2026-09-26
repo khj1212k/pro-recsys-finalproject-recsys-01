@@ -50,6 +50,10 @@ class FakeStore:
         self._maybe_fail("finish")
         self.rows[run_id].update(status=status, stats=stats, error=error)
 
+    def update_stats(self, run_id, stats):
+        self._maybe_fail("update_stats")
+        self.rows[run_id]["stats"] = stats
+
     def record(self, job, status, stats, git_sha, error=None):
         run_id = self.next_id
         self.next_id += 1
@@ -159,10 +163,59 @@ def test_job_skipped_exception_is_a_clean_skip_not_a_failure():
 
 def test_stale_running_rows_are_reported_after_taking_the_lock():
     store = FakeStore(stale_running=2)
+    notified = []
 
-    result = _run(lambda ctx: {}, store)
+    result = _run(lambda ctx: {}, store, notified)
 
+    assert result.status == "succeeded"
     assert store.rows[result.run_id]["stats"]["abandoned_previous_runs"] == 2
+    # OOM/SIGKILL로 죽은 실행은 스스로 실패를 알릴 수 없다 - 다음 실행이 발견했을 때 알려야 한다
+    assert len(notified) == 1 and "abandoned" in notified[0] and "2" in notified[0]
+
+
+def test_checkpoint_persists_partial_stats_while_the_run_is_still_running():
+    store = FakeStore()
+    seen_mid_run = {}
+
+    def job(ctx):
+        ctx.stats["embed"] = {"embedded": 8, "remaining": 92}
+        ctx.checkpoint()
+        seen_mid_run.update(store.rows[ctx.run_id])
+        ctx.stats["embed"]["embedded"] = 16
+        return {}
+
+    result = _run(job, store, job="embed")
+
+    assert seen_mid_run["status"] == "running"
+    assert seen_mid_run["stats"] == {"embed": {"embedded": 8, "remaining": 92}}
+    assert store.rows[result.run_id]["stats"]["embed"]["embedded"] == 16
+
+
+def test_checkpoint_failure_does_not_fail_the_job():
+    store = FakeStore(fail_on={"update_stats"})
+
+    def job(ctx):
+        ctx.checkpoint()
+        return {"ok": 1}
+
+    result = _run(job, store)
+
+    assert result.status == "succeeded" and result.exit_code == 0
+
+
+def test_warnings_are_alerted_and_kept_in_stats_without_failing_the_run():
+    store = FakeStore()
+    notified = []
+
+    def job(ctx):
+        ctx.warn("동아일보 기사 5건 전부 다운로드 실패")
+        return {}
+
+    result = _run(job, store, notified)
+
+    assert result.status == "succeeded" and result.exit_code == 0
+    assert store.rows[result.run_id]["stats"]["warnings"] == ["동아일보 기사 5건 전부 다운로드 실패"]
+    assert len(notified) == 1 and "동아일보" in notified[0]
 
 
 def test_database_unreachable_notifies_and_exits_nonzero():
@@ -263,3 +316,23 @@ def test_job_listed_in_jobs_disabled_exits_zero_without_touching_the_db(monkeypa
     monkeypatch.setenv("JOBS_DISABLED", "popularity, embed")
 
     assert run_cli.main(["embed", "--time-budget-s", "10"]) == 0
+
+
+def test_main_restores_previous_signal_handlers(monkeypatch):
+    """jobs.run.main을 부른 프로세스(pytest, 다른 파이썬 코드)에 SIGTERM/SIGINT 핸들러가 남으면
+    이후 Ctrl-C가 JobTerminated로 바뀐다 - 잡이 끝나면 원래 핸들러로 돌려놓아야 한다."""
+    import signal
+
+    import jobs.run as run_cli
+    import jobs.store as store
+
+    def unreachable(cls, job):
+        raise ConnectionError("no db in unit tests")
+
+    monkeypatch.setattr(store.PostgresJobRunStore, "connect", classmethod(unreachable))
+    monkeypatch.delenv("SLACK_WEBHOOK_URL", raising=False)
+    before = (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT))
+
+    assert run_cli.main(["daily_report"]) == 1
+
+    assert (signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT)) == before

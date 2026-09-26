@@ -79,7 +79,10 @@ docker compose exec db psql -U newsletter -d newsletter -c "
   `docker compose stop scheduler`·재배포·`docker stop`으로 끊긴 실행은 `failed` + `terminated by SIGTERM`으로 남고,
   그때까지의 stats가 보존된다. supercronic은 잡에 신호를 넘기지 않아서 `docker/scheduler-entrypoint.sh`가 잡의
   프로세스 그룹에 SIGTERM을 직접 보낸다(유예 60초, `stop_grace_period`). 유예 안에 끝나지 않거나 OOM·SIGKILL로
-  죽은 실행은 `running`으로 남았다가 다음 실행이 `abandoned`로 바꾼다.
+  죽은 실행은 `running`으로 남았다가 다음 실행이 `abandoned`로 바꾸고 알림을 보낸다.
+- `running` 행의 `stats`는 잡이 도는 동안 갱신된다(ingest는 단계마다, embed는 배치마다) - 강제 종료된 실행도 어디까지 했는지 남는다.
+- `succeeded`여도 `stats->'warnings'`가 있으면 알림이 간다(예: 한 언론사 기사 3건 이상이 전부 다운로드 실패).
+  본문 다운로드 실패(`fetch_failed`+`error`)가 대상의 50% 이상(대상 5건 이상)이면 ingest는 `failed`로 끝난다.
 - embed 행의 `device`가 `mps`면 호스트 에이전트, `cpu`면 컨테이너 실행이다.
 
 호스트 임베딩 에이전트:

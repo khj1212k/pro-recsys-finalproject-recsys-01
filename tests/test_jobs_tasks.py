@@ -47,6 +47,51 @@ def test_ingest_fails_loudly_when_every_rss_feed_failed(monkeypatch):
     assert ctx.stats["rss"]["failed_feeds"] == 2
 
 
+def _ingest_extract_only(monkeypatch, extract_stats):
+    from jobs.tasks import ingest
+    import crawler.content_extractor as extractor_pkg
+
+    class FakeExtractor:
+        def extract_parallel_with_stats(self, workers=None):
+            return dict(extract_stats)
+
+    monkeypatch.setattr(extractor_pkg, "ContentExtractor", FakeExtractor)
+    monkeypatch.setattr(ingest, "news_raw_snapshot", lambda: {"total": 0})
+    checkpoints = []
+    ctx = JobContext(job="ingest", args=build_parser().parse_args(["ingest", "--stages", "extract"]))
+    ctx._checkpoint = lambda: checkpoints.append(dict(ctx.stats))
+    return ingest, ctx, checkpoints
+
+
+def _extract_stats(per_press):
+    totals = {k: 0 for k in ("ok", "dropped", "empty", "fetch_failed", "error")}
+    for counts in per_press.values():
+        for k, v in counts.items():
+            totals[k] += v
+    return {"targets": sum(totals.values()), **totals, "per_press": per_press}
+
+
+def test_ingest_fails_when_most_article_fetches_failed(monkeypatch):
+    """네트워크가 끊기거나 차단되면 RSS는 되는데 본문은 전부 fetch_failed가 된다 - 그래도
+    succeeded로 끝나면 아무도 모른다."""
+    stats = _extract_stats({"A": {"ok": 2, "fetch_failed": 5}, "B": {"fetch_failed": 2, "error": 1}})
+    ingest, ctx, checkpoints = _ingest_extract_only(monkeypatch, stats)
+
+    with pytest.raises(RuntimeError, match="8건 실패"):
+        ingest.run(ctx)
+    assert ctx.stats["extract"]["fetch_failed"] == 7
+    assert checkpoints and checkpoints[-1]["extract"]["targets"] == 10
+
+
+def test_ingest_warns_but_succeeds_when_one_press_fetches_all_failed(monkeypatch):
+    stats = _extract_stats({"A": {"fetch_failed": 3}, "B": {"ok": 9}, "C": {"fetch_failed": 1, "ok": 1}})
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats)
+
+    ingest.run(ctx)
+
+    assert len(ctx.warnings) == 1 and ctx.warnings[0].startswith("A:")
+
+
 def test_generate_skips_before_clustering_when_kill_switch_file_exists(tmp_path, monkeypatch):
     from config.settings import Settings
     from jobs.tasks import generate
@@ -134,7 +179,12 @@ def test_embed_job_passes_budget_and_limit_and_fails_when_nothing_could_be_saved
     parser = build_parser()
     ctx = JobContext(job="embed", args=parser.parse_args(
         ["embed", "--limit", "50", "--time-budget-s", "600", "--batch-size", "4"]))
+    checkpoints = []
+    ctx._checkpoint = lambda: checkpoints.append(1)
     with pytest.raises(RuntimeError, match="0건 저장"):
         embed.run(ctx)
     assert seen["limit"] == 50 and seen["time_budget_s"] == 600 and seen["batch_size"] == 4
+    # 배치마다 job_runs에 진행 상황을 쓰도록 체크포인트가 연결돼 있어야 한다
+    seen["on_batch"]()
+    assert checkpoints == [1]
     assert ctx.stats["embed"]["failed_batches"] == 1

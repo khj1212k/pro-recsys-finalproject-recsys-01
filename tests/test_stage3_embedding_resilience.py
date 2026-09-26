@@ -308,3 +308,25 @@ def test_progress_is_written_into_caller_stats_before_an_interrupt(monkeypatch):
     assert progress["embedded"] == 2
     assert progress["encode_s"] == 1.5
     assert progress["failed_batches"] == 0
+
+
+def test_on_batch_callback_sees_progress_after_each_batch(monkeypatch):
+    """jobs.run은 이 콜백으로 job_runs.stats를 배치마다 갱신한다 - OOM/SIGKILL로 죽어도 진행 상황이 남는다."""
+    from pipeline.stages import embed_pending_articles
+
+    embedder, _ = _echo_embedder()
+    _install_fake_news_embedder(monkeypatch, embedder)
+    cursor = _make_cursor(rows=[(i, "t", "본문") for i in range(1, 6)])
+    conn = MagicMock()
+    conn.cursor.return_value = cursor
+
+    progress, snapshots = {}, []
+    with patch("db.connection.get_connection", return_value=conn), \
+         patch("db.connection.release_connection"):
+        embed_pending_articles(
+            _settings(), batch_size=2, stats=progress,
+            on_batch=lambda: snapshots.append((progress["embedded"], progress["remaining"])),
+        )
+
+    # 모델을 올리기 전(대상 확정) 한 번 + 배치 3개
+    assert snapshots == [(0, 5), (2, 3), (4, 1), (5, 0)]

@@ -58,6 +58,18 @@ class JobContext:
     run_id: Optional[int] = None
     # 잡이 진행하면서 채운다. 중간에 예외가 나도 여기까지 채운 값은 job_runs에 남는다.
     stats: Dict[str, Any] = field(default_factory=dict)
+    # 실패는 아니지만 사람이 봐야 하는 상황(예: 한 언론사 기사 전부 다운로드 실패). 끝나면 알림으로 묶어 보낸다.
+    warnings: list = field(default_factory=list)
+    # run_job이 지금까지의 stats를 job_runs에 쓰는 함수로 바꿔 끼운다. OOM/SIGKILL처럼 결과를 기록할
+    # 기회가 없는 종료에서도 진행 상황이 남게, 오래 도는 잡은 배치마다 부른다.
+    _checkpoint: Callable[[], None] = field(default=lambda: None, repr=False)
+
+    def checkpoint(self) -> None:
+        self._checkpoint()
+
+    def warn(self, message: str) -> None:
+        logger.warning(f"job={self.job}: {message}")
+        self.warnings.append(message)
 
 
 @dataclass(frozen=True)
@@ -161,6 +173,12 @@ def _run_with_store(job, fn, args, store, notify, git_sha) -> JobResult:
         ctx.run_id = store.start(job, git_sha)
         if abandoned:
             ctx.stats["abandoned_previous_runs"] = abandoned
+            # 죽은 실행은 스스로 알릴 수 없으므로(SIGKILL) 발견한 실행이 대신 알린다.
+            notify(
+                f"⚠️ job 비정상 종료 발견: job={job}, 결과를 남기지 못한 이전 실행 {abandoned}건을 "
+                f"abandoned로 표시 (OOM/SIGKILL/컨테이너 재시작 추정, 새 run_id={ctx.run_id})"
+            )
+        ctx._checkpoint = lambda: _write_checkpoint(store, ctx)
         return _execute(job, fn, ctx, store, notify)
     except Exception as e:
         # job_runs 기록 자체가 실패한 경우(DB가 도중에 내려감 등)
@@ -172,6 +190,14 @@ def _run_with_store(job, fn, args, store, notify, git_sha) -> JobResult:
             store.unlock(job)
         except Exception:
             logger.exception(f"job={job}: advisory lock 해제 실패 (세션 종료 시 자동 해제됨)")
+
+
+def _write_checkpoint(store, ctx: JobContext) -> None:
+    try:
+        store.update_stats(ctx.run_id, to_jsonable(ctx.stats))
+    except Exception:
+        # 중간 기록 실패로 잡 자체를 멈추지 않는다 - 끝에서 finish가 다시 시도한다.
+        logger.warning(f"job={ctx.job}: 중간 stats 기록 실패", exc_info=True)
 
 
 def _execute(job, fn, ctx: JobContext, store, notify) -> JobResult:
@@ -199,6 +225,8 @@ def _execute(job, fn, ctx: JobContext, store, notify) -> JobResult:
         logger.exception(f"job={job}: 실패")
         failure_summary = _short(f"{type(e).__name__}: {e}")
     ctx.stats["duration_s"] = round(time.monotonic() - started, 3)
+    if ctx.warnings:
+        ctx.stats["warnings"] = list(ctx.warnings)
 
     stats = to_jsonable(ctx.stats)
     store.finish(ctx.run_id, status, stats, error)
@@ -206,4 +234,6 @@ def _execute(job, fn, ctx: JobContext, store, notify) -> JobResult:
     if status == "failed":
         notify(f"🚨 job 실패: job={job}, run_id={ctx.run_id}, error={failure_summary}")
         return JobResult(status=status, exit_code=1, run_id=ctx.run_id, stats=stats, error=error)
+    if ctx.warnings:
+        notify(f"⚠️ job 경고: job={job}, run_id={ctx.run_id}, status={status} - " + " / ".join(ctx.warnings))
     return JobResult(status=status, exit_code=0, run_id=ctx.run_id, stats=stats, error=None)

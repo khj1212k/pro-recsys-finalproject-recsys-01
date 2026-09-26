@@ -59,7 +59,7 @@ def _length_sorted_batches(rows, batch_size: int, sort_window: int):
 
 def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=None,
                            time_budget_s=None, stats=None, sort_window=None,
-                           clock=time.monotonic) -> Dict[str, Any]:
+                           clock=time.monotonic, on_batch=None) -> Dict[str, Any]:
     """임베딩이 없는 기사를 BGE-M3로 임베딩해 news_raw.embedding_result에 저장하고 통계를 반환한다.
 
     limit: 한 번에 처리할 최대 건수(오래된 것부터).
@@ -67,6 +67,7 @@ def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=Non
         느린 환경에서 스케줄 실행 하나가 끝없이 길어지지 않게 한다 - 남은 건 다음 실행이 잇는다.
     stats: 호출자가 넘기면 그 dict를 배치마다 갱신한다(잡이 중간에 끊겨도 진행 상황이 남는다).
     sort_window: 길이순 정렬 창 크기(기본 batch_size*8). 1이면 정렬하지 않는다.
+    on_batch: 대상 확정 직후와 배치마다 부르는 콜백(jobs.run이 stats를 job_runs에 중간 기록한다).
     """
     from db.connection import get_connection, release_connection
     import numpy as np
@@ -124,6 +125,8 @@ def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=Non
             if not rows:
                 logger.info("건너뜀: 임베딩할 새로운 기사가 없습니다.")
                 return stats
+            if on_batch:
+                on_batch()
 
             # 대상이 있을 때만 모델을 올린다(BGE-M3 로드만 CPU에서 수십 초).
             from core.embedder import NewsEmbedder
@@ -166,6 +169,8 @@ def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=Non
                     stats["encode_s"] = round(encode_s, 3)
                     if encode_s > 0:
                         stats["articles_per_s"] = round(stats["embedded"] / encode_s, 3)
+                    if on_batch:
+                        on_batch()
     except Exception as e:
         # 배치 루프 진입 전(쿼리 준비 단계 등) 실패 - 지금까지 커밋된 count는 보존한다
         conn.rollback()

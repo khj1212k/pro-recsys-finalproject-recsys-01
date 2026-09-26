@@ -23,7 +23,7 @@ def run_embedding(ctx, *, limit=None, time_budget_s=None, batch_size=None, force
     progress = ctx.stats.setdefault("embed", {})
     stats = stages.embed_pending_articles(
         Settings, force_cpu=force_cpu, batch_size=batch_size, limit=limit,
-        time_budget_s=time_budget_s, stats=progress,
+        time_budget_s=time_budget_s, stats=progress, on_batch=ctx.checkpoint,
     )
     if stats.get("error") or (stats["targets"] and not stats["embedded"]):
         raise RuntimeError(

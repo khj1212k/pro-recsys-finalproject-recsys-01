@@ -71,20 +71,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
 
     # 기본 SIGTERM 처리는 실행 기록 없이 프로세스를 끝낸다(컨테이너 PID 1이면 아예 무시된다) -
-    # 예외로 바꿔 run_job이 중단을 job_runs에 남기고 advisory lock을 풀게 한다.
-    signal.signal(signal.SIGTERM, _raise_terminated)
-    signal.signal(signal.SIGINT, _raise_terminated)
-    module = importlib.import_module(JOBS[args.job])
+    # 예외로 바꿔 run_job이 중단을 job_runs에 남기고 advisory lock을 풀게 한다. 끝나면 원래 핸들러로
+    # 되돌린다(main을 부른 프로세스 - 테스트 러너 등 - 의 Ctrl-C가 JobTerminated로 바뀌지 않게).
+    previous = {sig: signal.signal(sig, _raise_terminated) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        module = importlib.import_module(JOBS[args.job])
 
-    from jobs.store import PostgresJobRunStore
+        from jobs.store import PostgresJobRunStore
 
-    result = run_job(
-        args.job,
-        module.run,
-        args=args,
-        store_factory=lambda: PostgresJobRunStore.connect(args.job),
-        git_sha=resolve_git_sha(),
-    )
+        result = run_job(
+            args.job,
+            module.run,
+            args=args,
+            store_factory=lambda: PostgresJobRunStore.connect(args.job),
+            git_sha=resolve_git_sha(),
+        )
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
     # 한 줄 JSON 요약 - supercronic/docker 로그에서 grep하기 쉽게
     print(json.dumps(
         {"job": args.job, "run_id": result.run_id, "status": result.status, "stats": result.stats},
