@@ -39,9 +39,30 @@ point-in-time 추론을 1차 프로토콜로 삼는다:
      결과다 - 같은 ranker, 원래(미제한) 로더/FeatureEngineer(loader #1)로 추론하고,
      '순수 추론 누출' 효과를 보기 위해 정답 구간은 1차와 동일하게 둔다.
   5. team-final에 한해 **team-final-as-written** 행을 추가로 낸다 - 실제
-     scripts/evaluate_results.py의 정답 정의(created_at >= NOW()-6 DAYS, is_clicked
-     필터 없음)를 그대로 적용한다. 이 아카이브 구간이 6시간 16분뿐이라 사실상
-     '로그 전체'가 정답이 된다(보고된 0.897을 설명하는 근거 중 하나).
+     scripts/evaluate_results.py의 정답 정의(created_at >= NOW()-6 DAYS)를 이
+     아카이브에 옮긴 것이다. 팀 DB 테이블(user_newsletter_ctr_log)에는 클릭 행만
+     있으므로(is_clicked 컬럼 자체가 없음), 아카이브에서의 올바른 번역은 "창 안의
+     is_clicked==1 행"이다. 이 아카이브 구간이 6시간 16분뿐이라 창이 로그 전체(학습
+     구간 포함)와 같아진다.
+
+=== v2.1: v2 재검토(blocker 2 / major 4) 이후 수정 ===
+
+  - v2의 team-final-as-written은 is_clicked 필터 없이 **모든 노출 행**을 정답으로
+    셌다. 페르소나마다 195건 전부가 노출되므로 모든 유저의 정답이 195건 전부가 되어,
+    어떤 랭킹(무작위 포함)도 MRR/P@5 = 1.0이 나오는 퇴화된 정의 오류였다(모델은
+    클릭으로 학습하는데 정답은 전체 행 - 라벨 가정 불일치). v2.1은 클릭만 정답으로
+    쓰고, v2 정의는 `team_final_written_all_rows_definition_error`로 이름을 붙여
+    기록으로만 남긴다.
+  - `--tie-draws R`: 거의 학습되지 않은 모델(best_iteration=1, 서로 다른 점수 약
+    30개)은 동점이 많아 랭킹이 CSV 행 순서로 정해진다. 1차 추론에 대해 동점을
+    무작위로 깨는 R회 추첨의 평균/범위를 함께 기록한다(기본 경로의 결정적 순서는
+    그대로 - 기존 수치와 비교 가능).
+  - `--fixed-rounds N`: 조기 종료 없이 정확히 N 라운드를 학습하는 민감도 arm.
+    학습 행은 기본 경로와 같은 train_df(inner-valid 분할의 앞 80%)다.
+  - inner-validation 분할은 인접 행이 아니라 **그룹 소속**으로 안전성을 확인한다
+    (user_id 그룹은 시간상 섞여 있어 인접 검사만으로는 85명 중 32명이 양쪽에
+    걸쳤다).
+  - 1차 추론에 'unshown-only' 필터 변형(경계 이전 노출분 전체 제거)을 추가했다.
 """
 from __future__ import annotations
 
@@ -93,7 +114,9 @@ def resolve_candidate_pool(bundle, mode: str, pinned_now: datetime, seed: int) -
         직접 테스트한다. v2: 정답도 이 풀 안으로 제한한다(protocol.restrict_ground_
         truth_to_pool) - v1은 정답을 풀 밖에 그대로 둬 애초에 도달 불가능한 정답을
         놓친 걸로 계산했다(MAJOR).
-      - padded_400: 보고된 팀 배포 규모(뉴스레터 405건)에 맞춰, 195건을 복제 +
+      - padded_400 (v2.1: 리포트에서 제외 - 패딩 사본이 학습 negative에도 섞여 학습 자체가
+        바뀌고, 효과가 단일 트리 시드에서만 나와 풀 크기 효과로 읽을 수 없다. 코드는
+        재검토용으로만 남긴다): 보고된 팀 배포 규모(뉴스레터 405건)에 맞춰, 195건을 복제 +
         임베딩에 약한 가우시안 잡음을 더해 400건까지 부풀린 근사 풀이다. v2:
         run_one()에서 패딩을 먼저 적용한 뒤 이 함수를 호출하므로(v1은 순서가
         반대라 후보 id가 여전히 195건이었다 - BLOCKER), None을 반환해 "패딩된
@@ -213,7 +236,13 @@ def _time_group_safe_split(df: pd.DataFrame, val_ratio: float, group_key: str):
     자르지 않으며 시간순으로 떼어낸다. v1은 team-final/fix-snapshot에 대해 그냥
     시간순 슬라이스만 했는데(그룹 안전성 없음), v2는 모든 버전에 동일하게 그룹
     안전 분할을 적용한다(이 분할은 우리 하네스가 하는 것이지 엔진 코드가 하는
-    게 아니므로, 버전마다 다르게 할 이유가 없다)."""
+    게 아니므로, 버전마다 다르게 할 이유가 없다).
+
+    v2.1: 경계 인접 행만 보는 검사는 그룹 행이 시간상 연속일 때만 안전하다
+    (user_timestamp 그룹은 한 그룹이 한 시각이라 연속이다). user_id 그룹처럼 시간상
+    섞인 그룹은 인접 검사를 통과해도 한 그룹이 양쪽에 걸친다(검토 실측: 85명 중
+    32명). 그래서 분할 뒤 **그룹 소속**으로 겹침을 확인하고, 겹치면 그룹 단위 분할
+    (_assign_groups_by_first_time)로 바꾼다 - 연속 그룹이면 기존 결과와 동일하다."""
     if len(df) == 0 or "_timestamp" not in df.columns:
         split_idx = int(len(df) * (1 - val_ratio))
         return df.iloc[:split_idx].copy(), df.iloc[split_idx:].copy()
@@ -221,7 +250,31 @@ def _time_group_safe_split(df: pd.DataFrame, val_ratio: float, group_key: str):
     target_idx = int(len(sorted_df) * (1 - val_ratio))
     group_ids = _group_ids_for(sorted_df, group_key)
     idx = _nearest_group_boundary(group_ids, target_idx)
-    return sorted_df.iloc[:idx].copy(), sorted_df.iloc[idx:].copy()
+    left_groups = set(group_ids.iloc[:idx])
+    right_groups = set(group_ids.iloc[idx:])
+    if left_groups.isdisjoint(right_groups):
+        return sorted_df.iloc[:idx].copy(), sorted_df.iloc[idx:].copy()
+    return _assign_groups_by_first_time(sorted_df, group_ids, target_idx)
+
+
+def _assign_groups_by_first_time(sorted_df: pd.DataFrame, group_ids: pd.Series, target_rows: int):
+    """그룹을 첫 등장 시각 순으로 줄 세워, 누적 행 수가 target_rows에 가장 가까워질
+    때까지 앞 그룹들을 train에, 나머지를 inner-valid에 통째로 넣는다. 어떤 그룹도
+    양쪽에 걸치지 않는다(대신 valid 그룹의 일부 행이 train 그룹의 마지막 행보다
+    이른 시각일 수 있다 - 시간 순서보다 그룹 무결성을 우선한다)."""
+    order = sorted_df.assign(_gid=group_ids.values).groupby("_gid", sort=False)["_timestamp"].min()
+    order = order.sort_values(kind="mergesort")
+    sizes = group_ids.value_counts()
+    cum = 0
+    train_groups = set()
+    for gid in order.index:
+        n = int(sizes[gid])
+        if cum > 0 and abs(cum + n - target_rows) > abs(cum - target_rows):
+            break
+        train_groups.add(gid)
+        cum += n
+    mask = group_ids.isin(train_groups).to_numpy()
+    return sorted_df[mask].copy(), sorted_df[~mask].copy()
 
 
 def _drop_timestamp_if_needed(df: pd.DataFrame, needs_drop: bool) -> pd.DataFrame:
@@ -230,10 +283,24 @@ def _drop_timestamp_if_needed(df: pd.DataFrame, needs_drop: bool) -> pd.DataFram
     return df
 
 
-def _build_recommendations(scored_df: pd.DataFrame, reranker, news_dict, user_cat_counts, top_k: int) -> Dict[int, List[int]]:
+def _build_recommendations(
+    scored_df: pd.DataFrame, reranker, news_dict, user_cat_counts, top_k: int,
+    tie_rng: Optional[np.random.Generator] = None, only_users: Optional[Set[int]] = None,
+) -> Dict[int, List[int]]:
+    """tie_rng=None이면 기존(팀 코드와 같은) 결정적 순서 - 동점은 입력 행 순서(=뉴스레터
+    CSV 순서)로 깨진다. tie_rng가 있으면 유저별 행을 무작위로 섞은 뒤 안정 정렬해
+    동점을 무작위로 깬다(MMR의 argsort/엄격 비교도 입력 순서를 따르므로 함께 섞인다).
+    only_users: 지정하면 그 유저만 계산한다(동점 추첨 반복 시 정답이 있는 유저만)."""
     recommendations: Dict[int, List[int]] = {}
     for uid, group in scored_df.groupby("user_id"):
-        group = group.sort_values("score", ascending=False)
+        if only_users is not None and int(uid) not in only_users:
+            continue
+        if tie_rng is None:
+            group = group.sort_values("score", ascending=False)
+        else:
+            group = group.iloc[tie_rng.permutation(len(group))].sort_values(
+                "score", ascending=False, kind="mergesort"
+            )
         valid_nids = [nid for nid in group["news_id"] if nid in news_dict]
         if not valid_nids:
             continue
@@ -250,6 +317,84 @@ def _build_recommendations(scored_df: pd.DataFrame, reranker, news_dict, user_ca
 
 def _n_distinct_scores(scored_df: pd.DataFrame) -> int:
     return int(len(set(np.round(scored_df["score"].values, 8).tolist())))
+
+
+def _top_tie_sizes(scored_df: pd.DataFrame, only_users: Optional[Set[int]] = None) -> List[int]:
+    """유저별로 최고 점수와 동점인 아이템 수(1이면 동점 없음). 거의 학습되지 않은
+    모델에서 top-k가 점수가 아니라 동점 처리 순서로 정해지는 정도를 보여준다."""
+    sizes = []
+    for uid, group in scored_df.groupby("user_id"):
+        if only_users is not None and int(uid) not in only_users:
+            continue
+        sc = np.round(group["score"].to_numpy(), 8)
+        sizes.append(int((sc == sc.max()).sum()))
+    return sizes
+
+
+def _tie_random_metrics(
+    scored_df, reranker, news_dict, user_cat_counts, top_k, evaluator, ground_truth, category_map, M,
+    n_draws: int, seed: int,
+) -> dict:
+    """동점을 무작위로 깬 n_draws회 추첨의 지표. 정답이 있는 유저만 다시 계산한다(MMR이
+    파이썬 루프라 전체 유저 반복은 비싸다 - 정답 없는 유저는 어차피 지표에서 빠진다)."""
+    users = {int(u) for u in ground_truth}
+    rng = np.random.default_rng([seed, 20260926])
+    aggs = []
+    per_user_sum: Dict[int, Dict[str, float]] = {}
+    for _ in range(n_draws):
+        recs = _build_recommendations(
+            scored_df, reranker, news_dict, user_cat_counts, top_k, tie_rng=rng, only_users=users
+        )
+        per_user = M.per_user_metrics(evaluator, recs, ground_truth, category_map)
+        aggs.append(M.aggregate(per_user))
+        for u, m in per_user.items():
+            acc = per_user_sum.setdefault(u, {k: 0.0 for k in m})
+            for k, v in m.items():
+                acc[k] += v
+    keys = [k for k in aggs[0] if k != "num_users"] if aggs else []
+    per_user_mean = {u: {k: v / n_draws for k, v in m.items()} for u, m in per_user_sum.items()}
+    return {
+        "n_draws": n_draws,
+        "aggregate_mean": {k: float(np.mean([a[k] for a in aggs])) for k in keys},
+        "aggregate_min": {k: float(np.min([a[k] for a in aggs])) for k in keys},
+        "aggregate_max": {k: float(np.max([a[k] for a in aggs])) for k in keys},
+        "per_user_metrics": {str(u): m for u, m in per_user_mean.items()},
+    }
+
+
+def _train_ranker(LGBMRanker, config, effective_group_key, train_df_fit, inner_valid_fit, fixed_rounds: int) -> dict:
+    """조기 종료(기본) 또는 고정 라운드 학습. 엔진 소스는 고치지 않고, 인스턴스 속성
+    num_boost_round만 덮어쓴다(current LGBMRanker는 __init__에서 이 값을 정한다)."""
+    try:
+        ranker = LGBMRanker(params=config["lightgbm"]["params"], group_key=effective_group_key)
+    except TypeError:
+        ranker = LGBMRanker(params=config["lightgbm"]["params"])
+    if fixed_rounds and fixed_rounds > 0:
+        if not hasattr(ranker, "num_boost_round"):
+            raise RuntimeError("이 엔진 버전의 LGBMRanker에는 num_boost_round 속성이 없어 --fixed-rounds를 쓸 수 없습니다.")
+        ranker.num_boost_round = int(fixed_rounds)
+        ranker.train(train_df_fit, valid_df=None)
+        policy = f"fixed_{int(fixed_rounds)}_rounds_no_early_stopping"
+        best_iteration = None
+    else:
+        ranker.train(train_df_fit, valid_df=inner_valid_fit)
+        policy = "inner_valid_early_stopping"
+        bi = getattr(ranker.model, "best_iteration", None)
+        best_iteration = int(bi) if bi is not None else None
+    best_score = {}
+    raw_best = getattr(ranker.model, "best_score", None) or {}
+    for ds_name, metrics in dict(raw_best).items():
+        best_score[str(ds_name)] = {str(k): float(v) for k, v in dict(metrics).items()}
+    return {
+        "ranker": ranker,
+        "rounds_policy": policy,
+        "best_iteration": best_iteration,
+        "n_trees": int(ranker.model.num_trees()),
+        "best_score_inner_valid": best_score,
+        # 조기 종료가 1라운드에서 멈춘 모델: 트리 1개, 서로 다른 점수 수십 개 - 결과를
+        # 모델 효과로 해석하지 않는다(리포트에 '퇴화 시드'로 표시).
+        "degenerate_single_tree": bool(best_iteration is not None and best_iteration <= 1),
+    }
 
 
 def run_one(args: argparse.Namespace) -> dict:
@@ -358,17 +503,15 @@ def _run_team_split(args, engine, bundle, pinned_now, config, config_hash, cfg_o
 
     # ---- 요구사항 5: 조기 종료는 학습 구간 내부에서만 (정답 구간을 보지 않음) ----
     train_df, inner_valid_df = _time_group_safe_split(train_all, val_ratio=0.2, group_key=effective_group_key)
-
-    try:
-        ranker = LGBMRanker(params=config["lightgbm"]["params"], group_key=effective_group_key)
-    except TypeError:
-        ranker = LGBMRanker(params=config["lightgbm"]["params"])
+    split_overlap = _n_groups_on_both_sides(train_df, inner_valid_df, effective_group_key)
 
     train_df_fit = _drop_timestamp_if_needed(train_df, needs_manual_timestamp_drop)
     inner_valid_fit = _drop_timestamp_if_needed(inner_valid_df, needs_manual_timestamp_drop) if len(inner_valid_df) else None
 
-    ranker.train(train_df_fit, valid_df=inner_valid_fit)
-    best_iteration = getattr(ranker.model, "best_iteration", None)
+    trained = _train_ranker(
+        LGBMRanker, config, effective_group_key, train_df_fit, inner_valid_fit, getattr(args, "fixed_rounds", 0)
+    )
+    ranker = trained["ranker"]
 
     top_k = config["recommendation"]["top_k"]
     reranker = create_reranker_from_config(config)
@@ -407,6 +550,16 @@ def _run_team_split(args, engine, bundle, pinned_now, config, config_hash, cfg_o
     pit_per_user = M.per_user_metrics(evaluator, pit_recommendations, ground_truth, category_map)
     pit_agg = M.aggregate(pit_per_user)
 
+    eval_users = {int(u) for u in ground_truth}
+    top_ties = _top_tie_sizes(pit_scored_df, only_users=eval_users)
+    tie_draws = int(getattr(args, "tie_draws", 0) or 0)
+    pit_tie_random = None
+    if tie_draws > 0:
+        pit_tie_random = _tie_random_metrics(
+            pit_scored_df, reranker, news_dict2, user_cat_counts2, top_k, evaluator, ground_truth,
+            category_map, M, n_draws=tie_draws, seed=args.seed,
+        )
+
     clicks_before = bundle.ctr_logs[(bundle.ctr_logs["is_clicked"] == 1) & (bundle.ctr_logs["timestamp"] < answer_start)]
     cold_ids, warm_ids = PR.cold_warm_split(bundle.users["user_id"], clicks_before, answer_start)
     cold_metrics = PR.split_metrics_by_group(pit_per_user, cold_ids)
@@ -417,6 +570,12 @@ def _run_team_split(args, engine, bundle, pinned_now, config, config_hash, cfg_o
     pit_per_user_filtered = M.per_user_metrics(evaluator, pit_recs_filtered, ground_truth, category_map)
     pit_agg_filtered = M.aggregate(pit_per_user_filtered)
     seen_share_top5 = PR.seen_share_in_topk(pit_recommendations, seen, k=5)
+
+    # unshown-only: 경계 이전에 노출된 아이템(클릭 여부 무관)은 정답이 될 수 없다.
+    shown = PR.shown_items_by_user(bundle.ctr_logs, answer_start)
+    pit_recs_unshown = PR.filter_seen(pit_recommendations, shown)
+    pit_per_user_unshown = M.per_user_metrics(evaluator, pit_recs_unshown, ground_truth, category_map)
+    pit_agg_unshown = M.aggregate(pit_per_user_unshown)
 
     # ---- 2차(as-written/leaky): 원래(미제한) loader #1/fe1/dataset1, eval_timestamp=pinned_now ----
     aw_inference_df = dataset1.create_inference_dataset(target_user_ids=None, eval_timestamp=pinned_now)
@@ -433,6 +592,13 @@ def _run_team_split(args, engine, bundle, pinned_now, config, config_hash, cfg_o
     aw_seen_filtered = PR.filter_seen(aw_recommendations, seen)
     aw_per_user_filtered = M.per_user_metrics(evaluator, aw_seen_filtered, ground_truth, category_map)
     aw_agg_filtered = M.aggregate(aw_per_user_filtered)
+    aw_tie_random = None
+    if tie_draws > 0:
+        # 누출 효과(as-written - 1차)를 동점 처리 순서와 무관하게도 보기 위해 2차에도 같은 추첨.
+        aw_tie_random = _tie_random_metrics(
+            aw_scored_df, reranker, news_dict1, user_cat_counts1, top_k, evaluator, ground_truth,
+            category_map, M, n_draws=tie_draws, seed=args.seed + 7,
+        )
 
     result = {
         "version": args.version,
@@ -452,10 +618,18 @@ def _run_team_split(args, engine, bundle, pinned_now, config, config_hash, cfg_o
         "harness_sha": args.harness_sha,
         "n_train": len(train_df),
         "n_inner_valid": len(inner_valid_df),
+        "inner_split_groups_on_both_sides": split_overlap,
         "n_candidates": len(candidate_ids) if candidate_ids is not None else len(bundle.newsletters),
         "answer_start": answer_start.isoformat(),
-        "best_iteration": int(best_iteration) if best_iteration is not None else None,
+        "rounds_policy": trained["rounds_policy"],
+        "fixed_rounds": int(getattr(args, "fixed_rounds", 0) or 0),
+        "best_iteration": trained["best_iteration"],
+        "n_trees": trained["n_trees"],
+        "best_score_inner_valid": trained["best_score_inner_valid"],
+        "degenerate_single_tree": trained["degenerate_single_tree"],
         "n_distinct_scores_primary": n_distinct_primary,
+        "top_tie_size_eval_users_median": float(np.median(top_ties)) if top_ties else None,
+        "top_tie_size_eval_users_mean": float(np.mean(top_ties)) if top_ties else None,
         "n_cold": len(cold_ids),
         "n_warm": len(warm_ids),
         "seen_share_top5_primary": seen_share_top5,
@@ -468,6 +642,11 @@ def _run_team_split(args, engine, bundle, pinned_now, config, config_hash, cfg_o
                 "aggregate_metrics": pit_agg_filtered,
                 "per_user_metrics": {str(k): v for k, v in pit_per_user_filtered.items()},
             },
+            "unshown_filtered": {
+                "aggregate_metrics": pit_agg_unshown,
+                "per_user_metrics": {str(k): v for k, v in pit_per_user_unshown.items()},
+            },
+            "tie_random": pit_tie_random,
         },
         "as_written": {
             "aggregate_metrics": aw_agg,
@@ -476,25 +655,64 @@ def _run_team_split(args, engine, bundle, pinned_now, config, config_hash, cfg_o
                 "aggregate_metrics": aw_agg_filtered,
                 "per_user_metrics": {str(k): v for k, v in aw_per_user_filtered.items()},
             },
+            "tie_random": aw_tie_random,
         },
     }
 
     if args.version == "team-final":
-        gt_written = bundle.ctr_logs.groupby("user_id")["news_letter_id"].apply(set).to_dict()
-        tf_per_user = M.per_user_metrics(evaluator, aw_recommendations, gt_written, category_map)
-        tf_agg = M.aggregate(tf_per_user)
-        result["team_final_written"] = {
-            "aggregate_metrics": tf_agg,
-            "per_user_metrics": {str(k): v for k, v in tf_per_user.items()},
-            "n_users_ground_truth": len(gt_written),
-            "note": (
-                "team-final의 실제 scripts/evaluate_results.py 정답 정의를 그대로 재현: "
-                "is_clicked 필터 없이 created_at >= NOW()-6DAYS인 모든 행. 이 아카이브 구간(약 "
-                "6시간16분)에서는 '최근 6일'이 로그 전체와 같다."
-            ),
-        }
+        result.update(_team_final_written_rows(bundle, aw_recommendations, evaluator, category_map, M))
 
     return result
+
+
+def team_final_written_ground_truth(ctr_logs: pd.DataFrame, clicks_only: bool) -> Dict[int, Set[int]]:
+    """team-final scripts/evaluate_results.py의 정답 창(created_at >= NOW()-6 DAYS)을 이
+    아카이브에 옮긴 정답. 아카이브 전체가 6시간 16분이라 창 = 로그 전체다.
+
+    clicks_only=True(올바른 번역): 팀 DB 테이블에는 클릭 행만 있으므로 is_clicked==1만.
+    clicks_only=False(v2의 정의 오류): 노출 행 전체 - 페르소나마다 195건 전부가 정답이
+    되어 어떤 랭킹도 MRR 1.0이 되는 퇴화 정의. 기록 보존용으로만 계산한다."""
+    logs = ctr_logs[ctr_logs["is_clicked"] == 1] if clicks_only else ctr_logs
+    return logs.groupby("user_id")["news_letter_id"].apply(set).to_dict()
+
+
+def _team_final_written_rows(bundle, aw_recommendations, evaluator, category_map, M) -> dict:
+    out = {}
+    for key, clicks_only, note in [
+        (
+            "team_final_written",
+            True,
+            "team-final scripts/evaluate_results.py의 정답 창(NOW()-6일)을 아카이브로 옮긴 것: "
+            "창 안의 클릭(is_clicked==1) 전체. 아카이브가 약 6시간16분이라 창 = 로그 전체(학습 "
+            "구간 클릭 포함). 추천은 팀 방식 추론 시점(데이터셋 끝)으로 만든 것.",
+        ),
+        (
+            "team_final_written_all_rows_definition_error",
+            False,
+            "v2의 정의 오류(기록 보존용): is_clicked 필터 없이 노출 행 전체를 정답으로 셌다. "
+            "페르소나마다 195건 전부가 노출되므로 정답 = 전체 아이템이 되어 무작위 추천도 "
+            "MRR/P@5 1.0이 나온다. 해석 대상이 아니다.",
+        ),
+    ]:
+        gt = team_final_written_ground_truth(bundle.ctr_logs, clicks_only=clicks_only)
+        per_user = M.per_user_metrics(evaluator, aw_recommendations, gt, category_map)
+        out[key] = {
+            "aggregate_metrics": M.aggregate(per_user),
+            "per_user_metrics": {str(k): v for k, v in per_user.items()},
+            "n_users_ground_truth": len(gt),
+            "mean_answers_per_user": float(np.mean([len(v) for v in gt.values()])) if gt else None,
+            "clicks_only": clicks_only,
+            "note": note,
+        }
+    return out
+
+
+def _n_groups_on_both_sides(train_df: pd.DataFrame, valid_df: pd.DataFrame, group_key: str) -> Optional[int]:
+    if len(train_df) == 0 or len(valid_df) == 0 or "_timestamp" not in train_df.columns:
+        return None
+    left = set(_group_ids_for(train_df, group_key))
+    right = set(_group_ids_for(valid_df, group_key))
+    return len(left & right)
 
 
 def _run_generator_split(args, engine, bundle, pinned_now, config, config_hash, cfg_overrides, candidate_ids, label_mode, FL, M, PR) -> dict:
@@ -532,15 +750,12 @@ def _run_generator_split(args, engine, bundle, pinned_now, config, config_hash, 
     # 경계가 없다 - inner-validation도 학습 구간 자체의 시간순으로만 나눈다.
     train_df, inner_valid_df = _time_group_safe_split(full_df, val_ratio=0.2, group_key=effective_group_key)
 
-    try:
-        ranker = LGBMRanker(params=config["lightgbm"]["params"], group_key=effective_group_key)
-    except TypeError:
-        ranker = LGBMRanker(params=config["lightgbm"]["params"])
-
     train_df_fit = _drop_timestamp_if_needed(train_df, needs_manual_timestamp_drop)
     inner_valid_fit = _drop_timestamp_if_needed(inner_valid_df, needs_manual_timestamp_drop) if len(inner_valid_df) else None
-    ranker.train(train_df_fit, valid_df=inner_valid_fit)
-    best_iteration = getattr(ranker.model, "best_iteration", None)
+    trained = _train_ranker(
+        LGBMRanker, config, effective_group_key, train_df_fit, inner_valid_fit, getattr(args, "fixed_rounds", 0)
+    )
+    ranker = trained["ranker"]
 
     # 학습 로그 자체에 정답 뉴스레터의 상호작용이 전혀 없으므로(train_bundle이 이미
     # 배제했다), eval_timestamp를 answer_start로 더 좁힐 필요가 없다 - 어차피 볼 수
@@ -590,7 +805,12 @@ def _run_generator_split(args, engine, bundle, pinned_now, config, config_hash, 
         "n_train_source_newsletters": int(train_bundle.ctr_logs["news_letter_id"].nunique()),
         "n_candidates": len(candidate_ids) if candidate_ids is not None else len(bundle.newsletters),
         "answer_start": None,
-        "best_iteration": int(best_iteration) if best_iteration is not None else None,
+        "rounds_policy": trained["rounds_policy"],
+        "fixed_rounds": int(getattr(args, "fixed_rounds", 0) or 0),
+        "best_iteration": trained["best_iteration"],
+        "n_trees": trained["n_trees"],
+        "best_score_inner_valid": trained["best_score_inner_valid"],
+        "degenerate_single_tree": trained["degenerate_single_tree"],
         "n_distinct_scores_primary": n_distinct_primary,
         "primary": {
             "aggregate_metrics": agg,
@@ -614,6 +834,8 @@ def main() -> None:
     parser.add_argument("--answer-start", default=None, help="team_split 프로토콜의 고정 정답 구간 시작 시각 (ISO 8601)")
     parser.add_argument("--code-sha", default="unknown", help="이 버전 엔진 코드의 git SHA (run_repro.py가 계산)")
     parser.add_argument("--harness-sha", default="unknown", help="이 하네스(evaluation/recsys/team_repro) 자체의 git SHA")
+    parser.add_argument("--tie-draws", type=int, default=0, help="1차 추론의 동점을 무작위로 깨는 추첨 횟수(0=끔)")
+    parser.add_argument("--fixed-rounds", type=int, default=0, help=">0이면 조기 종료 없이 정확히 N 라운드 학습(민감도 arm)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--out", required=True)
@@ -622,7 +844,10 @@ def main() -> None:
     result = run_one(args)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    summary = {k: v for k, v in result.items() if k not in ("primary", "as_written", "team_final_written")}
+    summary = {
+        k: v for k, v in result.items()
+        if k not in ("primary", "as_written", "team_final_written", "team_final_written_all_rows_definition_error")
+    }
     print(json.dumps(summary, ensure_ascii=False))
 
 
