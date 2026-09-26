@@ -2,7 +2,8 @@
 
 ## 상태
 채택됨 (2026-09-26). 초안(측정 전 사전 등록 규칙 포함)은 커밋 `2c0d193`. 7일 연속 수집 뒤
-`job_runs` 성공률로 다시 확인한다(아래 "결과와 한계").
+`job_runs` 성공률로 다시 확인한다(아래 "결과와 한계"). 같은 날 리뷰 반영으로 결정 8~10과 증거 2·6·8을 고쳤다
+(사전 등록 규칙 문구는 그대로 두고, 틀린 전제는 증거 6에 정정으로 적었다).
 
 ## 컨텍스트
 - 팀 시절 배치는 Airflow DAG이 `ai_workspace/main.py` 단계를 직접 불렀다. 배포 대상으로 잡은
@@ -28,7 +29,7 @@
    대신 api-server/scheduler/dag-processor/triggerer가 상시 떠 있고(유휴 1.0~1.1GiB, 59개 프로세스 - 증거 2),
    메타데이터 DB가 따로 필요하다. 프로필로 "기본은 꺼 둔" 채 유지하는 안도 검토했지만, 두 스케줄러가
    같은 잡을 동시에 스케줄링하는 사고 위험이 남고 이미지는 CI에서 빌드도 깨져 있었다.
-2. **supercronic + `python -m jobs.run <job>` (채택)** - 컨테이너 하나에 crontab 한 장(유휴 12MiB).
+2. **supercronic + `python -m jobs.run <job>` (채택)** - 컨테이너 하나에 crontab 한 장(유휴 11~45MiB, 익명 메모리 약 4MB - 증거 2).
    실행 기록은 `job_runs` 테이블, 겹침 방지는 Postgres advisory lock, 실패 알림은 `jobs/notify.py`.
    재시도·백필 UI는 없다 - 잡이 재실행 안전(idempotent)하고 다음 주기가 이어받는 구조로 대신한다.
 3. **호스트 cron/launchd만** - 가장 가볍지만 서버(Linux)와 Mac의 실행 경로가 갈라진다.
@@ -85,6 +86,19 @@
    정책브리핑 RSS가 2026-07-01부로 중단됐다(공지 "정책브리핑 RSS 서비스 제공 중단 안내", 사유: "콘텐츠 저작권 등
    권리 보호에 따른 제공방식 변경"). 사이트 스크래핑은 그 사유와 충돌하고, 공공데이터포털 API는 계정·키 발급이
    필요해 사용자 결정으로 넘긴다.
+8. **스케줄러 종료 신호는 잡까지 전달한다.** supercronic은 잡마다 새 프로세스 그룹을 만들고 SIGTERM을 받으면 잡에
+   신호를 보내지 않고 끝나기만 기다린다 - `docker compose stop`/재배포 때 잡이 유예 뒤 SIGKILL로 죽어 `abandoned`로만
+   남았다(tini -g도 supercronic의 그룹까지만 닿는다, 증거 8). `docker/scheduler-entrypoint.sh`가 supercronic의 자식마다
+   그 프로세스 그룹에 신호를 보내고, `stop_grace_period`는 60초다.
+9. **조용한 실패를 알림으로.** 결과를 못 남긴 실행(OOM/SIGKILL)은 다음 실행이 `abandoned`로 바꾸면서 알린다.
+   `job_runs.stats`는 끝에서만이 아니라 도중에도 쓴다(ingest 단계마다, embed 배치마다). ingest는 본문 다운로드 실패
+   (`fetch_failed`+`error`)가 대상 5건 이상 중 50% 이상이면 실패, 한 언론사 3건 이상이 전부 실패하면 경고한다.
+   추출 중 예외(`error`)도 시도 횟수를 올려 `MAX_EXTRACT_ATTEMPTS`(3)까지만 다시 받는다.
+10. **본문 해시로 중복 기사를 거른다**(Alembic `d48994e9d26e`). 동아일보 total.xml은 같은 기사를 `/news/list/...`로
+    내보냈다가 분류 뒤 `/news/It/...`처럼 섹션 경로로 다시 내보낸다 - URL UNIQUE로는 못 막는다(증거 1).
+    정제 본문의 sha256을 `raw_news_content_sha256`에 저장하고 `'ok'` 행 사이 부분 unique 인덱스로 막는다. 사본은
+    `'duplicate'`(본문·임베딩 없음)로 남아 임베딩·클러스터에서 빠진다. 언론사별 URL 정규화 대신 해시를 고른 이유:
+    규칙을 언론사마다 유지할 필요가 없고, 본문 30일 보존(해시는 남김) 결정과 맞는다. 대가: 사본도 한 번은 받아 온다.
 
 ## 증거
 측정 환경: MacBook(Apple M2, 16GB, 전원 연결), macOS 26, colima 0.10.3(vz, aarch64, 4 vCPU),
@@ -113,6 +127,11 @@ transformers 4.38.2. 호스트에서 다른 작업이 동시에 돌았다(측정
 | 국민일보 | 38 | 35 | 3 | 35 |
 | 합계 | 548 | 518 | 30 | 518 (본문 있는 기사 전부, L2 노름 1 ± 1e-3) |
 
+위 합계에는 URL만 다른 같은 기사 2쌍(동아일보, 본문·임베딩 동일)이 들어 있다 - 결정 10의 마이그레이션이
+뒤 사본 2건을 `duplicate`로 바꾼다(2026-09-26 운영 DB 읽기 전용 미리보기: 같은 해시 그룹 2개, 바뀔 행 2건).
+첫 실행 #1은 stats가 `{}`로 남아(끝에서만 기록하던 때) 위 #1 수치는 컨테이너 로그에서 옮겼다 - 결정 9 이후로는
+강제 종료된 실행도 `job_runs`에 진행 상황이 남는다.
+
 수집 잡(rss,extract)의 컨테이너 메모리는 관측 최대 376MiB(추출 워커 8개, 36개 프로세스, `docker stats` 4회 표본이라 과소추정 가능).
 
 ### 2. 스케줄러 유휴 메모리 (`docker stats`, 30초 간격 8회, 2026-09-25 22:12~22:16 UTC)
@@ -123,7 +142,10 @@ transformers 4.38.2. 호스트에서 다른 작업이 동시에 돌았다(측정
 | 참고: api / db | 80MiB / 81~85MiB | 4 / 13~15 | ~0.5% / 2~6% |
 
 Airflow는 공식 이미지(`apache/airflow:3.1.6-python3.11`)로 따로 띄워 쟀다(잡 venv 없음 - 유휴 메모리에는 영향 없음).
-12GB VM 기준으로 supercronic은 Airflow 대비 약 1.1GiB를 아낀다.
+`docker stats` 값에는 회수 가능한 페이지 캐시가 들어 있다. 위 12.2MiB는 스케줄러 시작 직후 값이고, 잡이 여러 번 돈 뒤에는
+45.2MiB(리뷰 시점, 익명 4.4MB - 나머지는 잡이 남긴 페이지 캐시), 재시작 16분 뒤(ingest 1회 후) 10.9MiB(cgroup `memory.stat`
+anon 3.9MiB / file 9.1MiB, 2026-09-26 00:16 UTC)였다. 그래서 범위는 11~45MiB로 적는다. Airflow 수치는 같은 구분을 하지
+않았다. 결론(12GB VM 기준 supercronic이 Airflow 대비 약 1GiB를 아낀다)은 범위의 어느 끝을 써도 같다.
 
 ### 3. 임베딩 처리량: CPU vs MPS (같은 기사 49건 중 41건 측정, 첫 배치는 워밍업, 평균 1,820자)
 `scripts/bench_embedding_throughput.py`, 호스트 `.venv-jobs`(worker 이미지와 같은 잠금 파일), 배치 8, 배치·캐시 수정 후 코드.
@@ -164,12 +186,37 @@ Airflow는 공식 이미지(`apache/airflow:3.1.6-python3.11`)로 따로 띄워 
 - 보조: top-5 이웃 보존율 0.82 / 0.84 / 0.93, 최소 코사인 0.83 / 0.86 / 0.99.
 - 규칙에 따라 **L=8192 유지**. 참고로 리뷰 문서가 인용한 "p95 1,533 토큰"은 이 데이터에서 재현되지 않았다(p95 2,673).
 - emb_8192(CPU 배치 1, 99건) 계산에 1,345초, 측정 프로세스 최대 메모리 9.4GB.
+- **정정 1 - 기준선도 이미 자른다.** 사전 등록 문구의 "8000자 절단 때문에 사실상 무절단"은 틀렸다. 텍스트는 토큰화 전에
+  `[:8000]`자로 잘린다: 측정 대상 456건(2026-09-25 21:30 UTC 이전 추출분으로 재구성) 중 **12건(2.6%)이 8000자를 넘어**
+  기준선에서도 잘렸다 - L=4096의 토큰 절단 건수(12건)와 같다. 관측 최대 4,469토큰은 기사 길이가 아니라 이 선절단의
+  산물이고, 실제 유효 상한은 약 4.5k 토큰이다. 가장 긴 기사는 12,384자. 2026-09-26 00:10 UTC 기준 본문 있는 560건 중 14건(2.5%).
+  그래서 "L=8192 유지"의 실제 의미는 "약 4.5k 토큰(8000자) 유지"이고, L=4096과의 차이는 그 12건의 마지막 ~370토큰뿐이다
+  (cos 중앙값 0.994가 높은 이유). 규칙 판정은 바뀌지 않는다((a)는 토큰화 결과만 보므로 세 후보 모두 여전히 실패).
+  8000자 선절단 자체를 바꿀지는 긴 기사의 메모리 비용과 함께 따로 결정한다(이번에는 바꾸지 않음).
+- **정정 2 - 장치 혼입.** 첫 측정은 emb_8192(긴 기사)를 CPU에서, emb_L을 MPS에서 계산해 (b)의 코사인에 장치 차이가
+  섞였다(통제되지 않은 교란, 크기는 작다고 보지만 재지 않았다). 결정에는 영향이 없다((a)에서 이미 전부 탈락).
+  스크립트는 이제 emb_L도 CPU 배치 1로 계산하고 8000자 선절단 비율을 함께 출력한다(`char_cut`, `candidate_device`).
+  측정은 다시 돌리지 않았다(약 35분·최대 9.4GB).
 
 ### 7. 스케줄·에이전트 동작 확인
 - 스케줄러 재빌드 후 `20 * * * * embed` 줄이 Mac에서 `{"status": "disabled"}`로 끝나고 `job_runs`에 행을 남기지 않음(23:20 UTC 로그).
 - launchd 에이전트 설치 직후(RunAtLoad) 실행 #21이 `device` 없이 targets 0으로 성공.
 - `tests/integration/test_ingest_job_end_to_end.py`: 수집(rss,extract) 뒤 embed 잡이 따로 임베딩을 채우는 경로를
-  실제 Postgres(운영 DB와 분리한 `itest_wt1`)에서 확인, integration 26 passed.
+  실제 Postgres(운영 DB와 분리한 테스트 DB)에서 확인. integration 테스트는 DB 이름에 `test`가 없거나 `news_raw`에
+  테스트가 만들지 않은 행이 있으면 실패하도록 막았다(운영 DB에 가짜 임베딩이 저장되는 사고 방지).
+- 리뷰에서 `cluster` 잡이 매번 실패할 것이 드러났다: 풀 연결마다 `register_vector`가 걸려 벡터가 `pgvector.Vector`로 오는데
+  `parse_embedding`이 문자열·리스트만 처리했다. 고친 이미지로 운영 DB 읽기 전용 실행: 기사 547건 → 클러스터 41개, 노이즈 350건
+  (2026-09-25 23:57 UTC). `tests/integration/test_cluster_job.py`가 같은 경로를 검증한다(수정 전 코드로 TypeError 재현).
+
+### 8. 스케줄러 종료 신호 (colima, worker 이미지, TERM 트랩을 건 셸 잡)
+| 구성 | `docker stop -t 8` 결과 |
+|---|---|
+| supercronic 직접(`init: true`) | 트랩 미발동, 8초 뒤 exit 137 |
+| + `TINI_KILL_PROCESS_GROUP=1` | 같음 - 잡은 별도 그룹(supercronic pgrp 7, 잡 셸 pgrp 15) |
+| `docker/scheduler-entrypoint.sh` | 트랩 발동, 즉시 exit 0 |
+
+`tests/test_scheduler_entrypoint.py`(Linux 전용, 가짜 supercronic)가 같은 동작을 검증한다 - 엔트리포인트를
+`exec supercronic`으로 바꾸면 실패한다.
 
 ## 결과와 한계
 - **7일 연속 수집 증거는 아직 없다.** 성공 기준(48시간 연속 성공률 ≥95%, 언론사별 with_body/embedded 수)은
@@ -184,6 +231,12 @@ Airflow는 공식 이미지(`apache/airflow:3.1.6-python3.11`)로 따로 띄워 
 - max_length=8192에서 가장 긴 기사(4,469토큰)는 배치 1이어도 attention 점수 텐서가 층마다 약 1.3GB다.
   transformers를 SDPA 지원 버전으로 올리면 줄일 수 있지만 임베딩 재현성 확인이 필요해 이번에는 하지 않았다.
 - `recommend_engine/src/utils/embedder.py`(합성 데이터용 스크립트 전용)는 여전히 자체 인코딩 경로를 쓴다.
-- launchd 에이전트는 설치한 체크아웃 경로를 가리킨다. 워크트리에서 설치했다면 머지 후 메인 체크아웃에서 다시 설치해야 한다.
-- 이 브랜치의 Alembic 리비전 `f87f7378672e`(down_revision `e725a62ffef1`)는 `feat/realtime-recommendation`의
-  `8b7f830013b7`과 같은 부모를 가진다 - 둘 다 머지되면 merge 리비전이 필요하다.
+- 운영 런타임(compose `.env`, `.venv-jobs`, launchd 에이전트가 가리키는 경로)은 개발 워크트리와 분리된 전용 워크트리
+  `~/Projects/newsletter-runtime`(detached HEAD)에 둔다. 개발 워크트리가 정리돼도 수집이 멈추지 않게 하기 위함이다
+  (runbook 2절). 코드를 갱신하려면 그 워크트리를 새 커밋으로 옮기고 다시 빌드해야 한다 - 자동 배포는 없다.
+- 이 브랜치의 Alembic 리비전은 `f87f7378672e`(down_revision `e725a62ffef1`) → `d48994e9d26e` 순서다. `f87f7378672e`는
+  `feat/realtime-recommendation`의 `8b7f830013b7`과 같은 부모를 가진다 - 둘 다 머지되면 merge 리비전이 필요하다.
+- 중복 판정은 정제 본문이 글자 하나까지 같을 때만 잡는다. 같은 기사의 수정판(오탈자 수정, 사진 설명 추가)은 다른 기사로
+  남는다 - 근접 중복은 임베딩 코사인으로 따로 재야 한다(측정하지 않음).
+- 알림은 `SLACK_WEBHOOK_URL`이 있을 때만 사람에게 닿는다. 지금 Mac 환경에는 설정돼 있지 않아 로그와 `job_runs`,
+  `daily_report`로만 확인한다.

@@ -1,8 +1,9 @@
 """BGE-M3 입력 길이 상한(max_length) 후보별 절단 비율과 절단 영향을 잰다 (ADR 0006 사전 등록 규칙).
 
 DB(news_raw)에서 본문 있는 기사를 읽어 수집 잡과 같은 텍스트(`f"{title} {content}"[:8000]`)를 만들고,
+- 8000자 선절단 비율(토큰화 전에 이미 잘리는 기사 - 기준선 L=8192도 이만큼은 자른다),
 - 토큰 길이 분포와 후보 L별 절단 비율,
-- 잘리는 기사들의 cos(emb_L, emb_8192) (emb_8192는 배치 1 CPU fp32),
+- 잘리는 기사들의 cos(emb_L, emb_8192) (둘 다 배치 1 CPU fp32 - 장치 차이가 섞이지 않게),
 - 보조: 잘린 기사의 top-5 이웃 보존율(이웃 풀 = 전체 기사의 무절단 임베딩)
 을 집계 JSON으로 출력한다. 기사 텍스트나 임베딩은 출력하지 않는다. DB에 쓰지 않는다.
 
@@ -21,6 +22,7 @@ sys.path.append(str(REPO_ROOT / "ai_workspace"))
 
 CANDIDATES = (1024, 2048, 4096)
 REFERENCE = 8192
+CHAR_CUT = 8000  # pipeline.stages.embed_pending_articles와 같은 선절단
 
 
 def load_texts():
@@ -39,7 +41,8 @@ def load_texts():
             rows = cur.fetchall()
     finally:
         conn.close()
-    return [r[0] for r in rows], [f"{r[1]} {r[2]}"[:8000] for r in rows]
+    full = [f"{r[1]} {r[2]}" for r in rows]
+    return [r[0] for r in rows], [t[:CHAR_CUT] for t in full], np.array([len(t) for t in full])
 
 
 def encode(model, texts, max_length, batch_size):
@@ -61,7 +64,7 @@ def main() -> int:
     import torch
     from FlagEmbedding import BGEM3FlagModel
 
-    ids, texts = load_texts()
+    ids, texts, char_lengths = load_texts()
     t0 = time.monotonic()
     cpu_model = BGEM3FlagModel("BAAI/bge-m3", use_fp16=False, device="cpu")
     tokenizer = cpu_model.tokenizer
@@ -71,6 +74,8 @@ def main() -> int:
     report = {
         "n_articles": len(texts),
         "text_rule": 'f"{title} {content}"[:8000]',
+        "char_cut": {"limit_chars": CHAR_CUT, "count": int((char_lengths > CHAR_CUT).sum()),
+                     "rate": round(float((char_lengths > CHAR_CUT).mean()), 4)},
         "token_length": {f"p{q}": pct(lengths, q) for q in (50, 90, 95, 99)} | {"max": int(lengths.max())},
         "truncation_rate": {str(L): round(float((lengths > L).mean()), 4) for L in CANDIDATES},
         "truncated_count": {str(L): int((lengths > L).sum()) for L in CANDIDATES},
@@ -87,7 +92,17 @@ def main() -> int:
         ref[i] = encode(cpu_model, [texts[i]], REFERENCE, 1)[0]
     report["reference_long_cpu_s"] = round(time.monotonic() - started, 1)
 
-    # 모델 두 벌(각 2.2GB fp32)을 동시에 올리지 않는다.
+    # 후보 L 임베딩도 기준(emb_8192)과 같은 CPU fp32 배치 1로 계산한다. 2026-09-26 첫 측정은 emb_L을
+    # MPS에서 계산해 장치 차이가 cos에 섞였다(ADR 0006 증거 6).
+    cut_by_L = {L: [i for i in long_ if lengths[i] > L] for L in CANDIDATES}
+    emb_by_L = {
+        L: np.stack([encode(cpu_model, [texts[i]], L, 1)[0] for i in cut]) if cut else None
+        for L, cut in cut_by_L.items()
+    }
+    report["candidate_device"] = "cpu"
+
+    # 모델 두 벌(각 2.2GB fp32)을 동시에 올리지 않는다. 짧은 기사는 어느 L에서도 입력이 같아
+    # 이웃 풀(보조 지표)로만 쓰이므로 빠른 장치에서 계산한다.
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     if device != "cpu":
         del cpu_model
@@ -103,11 +118,11 @@ def main() -> int:
 
     report["impact"] = {}
     for L in CANDIDATES:
-        cut = [i for i in long_ if lengths[i] > L]
+        cut = cut_by_L[L]
         if not cut:
             report["impact"][str(L)] = {"n": 0}
             continue
-        emb_L = np.stack([encode(fast_model, [texts[i]], L, 1)[0] for i in cut])
+        emb_L = emb_by_L[L]
         cos = np.einsum("ij,ij->i", emb_L, ref[cut])
         keep = []
         for row, i in enumerate(cut):
