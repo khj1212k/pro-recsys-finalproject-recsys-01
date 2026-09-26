@@ -161,7 +161,7 @@ EBNERD_ROOT=<repo>/data/benchmarks/ebnerd .venv/bin/python -m evaluation.recsys.
 - R1·R2(ranker_v2)와 R3(poolneg)가 서로 다른 학습 데이터 변형에 대해 판정됐다. poolneg 단독으로는 P1에서 popularity_24h를
   넘지 못한다(AUC 0.5025). 사전 등록 규칙은 그대로 적용했지만, 서빙 모델 한 개가 두 과제를 모두 이긴 것은 아니다
   (mixed가 가장 가깝다: P1 0.6080 > popularity_24h 0.5992, 여유 +0.0088 < 0.02).
-- P2에서 피처 기여만 떼어 본 사슬(풀 네거티브 고정)이 없고, MMR λ 간 쌍체 차이를 계산하지 않았다. 하이퍼파라미터는 튜닝하지 않았다.
+- 하이퍼파라미터는 튜닝하지 않았다. (v1에 없던 P2 풀 네거티브 사슬과 MMR λ 쌍체 차이는 A1 보충 실험으로 채웠다.)
 - 팀 방식 재현은 EB-NeRD 적응판이다(7일 네거티브 풀, 온보딩 대신 과거 상위 3개 카테고리).
 - 실행 피크 메모리 10.1GB(M2 16GB): large 데이터셋으로 키우려면 P2 표본·배치 계산을 더 나눠야 한다.
 
@@ -179,3 +179,8 @@ EBNERD_ROOT=<repo>/data/benchmarks/ebnerd .venv/bin/python -m evaluation.recsys.
   - 명령: `run_ebnerd --dataset ebnerd_small --chain poolneg --seeds 0 1 2 --n-boot 1000 --p2-sample 20000
     --p2-select-sample 5000 --mmr-sample 3000 --threads 6 --skip replay --out-json reports/recsys/ebnerd_v1_1_poolneg.json`
     (코드 `93bc8f1` 이후, 이 기록을 담은 커밋).
+  - **A1 결과**(`reports/recsys/ebnerd_v1_1_poolneg.json`, 코드 `2d223a5`; 겹치는 모델·MMR 수치는 v1과 동일하게 재현):
+    P2 ΔnDCG@10 +trailing 인기도 +0.0494 [+0.0464, +0.0523], +단기·세션 +0.0234 [+0.0213, +0.0258], +카테고리 share·히스토리 길이
+    +0.0147 [+0.0129, +0.0166] — 세 단계 모두 "기여". 같은 팀 피처에서 team_binary 0.1814 ≈ poolneg_team_features 0.1812라 P2에서의
+    팀 방식 대비 이득(+0.087)은 피처에서 온다. MMR λ=0.5 − λ=1.0: ΔILD@10 +0.0094 [+0.0090, +0.0099](다양성 이득 측정됨),
+    ΔnDCG@10 −0.0025 [−0.0057, +0.0008](정확도 비용 측정되지 않음). 결정 1(피처 구성)과 5(MMR λ 잠정 0.5)를 뒷받침하며 v1 판정은 그대로다.
