@@ -1,7 +1,10 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from fastapi.testclient import TestClient
+
+pytest.importorskip("fastapi")  # not installed in the integration CI job
+
+from fastapi.testclient import TestClient  # noqa: E402
 
 from sim.catalog import Item, synthetic_catalog
 from sim.click_model import ClickModel, preset
