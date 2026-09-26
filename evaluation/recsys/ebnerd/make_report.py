@@ -140,16 +140,23 @@ def two_stage_table(d: dict) -> str:
 
 def mmr_table(d: dict) -> str:
     sweep = d["p2_mmr"]["sweep"]
+    paired = d["p2_mmr"].get("paired_vs_lambda_1.0")
     lams = list(sweep)
     pts = [(sweep[l]["ndcg@10"]["mean"], sweep[l]["ild@10"]["mean"], sweep[l]["coverage@10"]) for l in lams]
     front = pareto_front(pts)
     rows = []
     for l, f in zip(lams, front):
         s = sweep[l]
-        rows.append([l, ci(s["ndcg@10"]), f"{s['recall@10']:.4f}", ci(s["ild@10"], 3), f"{s['coverage@10']:.3f}",
-                     ci(s["category_entropy@10"], 3), ci(s["novelty@10"], 2), "O" if f else ""])
-    return table(["λ", "nDCG@10", "Recall@10", "ILD@10", "coverage@10", "카테고리 엔트로피@10", "novelty@10",
-                  "Pareto"], rows)
+        row = [l, ci(s["ndcg@10"]), f"{s['recall@10']:.4f}", ci(s["ild@10"], 3), f"{s['coverage@10']:.3f}",
+               ci(s["category_entropy@10"], 3), ci(s["novelty@10"], 2), "O" if f else ""]
+        if paired is not None:
+            p = paired.get(l)
+            row += [dci(p["ndcg@10"]) if p else "(기준)", dci(p["ild@10"]) if p else "(기준)"]
+        rows.append(row)
+    header = ["λ", "nDCG@10", "Recall@10", "ILD@10", "coverage@10", "카테고리 엔트로피@10", "novelty@10", "Pareto"]
+    if paired is not None:
+        header += ["ΔnDCG@10 vs λ=1.0 (쌍체)", "ΔILD@10 vs λ=1.0 (쌍체)"]
+    return table(header, rows)
 
 
 def replay_table(d: dict) -> str:
@@ -209,7 +216,8 @@ def render(d: dict) -> str:
             sweep = d["p2_mmr"]["sweep"]
             lam = recommended_mmr_lambda({k: v["ndcg@10"]["mean"] for k, v in sweep.items()})
             parts += ["### MMR λ 스윕", mmr_table(d), f"사전 등록 규칙(λ=1.0 대비 nDCG@10 상대 손실 ≤2%)의 권장 λ: **{lam}**"]
-        parts += ["### 승격 규칙 판정(ADR 0013 사전 등록)", verdict_table(d)]
+        if d.get("protocol", {}).get("chain", "inview") == "inview":
+            parts += ["### 승격 규칙 판정(ADR 0013 사전 등록)", verdict_table(d)]
     if "replay" in d:
         rp = d["replay"]
         parts += ["### 실시간 재생",

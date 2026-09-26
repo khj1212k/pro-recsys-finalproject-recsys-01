@@ -38,7 +38,7 @@ from ..metrics import (
 )
 from .embedding_sanity import knn_category_accuracy
 from .loaders import ebnerd_root
-from .models import ABLATION, ALL_GROUPS, NEGATIVE_VARIANTS, baseline_scores, train
+from .models import ABLATION, ALL_GROUPS, CHAINS, baseline_scores, train
 from .prepare import (
     impressions_in,
     load_bench,
@@ -54,8 +54,6 @@ log = logging.getLogger("ebnerd")
 P1_KS = (5, 10)
 P1_METRICS = ("auc", "mrr", "ndcg@5", "ndcg@10")
 P2_SOURCE_KS = (50, 100, 200)
-# P2에서는 학습한 모든 모델을 평가한다(P1 ablation이 네거티브 분포 차이와 섞이는지 P2에서 따로 보기 위해).
-P2_MODELS = tuple(s.name for s in ABLATION + NEGATIVE_VARIANTS)
 SPLIT_SEED = 20260925
 SEEN_FILTER_METHODS = ("popularity_24h", "recency", "cosine_history", "team_binary", "ranker_v2",
                        "ranker_v2_poolneg", "ranker_v2_mixed")
@@ -160,30 +158,34 @@ def run_p1(bench, W, args, seeds, out) -> dict:
             keep_scores(name, sc)
 
     models: dict[str, list] = {}
-    rn_cache: dict[int, tuple] = {}
-    for spec in ABLATION + NEGATIVE_VARIANTS:
+    chain, extras = CHAINS[args.chain]
+    # 같은 (데이터 구성, seed)의 학습 데이터는 피처만 다른 여러 단계가 공유한다. 구성이 바뀌면 비워 메모리를 돌려준다.
+    neg_cache: dict[tuple, tuple] = {}
+    for spec in chain + extras:
         if args.only_models and spec.name not in args.only_models:
             continue
-        if spec.data != "random_neg":
-            rn_cache.clear()
+        if any(k[0] != spec.data for k in neg_cache):
+            neg_cache.clear()
         for seed in seeds:
-            if spec.data == "random_neg":
-                if seed not in rn_cache:
+            key = (spec.data, seed)
+            if spec.data == "inview":
+                fit, es = (tasks["fit"], feats["fit"]), (tasks["es"], feats["es"])
+            elif key not in neg_cache:
+                if spec.data == "random_neg":
                     r = np.random.default_rng(seed)
                     tf = random_negative_task(bench, "train", idx["fit"], r)
                     te = random_negative_task(bench, "train", idx["es"], r)
-                    rn_cache[seed] = ((tf, _features(bench.ctx["train"], tf, f"rn-fit-s{seed}")),
-                                      (te, _features(bench.ctx["train"], te, f"rn-es-s{seed}")))
-                fit, es = rn_cache[seed]
-            elif spec.data in ("pool_neg", "mixed_neg"):
-                r = np.random.default_rng(1000 + seed)
-                mixed = spec.data == "mixed_neg"
-                tf = pool_negative_task(bench, "train", idx["fit"], r, include_inview=mixed)
-                te = pool_negative_task(bench, "train", idx["es"], r, include_inview=mixed)
-                fit = (tf, _features(bench.ctx["train"], tf, f"{spec.data}-fit-s{seed}"))
-                es = (te, _features(bench.ctx["train"], te, f"{spec.data}-es-s{seed}"))
-            else:
-                fit, es = (tasks["fit"], feats["fit"]), (tasks["es"], feats["es"])
+                    tag = "rn"
+                else:
+                    r = np.random.default_rng(1000 + seed)
+                    mixed = spec.data == "mixed_neg"
+                    tf = pool_negative_task(bench, "train", idx["fit"], r, include_inview=mixed)
+                    te = pool_negative_task(bench, "train", idx["es"], r, include_inview=mixed)
+                    tag = spec.data
+                neg_cache[key] = ((tf, _features(bench.ctx["train"], tf, f"{tag}-fit-s{seed}")),
+                                  (te, _features(bench.ctx["train"], te, f"{tag}-es-s{seed}")))
+            if spec.data != "inview":
+                fit, es = neg_cache[key]
             m = train(spec, fit, es, seed=seed, num_threads=args.threads)
             sc = m.predict(ft, test)
             bank.add(spec.name, ranking_metrics(sc, labels, ptr, ks=P1_KS, seed=seed))
@@ -195,15 +197,15 @@ def run_p1(bench, W, args, seeds, out) -> dict:
     names = list(bank.runs)
     out["p1"] = {n: bank.summary(n) for n in names}
     out["p1_models"] = {n: [m.summary() for m in ms] for n, ms in models.items()}
-    steps = [s.name for s in ABLATION if s.name in bank.runs]
+    steps = [s.name for s in chain if s.name in bank.runs]
     out["p1_ablation_diffs"] = {f"{b}-vs-{a}": bank.diff(b, a) for a, b in zip(steps, steps[1:])}
     ref = "ranker_v2" if "ranker_v2" in bank.runs else steps[-1] if steps else None
     if ref:
-        variant_names = {s.name for s in NEGATIVE_VARIANTS}
+        variant_names = {s.name for s in extras}
         out["p1_vs_baselines"] = {f"{ref}-vs-{n}": bank.diff(ref, n) for n in names
                                   if n not in steps and n not in variant_names}
-        for other in ["team_binary"] + [s.name for s in NEGATIVE_VARIANTS]:
-            if other in bank.runs:
+        for other in ["team_binary"] + [s.name for s in extras]:
+            if other in bank.runs and other != ref:
                 out["p1_vs_baselines"][f"{ref}-vs-{other}"] = bank.diff(ref, other)
 
     # --- seen 필터 버전: 후보에서 이미 본 아이템을 뺀 뒤 재평가 ---
@@ -214,7 +216,7 @@ def run_p1(bench, W, args, seeds, out) -> dict:
         for seed, sc in zip(seeds, scores_keep[name]):
             fbank.add(name, ranking_metrics(sc[keep], labels[keep], fptr, ks=P1_KS, seed=seed))
     out["p1_seen_filtered"] = {n: fbank.summary(n) for n in fbank.runs}
-    return {"models": models, "tasks": tasks, "feats": feats, "idx": idx}
+    return {"models": models, "tasks": tasks, "feats": feats, "idx": idx, "chain": steps}
 
 
 def _novelty(feats: pd.DataFrame, task, lists_pos: np.ndarray) -> np.ndarray:
@@ -307,8 +309,8 @@ def run_p2(bench, W, args, seeds, p1, out):
     for seed in seeds:
         for name, sc in baseline_scores(feats, len(labels), seed).items():
             _add(name, seed, sc)
-    for name in P2_MODELS:
-        for m in p1["models"].get(name, []):
+    for name, ms in p1["models"].items():
+        for m in ms:
             _add(name, m.seed, m.predict(feats, task))
     out["p2"] = {}
     for name in bank.runs:
@@ -316,7 +318,7 @@ def run_p2(bench, W, args, seeds, p1, out):
         out["p2"][name].update(_list_metrics(bench, task, feats, lists[name], args.n_boot))
     if chosen in bank.runs:
         out["p2_vs"] = {f"{chosen}-vs-{n}": bank.diff(chosen, n) for n in bank.runs if n != chosen}
-    steps = [s.name for s in ABLATION if s.name in bank.runs]
+    steps = [n for n in p1["chain"] if n in bank.runs]
     out["p2_ablation_diffs"] = {f"{b}-vs-{a}": bank.diff(b, a) for a, b in zip(steps, steps[1:])}
     if chosen in bank.runs:
         out["p2_two_stage"] = _two_stage(task, chosen_scores, seeds, union_masks, args.n_boot)
@@ -345,10 +347,7 @@ def select_p2_model(bench, W, args, seeds, p1, out):
     task = p2_task(bench, "train", idx, window_h=48, exclude_seen=True)
     feats = _features(bench.ctx["train"], task, "p2-select")
     table = {}
-    for name in P2_MODELS:
-        ms = p1["models"].get(name, [])
-        if not ms:
-            continue
+    for name, ms in p1["models"].items():
         vals = [float(np.nanmean(ranking_metrics(m.predict(feats, task), task.labels, task.req.cand_ptr, ks=(10,),
                                                  n_pos_total=task.n_pos_total, seed=m.seed,
                                                  with_auc=False)["ndcg@10"])) for m in ms]
@@ -371,6 +370,7 @@ def run_mmr(bench, task, feats, scores, args, model_name: str) -> dict:
         sub = np.sort(rng.choice(task.req.n, size=args.mmr_sample, replace=False))
     res = {"n_requests": int(len(sub)), "model": f"{model_name} seed0", "top_k": 10, "pool_multiplier": 4,
            "sweep": {}}
+    per_request: dict[str, dict[str, np.ndarray]] = {}
     for lam in args.mmr_lambdas:
         rr = MMRReranker(lambda_param=lam, pool_multiplier=4)
         lists = np.full((len(sub), 10), -1, dtype=np.int64)
@@ -403,7 +403,21 @@ def run_mmr(bench, task, feats, scores, args, model_name: str) -> dict:
         metrics["recall@10"] = float(np.nanmean(hit / np.where(n_rel > 0, n_rel, np.nan)))
         metrics["seconds"] = round(time.time() - t0, 1)
         res["sweep"][f"{lam:.1f}"] = metrics
+        items = np.where(lists >= 0, task.req.cand_item[np.where(lists >= 0, lists, 0)], -1)
+        per_request[f"{lam:.1f}"] = {"ndcg@10": ndcg, "ild@10": intra_list_diversity(items, cat.emb)}
         log.info("mmr lambda=%.1f ndcg@10=%.4f ild=%.4f", lam, metrics["ndcg@10"]["mean"], metrics["ild@10"]["mean"])
+    if "1.0" in per_request:
+        # 같은 요청에서 lambda=1.0(순수 관련도) 대비 차이. lambda별 CI가 겹쳐도 쌍체로는 구분될 수 있다.
+        ref = per_request["1.0"]
+        clusters = task.group_user[sub]
+        res["paired_vs_lambda_1.0"] = {}
+        for lam, arrs in per_request.items():
+            if lam == "1.0":
+                continue
+            res["paired_vs_lambda_1.0"][lam] = {}
+            for m in ("ndcg@10", "ild@10"):
+                ci = paired_bootstrap_diff(arrs[m], ref[m], clusters, n_boot=args.n_boot, seed=1)
+                res["paired_vs_lambda_1.0"][lam][m] = {"diff": ci["mean"], "ci95": [ci["lo"], ci["hi"]], "n": ci["n"]}
     return res
 
 
@@ -517,6 +531,8 @@ def main(argv=None) -> int:
     ap.add_argument("--n-boot", type=int, default=1000)
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--only-models", nargs="*", default=None)
+    ap.add_argument("--chain", choices=sorted(CHAINS), default="inview",
+                    help="inview: ADR 0013 본 ablation(노출 네거티브) / poolneg: 48h 풀 네거티브 고정 보충 사슬")
     ap.add_argument("--skip", nargs="*", default=[], choices=["p2", "replay"])
     ap.add_argument("--out-json", required=True)
     args = ap.parse_args(argv)
@@ -538,7 +554,7 @@ def main(argv=None) -> int:
         "data": {"catalog": bench.catalog_info, **bench.data_info},
         "protocol": {"windows": {k: [_iso(a), _iso(b)] for k, (a, b) in W.items()},
                      "features": bench.ctx["train"].config.__dict__ | {"pop_windows_h": list(bench.ctx["train"].config.pop_windows_h)},
-                     "ablation": [s.__dict__ for s in ABLATION]},
+                     "chain": args.chain, "ablation": [s.__dict__ for s in sum(CHAINS[args.chain], [])]},
         "timing": {},
     }
     if not args.fake_dim:
