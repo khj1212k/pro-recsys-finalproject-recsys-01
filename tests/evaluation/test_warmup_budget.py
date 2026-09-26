@@ -72,16 +72,19 @@ def _clusters(sizes):
             for i, s in enumerate(sizes)]
 
 
-def test_selection_spreads_across_size_buckets_and_skips_fragments():
+def test_selection_spans_smallest_to_largest_size_and_skips_fragments():
     clusters = _clusters([2, 1, 3, 3, 4, 3, 5, 6, 7, 12, 15])
     picked = select_clusters(clusters, n=5, seed=20260926)
 
     sizes = [c["size"] for c in picked]
-    assert len(picked) == 5
-    assert all(s >= 3 for s in sizes)
-    assert sum(1 for s in sizes if s >= 10) == 2
-    assert sum(1 for s in sizes if 5 <= s <= 9) == 2
-    assert sum(1 for s in sizes if 3 <= s <= 4) == 1
+    # 서로 다른 크기 [3,4,5,6,7,12,15] 위에서 균등 간격 5개
+    assert sizes == [3, 5, 6, 7, 15]
+
+
+def test_selection_fills_from_remaining_when_fewer_distinct_sizes_than_n():
+    clusters = _clusters([3, 3, 3, 3, 10])
+    picked = select_clusters(clusters, n=4, seed=3)
+    assert sorted(c["size"] for c in picked) == [3, 3, 3, 10]
 
 
 def test_selection_is_deterministic_for_a_seed_and_never_repeats():
@@ -94,6 +97,7 @@ def test_selection_is_deterministic_for_a_seed_and_never_repeats():
 
 def test_selection_returns_fewer_when_not_enough_eligible_clusters():
     assert len(select_clusters(_clusters([2, 3, 4]), n=5, seed=1)) == 2
+    assert select_clusters(_clusters([1, 2]), n=5, seed=1) == []
 
 
 def test_generator_visible_articles_match_what_the_reconstructor_puts_in_the_prompt():

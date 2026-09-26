@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import logging
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence
@@ -159,6 +160,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     )
     logger.info("최종(split_v2 포함) 지표·안정성 계산 중")
     final_dbcv, final_dbcv_reason = dbcv(X, final_labels)
+    # split_v2가 만든 1건짜리 조각은 DBCV에서 정의되지 않으므로(싱글톤) 노이즈로 돌려 한 번 더 잰다
+    sizes_by_label = {g: int(np.sum(final_labels == g)) for g in set(final_labels.tolist()) if g != -1}
+    final_no_singletons = np.array([g if g != -1 and sizes_by_label[g] >= 2 else -1 for g in final_labels.tolist()])
+    final_dbcv_ns, final_dbcv_ns_reason = dbcv(X, final_no_singletons)
     X_aug = np.hstack([np.arange(len(ids), dtype=np.float64)[:, None], X])
     final_stab = stability_ari(X_aug, pipeline_fn(titles, mcs, ms), n_runs=args.stability_runs,
                                frac=args.stability_frac, seed=args.seed)
@@ -187,9 +192,13 @@ def main(argv: Optional[List[str]] = None) -> None:
             "sizes": distribution(final_sizes),
             "n_groups_below_2_articles": int(sum(1 for s in final_sizes if s < 2)),
             "n_groups_below_3_articles": int(sum(1 for s in final_sizes if s < 3)),
-            "n_split_parents": int(sum(1 for c in mem["clusters"] if c["size"] < np.sum(hdb_labels == c["hdbscan_parent_labels"][0]))),
+            # split_v2가 둘로 나눈 HDBSCAN 1차 클러스터 수(같은 부모를 가진 최종 그룹이 2개 이상)
+            "n_split_parents": int(sum(1 for _, k in Counter(c["hdbscan_parent_labels"][0] for c in mem["clusters"]).items() if k > 1)),
             "dbcv": final_dbcv,
             "dbcv_reason": final_dbcv_reason,
+            "dbcv_singletons_as_noise": final_dbcv_ns,
+            "dbcv_singletons_as_noise_reason": final_dbcv_ns_reason,
+            "dbcv_hdbscan_unstabilized_singletons_as_noise": dbcv(X, final_no_singletons, stable=False)[0],
             "cosine_silhouette": cosine_silhouette(X, final_labels),
             "stability": final_stab,
             "press_per_cluster": distribution([c["n_press"] for c in mem["clusters"]]),

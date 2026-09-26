@@ -110,37 +110,32 @@ class BudgetGuard:
         })
 
 
-SIZE_BUCKETS = (("10+", 10, 10**9), ("5-9", 5, 9), ("3-4", 3, 4))
+def select_clusters(clusters: Sequence[dict], n: int, seed: int, min_size: int = 3) -> List[dict]:
+    """클러스터 크기가 퍼지도록 n개를 고른다.
 
-
-def size_bucket(size: int) -> Optional[str]:
-    for name, lo, hi in SIZE_BUCKETS:
-        if lo <= size <= hi:
-            return name
-    return None
-
-
-def select_clusters(clusters: Sequence[dict], n: int, seed: int) -> List[dict]:
-    """크기 구간(10+ → 5-9 → 3-4)을 돌아가며 한 개씩 뽑아 크기가 퍼지게 n개를 고른다.
-
-    구간 안에서는 seed로 고정한 난수로 뽑는다. 3건 미만 그룹(split_v2가 만든 1~2건 조각)은
-    제외한다. 반환 순서는 뽑힌 순서.
+    크기 min_size 이상인 그룹의 서로 다른 크기 값들을 오름차순으로 놓고, 그 위에서 균등 간격으로
+    n개 크기를 골라(최소·최대 크기 포함) 각 크기에서 seed 난수로 한 개씩 뽑는다. 서로 다른 크기가
+    n개보다 적으면 남은 그룹 중에서 seed 난수로 채운다. min_size 미만(split_v2가 만든 1~2건
+    조각)은 제외한다. 반환 순서는 크기 오름차순으로 뽑힌 순서.
     """
     rng = np.random.default_rng(seed)
-    pools: Dict[str, List[dict]] = {name: [] for name, _, _ in SIZE_BUCKETS}
+    by_size: Dict[int, List[dict]] = {}
     for c in sorted(clusters, key=lambda c: int(c["cluster_idx"])):
-        b = size_bucket(int(c["size"]))
-        if b is not None:
-            pools[b].append(c)
-    order = [name for name, _, _ in SIZE_BUCKETS]
+        size = int(c["size"])
+        if size >= min_size:
+            by_size.setdefault(size, []).append(c)
+    levels = sorted(by_size)
+    if not levels or n <= 0:
+        return []
+    k = min(n, len(levels))
+    positions = sorted(set(int(p) for p in np.round(np.linspace(0, len(levels) - 1, k))))
     picked: List[dict] = []
-    while len(picked) < n and any(pools[b] for b in order):
-        for b in order:
-            if len(picked) >= n:
-                break
-            if pools[b]:
-                k = int(rng.integers(len(pools[b])))
-                picked.append(pools[b].pop(k))
+    for p in positions:
+        pool = by_size[levels[p]]
+        picked.append(pool.pop(int(rng.integers(len(pool)))))
+    rest = [c for lv in levels for c in by_size[lv]]
+    while len(picked) < n and rest:
+        picked.append(rest.pop(int(rng.integers(len(rest)))))
     return picked
 
 

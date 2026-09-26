@@ -114,8 +114,10 @@ def run_stage3(settings, batch_size: int) -> Dict[str, Any]:
     }
 
 
-def bench_reembed(n: int, batch_size: int) -> Dict[str, Any]:
-    """이미 임베딩된 기사 n건을 Stage3와 같은 방식으로 다시 인코딩(메모리 전용)."""
+def bench_reembed(n: int, batch_size: int, time_budget_s: Optional[float] = None) -> Dict[str, Any]:
+    """이미 임베딩된 기사 n건을 Stage3와 같은 방식으로 다시 인코딩(메모리 전용).
+
+    time_budget_s가 지나면 새 배치를 시작하지 않는다(호스트가 과부하일 때 벤치가 끝없이 늘어지지 않게)."""
     from core.embedder import NewsEmbedder
     from core.clustering.hdbscan_clusterer import parse_embedding
     from db.connection import get_connection, release_connection
@@ -152,6 +154,8 @@ def bench_reembed(n: int, batch_size: int) -> Dict[str, Any]:
         encode_s = 0.0
         per_batch = []
         for i in range(0, len(texts), batch_size):
+            if time_budget_s is not None and encode_s >= time_budget_s:
+                break
             out, elapsed = embedder.generate_embeddings_batch(texts[i:i + batch_size], batch_size)
             vecs.extend(out)
             encode_s += elapsed
@@ -160,10 +164,14 @@ def bench_reembed(n: int, batch_size: int) -> Dict[str, Any]:
     finally:
         embedder.cleanup()
 
+    done = len(vecs)
+    rows, texts, full_texts, lengths, stored = rows[:done], texts[:done], full_texts[:done], lengths[:done], stored[:done]
     cos = cosine_rows(np.asarray(vecs, dtype=np.float64), stored)
     stored_norms = np.linalg.norm(stored, axis=1)
     return {
         "n": len(rows),
+        "n_requested": n,
+        "stopped_by_budget": done < n,
         "ids_sha256": sha256_ids(r[0] for r in rows),
         "device": device,
         "batch_size": batch_size,
@@ -183,6 +191,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     parser.add_argument("--out", required=True)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--bench", type=int, default=0, help="이미 임베딩된 기사 N건 재인코딩 벤치(DB 쓰기 없음)")
+    parser.add_argument("--bench-time-budget-s", type=float, default=None)
     parser.add_argument("--skip-stage3", action="store_true")
     args = parser.parse_args(argv)
 
@@ -219,8 +228,12 @@ def main(argv: Optional[List[str]] = None) -> None:
         finally:
             release_connection(conn)
 
+    report["environment_after_stage3"] = environment()
+    write_json(args.out, report)  # 벤치가 중간에 끊겨도 Stage3 결과는 남긴다
+
     if args.bench:
-        report["bench"] = bench_reembed(args.bench, batch_size)
+        report["bench"] = bench_reembed(args.bench, batch_size, args.bench_time_budget_s)
+        report["environment_after_bench"] = environment()
 
     report["finished_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     write_json(args.out, report)
