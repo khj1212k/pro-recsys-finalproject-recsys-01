@@ -30,3 +30,4 @@
 - `negative_sample_ratio`의 negative sampling에 랜덤 시드가 없어 실행마다 학습 데이터 구성이 달라졌다(수정 완료, `FIX_LOG.md` #16)
 - λ 구간별 값(0.8/0.7/0.6)이 실제 사용자 행동 데이터 분석(EDA)이 아니라 직관적 가정으로 설정되어 있다 — `scripts/generate_daily_stats.py`의 `analyze_user_diversity()` 결과와 연결해 데이터 기반으로 재검증할 필요가 있다.
 - `user_age_band`/`user_gender` 피처가 DB에 실제 컬럼이 없어 항상 0으로 고정된 상수 피처다 — 모델 성능에 기여하지 못하는 죽은 피처.
+- 합성 아카이브 재현([`reports/recsys/team_repro_v2.md`](../../reports/recsys/team_repro_v2.md), [ADR 0007](0007-recsys-offline-evaluation-protocol.md))에서 inner-validation 조기 종료 lambdarank는 5개 시드 중 3개가 트리 1개(`best_iteration`=1)로 멈췄고, point-in-time MRR에서 lambdarank와 binary의 차이는 검출되지 않았다(binary − lambdarank 조기 종료 +0.010 [−0.081, +0.114], binary − lambdarank 100라운드 −0.032 [−0.121, +0.052], 합성 유저 31명·5시드). 이 전환은 모델 이름·평가지표와 학습 목표를 맞춘 정합성 수정이며, 성능 개선의 근거는 아직 없다.
