@@ -66,6 +66,17 @@ def test_fallback_softens_the_draft_sentence_instead_of_reusing_the_title(monkey
     assert converted["summary"] == converted["sentence"]
 
 
+def test_fallback_softener_applies_the_longer_phrase_before_its_suffix(monkeypatch):
+    # "것으로 보입니다"가 "입니다" 치환에 먼저 먹혀 "것으로 보이에요"가 되던 순서 문제
+    monkeypatch.setattr(Settings, "MAX_RETRY_TONE_VALIDATION", 0)
+    fake = FakeLLMClient(results=[{"parsed": ToneResult(title="", summary="", content="", keywords=[])}])
+    draft = dict(DRAFT, content="수요가 늘어날 것으로 보입니다. 정부는 대책을 발표했습니다.")
+
+    converted = ToneConverter(llm_client=fake).convert(draft)
+
+    assert converted["content"] == "📰 수요가 늘어날 것 같아요. 정부는 대책을 발표했어요."
+
+
 class _FakeDBConn:
     def cursor(self):
         raise AssertionError("임베딩이 없으면 cursor()를 부르지 않는다")
