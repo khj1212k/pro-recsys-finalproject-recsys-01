@@ -40,7 +40,7 @@ LLM 호출은 HyperCLOVA X가 아니라 위 어댑터를 거친다. 팀 시절�
 
 - LLM 호출 프로브(2026-09-25, 각 1회): 생성 기본 모델은 정상 응답 1.8초, 판정 기본 모델은 8.1초. 한 후보는 30초 타임아웃과 연속 503이 나서 판정 기본값에서 뺐다 — [ADR 0005 부록](docs/adr/0005-llm-provider-abstraction.md). 표본이 1회씩이라 지연 분포로 읽으면 안 된다.
 - 추론 시 사용자 히스토리 임베딩 메모이즈: 합성 데이터(사용자 300 × 뉴스 200)에서 수정 전 14.5~15.1초 → 수정 후 0.044~0.053초 — [ADR 0004](docs/adr/0004-continue-in-fork-and-port-july-fixes.md).
-- 항상 0이던 사용자 속성 피처 2개 제거 전후 LightGBM 예측이 3시드 × 열 위치 3가지에서 비트 단위로 같음 — [ADR 0003](docs/adr/0003-lightgbm-mmr-for-recommendation.md).
+- 항상 0이던 사용자 속성 피처 2개 제거 전후 LightGBM 예측이 합성 데이터에서 비트 단위로 같음. 3시드 × 열 위치 3가지 × 학습 방식 2가지(early stopping, 트리 300개 고정) — [reports/recsys/constant_feature_ablation_v1](reports/recsys/constant_feature_ablation_v1.md), [ADR 0003](docs/adr/0003-lightgbm-mmr-for-recommendation.md).
 - 단위 테스트와 pgvector 통합 테스트는 CI에서 매 푸시마다 돈다.
 
 아직 측정하지 않은 것:
