@@ -650,8 +650,12 @@ DOI 10.1145/3687151.3687160), 리더보드 AUC는 우리 split·정답 창과 �
   - 파일: 코드 tarball = `git archive <sha> recsys_core evaluation/__init__.py evaluation/recsys scripts/e15_colab_driver.py requirements-colab.txt`(커밋 id는 `git get-tar-commit-id`로
     복원 가능; tarball sha256 기록), behaviors/history parquet 4개(개별 업로드, 최대 24.0 MB), 메타 전용 articles parquet(§4.1.1; 원본 sha `b1cea52e…3d2`와 파생 sha), 임베딩
     `bge_m3_tsb512.f16.npy`(42,471,552 B) + `article_ids.npy` + meta.json. **zip은 올리지 않는다**(본문 텍스트·`__MACOSX` 항목 포함 = 피할 수 있는 반출).
-  - `colab upload`(`colab_cli/contents.py`)는 파일 전체를 읽어 base64 JSON 하나(`chunk: 1`)로 Contents PUT하므로 npy는 ≈57 MB 본문이 런타임 프록시를 지난다. 크기 제한·전송 시간은
-    스모크에서 검증되지 않았다(파일을 올리지 않았음) → S0에서 같은 크기의 무작위 파일로 시간·성공을 기록. **폴백**: `split -b 16m` 조각 업로드 → VM에서 `cat` → sha256 검증.
+  - **전송 경로(2026-09-27 변경, 실측)**: 데이터 파일은 `colab upload`가 아니라 사용자 GCP 프로젝트의 **비공개 GCS 버킷**(공개 접근 차단 강제, 90일 수명 규칙,
+    버킷·프로젝트 식별자는 `.ops/`에만 기록)에 두고, 이 버킷의 `objectViewer`만 가진 전용 서비스 계정으로 **실행마다 12시간 이하 V4 서명 URL**을 발급해 VM에서 내려받는다
+    (`gcloud storage sign-url --impersonate-service-account=… --region=us-central1 --duration=12h`; URL은 인자로만 전달하고 출력·커밋하지 않는다). 버킷에는 behaviors/history
+    parquet 4개·임베딩 npy·`article_ids.npy`·meta.json·`SHA256SUMS`만 있고 **기사 텍스트가 든 파일(zip, 원본 articles parquet)은 두지 않는다**. 메타 전용 articles parquet은
+    실행 직전 Mac에서 만들어 같은 방식으로 올리고 실행 뒤 지운다. 스모크(2026-09-27, CPU 런타임, `colab run`): 21.5 MB를 0.37 s(55 MiB/s)에 받고 sha256 일치, VM 자동 해제,
+    CU 잔액 표시 변화 없음(0.01 단위 미만). 코드 tarball(수 MB)만 `colab upload`로 보낸다. `colab upload`의 base64 단일 PUT 한계는 이 경로에서 문제가 되지 않는다.
   - VM에서 sha256 검증: parquet 4개는 `ebnerd_v1.json data.files`, 메타 parquet은 파생 sha, npy는 meta의 `embeddings_sha256`·`article_ids_sha256`. 하나라도 다르면 즉시 중단·해제.
   - `run_neural`은 `E15_CODE_SHA`(업로드한 SHA 파일)와 tarball sha256을 `meta`에 기록하고, ADR 0013 A3 사전 등록 커밋과 다르면 경고를 남긴다(`_git_sha()`는 `.git`이 없으면
     "unknown"을 돌려주므로 리포트 머리말 SHA는 이 값을 쓴다).
