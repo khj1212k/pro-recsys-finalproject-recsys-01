@@ -11,7 +11,7 @@ def _xml(news_id):
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <response><header><resultCode>0</resultCode><resultMsg>OK</resultMsg></header>
 <body><NewsItem>
-  <NewsItemId>{news_id}</NewsItemId><ApproveDate>09/24/2026 10:30:00</ApproveDate>
+  <NewsItemId>{news_id}</NewsItemId><ContentsStatus>I</ContentsStatus><ApproveDate>09/24/2026 10:30:00</ApproveDate>
   <Title>합성 정책뉴스 {news_id}</Title><ContentsType>H</ContentsType>
   <DataContents><![CDATA[{body}]]></DataContents>
   <OriginalUrl>https://www.korea.kr/news/policyNewsView.do?newsId={news_id}</OriginalUrl>
