@@ -309,3 +309,32 @@ def create_fake_app(backend: FakeBackend):
         return {"batches": len(backend.batches)}
 
     return app
+
+
+def main(argv=None) -> int:
+    """Serve the fake app on a real port (wall clock) - a local target for the Locust file.
+
+        python -m sim.fake_app --port 8765 --policy reactive
+    """
+    import argparse
+
+    import uvicorn
+
+    from sim.catalog import synthetic_catalog
+
+    p = argparse.ArgumentParser()
+    p.add_argument("--host", default="127.0.0.1")
+    p.add_argument("--port", type=int, default=8765)
+    p.add_argument("--policy", default="reactive", choices=POLICIES)
+    p.add_argument("--days", type=int, default=7, help="catalog days after today (items appear as time passes)")
+    p.add_argument("--seed", type=int, default=0)
+    args = p.parse_args(argv)
+    midnight = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    backend = FakeBackend(synthetic_catalog(n_days=args.days, seed=args.seed, start=midnight),
+                          policy=args.policy, seed=args.seed)
+    uvicorn.run(create_fake_app(backend), host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

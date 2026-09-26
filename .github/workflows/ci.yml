@@ -52,9 +52,10 @@ jobs:
             hdbscan \
             rapidfuzz
 
-      # sim/ driver tests (fake FastAPI app) and the contract test that runs the
-      # driver against the real backend routers. bcrypt is pinned as in
-      # backend/requirements.txt: passlib 1.7.4 raises ValueError on bcrypt 5.
+      # sim/ driver tests (fake FastAPI app), the contract test that runs the
+      # driver against the real backend routers, and the headless Locust smoke
+      # test (locust + uvicorn). bcrypt is pinned as in backend/requirements.txt:
+      # passlib 1.7.4 raises ValueError on bcrypt 5.
       - name: Install API test dependencies
         run: |
           uv pip install --python .venv/bin/python \
@@ -62,7 +63,9 @@ jobs:
             httpx2 \
             python-jose \
             passlib \
-            "bcrypt==3.2.2"
+            "bcrypt==3.2.2" \
+            locust \
+            uvicorn
 
       - name: Install ai_workspace package (no deps, editable)
         run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace

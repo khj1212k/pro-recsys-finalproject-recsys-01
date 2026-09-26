@@ -65,11 +65,12 @@ class ApiClient:
     def _request(self, endpoint: str, method: str, path: str, *, auth: bool = False,
                  expected: Sequence[int] = (200,), retry_auth: bool = True, **kw):
         headers = {"Authorization": f"Bearer {self.token}"} if auth and self.token else {}
-        if self.locust:
-            kw["name"] = endpoint
         t0 = time.perf_counter()
         try:
-            resp = self.session.request(method, self.base_url + path, headers=headers, **kw)
+            if self.locust:
+                resp = self._locust_request(endpoint, method, path, headers, expected, kw)
+            else:
+                resp = self.session.request(method, self.base_url + path, headers=headers, **kw)
         except Exception as e:  # transport errors are data for the error-rate metric
             self.calls.append(CallRecord(endpoint, method, None, (time.perf_counter() - t0) * 1000, False,
                                          self.user_index, type(e).__name__))
@@ -83,6 +84,18 @@ class ApiClient:
             return self._request(endpoint, method, path, auth=auth, expected=expected, retry_auth=False, **kw)
         if not ok:
             raise ApiError(endpoint, resp.status_code, _detail(resp))
+        return resp
+
+    def _locust_request(self, endpoint, method, path, headers, expected, kw):
+        # Locust would count every non-2xx as a failure; the contract expects some
+        # (signup 400 = account exists on a re-run), so judge by `expected` instead.
+        # Transport errors come back as status 0 here, not as exceptions.
+        with self.session.request(method, self.base_url + path, headers=headers, name=endpoint,
+                                  catch_response=True, **kw) as resp:
+            if resp.status_code in expected:
+                resp.success()
+            else:
+                resp.failure(f"{endpoint}: status {resp.status_code}")
         return resp
 
     def signup(self, user: SimUser) -> bool:
@@ -110,8 +123,8 @@ class ApiClient:
     def put_categories(self, codes: Sequence[int]) -> None:
         self._request("put_categories", "PUT", "/users/me/categories", auth=True, json={"categories": list(codes)})
 
-    def today(self) -> Feed:
-        resp = self._request("today", "GET", "/newsletters/today", auth=True)
+    def today(self, endpoint: str = "today") -> Feed:
+        resp = self._request(endpoint, "GET", "/newsletters/today", auth=True)
         return Feed([Item.from_api(p) for p in resp.json()], resp.headers.get(REC_SOURCE_HEADER))
 
     def click(self, news_letter_id: int) -> int:
