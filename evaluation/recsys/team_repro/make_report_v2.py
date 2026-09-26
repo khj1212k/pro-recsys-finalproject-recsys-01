@@ -130,6 +130,27 @@ def list_str(xs) -> str:
     return "[" + ", ".join("-" if x is None else (f"{x:g}" if isinstance(x, float) else str(x)) for x in xs) + "]"
 
 
+def unshown_verdict_summary(model_entry: dict, baselines) -> str:
+    """unshown 필터 비교에서 CI가 0을 벗어난 (베이스라인, 지표)만 '모델 우위/열위'로 묶어 문장으로 만든다."""
+    wins, losses = [], []
+    for b in baselines:
+        for mk, label in (("mrr", "MRR"), ("precision@5", "P@5")):
+            e = get(model_entry, b, "unshown_filtered", mk, default={})
+            v = ci_verdict(e)
+            if v == "positive":
+                wins.append(f"{b} {label} {fmt_eff(e)}")
+            elif v == "negative":
+                losses.append(f"{b} {label} {fmt_eff(e)}")
+    parts = []
+    if wins:
+        parts.append("모델 우위: " + ", ".join(wins))
+    if losses:
+        parts.append("모델 열위: " + ", ".join(losses))
+    if not parts:
+        return "모든 비교가 구분되지 않는다"
+    return "; ".join(parts) + " (나머지는 구분 안 됨)"
+
+
 # ------------------------------------------------------------------ 본문
 
 
@@ -258,6 +279,11 @@ def main() -> None:
             gap_sentence += (
                 " 다만 누출 효과 차이의 CI가 0을 포함하므로, 누출이 격차의 '주된 원인'이라고까지는 말할 수 없다."
             )
+        elif ci_verdict(did) == "positive":
+            gap_sentence += (
+                " 누출 효과 자체도 team-final 쪽이 더 크다(DiD CI가 0 초과) - team-final 코드가 추론 시점 누출에 더 "
+                "민감하다는 것과 일관되지만, 합성 유저 31명 위의 결과라 격차의 '원인'이라는 인과 문장으로 쓰지 않는다."
+            )
     A(gap_sentence)
 
     cur_mvb = mvb.get("current_lambdarank_es", {})
@@ -287,6 +313,12 @@ def main() -> None:
         )
     else:
         bl_sentence += f" CI가 0을 넘는(모델 우위) 비교: {', '.join(sorted(set(wins)))}."
+    unshown_mixed = unshown_verdict_summary(cur_mvb, strong)
+    if unshown_mixed:
+        bl_sentence += (
+            f" 이전 노출 아이템을 양쪽 모두에서 뺀 unshown 비교(정답은 전부 미노출 아이템이다)에서는 {unshown_mixed} - "
+            "필터에 따라 판정이 바뀌므로 어느 쪽으로도 '모델이 낫다/못하다'를 일반화하지 않는다(3-3절)."
+        )
     A(bl_sentence)
 
     fx = get(decomp, "fixed100", "primary", default={})
@@ -559,12 +591,15 @@ def main() -> None:
         s = block.get(f_main) or {}
         if not s:
             continue
-        sf = block.get(f_seen) or {} if f_seen else {}
-        uf = block.get(f_unshown) or {} if f_unshown else {}
+        def cell(block_name, mk):
+            if not block_name:
+                return "-"  # 동점 무작위 추첨에는 필터 변형을 계산하지 않는다
+            return fmt_ms((block.get(block_name) or {}).get(mk))
+
         A(
             f"| **모델: {label}** (시드 {s.get('n_seeds', '?')}) | {fmt_ms(s.get('mrr'))} | {fmt_ms(s.get('precision@5'))} "
-            f"| {fmt_ms(s.get('ndcg@5'))} | {fmt_ms(s.get('coverage@5'))} | {fmt_ms(sf.get('mrr'))} | {fmt_ms(sf.get('precision@5'))} "
-            f"| {fmt_ms(uf.get('mrr'))} | {fmt_ms(uf.get('precision@5'))} |"
+            f"| {fmt_ms(s.get('ndcg@5'))} | {fmt_ms(s.get('coverage@5'))} | {cell(f_seen, 'mrr')} | {cell(f_seen, 'precision@5')} "
+            f"| {cell(f_unshown, 'mrr')} | {cell(f_unshown, 'precision@5')} |"
         )
     A("")
     A(
@@ -648,6 +683,20 @@ def main() -> None:
             f"| {fmt_ms(s.get('mrr'))} | {fmt_ms(s.get('precision@5'))} | {fmt_ms(s.get('ndcg@5'))} | {fmt_ms(s.get('coverage@5'))} |"
         )
     A("")
+
+    gen_rand = get(base_gen, "random", "aggregate", "mrr")
+    gen_notes = []
+    for version, d in gen.items():
+        m = get(d, "summary", "mrr", "mean")
+        if m is not None and gen_rand is not None:
+            gen_notes.append(f"{VERSION_LABELS.get(version, version)} {pct(m)}({'무작위보다 낮다' if m < gen_rand else '무작위 이상'})")
+    if gen_notes:
+        A(
+            f"점추정 비교(CI 없음): 모델 평균 MRR {', '.join(gen_notes)}, random {pct(gen_rand)}. 학습 로그에 valid 아이템의 "
+            "상호작용이 전혀 없으므로 클릭 기반 신호가 없는 최신 아이템을 모델이 낮게 매긴다는 것과 일관된다(가설). 이 결과는 "
+            "모델의 새 아이템 일반화에 대해 아무것도 증명하지 않는다 - 과제 자체가 '최신 아이템 찾기'다."
+        )
+        A("")
 
     # ---------------------------------------------------------------- 4. 분해 실험
     A("## 4. 분해 실험 (current 코드, 1차 point-in-time)")
@@ -860,7 +909,7 @@ def main() -> None:
         "- \"팀원이 담당한 LightGBM+MMR 추천기를 세 git 스냅샷(team-final / 중간 수정본 / 현재 브랜치) 그대로 아카이브 합성 "
         "데이터 위에서 재실행하는 파일 기반 재현 하네스를 만들었다. git SHA·데이터 sha256·버전별 config.yaml 해시를 고정해, "
         "같은 시드의 재실행이 지표를 소수 4자리까지 재현한다.\""
-        + (f" (재현 대조: {', '.join(rc_ok)} arm이 v2 원자료와 소수 4자리 일치 - 부록)" if rc_ok else "")
+        + (f" (부록: 같은 시드를 공유하는 arm {len(rc_ok)}개가 v2 원자료와 소수 4자리 일치)" if rc_ok else "")
     )
     A(
         f"- \"재현한 파이프라인에서 평가 시점 누출을 찾았다: 유저 히스토리 피처가 데이터셋 끝 시각 기준으로 계산돼 채점 대상 "
@@ -868,12 +917,17 @@ def main() -> None:
         f"(현재 코드), {pct(get(tf_aw, 'mrr', 'mean'), 2)}→{pct(get(tf_p, 'mrr', 'mean'), 2)}(팀 최종 코드)로 떨어졌다(합성 유저 "
         f"{n_users}명, 시드 {len(seeds_main)}개).\""
     )
+    mrr_v = {b: ci_verdict(get(cur_mvb, b, "plain", "mrr", default={})) for b in strong}
+    if all(v == "inconclusive" for v in mrr_v.values()):
+        mrr_phrase = "MRR은 popularity·onboarding cosine·cosine_history와 구분되지 않았다"
+    else:
+        mrr_phrase = "MRR은 " + ", ".join(f"{b} 대비 {say(get(cur_mvb, b, 'plain', 'mrr', default={}), *MODEL_WORDS)}" for b in strong)
     if not wins:
         A(
             f"- \"point-in-time으로 고친 뒤, '모델이 단순 베이스라인보다 낫다'던 내 이전(v1) 분석 결론을 철회했다: P@5 "
             f"{pct(get(cur_p, 'precision@5', 'mean'), 2)} vs popularity {pct(get(base_team, 'popularity', 'aggregate', 'precision@5'), 2)}"
-            f"(쌍 차이 {fmt_eff(pop.get('precision@5'))}, {say(pop.get('precision@5'), *MODEL_WORDS)}), MRR은 popularity·onboarding "
-            "cosine·cosine_history와 구분되지 않거나 낮았다.\""
+            f"(쌍 차이 {fmt_eff(pop.get('precision@5'))}, {say(pop.get('precision@5'), *MODEL_WORDS)}), {mrr_phrase}.\" "
+            f"(보충: 이전 노출 아이템을 뺀 비교에서는 {unshown_mixed} - 우위 주장으로 쓰지 않는다)"
         )
     A(
         f"- \"아카이브 합성 로그를 프로파일링해, LLM 페르소나 {ds['n_users_total']}명이 뉴스레터 {ds['n_newsletters']}건 전부를 "
@@ -920,6 +974,10 @@ def main() -> None:
         "팀은 절대 지표만 보고했다)"
     )
     A("- \"FIX #4의 효과가 0(또는 거의 0)이다\"를 확정된 null로 쓰는 문장. (CI가 넓고 lambdarank 조기 종료 모델은 퇴화 시드 포함)")
+    A(
+        "- FIX #4/#5의 효과를 설정(objective·학습 라운드)과 합성 데이터라는 조건 없이 일반화하는 문장(예: \"FIX #4가 추천 성능을 "
+        "N% 개선했다\"). (효과가 검출되더라도 한 설정·합성 유저 31명 위의 결과다)"
+    )
     A("- \"LightGBM+MMR 모델이 MRR 0.77(vs 베이스라인 0.60)로 베이스라인보다 우수했다\" 등 모든 모델 우위 주장.")
     A(
         "- \"0.849 vs 0.772 격차의 주된 원인은 추론 시점 누출이다\" (인과 문장). 쓸 수 있는 형태: 'point-in-time 추론에서는 그 격차가 "
