@@ -1,5 +1,9 @@
 """ingest: RSS 수집 -> 본문 추출 -> BGE-M3 임베딩 (기존 main.py --from-stage 1 --to-stage 3).
 
+rss 단계는 정책브리핑 정책뉴스(공공누리 제1유형, Open API)도 함께 수집한다(ADR 0023). 본문을
+API가 주므로 extract 단계를 거치지 않는다. 인증키(DATA_GO_KR_SERVICE_KEY)가 없으면 건너뛰고,
+실패해도 RSS 결과는 그대로 두고 경고만 남긴다.
+
 스케줄러는 `--stages rss,extract`로 수집만 돌리고 임베딩은 embed 잡이 따로 한다(docker/crontab).
 세 단계를 한 번에 도는 기본값은 수동 부트스트랩용이다 - 스케줄러의 embed 잡과 동시에 돌리면
 같은 기사를 두 번 임베딩할 수 있다(결과는 같고 CPU만 낭비).
@@ -79,6 +83,21 @@ def news_raw_snapshot() -> Dict[str, Any]:
     }
 
 
+def collect_policy_briefing_safely(ctx) -> Dict[str, Any]:
+    """정책브리핑 수집. 이 출처의 실패(인증키·API 오류·네트워크)는 잡을 실패시키지 않고
+    stats에 에러와 경고로만 남긴다 - pipeline/stages.py의 Stage1_RSSCollection과 같은 규칙."""
+    from crawler.policy_briefing import collect_policy_briefing
+
+    started = time.monotonic()
+    try:
+        result = dict(collect_policy_briefing())
+    except Exception as e:  # noqa: BLE001
+        result = {"error": f"{type(e).__name__}: {e}"[:300]}
+        ctx.warn(f"정책브리핑 수집 실패 (RSS 수집 결과는 유지): {result['error']}")
+    result["duration_s"] = round(time.monotonic() - started, 3)
+    return result
+
+
 def check_extract_health(ctx, stats: Dict[str, Any]) -> None:
     for press, counts in sorted((stats.get("per_press") or {}).items()):
         attempted = sum(counts.values())
@@ -106,6 +125,7 @@ def run(ctx) -> Dict[str, Any]:
 
         rss = _timed(collect_rss, hours=args.rss_hours)
         ctx.stats["rss"] = rss
+        ctx.stats["policy_briefing"] = collect_policy_briefing_safely(ctx)
         if rss["per_feed"] and rss["failed_feeds"] == len(rss["per_feed"]):
             raise RuntimeError(f"모든 RSS 피드({rss['failed_feeds']}개) 수집 실패 - 네트워크/DNS를 확인하세요")
         ctx.checkpoint()

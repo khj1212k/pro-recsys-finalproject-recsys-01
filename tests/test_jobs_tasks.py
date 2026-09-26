@@ -37,7 +37,9 @@ def test_ingest_fails_loudly_when_every_rss_feed_failed(monkeypatch):
                 "per_feed": {"a": {"error": "dns"}, "b": {"error": "dns"}}}
 
     import crawler.rss_collector as rss_module
+    import crawler.policy_briefing as policy_module
     monkeypatch.setattr(rss_module, "collect_rss", fake_collect_rss)
+    monkeypatch.setattr(policy_module, "collect_policy_briefing", lambda: {"skipped": "no service key"})
 
     parser = build_parser()
     ctx = JobContext(job="ingest", args=parser.parse_args(["ingest", "--stages", "rss"]))
@@ -45,6 +47,67 @@ def test_ingest_fails_loudly_when_every_rss_feed_failed(monkeypatch):
         ingest.run(ctx)
     # 실패해도 여기까지의 수집 통계는 job_runs에 남도록 ctx.stats에 들어가 있어야 한다
     assert ctx.stats["rss"]["failed_feeds"] == 2
+
+
+def _ingest_rss_only(monkeypatch, policy_briefing):
+    """rss 단계만 도는 ingest. RSS는 정상, 정책브리핑 수집은 policy_briefing(함수)로 바꿔 끼운다."""
+    from jobs.tasks import ingest
+    import crawler.rss_collector as rss_module
+    import crawler.policy_briefing as policy_module
+
+    monkeypatch.setattr(rss_module, "collect_rss", lambda hours: {
+        "inserted": 3, "skipped": 1, "failed_feeds": 0, "per_feed": {"a": {"inserted": 3}}})
+    monkeypatch.setattr(policy_module, "collect_policy_briefing", policy_briefing)
+    monkeypatch.setattr(ingest, "news_raw_snapshot", lambda: {"total": 0})
+    checkpoints = []
+    ctx = JobContext(job="ingest", args=build_parser().parse_args(["ingest", "--stages", "rss"]))
+    ctx._checkpoint = lambda: checkpoints.append(dict(ctx.stats))
+    return ingest, ctx, checkpoints
+
+
+def test_ingest_rss_stage_also_collects_policy_briefing(monkeypatch):
+    """스케줄러는 `--stages rss,extract`로 수집한다. 정책브리핑(API 본문, 추출 불필요)도
+    이 rss 단계에서 돌아야 compose 런타임에서 실제로 수집된다."""
+    calls = []
+
+    def fake_policy():
+        calls.append(1)
+        return {"fetched": 4, "kept": 2, "inserted": 2, "skipped": 0}
+
+    ingest, ctx, checkpoints = _ingest_rss_only(monkeypatch, fake_policy)
+
+    ingest.run(ctx)
+
+    assert calls == [1]
+    assert ctx.stats["rss"]["inserted"] == 3
+    assert ctx.stats["policy_briefing"]["inserted"] == 2
+    assert "duration_s" in ctx.stats["policy_briefing"]
+    assert checkpoints and "policy_briefing" in checkpoints[-1]
+    assert ctx.warnings == []
+
+
+def test_ingest_policy_briefing_failure_keeps_rss_result_and_only_warns(monkeypatch):
+    import crawler.policy_briefing as policy_module
+
+    def boom():
+        raise policy_module.PolicyBriefingAPIError("30", "SERVICE_KEY_IS_NOT_REGISTERED_ERROR")
+
+    ingest, ctx, _ = _ingest_rss_only(monkeypatch, boom)
+
+    ingest.run(ctx)  # 이 출처의 실패로 RSS 수집 잡 전체를 실패시키지 않는다
+
+    assert ctx.stats["rss"]["inserted"] == 3
+    assert ctx.stats["policy_briefing"]["error"].startswith("PolicyBriefingAPIError")
+    assert len(ctx.warnings) == 1 and "정책브리핑" in ctx.warnings[0]
+
+
+def test_ingest_without_service_key_records_skip_without_warning(monkeypatch):
+    ingest, ctx, _ = _ingest_rss_only(monkeypatch, lambda: {"skipped": "no service key"})
+
+    ingest.run(ctx)
+
+    assert ctx.stats["policy_briefing"]["skipped"] == "no service key"
+    assert ctx.warnings == []
 
 
 def _ingest_extract_only(monkeypatch, extract_stats):
