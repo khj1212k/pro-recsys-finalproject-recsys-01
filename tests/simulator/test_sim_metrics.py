@@ -116,7 +116,7 @@ def test_fallback_rate_is_unknown_without_a_source_header():
 
 
 def test_fallback_rate_counts_the_request_time_api_fallback_chain():
-    # X-Rec-Source values of the request-time /today (ADR 0015 branch): realtime and
+    # X-Rec-Source values of the request-time /today (feat/realtime-recommendation): realtime and
     # cold-start paths are answers by design; batch/popular/recent/empty come from
     # the failure chain, but batch is also the normal answer in RECSYS_MODE=batch,
     # so it is reported in source_counts and not counted as fallback.
