@@ -158,18 +158,33 @@ def nested_bootstrap_paired_diff(
     n_boot: int = 1000,
     seed: int = 0,
     alpha: float = 0.05,
+    paired_seeds: bool = False,
 ) -> Dict[str, float]:
     """nested_bootstrap_ci의 paired-diff 버전. A/B 각각 (시드 리스트, per-user dict
-    리스트)를 받아, 공통 유저에 대해 시드 x 유저를 함께(각 조건 내에서 독립적으로)
-    재표본하며 B-A 평균 차이의 신뢰구간을 계산한다."""
+    리스트)를 받아, 공통 유저에 대해 시드 x 유저를 함께 재표본하며 B-A 평균 차이의
+    신뢰구간을 계산한다.
+
+    paired_seeds=False(기본): 시드를 각 조건 안에서 독립적으로 재표본한다 - 두 조건이
+    서로 다른 모델(다른 학습)일 때 쓴다.
+
+    paired_seeds=True: A/B의 i번째 시드가 **같은 학습된 모델**을 공유할 때(예: 같은
+    ranker를 point-in-time/as-written 두 방식으로만 추론한 누출 효과) 두 조건에 같은
+    시드 인덱스를 쓴다. 독립 재표본은 공유된 모델 변동을 두 번 더해 구간을 과하게
+    넓힌다(보수적 편향) - v2 리뷰 MINOR 지적 대응. 이 모드는 두 조건의 시드 수가
+    같아야 한다.
+    """
     mat_a, common_a, n_seeds_a, n_users_a = _common_matrix(per_user_by_seed_a, metric_key)
     mat_b, common_b, n_seeds_b, n_users_b = _common_matrix(per_user_by_seed_b, metric_key)
     common = sorted(set(common_a) & set(common_b))
     if not common or n_seeds_a == 0 or n_seeds_b == 0:
         return {
             "effect": float("nan"), "ci_lo": float("nan"), "ci_hi": float("nan"),
-            "n_users": len(common), "n_boot": n_boot,
+            "n_users": len(common), "n_boot": n_boot, "paired_seeds": paired_seeds,
         }
+    if paired_seeds and n_seeds_a != n_seeds_b:
+        raise ValueError(
+            f"paired_seeds=True에는 두 조건의 시드 수가 같아야 합니다 ({n_seeds_a} vs {n_seeds_b})."
+        )
     idx_a = [common_a.index(u) for u in common]
     idx_b = [common_b.index(u) for u in common]
     mat_a = mat_a[:, idx_a]
@@ -180,7 +195,7 @@ def nested_bootstrap_paired_diff(
     diffs = np.empty(n_boot)
     for b in range(n_boot):
         sa = rng.integers(0, n_seeds_a, size=n_seeds_a)
-        sb = rng.integers(0, n_seeds_b, size=n_seeds_b)
+        sb = sa if paired_seeds else rng.integers(0, n_seeds_b, size=n_seeds_b)
         u_idx = rng.integers(0, n_users, size=n_users)
         diffs[b] = mat_b[np.ix_(sb, u_idx)].mean() - mat_a[np.ix_(sa, u_idx)].mean()
     lo, hi = np.percentile(diffs, [100 * alpha / 2, 100 * (1 - alpha / 2)])
@@ -188,4 +203,22 @@ def nested_bootstrap_paired_diff(
         "effect": point, "ci_lo": float(lo), "ci_hi": float(hi),
         "n_users": n_users, "n_seeds_a": n_seeds_a, "n_seeds_b": n_seeds_b, "n_boot": n_boot,
         "mean_a": float(mat_a.mean()), "mean_b": float(mat_b.mean()),
+        "paired_seeds": paired_seeds,
     }
+
+
+def ci_verdict(effect: Dict[str, float]) -> str:
+    """부트스트랩 효과 dict를 CI 부호로만 분류한다 - 리포트 문장이 숫자와 무관하게
+    하드코딩되어 '1.0을 0.897에 근접'처럼 쓰이던 문제(v2 리뷰 MINOR)를 막기 위해,
+    결론 단어는 이 함수가 돌려주는 값에서만 고른다.
+
+    반환: "positive"(CI 전체가 0 초과), "negative"(CI 전체가 0 미만),
+    "inconclusive"(CI가 0을 포함), "nan"(계산 불가)."""
+    lo, hi = effect.get("ci_lo"), effect.get("ci_hi")
+    if lo is None or hi is None or lo != lo or hi != hi:
+        return "nan"
+    if lo > 0:
+        return "positive"
+    if hi < 0:
+        return "negative"
+    return "inconclusive"

@@ -159,3 +159,36 @@ def test_nested_bootstrap_paired_diff_wider_than_plain_bootstrap_when_seeds_vary
     nested_width = nested["ci_hi"] - nested["ci_lo"]
     plain_width = plain["ci_hi"] - plain["ci_lo"]
     assert nested_width > plain_width
+
+
+def test_nested_bootstrap_paired_diff_paired_seeds_narrower_when_model_is_shared():
+    """두 조건이 같은 시드의 같은 모델을 공유하면(A의 시드 변동이 B에도 그대로 실림)
+    paired_seeds=True가 공유 변동을 상쇄해 독립 재표본보다 구간이 좁아야 한다."""
+    rng = np.random.default_rng(1)
+    n_users = 20
+    a, b = [], []
+    for _ in range(5):
+        shift = rng.normal(scale=1.0)  # 시드(=모델)마다 큰 공통 흔들림
+        a.append({i: {"m": float(i % 4) + shift} for i in range(n_users)})
+        b.append({i: {"m": float(i % 4) + shift + 0.3} for i in range(n_users)})
+    indep = M.nested_bootstrap_paired_diff(a, b, "m", n_boot=500, seed=0)
+    paired = M.nested_bootstrap_paired_diff(a, b, "m", n_boot=500, seed=0, paired_seeds=True)
+    assert paired["effect"] == pytest.approx(0.3)
+    assert paired["paired_seeds"] is True and indep["paired_seeds"] is False
+    assert (paired["ci_hi"] - paired["ci_lo"]) < (indep["ci_hi"] - indep["ci_lo"])
+    assert paired["ci_lo"] > 0  # 공통 변동을 상쇄하면 일정한 +0.3 이동이 검출된다
+
+
+def test_nested_bootstrap_paired_diff_paired_seeds_requires_equal_seed_counts():
+    a = [{i: {"m": 1.0} for i in range(5)} for _ in range(3)]
+    b = [{i: {"m": 1.0} for i in range(5)} for _ in range(2)]
+    with pytest.raises(ValueError):
+        M.nested_bootstrap_paired_diff(a, b, "m", n_boot=10, paired_seeds=True)
+
+
+def test_ci_verdict_classifies_by_ci_sign_only():
+    assert M.ci_verdict({"effect": 0.1, "ci_lo": 0.01, "ci_hi": 0.2}) == "positive"
+    assert M.ci_verdict({"effect": -0.1, "ci_lo": -0.2, "ci_hi": -0.01}) == "negative"
+    assert M.ci_verdict({"effect": -0.03, "ci_lo": -0.15, "ci_hi": 0.07}) == "inconclusive"
+    assert M.ci_verdict({"effect": float("nan"), "ci_lo": float("nan"), "ci_hi": float("nan")}) == "nan"
+    assert M.ci_verdict({}) == "nan"
