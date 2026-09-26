@@ -450,7 +450,8 @@ EB-NeRD에는 클릭 시각이 없어 하네스는 클릭을 그 노출의 시�
 (창 길이는 그대로) 다시 계산했다. `reports/recsys/ebnerd_v1_click_time_sensitivity.json`, 코드 `9a44f54`, 명령
 `python -m evaluation.recsys.ebnerd.click_time_sensitivity --dataset ebnerd_small --compare-json reports/recsys/ebnerd_v1.json
 --out-json reports/recsys/ebnerd_v1_click_time_sensitivity.json`(seed 0/1/2, 유저 부트스트랩 1,000회, v1과 같은 평가 노출
-244,647건·P2 표본 20,000 요청), 311초, 피크 메모리 2.0GB. gap=0 결과는 v1 수치와 정확히 같다(평균의 최대 절대 차이 0).
+244,647건·P2 표본 20,000 요청), 실행 309초(JSON `timing_seconds`, 프로세스 전체 벽시계 약 311초), 피크 메모리 2.0GB.
+gap=0 결과는 v1 수치와 정확히 같다(평균의 최대 절대 차이 0).
 
 #### 클릭이 있는 평가 노출의 read_time(페이지 체류 초)
 
