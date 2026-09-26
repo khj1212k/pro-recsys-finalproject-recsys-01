@@ -65,12 +65,9 @@ class BaseSettings:
     # ========== Pipeline ==========
     DEFAULT_CLUSTER_LIMIT: int = None
 
-    # ========== Quality Thresholds ==========
-    # (미사용) 코드 어디에서도 읽지 않는다. ClusterEvaluator의 confidence를 게이트로 쓸지는
-    # 사람 라벨 대비 ROC로 정한 뒤 연결한다 - 그 전까지 이 값은 동작에 영향이 없다.
-    # (MIN_NEWSLETTER_SCORE=7은 삭제: 실제 PASS 기준은 workflow/evaluators.py의 score >= 5였다.)
-    MIN_CLUSTER_CONFIDENCE: float = 0.7
-    
+    # 품질 판정 기준은 설정이 아니라 workflow/evaluators.py에 있다(뉴스레터 PASS: score >= 5).
+    # 클러스터 평가 confidence는 아직 게이트로 쓰지 않는다.
+
     # ========== Pipeline Stages ==========
     STAGE_NAMES: Dict[int, str] = {
         0: "User Embedding",
