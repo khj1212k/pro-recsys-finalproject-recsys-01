@@ -14,6 +14,7 @@
 # - 날짜 파라미터 형식(YYYYMMDD)은 공공데이터포털 API의 관례를 따른 것이고, 인증키가 없어
 #   실제 응답으로는 아직 확인하지 못했다. 형식이 틀리면 API가 에러 코드 97을 돌려주고
 #   PolicyBriefingAPIError로 드러난다.
+import hashlib
 import logging
 import os
 import re
@@ -245,13 +246,68 @@ def fetch_policy_news(service_key: str, start: date, end: date, http_get: Callab
 
 # --------------------------------------------------------------------------- 수집
 
-_INSERT_SQL = """
-    INSERT INTO news_raw (press_id, raw_news_title, raw_news_content, raw_news_url,
-                          raw_news_created_at, raw_news_crawled_at)
-    VALUES %s
-    ON CONFLICT (raw_news_url) DO NOTHING
-    RETURNING raw_news_url
-"""
+_BASE_COLUMNS = ("press_id", "raw_news_title", "raw_news_content", "raw_news_url",
+                 "raw_news_created_at", "raw_news_crawled_at")
+# 수집 런타임 브랜치(PR #8)의 마이그레이션 f87f7378672e·d48994e9d26e가 news_raw에 더하는 컬럼.
+# 그 스키마의 본문 추출기는 raw_news_extract_status IS NULL인 행을 골라 원문 페이지를 다시
+# 내려받아 본문을 덮어쓴다. API 본문(공공누리 텍스트만, 사진 캡션 제외)을 지키려면 이 행을
+# 처음부터 추출 완료('ok')로 넣어야 한다. 컬럼이 없는 스키마(main)에서는 넣지 않는다.
+EXTRACT_STATUS_COLUMN = "raw_news_extract_status"
+EXTRACTED_AT_COLUMN = "raw_news_extracted_at"
+CONTENT_SHA256_COLUMN = "raw_news_content_sha256"
+
+
+def content_sha256(text: str) -> str:
+    """본문 해시. 마이그레이션 d48994e9d26e(encode(sha256(convert_to(content, 'UTF8')), 'hex'))와
+    그 브랜치 추출기의 content_sha256과 같은 값이다."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def news_raw_columns(cur) -> set:
+    """현재 연결의 스키마에서 news_raw 컬럼 이름 집합 (수집 1회당 1번 조회)."""
+    cur.execute(
+        """
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'news_raw'
+        """
+    )
+    return {row[0] for row in cur.fetchall()}
+
+
+def build_insert(columns: set) -> Tuple[str, str, Callable[[int, PolicyNewsRow, datetime], tuple]]:
+    """스키마에 맞는 (INSERT 문, execute_values 템플릿, 행 -> 값 튜플 함수)를 만든다.
+
+    - 추출 상태 컬럼이 있으면 'ok'와 now()를, 해시 컬럼이 있으면 본문 sha256을 채운다.
+    - 해시 컬럼이 있는 스키마에는 'ok' 행끼리 본문 해시가 유일해야 하는 부분 unique 인덱스
+      (uq_news_raw_content_sha256_ok)가 있다. ON CONFLICT (raw_news_url)로 대상을 좁히면
+      본문이 같은 기사(URL만 다름) 하나 때문에 배치 전체가 UniqueViolation으로 롤백된다.
+      그래서 그 스키마에서는 대상 없는 ON CONFLICT DO NOTHING으로 두 경우를 모두 건너뛴다.
+    """
+    names = list(_BASE_COLUMNS)
+    placeholders = ["%s"] * len(_BASE_COLUMNS)
+    if EXTRACT_STATUS_COLUMN in columns:
+        names.append(EXTRACT_STATUS_COLUMN)
+        placeholders.append("'ok'")
+    if EXTRACTED_AT_COLUMN in columns:
+        names.append(EXTRACTED_AT_COLUMN)
+        placeholders.append("now()")
+    with_hash = CONTENT_SHA256_COLUMN in columns
+    if with_hash:
+        names.append(CONTENT_SHA256_COLUMN)
+        placeholders.append("%s")
+    conflict = "ON CONFLICT DO NOTHING" if with_hash else "ON CONFLICT (raw_news_url) DO NOTHING"
+
+    sql = (
+        f"INSERT INTO news_raw ({', '.join(names)}) VALUES %s "
+        f"{conflict} RETURNING raw_news_url"
+    )
+    template = f"({', '.join(placeholders)})"
+
+    def values(press_id: int, row: PolicyNewsRow, crawled_at: datetime) -> tuple:
+        base = (press_id, row.title, row.content, row.url, row.published_at, crawled_at)
+        return base + (content_sha256(row.content),) if with_hash else base
+
+    return sql, template, values
 
 
 def _get_or_create_press_id(cur, press_name: str) -> int:
@@ -266,6 +322,7 @@ def _get_or_create_press_id(cur, press_name: str) -> int:
 def collect_policy_briefing(days: int = 3, now: Optional[datetime] = None, fetch: Optional[Callable] = None,
                             press_name: str = POLICY_BRIEFING_PRESS) -> Dict[str, object]:
     """최근 days일(오늘 포함)의 정책뉴스를 news_raw에 넣는다. 재실행 안전(ON CONFLICT DO NOTHING).
+    skipped는 이미 있는 URL(그리고 본문 해시 컬럼이 있는 스키마에서는 이미 있는 본문)의 수다.
 
     본문은 API가 주므로 본문 추출(Stage2)을 거치지 않고 바로 저장한다. 인증키가 없으면
     아무것도 하지 않고 {"skipped": ...}를 돌려준다.
@@ -292,11 +349,11 @@ def collect_policy_briefing(days: int = 3, now: Optional[datetime] = None, fetch
     conn = get_connection()
     try:
         with conn.cursor() as cur:
+            sql, template, values = build_insert(news_raw_columns(cur))
             press_id = _get_or_create_press_id(cur, press_name)
             inserted = execute_values(
-                cur, _INSERT_SQL,
-                [(press_id, r.title, r.content, r.url, r.published_at, crawled_at) for r in rows],
-                fetch=True,
+                cur, sql, [values(press_id, r, crawled_at) for r in rows],
+                template=template, fetch=True,
             )
         conn.commit()
     except Exception:
