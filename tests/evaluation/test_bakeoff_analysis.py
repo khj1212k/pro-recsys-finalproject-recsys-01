@@ -238,3 +238,31 @@ def test_cluster_evaluator_analysis_drops_rows_where_the_evaluator_did_not_answe
 
     assert out["auc"] == pytest.approx(1.0)
     assert (out["n"], out["n_excluded_unparsed"]) == (20, 6)
+
+
+def test_judge_agreement_is_measured_on_other_families_outputs_only():
+    # 운영에서 judge는 다른 계열 생성기(승자)의 출력만 채점한다. 자기 계열 출력에 후한 judge의
+    # 자기선호가 선정 지표(OOF κ)에 섞이지 않게 같은 계열 출력은 빼고 잰다(ADR 0009 A4).
+    w = World().add(A, 20).add(B, 12).add(C, 12).relabel()
+    rows = _judgments(w, "gemini-judge", "gemini", "v2", agree=1.0, seed=1)
+    for r in rows:
+        if r["generator_family"] == "gemini":
+            r["result"]["criteria"] = {k: 5 for k in r["result"]["criteria"]}  # 자기 계열은 전부 통과
+
+    jm = w.analyze(judgments=rows)["judges"]["gemini-judge"]
+
+    assert jm["oof_kappa"] == pytest.approx(1.0)
+    assert (jm["n"], jm["n_excluded_same_family"]) == (80, 40)
+
+
+def test_families_are_normalized_the_same_way_for_candidates_and_judges(monkeypatch):
+    import core.llm.registry as registry
+
+    monkeypatch.setattr(registry, "_model_family", lambda provider: "one-vendor")
+    w = World().add(A, 36).add(B, 12).add(C, 12).relabel()
+    js = _judgments(w, "haiku-v2", "one-vendor", "v2", agree=0.9, seed=2)
+
+    sel = w.analyze(judgments=js)["judge_selection"]
+
+    # 모든 후보와 judge가 같은 계열로 정규화되면 교차 계열 judge가 없다
+    assert sel["judge"] is None

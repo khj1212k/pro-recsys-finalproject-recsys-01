@@ -218,11 +218,16 @@ def claim_precision(judgments: Sequence[dict], gens_by_key: dict, human: dict) -
 
 
 def judge_metrics(judgments: Sequence[dict], gens: Sequence[dict], human: dict, prereg: dict) -> Dict[str, dict]:
+    """judge별 사람 라벨 일치도. 교차 계열 요건이 있으면 judge 자신의 계열이 만든 출력은 빼고 잰다
+    (ADR 0009 A4) - 운영에서 judge는 다른 계열 생성기의 출력만 채점하므로, 같은 계열 출력의
+    자기선호가 선정 지표에 섞이면 안 된다. 자기선호 자체는 self_preference(DiD)가 따로 잰다."""
     sel = prereg["judge_selection"]
+    cross_only = sel.get("require_cross_family", True)
     gens_by_key = {(g["candidate"], g["item_id"]): g for g in gens}
     out = {}
     for name in sorted({j["judge"] for j in judgments}):
-        js = [j for j in judgments if j["judge"] == name and (j["candidate"], j["item_id"]) in human]
+        labeled = [j for j in judgments if j["judge"] == name and (j["candidate"], j["item_id"]) in human]
+        js = [j for j in labeled if not (cross_only and j["generator_family"] == j["judge_family"])]
         if not js:
             continue
         version = js[0]["judge_version"]
@@ -239,6 +244,7 @@ def judge_metrics(judgments: Sequence[dict], gens: Sequence[dict], human: dict, 
         pairs = [(s, h) for s, h in zip(scores, styles) if not math.isnan(s)]
         out[name] = {
             "family": js[0]["judge_family"], "version": version, "model": js[0]["judge_model"], "n": len(js),
+            "n_excluded_same_family": len(labeled) - len(js),
             "oof_kappa": sel_out["oof_kappa"], "folds": sel_out["folds"], "rule_full_fit": sel_out["full_fit"],
             "spearman_vs_human_style": cal.spearman(*zip(*pairs)) if len(pairs) > 2 else float("nan"),
             "claim_precision": claim_precision(js, gens_by_key, human) if version == "v2" else None,
@@ -351,9 +357,12 @@ def analyze(prereg: dict, generations: List[dict], labels: dict, blind_key: dict
                                or reliability["publishable"]["n"] == 0
                                or math.isnan(reliability["publishable"]["kappa"]))
 
-    fam_of = {c["name"]: c["generator"]["provider"] for c in prereg["candidates"]}
+    # 계열은 러너(judge_one)와 같은 함수로 정규화한다 - judge 행의 *_family 값이 이 함수의 출력이다
+    from core.llm.registry import _model_family
+
+    fam_of = {c["name"]: _model_family(c["generator"]["provider"]) for c in prereg["candidates"]}
     # 승자가 없으면 현재 기본 생성기(사전 등록의 첫 후보 = incumbent) 계열 기준으로 judge를 고른다
-    gen_family = fam_of.get(decision.get("winner")) or prereg["candidates"][0]["generator"]["provider"]
+    gen_family = fam_of.get(decision.get("winner")) or fam_of[prereg["candidates"][0]["name"]]
     jm = judge_metrics(judgments, generations, human, prereg)
     return {
         "prereg_id": prereg.get("id"),
