@@ -81,7 +81,10 @@ python -m evaluation.clustering.metrics \
   `embedding_sanity.py`(카테고리 kNN), `run_ebnerd.py`(전체 실행), `make_report.py`(JSON → 표,
   ADR 0013 승격 규칙 판정). 피처는 최상위 `recsys_core/`(numpy/pandas만, DB 없음)가 계산한다.
 - 프로토콜·판정 규칙은 [ADR 0013](../docs/adr/0013-ranker-v2-design.md), 결과는
-  `reports/recsys/ebnerd_v1.{md,json}`.
+  `reports/recsys/ebnerd_v1.{md,json}`(본 ablation, `--chain inview`)과 `ebnerd_v1_1_poolneg.json`
+  (48h 풀 네거티브 고정 보충 사슬, `--chain poolneg`).
+- demo 데이터 기반 테스트(로더·과제 구성·전 구간 스모크)는 데이터가 있어야 돈다. git worktree에서는
+  `EBNERD_ROOT=<메인 체크아웃>/data/benchmarks/ebnerd`를 지정해 실행한다(없으면 skip).
 - **라이선스**: EB-NeRD는 연구/비상업 전용이고 이 Mac 밖으로 반출할 수 없다. 데이터·임베딩은
   gitignore된 `data/benchmarks/ebnerd/`(또는 `EBNERD_ROOT`)에만 두고 저장소에는 집계 수치만 커밋한다.
   데이터가 없는 환경(CI)에서는 관련 테스트가 skip된다.
