@@ -24,10 +24,20 @@ class Stage0_UserEmbedding(PipelineStage):
         return UserEmbedder().batch_update_all_users()
 
 class Stage1_RSSCollection(PipelineStage):
-    """RSS 수집"""
-    def execute(self, **kwargs) -> Dict[str, int]:
+    """RSS 수집 + 정책브리핑 정책뉴스(공공누리 제1유형, Open API) 수집"""
+    def execute(self, **kwargs) -> Dict[str, Any]:
         from crawler.rss_collector import collect_rss
-        return collect_rss()
+        from crawler.policy_briefing import collect_policy_briefing
+
+        result = dict(collect_rss())
+        # 정책브리핑은 인증키(DATA_GO_KR_SERVICE_KEY)가 있을 때만 돈다. 이 출처의 실패가
+        # 언론사 RSS 수집 결과를 버리게 하지 않도록 따로 잡아 기록만 한다 (docs/adr/0023).
+        try:
+            result["policy_briefing"] = collect_policy_briefing()
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"정책브리핑 수집 실패: {e}")
+            result["policy_briefing"] = {"error": f"{type(e).__name__}: {e}"[:300]}
+        return result
 
 class Stage2_ContentExtraction(PipelineStage):
     """본문 추출"""
