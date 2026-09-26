@@ -3,12 +3,14 @@
 # - trafilatura로 HTML에서 본문 텍스트 추출
 # - 멀티프로세싱으로 병렬 처리
 
+import hashlib
 import logging
 import multiprocessing
 import time
 from collections import Counter
 from typing import Any, Dict, NamedTuple, Tuple
 
+import psycopg2
 import trafilatura
 from tqdm import tqdm
 from db.connection import get_connection, release_connection
@@ -45,25 +47,47 @@ def fetch_url_with_retry(url, fetch_fn=None, max_attempts=None, sleep_fn=time.sl
 class ExtractionResult(NamedTuple):
     raw_news_id: int
     press_name: str
-    status: str  # ok | dropped | empty | fetch_failed | error
+    status: str  # ok | dropped | empty | fetch_failed | error | duplicate
     reasons: Tuple[str, ...] = ()
     detail: str = ""
 
 
-# raw_news_extract_status로 기록하는 값(f87f7378672e의 CHECK 제약과 동일). 'error'는
-# DB 오류 등으로 결과를 기록하지 못한 경우라 상태를 남기지 않고 다음 실행에서 다시 시도한다.
-_RECORDED_STATUSES = ("ok", "dropped", "empty", "fetch_failed")
+# raw_news_extract_status 값(d48994e9d26e의 CHECK 제약과 동일).
+_RECORDED_STATUSES = ("ok", "dropped", "empty", "fetch_failed", "error", "duplicate")
+# 다시 받으면 결과가 달라질 수 있는 상태 - Settings.MAX_EXTRACT_ATTEMPTS회까지만 다시 시도한다.
+RETRYABLE_STATUSES = ("fetch_failed", "error")
 
 
-def _record_extraction(cur, raw_news_id, content, status):
+def content_sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _record_extraction(cur, raw_news_id, content, status, digest=None):
     cur.execute("""
         UPDATE news_raw
         SET raw_news_content = %s,
             raw_news_extract_status = %s,
+            raw_news_content_sha256 = %s,
             raw_news_extracted_at = now(),
             raw_news_extract_attempts = raw_news_extract_attempts + 1
         WHERE raw_news_id = %s
-    """, (content, status, raw_news_id))
+    """, (content, status, digest, raw_news_id))
+
+
+def _record_ok_or_duplicate(conn, cur, raw_news_id, cleaned) -> str:
+    """본문을 'ok'로 저장한다. 같은 본문이 이미 'ok'로 있으면(URL만 다른 같은 기사)
+    uq_news_raw_content_sha256_ok가 막으므로 사본은 본문 없이 'duplicate'로 남긴다.
+    병렬 워커가 같은 본문을 동시에 저장하는 경합도 인덱스가 한쪽만 통과시킨다."""
+    digest = content_sha256(cleaned)
+    try:
+        _record_extraction(cur, raw_news_id, cleaned, "ok", digest)
+        conn.commit()
+        return "ok"
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+    _record_extraction(cur, raw_news_id, "", "duplicate", digest)
+    conn.commit()
+    return "duplicate"
 
 
 class ContentExtractor:
@@ -115,10 +139,9 @@ class ContentExtractor:
                     conn.commit()
                     return ExtractionResult(raw_news_id, press_name, "dropped", tuple(drop_reasons))
 
-                _record_extraction(cur, raw_news_id, cleaned, 'ok')
-                conn.commit()
+                status = _record_ok_or_duplicate(conn, cur, raw_news_id, cleaned)
                 return ExtractionResult(
-                    raw_news_id, press_name, "ok", detail=f"raw={len(text)} clean={len(cleaned)}"
+                    raw_news_id, press_name, status, detail=f"raw={len(text)} clean={len(cleaned)}"
                 )
 
             # 페이지는 받았지만 본문을 뽑지 못함(목록/영상 페이지 등) - 재시도해도 같으므로 확정
@@ -128,6 +151,13 @@ class ContentExtractor:
 
         except Exception as e:
             conn.rollback()
+            # 시도 횟수를 올려 둬야 같은 기사에서 매번 죽는 경우(파서 크래시 등) 상한 뒤 멈춘다.
+            # DB 자체가 문제면 기록도 실패한다 - 그때는 상태 없이 다음 실행에서 다시 시도된다.
+            try:
+                _record_extraction(cur, raw_news_id, '', 'error')
+                conn.commit()
+            except Exception:
+                conn.rollback()
             return ExtractionResult(raw_news_id, press_name, "error", detail=str(e)[:200])
 
         finally:
@@ -141,8 +171,8 @@ class ContentExtractor:
         if num_workers is None:
             num_workers = Settings.PARALLEL_WORKERS
 
-        # 1. 대상 조회 - 아직 추출을 시도하지 않은 기사 + 다운로드 실패로 재시도 여지가 남은 기사.
-        #    'dropped'/'empty'는 다시 받아도 결과가 같으므로 제외한다.
+        # 1. 대상 조회 - 아직 추출을 시도하지 않은 기사 + 다운로드 실패/예외로 재시도 여지가 남은 기사.
+        #    'dropped'/'empty'/'duplicate'는 다시 받아도 결과가 같으므로 제외한다.
         conn = get_connection()
         try:
             cur = conn.cursor()
@@ -151,7 +181,7 @@ class ContentExtractor:
                 FROM news_raw N
                 JOIN press P ON N.press_id = P.press_id
                 WHERE N.raw_news_extract_status IS NULL
-                   OR (N.raw_news_extract_status = 'fetch_failed'
+                   OR (N.raw_news_extract_status IN ('fetch_failed', 'error')
                        AND N.raw_news_extract_attempts < %s)
                 ORDER BY N.raw_news_id
             """, (Settings.MAX_EXTRACT_ATTEMPTS,))
@@ -161,7 +191,7 @@ class ContentExtractor:
 
         stats: Dict[str, Any] = {
             "targets": len(articles), "workers": num_workers,
-            **{status: 0 for status in (*_RECORDED_STATUSES, "error")},
+            **{status: 0 for status in _RECORDED_STATUSES},
             "drop_reasons": {}, "per_press": {}, "error_samples": [],
         }
         if not articles:
@@ -195,6 +225,6 @@ class ContentExtractor:
         stats["drop_reasons"] = dict(drop_reasons)
         logger.info(
             f"🏁 본문 추출 종료. 성공: {stats['ok']}, 필터링: {stats['dropped']}, 내용없음: {stats['empty']}, "
-            f"다운로드 실패: {stats['fetch_failed']}, 에러: {stats['error']}"
+            f"중복: {stats['duplicate']}, 다운로드 실패: {stats['fetch_failed']}, 에러: {stats['error']}"
         )
         return stats

@@ -54,29 +54,43 @@ def fake_world(pg_conn, isolated_news_raw, monkeypatch):
         press_id = cur.fetchone()[0]
 
     urls = {
-        "ok": f"http://itest.example.com/{suffix}/ok",
+        "ok": f"http://itest.example.com/{suffix}/list/ok",
+        # 동아일보처럼 같은 기사를 섹션 경로만 바꾼 URL로 다시 내보내는 경우
+        "ok_variant": f"http://itest.example.com/{suffix}/Economy/ok",
         "short": f"http://itest.example.com/{suffix}/short",
         "unreachable": f"http://itest.example.com/{suffix}/unreachable",
+        "crash": f"http://itest.example.com/{suffix}/crash",
     }
     published = datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S %z")
     feed = MagicMock()
     feed.bozo = 0
     feed.entries = [
         _FakeEntry(urls["ok"], "경제 정책 발표", published),
+        _FakeEntry(urls["ok_variant"], "경제 정책 발표", published),
         _FakeEntry(urls["short"], "짧은 기사", published),
         _FakeEntry(urls["unreachable"], "막힌 기사", published),
+        _FakeEntry(urls["crash"], "파서가 죽는 기사", published),
     ]
-    pages = {urls["ok"]: "<html>ok</html>", urls["short"]: "<html>short</html>"}
+    pages = {
+        urls["ok"]: "<html>ok</html>", urls["ok_variant"]: "<html>ok</html>",
+        urls["short"]: "<html>short</html>", urls["crash"]: "<html>crash</html>",
+    }
     bodies = {"<html>ok</html>": LONG_BODY, "<html>short</html>": "한 줄짜리 본문"}
 
+    def fake_extract(html, **kwargs):
+        if html == "<html>crash</html>":
+            raise ValueError("parser crashed")
+        return bodies[html]
+
     monkeypatch.setattr(Settings, "RSS_FEEDS", {press_name: ("direct", "http://itest/rss")})
+    monkeypatch.setattr(Settings, "MAX_EXTRACT_ATTEMPTS", 3)
     fake_embedder_module = types.ModuleType("core.embedder")
     fake_embedder_module.NewsEmbedder = _FakeEmbedder
     monkeypatch.setitem(sys.modules, "core.embedder", fake_embedder_module)
 
     with patch("crawler.rss_collector.parse_feed_with_retry", return_value=feed), \
          patch("crawler.content_extractor.extractor.fetch_url_with_retry", side_effect=lambda u: pages.get(u)), \
-         patch("crawler.content_extractor.extractor.trafilatura.extract", side_effect=lambda html, **kw: bodies[html]):
+         patch("crawler.content_extractor.extractor.trafilatura.extract", side_effect=fake_extract):
         yield {"press_name": press_name, "press_id": press_id, "urls": urls}
 
     with pg_conn.cursor() as cur:
@@ -101,9 +115,10 @@ def test_ingest_job_collects_extracts_embeds_and_is_idempotent(database_url, pg_
 
         assert status == "succeeded"
         feed_stats = stats["rss"]["per_feed"][fake_world["press_name"]]
-        assert (feed_stats["entries"], feed_stats["inserted"], feed_stats["skipped"]) == (3, 3, 0)
+        assert (feed_stats["entries"], feed_stats["inserted"], feed_stats["skipped"]) == (5, 5, 0)
         extract = stats["extract"]
-        assert (extract["ok"], extract["dropped"], extract["fetch_failed"]) == (1, 1, 1)
+        assert (extract["ok"], extract["duplicate"], extract["dropped"], extract["fetch_failed"], extract["error"]) \
+            == (1, 1, 1, 1, 1)
         assert stats["embed"]["embedded"] == 1
 
         urls = fake_world["urls"]
@@ -119,21 +134,37 @@ def test_ingest_job_collects_extracts_embeds_and_is_idempotent(database_url, pg_
             )
             rows = {r[0]: r[1:] for r in cur.fetchall()}
         assert rows[urls["ok"]] == ("ok", 1, True, DIM)
+        assert rows[urls["ok_variant"]] == ("duplicate", 1, True, None)
         assert rows[urls["short"]] == ("dropped", 1, True, None)
         assert rows[urls["unreachable"]] == ("fetch_failed", 1, True, None)
+        assert rows[urls["crash"]] == ("error", 1, True, None)
 
-        # 두 번째 실행: 새 기사 없음, 버린 기사는 다시 받지 않고 다운로드 실패 건만 재시도
+        # 두 번째 실행: 새 기사 없음, 버린/중복 기사는 다시 받지 않고 다운로드 실패·오류 건만 재시도
         assert main(["ingest", "--workers", "1"]) == 0
         run_id, status, stats = _latest_ingest_run(pg_conn)
         run_ids.append(run_id)
         feed_stats = stats["rss"]["per_feed"][fake_world["press_name"]]
-        assert (feed_stats["inserted"], feed_stats["skipped"]) == (0, 3)
-        assert stats["extract"]["targets"] == 1 and stats["extract"]["fetch_failed"] == 1
+        assert (feed_stats["inserted"], feed_stats["skipped"]) == (0, 5)
+        assert stats["extract"]["targets"] == 2
+        assert (stats["extract"]["fetch_failed"], stats["extract"]["error"]) == (1, 1)
         assert stats["embed"]["targets"] == 0
 
-        with pg_conn.cursor() as cur:
-            cur.execute("SELECT raw_news_extract_attempts FROM news_raw WHERE raw_news_url = %s", (urls["unreachable"],))
-            assert cur.fetchone()[0] == 2
+        def attempts(url):
+            with pg_conn.cursor() as cur:
+                cur.execute("SELECT raw_news_extract_attempts FROM news_raw WHERE raw_news_url = %s", (url,))
+                return cur.fetchone()[0]
+
+        assert attempts(urls["unreachable"]) == 2 and attempts(urls["crash"]) == 2
+
+        # 시도 횟수 상한(MAX_EXTRACT_ATTEMPTS=3)에 닿으면 더 받지 않는다
+        assert main(["ingest", "--workers", "1"]) == 0
+        run_id, _, stats = _latest_ingest_run(pg_conn)
+        run_ids.append(run_id)
+        assert main(["ingest", "--workers", "1"]) == 0
+        run_id, _, stats = _latest_ingest_run(pg_conn)
+        run_ids.append(run_id)
+        assert stats["extract"]["targets"] == 0
+        assert attempts(urls["unreachable"]) == 3 and attempts(urls["crash"]) == 3
     finally:
         with pg_conn.cursor() as cur:
             cur.execute("DELETE FROM job_runs WHERE id = ANY(%s)", (run_ids,))

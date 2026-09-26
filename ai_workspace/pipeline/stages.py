@@ -99,16 +99,16 @@ def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=Non
             rows = cur.fetchall() # 임베딩 없는 기사 목록 (본문 있는 것만)
 
             # 본문이 없어 임베딩하지 않는 기사: 아직 추출 전(다음 실행에서 채워질 수 있음)과
-            # 추출했지만 본문이 없는 것(dropped/empty/다운로드 재시도 소진 - 영구 제외)을 나눠 센다.
+            # 추출했지만 본문이 없는 것(dropped/empty/duplicate/재시도 소진 - 영구 제외)을 나눠 센다.
             cur.execute("""
                 SELECT
                     COUNT(*) FILTER (
                         WHERE raw_news_extract_status IS NULL
-                           OR (raw_news_extract_status = 'fetch_failed'
+                           OR (raw_news_extract_status IN ('fetch_failed', 'error')
                                AND raw_news_extract_attempts < %s)),
                     COUNT(*) FILTER (
-                        WHERE raw_news_extract_status IN ('dropped', 'empty')
-                           OR (raw_news_extract_status = 'fetch_failed'
+                        WHERE raw_news_extract_status IN ('dropped', 'empty', 'duplicate')
+                           OR (raw_news_extract_status IN ('fetch_failed', 'error')
                                AND raw_news_extract_attempts >= %s))
                 FROM news_raw
                 WHERE embedding_result IS NULL

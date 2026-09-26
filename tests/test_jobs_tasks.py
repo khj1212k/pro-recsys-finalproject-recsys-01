@@ -156,7 +156,7 @@ def test_daily_report_text_flags_a_silent_scheduler():
 
     report = {
         "job_runs": {},
-        "news_raw_24h": {"total": 0, "ok": 0, "dropped": 0, "empty": 0, "fetch_failed": 0,
+        "news_raw_24h": {"total": 0, "ok": 0, "dropped": 0, "empty": 0, "fetch_failed": 0, "error": 0, "duplicate": 0,
                          "embedded": 0, "per_press": {}},
         "totals": {"news_raw": 10, "embedded": 8, "newsletters_24h": 0},
     }
