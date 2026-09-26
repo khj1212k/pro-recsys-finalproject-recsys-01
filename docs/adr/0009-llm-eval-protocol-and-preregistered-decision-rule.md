@@ -25,7 +25,7 @@
   (garden of forking paths) 어떤 후보든 이기게 만들 수 있다.
 - 이 프로젝트의 라벨러는 사실상 1명(사용자)이다. 라벨 예산이 표본 크기를 결정한다.
 
-### 검증한 사실 (WebFetch, 접근일 2026-09-25)
+### 검증한 사실 (공식 문서 조회, 접근일 2026-09-25)
 | 항목 | 확인 내용 | 출처 |
 |---|---|---|
 | Gemini 가격 (paid, standard) | `gemini-3.5-flash-lite` 입력 $0.30 / 출력 $2.50, `gemini-3.5-flash` $1.50 / $9.00, `gemini-3.8-flash` $0.75 / $3.75 (2026-12-31까지, 2027-01-01부터 $1.50 / $7.50) (1M 토큰당). 문서 "Last updated 2026-09-24 UTC" | https://ai.google.dev/gemini-api/docs/pricing |
@@ -211,7 +211,7 @@
   빠질 수 없다. `gemini-3.5-flash-v2`는 남겨 두고, pre-flight에서 타임아웃/503이 설정으로
   풀리지 않으면 기존 pre-flight 규칙대로 본 실행 전에 빼고 여기에 기록한다.
 - 가격: `gemini-3.1-flash-lite` 입력 $0.25 / 출력 $1.50 (1M 토큰, paid standard, 텍스트 입력.
-  https://ai.google.dev/gemini-api/docs/pricing, WebFetch 접근일 2026-09-26, 문서 "Last updated
+  https://ai.google.dev/gemini-api/docs/pricing, 접근일 2026-09-26, 문서 "Last updated
   2026-09-24 UTC"). `llm_pricing.yaml`에 추가했다.
 - 생성 후보·게이트·임계값·승자 결정·표본 크기는 바꾸지 않았다. 실행 전 변경이라 새 id 파일을
   만들지 않고 `bakeoff-v1.yaml`의 `amendments`에 같은 내용을 남겼다(git 이력으로 원문 대조 가능).
