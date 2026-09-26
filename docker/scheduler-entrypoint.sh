@@ -12,9 +12,11 @@ supercronic "$@" &
 SUPERCRONIC_PID=$!
 
 forward() {
+  interrupted=1
   sig=$1
   for stat_file in /proc/[0-9]*/stat; do
-    stat=$(cat "$stat_file" 2>/dev/null) || continue
+    # read는 내장 명령이라 fork하지 않는다(프로세스가 많으면 스캔이 길어진다).
+    read -r stat < "$stat_file" 2>/dev/null || continue
     # /proc/<pid>/stat: pid (comm) state ppid pgrp ... - comm에 공백이 있을 수 있어 ')' 뒤부터 자른다.
     # shellcheck disable=SC2086
     set -- ${stat##*) }
@@ -26,11 +28,12 @@ forward() {
 trap 'forward TERM' TERM
 trap 'forward INT' INT
 
-# 신호를 받으면 wait가 트랩 처리 후 바로 돌아오므로, supercronic이 잡을 모두 기다리고 끝날 때까지 다시 기다린다.
-wait "$SUPERCRONIC_PID"
-status=$?
-while kill -0 "$SUPERCRONIC_PID" 2>/dev/null; do
+# 신호를 받으면 wait가 트랩 때문에 128+신호로 먼저 돌아온다. supercronic이 그 사이 이미 끝나 셸이
+# 거둬 갔을 수 있으므로(kill -0으로는 알 수 없다) 트랩이 돌았으면 wait를 다시 불러 실제 종료 상태를 받는다.
+while :; do
+  interrupted=0
   wait "$SUPERCRONIC_PID"
   status=$?
+  [ "$interrupted" = 1 ] || break
 done
 exit "$status"
