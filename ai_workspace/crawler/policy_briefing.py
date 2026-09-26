@@ -253,7 +253,14 @@ def fetch_policy_news(service_key: str, start: date, end: date, http_get: Callab
         else:
             if resp.status_code < 500:
                 # 4xx도 본문이 XML 에러 봉투라 파서가 코드와 메시지를 꺼내 올린다.
-                return parse_policy_news_xml(resp.text)
+                try:
+                    return parse_policy_news_xml(resp.text)
+                except ET.ParseError:
+                    # HTML 에러 페이지(429 등). 다시 불러도 같을 가능성이 커서 재시도하지 않는다.
+                    raise PolicyBriefingFetchError(
+                        f"정책브리핑 API가 XML이 아닌 응답을 돌려줌(HTTP {resp.status_code}, "
+                        f"{start:%Y%m%d}~{end:%Y%m%d})"
+                    ) from None
             last_problem = f"HTTP {resp.status_code}"
         if attempt < max_attempts - 1:
             sleep_fn(delay)

@@ -222,6 +222,19 @@ def test_fetch_errors_never_echo_the_service_key():
     assert exc.value.__cause__ is None and exc.value.__suppress_context__
 
 
+@pytest.mark.parametrize("status_code", [200, 429])
+def test_fetch_reports_non_xml_body_as_fetch_error_without_the_key(status_code):
+    html = "<html><body>Too Many Requests</body></html><p>"  # 닫히지 않은 태그 - XML 파싱 실패
+
+    with pytest.raises(pb.PolicyBriefingFetchError) as exc:
+        pb.fetch_policy_news("SECRET-KEY-123", date(2026, 9, 24), date(2026, 9, 24),
+                             http_get=lambda url, params=None, timeout=None: _Resp(html, status_code),
+                             max_attempts=1, sleep_fn=lambda s: None)
+
+    assert f"HTTP {status_code}" in str(exc.value)
+    assert "SECRET-KEY-123" not in str(exc.value)
+
+
 def test_fetch_retries_server_errors_then_succeeds():
     responses = [_Resp("upstream down", status_code=503), _Resp(_response(_item("1")))]
     sleeps = []
