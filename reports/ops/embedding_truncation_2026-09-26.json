@@ -1,0 +1,68 @@
+{
+  "n_articles": 456,
+  "text_rule": "f\"{title} {content}\"[:8000]",
+  "token_length": {
+    "p50": 680.5,
+    "p90": 1633.0,
+    "p95": 2673.2,
+    "p99": 4323.9,
+    "max": 4469
+  },
+  "truncation_rate": {
+    "1024": 0.2171,
+    "2048": 0.0811,
+    "4096": 0.0263
+  },
+  "truncated_count": {
+    "1024": 99,
+    "2048": 37,
+    "4096": 12
+  },
+  "reference_long_cpu_s": 1344.7,
+  "impact": {
+    "1024": {
+      "n": 99,
+      "cos_median": 0.9707,
+      "cos_p10": 0.8855,
+      "cos_min": 0.8255,
+      "top5_neighbor_overlap_mean": 0.816
+    },
+    "2048": {
+      "n": 37,
+      "cos_median": 0.9632,
+      "cos_p10": 0.9296,
+      "cos_min": 0.8608,
+      "top5_neighbor_overlap_mean": 0.843
+    },
+    "4096": {
+      "n": 12,
+      "cos_median": 0.9935,
+      "cos_p10": 0.989,
+      "cos_min": 0.9885,
+      "top5_neighbor_overlap_mean": 0.933
+    }
+  },
+  "rule": [
+    {
+      "L": 1024,
+      "a_trunc_le_2pct": false,
+      "b_cos_median_ge_0.95": true
+    },
+    {
+      "L": 2048,
+      "a_trunc_le_2pct": false,
+      "b_cos_median_ge_0.95": true
+    },
+    {
+      "L": 4096,
+      "a_trunc_le_2pct": false,
+      "b_cos_median_ge_0.95": true
+    }
+  ],
+  "decision": "8192 (+ >4096 토큰은 배치 1)",
+  "reference_device_short": "mps",
+  "wall_s": 2083.8,
+  "versions": {
+    "torch": "2.14.0"
+  }
+}

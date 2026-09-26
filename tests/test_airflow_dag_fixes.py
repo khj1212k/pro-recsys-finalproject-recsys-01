@@ -56,8 +56,16 @@ def test_dag_files_no_longer_hardcode_ephemeral_path():
 
 
 def test_dag_files_register_on_failure_callback():
-    dag_dir = os.path.join(REPO_ROOT, "backend", "airflow", "dags")
-    for fname in ("news_rss_collector_dag.py", "newsletter_ranking_dag.py"):
-        with open(os.path.join(dag_dir, fname), encoding="utf-8") as f:
-            content = f.read()
-        assert "on_failure_callback" in content, f"{fname}에 on_failure_callback이 없습니다"
+    """DAG 파일은 공통 DEFAULT_ARGS를 쓰고, 그 안에 실패 알림 콜백이 들어 있어야 한다."""
+    import _callbacks
+    import _jobs
+
+    assert _jobs.DEFAULT_ARGS["on_failure_callback"] is _callbacks.notify_failure
+
+
+def test_dag_job_command_runs_jobs_cli_from_repo_root():
+    """Airflow 경로도 supercronic과 같은 `python -m jobs.run <job>`을 저장소 루트에서 실행한다."""
+    import _jobs
+
+    assert str(_jobs.PROJECT_ROOT) == REPO_ROOT
+    assert _jobs.job_command("ingest") == f"cd {REPO_ROOT} && python -m jobs.run ingest"

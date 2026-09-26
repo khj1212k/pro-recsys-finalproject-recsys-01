@@ -1,7 +1,7 @@
 from typing import Optional, List
 from datetime import datetime, timezone
 from sqlmodel import Field, SQLModel, JSON, Column
-from sqlalchemy import DateTime
+from sqlalchemy import CheckConstraint, DateTime, Index, SmallInteger, String, text
 from pgvector.sqlalchemy import Vector
 
 from sqlalchemy.dialects.postgresql import TSVECTOR
@@ -30,9 +30,25 @@ class RSS_URI(SQLModel, table=True):
     uri: str
 
 # 4. 원문 기사 (News_Raw)
+# 본문 추출 상태 (f87f7378672e, d48994e9d26e). NULL = 아직 시도 안 함.
+NEWS_RAW_EXTRACT_STATUSES = ("ok", "dropped", "empty", "fetch_failed", "error", "duplicate")
+
+
 class NewsRaw(SQLModel, table=True):
     __tablename__ = "news_raw"
-    
+    __table_args__ = (
+        CheckConstraint(
+            "raw_news_extract_status IS NULL OR raw_news_extract_status IN ("
+            + ", ".join(f"'{s}'" for s in NEWS_RAW_EXTRACT_STATUSES) + ")",
+            name="ck_news_raw_extract_status",
+        ),
+        # URL만 다른 같은 기사: 'ok' 행 사이에서 정제 본문 해시가 유일해야 한다.
+        Index(
+            "uq_news_raw_content_sha256_ok", "raw_news_content_sha256", unique=True,
+            postgresql_where=text("raw_news_extract_status = 'ok'"),
+        ),
+    )
+
     raw_news_id: Optional[int] = Field(default=None, primary_key=True)
     press_id: int = Field(foreign_key="press.press_id")
     raw_news_title: str
@@ -49,6 +65,17 @@ class NewsRaw(SQLModel, table=True):
     )
     news_letter_id: Optional[int] = Field(default=None, foreign_key="news_letter.news_letter_id")
     search_vector: Optional[str] = Field(default=None, sa_column=Column(TSVECTOR))
+    # 본문 추출 결과(f87f7378672e). NULL = 아직 시도 안 함. 'dropped'/'empty'도
+    # raw_news_content는 ''이므로 이 컬럼 없이는 "미처리"와 구분할 수 없다.
+    raw_news_extract_status: Optional[str] = Field(default=None, max_length=16)
+    raw_news_extracted_at: Optional[datetime] = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
+    raw_news_extract_attempts: int = Field(
+        default=0, sa_column=Column(SmallInteger, nullable=False, server_default=text("0"))
+    )
+    # 정제된 본문의 sha256(hex). 본문 보존 기한이 지나 본문을 비워도 중복 판정용으로 남긴다.
+    raw_news_content_sha256: Optional[str] = Field(default=None, sa_column=Column(String(64)))
 
 # 5. 뉴스 레터 (News_Letter)
 class NewsLetter(SQLModel, table=True):

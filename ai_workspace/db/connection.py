@@ -150,6 +150,19 @@ def get_pool() -> DatabasePool:
     return _db_pool
 
 
+def connect_unpooled(application_name: Optional[str] = None) -> Connection:
+    """풀 밖의 전용 연결(pgvector 어댑터 미등록).
+
+    세션 수명에 묶이는 상태(예: jobs/의 advisory lock)는 반드시 이런 전용 연결에
+    걸어야 한다 - 풀 커넥션은 반납 뒤 다른 코드가 재사용하므로 세션 락이 엉뚱한
+    작업에 딸려 가거나 너무 일찍/늦게 풀린다.
+    """
+    config = _build_db_config()
+    if application_name:
+        config["application_name"] = application_name
+    return psycopg2.connect(**config)
+
+
 def get_connection() -> Connection:
     return get_pool().get_connection()
 

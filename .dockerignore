@@ -1,0 +1,32 @@
+# 빌드 컨텍스트에서 제외 - 비밀(.env), 로컬 데이터(EB-NeRD 등 라이선스 제한 데이터 포함),
+# 가상환경, 프론트엔드는 이미지에 절대 들어가지 않아야 한다.
+**/.env
+**/.env.*
+!**/.env.example
+.git
+.github
+.claude
+.ops
+.venv
+.venv-*
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+**/.pytest_cache
+data/
+reports/
+mlruns/
+checkpoints/
+frontend/
+assets/
+docs/
+tests/
+ai_workspace/logs/
+ai_workspace/output/
+ai_workspace/data/
+ai_workspace/recommend_engine/checkpoints/
+ai_workspace/recommend_engine/results/
+ai_workspace/recommend_engine/logs/
+ai_workspace/recommend_engine/data/
+**/*.log
+**/*.ipynb

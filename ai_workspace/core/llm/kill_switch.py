@@ -35,6 +35,11 @@ def _kill_switch_reason() -> Optional[str]:
     return None
 
 
+def kill_switch_reason() -> Optional[str]:
+    """배치 잡(jobs.run generate)이 시작 전에 같은 규칙으로 확인할 수 있게 공개한 조회 함수."""
+    return _kill_switch_reason()
+
+
 class LLMKillSwitchEngaged(RuntimeError):
     pass
 

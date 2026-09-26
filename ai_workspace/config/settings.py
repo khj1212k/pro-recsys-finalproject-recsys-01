@@ -61,6 +61,10 @@ class BaseSettings:
     # ========== Embedder ==========
     EMBEDDING_BATCH_SIZE: int = 8  # GPU 메모리 고려
     EMBEDDING_DIM: int = 1024
+    # BGE-M3 입력 토큰 상한 - 임베딩 의미가 바뀌는 값이라 ADR 0006의 사전 등록 규칙으로 정했다.
+    EMBEDDING_MAX_LENGTH: int = int(os.getenv("EMBEDDING_MAX_LENGTH", "8192"))
+    # 배치 크기 x (배치 내 최대 토큰 길이)^2 상한 = 1024토큰 8건. eager attention 점수 텐서 크기를 묶는다.
+    EMBEDDING_ATTENTION_BUDGET: int = int(os.getenv("EMBEDDING_ATTENTION_BUDGET", str(8 * 1024 ** 2)))
 
     # ========== Pipeline ==========
     DEFAULT_CLUSTER_LIMIT: int = None
@@ -83,7 +87,14 @@ class BaseSettings:
     # ========== Retry Configuration ==========
     RETRY_EXPONENTIAL_BASE: float = 2.0
     MAX_RETRY_WAIT_SECONDS: int = 64
+    # RSS/본문 요청에 쓰는 User-Agent. 라이브러리 기본 UA를 막는 언론사가 있다(한국경제 RSS: feedparser UA에 403).
+    HTTP_USER_AGENT: str = os.getenv(
+        "HTTP_USER_AGENT", "Mozilla/5.0 (compatible; newsletter-recsys/1.0)"
+    )
     MAX_FETCH_RETRIES: int = 3  # RSS/본문 크롤링 네트워크 요청 최대 재시도 횟수
+    # 본문 다운로드가 (위 재시도까지) 실패한 기사를 이후 실행에서 다시 시도하는 총 횟수 상한.
+    # news_raw.raw_news_extract_attempts로 센다 - 막힌 URL을 2시간마다 영원히 두드리지 않게.
+    MAX_EXTRACT_ATTEMPTS: int = int(os.getenv("MAX_EXTRACT_ATTEMPTS", "3"))
     # LLM 채팅 API(HyperCLOVA/OpenAI) 호출 재시도 최대 횟수 (감사에서 발견: HyperCLOVA
     # 클라이언트의 `while True` 루프가 이 상한 없이 무제한 재시도했음)
     MAX_LLM_CALL_RETRIES: int = 10

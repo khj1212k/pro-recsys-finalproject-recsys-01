@@ -27,3 +27,24 @@ def test_parse_embedding_rejects_code_execution_string():
     malicious = "__import__('os').system('echo pwned')"
     with pytest.raises((ValueError, SyntaxError)):
         parse_embedding(malicious)
+
+
+def test_parse_embedding_from_pgvector_vector():
+    # db.connection 풀 연결은 register_vector가 걸려 있어 vector 컬럼이 pgvector.Vector로 온다.
+    # np.array(Vector)는 0차원 object 배열이 돼 HDBSCAN에서 TypeError로 죽었다.
+    from pgvector import Vector
+
+    result = parse_embedding(Vector([0.25, -0.5, 1.0]))
+    assert result.dtype == np.float32 and result.shape == (3,)
+    np.testing.assert_allclose(result, [0.25, -0.5, 1.0])
+
+
+def test_parse_embedding_from_ndarray():
+    result = parse_embedding(np.array([0.1, 0.2], dtype=np.float64))
+    assert result.dtype == np.float32 and result.shape == (2,)
+    np.testing.assert_allclose(result, [0.1, 0.2], rtol=1e-6)
+
+
+def test_parse_embedding_rejects_non_vector_value():
+    with pytest.raises((TypeError, ValueError)):
+        parse_embedding(object())

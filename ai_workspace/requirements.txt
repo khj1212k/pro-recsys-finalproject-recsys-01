@@ -36,6 +36,5 @@ FlagEmbedding==1.2.5
 transformers==4.38.2
 sentence-transformers==2.2.2
 
-# Airflow
-apache-airflow
-apache-airflow-providers-standard
+# Airflow는 뺐다(스케줄러는 supercronic + `python -m jobs.run`, docs/adr/0006).
+# 보관된 DAG(backend/airflow/dags)을 직접 띄워 보려면: pip install -r backend/requirements-airflow.txt
