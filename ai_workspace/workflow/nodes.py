@@ -499,6 +499,7 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
     
     logger.info(f"💾 뉴스레터 저장 중 (Cluster {cluster_id})...")
     
+    conn = None
     try:
         conn = get_connection()
         
@@ -531,8 +532,6 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
                 logger.info(f"📐 임베딩 저장 완료 (원본 텍스트 기준)")
             except Exception as e:
                 logger.info(f"ℹ️ 임베딩 저장 실패: {e}")
-        
-        release_connection(conn)
 
         completed = list(state.get("completed_newsletters", []))
         completed.append(saved_id)
@@ -550,6 +549,10 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
             "failed_clusters": failed,
             "error_message": str(e)
         }
+    finally:
+        # Stage5 워커(최대 4)가 dev 풀(최대 5)을 공유한다 - 저장 실패에서도 반드시 반납한다
+        if conn is not None:
+            release_connection(conn)
 
 
 def handle_newsletter_max_retries(state: AgentState) -> Dict[str, Any]:
