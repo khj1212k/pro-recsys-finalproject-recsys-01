@@ -271,6 +271,22 @@ def test_cluster_eval_records_whether_the_evaluator_actually_answered(tmp_path):
     assert second["parsed"] is True
 
 
+def test_hard_cases_get_cluster_labels_and_evals_but_no_generated_outputs(tmp_path):
+    items = _items(3)
+    items[2].hard_case = True
+    run_dir, labels_dir = tmp_path / "run", tmp_path / "labels"
+
+    bo.run_generation(items, PREREG, run_dir, client_factory=_factory([]), pricing=PRICING, log=lambda *_: None)
+    bo.run_cluster_eval(items, run_dir, {"provider": "px", "model": "judge-x"}, client_factory=_factory([]),
+                        pricing=PRICING, log=lambda *_: None)
+    out = bo.export_blind(items, run_dir, labels_dir, PREREG, seed=5)
+
+    assert {r["item_id"] for r in _rows(run_dir / "generations.jsonl")} == {"r1-c0", "r1-c1"}
+    assert {r["item_id"] for r in _rows(run_dir / "cluster_evals.jsonl")} == {"r1-c0", "r1-c1", "r1-c2"}
+    assert out == {"outputs": 4, "clusters": 3}
+    assert "r1-c2" in {c["item_id"] for c in _rows(labels_dir / "clusters.jsonl")}
+
+
 def test_blind_export_hides_candidates_and_keeps_the_key_separately(tmp_path):
     items = _items(2)
     run_dir, labels_dir = tmp_path / "run", tmp_path / "labels"

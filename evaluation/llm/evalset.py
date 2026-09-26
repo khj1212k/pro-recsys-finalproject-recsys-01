@@ -5,8 +5,9 @@ DB의 cluster_history(실행별 클러스터 로그)에서 클러스터를 뽑�
     기사 id / URL / 언론사 / 본문·제목 SHA-256만 담는다.
   - 로컬 전용 본문 파일(data/evalsets/<name>/articles.jsonl, gitignore):
     제목·본문 원문. 기사 저작권 때문에 저장소에는 절대 올리지 않는다.
-로 나눠 쓴다. 층: 크기 버킷(3-4 / 5-9 / 10+) × 카테고리 × split_v2 여부, 그리고
-ClusterEvaluator가 FAIL을 낸 "어려운 사례" 할당량.
+로 나눠 쓴다. 층: 크기 버킷(3-4 / 5-9 / 10+) × 카테고리 × split_v2 여부. 여기에 더해
+ClusterEvaluator가 FAIL을 낸 "어려운 사례"를 n개와 별도로 뽑는다(생성하지 않고 클러스터
+라벨·ROC 전용, ADR 0009 A5).
 
 사용 예:
   python -m evaluation.llm.evalset sample --name v1 --n 40 --seed 20260925 --warmup 2
@@ -236,12 +237,15 @@ def stratified_sample(
     regular_pool = [c for c in pool if not c.hard_case]
     used: set = set()
 
+    # 어려운 사례(ClusterEvaluator FAIL)는 n개와 **별도로** round(n × hard_fraction)개 더 뽑는다
+    # (ADR 0009 A5). 운영에서는 이런 클러스터로 뉴스레터를 만들지 않으므로 생성·발행률 표본에
+    # 넣지 않고, 클러스터 라벨 + ClusterEvaluator ROC의 음성 표본으로만 쓴다.
     n_hard = min(int(round(n * hard_fraction)), len(hard_pool))
     hard = _draw_stratified(hard_pool, n_hard, rng, used)
-    regular = _draw_stratified(regular_pool, n - len(hard), rng, used)
+    regular = _draw_stratified(regular_pool, n, rng, used)
     evals = hard + regular
-    if len(evals) < n:
-        logger.warning("평가셋 목표 %d개 중 %d개만 뽑았습니다 (후보 부족 또는 기사 중복)", n, len(evals))
+    if len(regular) < n:
+        logger.warning("평가셋 일반 클러스터 목표 %d개 중 %d개만 뽑았습니다 (후보 부족 또는 기사 중복)", n, len(regular))
 
     warm = _draw([c for c in regular_pool if c not in evals], warmup, rng, used)
 
@@ -439,7 +443,8 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     p_sample = sub.add_parser("sample", help="DB에서 층화 추출해 매니페스트/본문 파일을 쓴다")
     p_sample.add_argument("--name", required=True)
-    p_sample.add_argument("--n", type=int, default=40)
+    p_sample.add_argument("--n", type=int, default=40,
+                          help="생성·라벨링할 일반 클러스터 수 (어려운 사례는 이와 별도로 n × hard-fraction개)")
     p_sample.add_argument("--seed", type=int, default=20260925)
     p_sample.add_argument("--hard-fraction", type=float, default=0.2)
     p_sample.add_argument("--warmup", type=int, default=2)

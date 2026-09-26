@@ -346,9 +346,11 @@ def run_generation(items, prereg: dict, run_dir: Path, *, client_factory: Client
 
     # 후보를 바깥 루프가 아니라 안쪽에 둔다 - 중간에 멈춰도 후보들이 같은 클러스터 집합을
     # 가진 채로 멈춰 짝지은 비교가 가능한 상태로 남는다.
+    # 어려운 사례(ClusterEvaluator FAIL)는 생성하지 않는다 - 클러스터 라벨·ROC 전용(ADR 0009 A5).
     tasks = [
         (f"{c['name']}|{item.item_id}", (lambda c=c, item=item: generate_one(c, item, client_factory, pricing, on)))
         for item in items
+        if not item.hard_case
         for c in cands
     ]
     return _run_loop(tasks, store, log)
@@ -462,6 +464,7 @@ def export_blind(items, run_dir: Path, labels_dir: Path, prereg: dict, seed: Opt
       모델, 자동 지표(사실성·드리프트)는 넣지 않는다 - 라벨러가 검사기 결과에 끌려가지 않게.
     - relabel.json: 재라벨(intra-rater) 대상. 사전 등록한 개수만큼 무작위.
     생성 실패(draft 없음) 행은 내보내지 않는다 - 분석에서 publishable=N으로 처리한다.
+    클러스터 라벨은 평가셋의 모든 항목에 단다 - 출력이 없는 어려운 사례도 ROC에 필요하다.
     """
     run_dir, labels_dir = Path(run_dir), Path(labels_dir)
     key_path = run_dir / "blind_key.json"
@@ -487,14 +490,14 @@ def export_blind(items, run_dir: Path, labels_dir: Path, prereg: dict, seed: Opt
             "converted": {k: c.get(k, "") for k in ("title", "summary", "content")},
         })
 
-    item_ids = sorted({g["item_id"] for g in gens})
     by_id = {i.item_id: i for i in items}
+    item_ids = sorted(by_id)
     clusters = [
         {"item_id": iid, "articles": [
             {"raw_news_id": a.raw_news_id, "press_name": a.press_name, "title": a.title, "body": a.body, "url": a.url}
             for a in by_id[iid].articles
         ]}
-        for iid in item_ids if iid in by_id
+        for iid in item_ids
     ]
 
     hr = prereg.get("human_reliability", {})

@@ -69,11 +69,20 @@ def test_hard_case_quota_is_filled_from_cluster_evaluator_failures():
     assert len(hard) == 4
 
 
+def test_hard_cases_are_added_on_top_of_n_regular_clusters():
+    # 어려운 사례는 ROC용 클러스터 라벨 전용이라 생성하지 않는다 - 생성·발행률 표본(n)을
+    # 줄이지 않도록 n개와 별도로 뽑는다 (ADR 0009 A5)
+    sample = es.stratified_sample(_pool(), n=20, seed=1, hard_fraction=0.2, warmup=0)
+    evals = [s for s in sample if s.split == "eval"]
+    assert sum(not s.candidate.hard_case for s in evals) == 20
+    assert sum(s.candidate.hard_case for s in evals) == 4
+
+
 def test_hard_case_quota_shrinks_when_not_enough_failures_exist():
     pool = [c for c in _pool() if not c.hard_case] + [_cand(9, 999, range(900000, 900003), hard=True)]
     sample = es.stratified_sample(pool, n=20, seed=1, hard_fraction=0.5, warmup=0)
     assert sum(s.candidate.hard_case for s in sample) == 1
-    assert len(sample) == 20
+    assert len(sample) == 21  # 일반 20개는 그대로, 어려운 사례만 있는 만큼(1개)
 
 
 def test_every_size_bucket_is_represented_even_when_rare():
@@ -88,7 +97,7 @@ def test_warmup_clusters_are_disjoint_from_the_eval_set():
     sample = es.stratified_sample(_pool(), n=20, seed=2, hard_fraction=0.2, warmup=3)
     evals = {(s.candidate.run_id, s.candidate.cluster_id) for s in sample if s.split == "eval"}
     warm = {(s.candidate.run_id, s.candidate.cluster_id) for s in sample if s.split == "warmup"}
-    assert len(evals) == 20 and len(warm) == 3
+    assert len(evals) == 24 and len(warm) == 3  # 일반 20 + 어려운 사례 4
     assert not evals & warm
 
 
