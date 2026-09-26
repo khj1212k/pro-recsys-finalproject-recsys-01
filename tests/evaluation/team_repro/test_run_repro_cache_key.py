@@ -91,3 +91,70 @@ def test_cache_tag_stable_when_nothing_relevant_changes(monkeypatch):
     RR.run_many_seeds(**kwargs)
 
     assert tags[0] == tags[1]
+
+
+# --- v2.1: 캐시 키 보강 / 새 실행 수 상한 / 작업 트리 상태 -----------------------
+
+
+def _tag_for(monkeypatch, **overrides):
+    tags = []
+    monkeypatch.setattr(RR, "run_pipeline", _fake_result(tags))
+    kwargs = dict(
+        seeds=[1], code_shas={"current": "sha_a"}, harness_sha="harness_a",
+        config_hashes={("current", "none"): "cfg"}, answer_start="2026-01-01T00:00:00",
+        key_extras={"diff_hash": "d0", "data": ["x"]}, **_common_kwargs(),
+    )
+    kwargs.update(overrides)
+    RR.run_many_seeds(**kwargs)
+    return tags[0]
+
+
+def test_cache_tag_changes_with_uncommitted_diff_data_answer_start_and_run_options(monkeypatch):
+    """HEAD SHA가 같아도 작업 트리 diff/데이터/answer_start/top_k/추첨/라운드가 바뀌면
+    다른 캐시 파일이어야 한다(v2 리뷰: v2 코드가 v1 SHA 키로 캐시된 사례)."""
+    base = _tag_for(monkeypatch)
+    variants = [
+        _tag_for(monkeypatch, key_extras={"diff_hash": "d1", "data": ["x"]}),
+        _tag_for(monkeypatch, key_extras={"diff_hash": "d0", "data": ["y"]}),
+        _tag_for(monkeypatch, answer_start="2026-01-02T00:00:00"),
+        _tag_for(monkeypatch, top_k=10),
+        _tag_for(monkeypatch, tie_draws=30),
+        _tag_for(monkeypatch, fixed_rounds=100),
+    ]
+    assert base == _tag_for(monkeypatch)
+    assert len({base, *variants}) == 1 + len(variants)
+
+
+def test_run_budget_stops_new_runs_but_not_cached_ones(tmp_path, monkeypatch):
+    monkeypatch.setattr(RR, "RESULTS_DIR", tmp_path)
+    (tmp_path / "cached.json").write_text('{"ok": 1}', encoding="utf-8")
+    monkeypatch.setitem(RR._BUDGET, "max_new", 0)
+    monkeypatch.setitem(RR._BUDGET, "started", 0)
+    assert RR.run_pipeline(out_tag="cached") == {"ok": 1}  # 캐시 히트는 한도와 무관
+    import pytest
+
+    with pytest.raises(RR.RunBudgetExhausted):
+        RR.run_pipeline(out_tag="not_cached_yet", engine_root="x", version="current")
+
+
+def test_working_tree_state_detects_uncommitted_change(tmp_path):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    (repo / "watched").mkdir(parents=True)
+    (repo / "watched" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    for cmd in (
+        ["git", "init", "-q"],
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "add", "watched/a.py"],
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"],
+    ):
+        subprocess.run(cmd, cwd=repo, check=True)
+    clean = RR.working_tree_state(str(repo), ["watched"])
+    assert clean["dirty"] is False
+    (repo / "watched" / "a.py").write_text("x = 2\n", encoding="utf-8")
+    dirty = RR.working_tree_state(str(repo), ["watched"])
+    assert dirty["dirty"] is True and dirty["diff_hash"] != clean["diff_hash"]
+    (repo / "watched" / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (repo / "watched" / "new.py").write_text("y = 1\n", encoding="utf-8")
+    untracked = RR.working_tree_state(str(repo), ["watched"])
+    assert untracked["dirty"] is True and untracked["diff_hash"] != clean["diff_hash"]
