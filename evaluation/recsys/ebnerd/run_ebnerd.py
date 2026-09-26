@@ -326,15 +326,23 @@ def run_p2(bench, W, args, seeds, p1, out):
 
 
 def _two_stage(task, score_list, seeds, union_masks, n_boot) -> dict:
-    """후보 생성(출처별 상위 k 합집합) -> 랭커 2단계. 합집합 밖 후보는 순위 맨 뒤로 보낸다."""
+    """후보 생성(출처별 상위 k 합집합) -> 랭커 2단계. 합집합 밖 후보는 순위 맨 뒤로 보낸다.
+    같은 요청·같은 점수로 전체 풀을 정렬한 결과 대비 쌍체 차이(`paired_vs_full_pool`)도 낸다
+    (두 CI가 겹친다는 것만으로는 "후보 생성이 nDCG를 떨어뜨리지 않는다"를 말할 수 없으므로)."""
     ptr, labels, npos = task.req.cand_ptr, task.labels, task.n_pos_total
-    res = {}
-    for k, mask in union_masks.items():
-        bank = MetricBank(task.group_user, n_boot, metrics=("ndcg@10", "recall@10"))
-        for seed, sc in zip(seeds, score_list):
+    bank = MetricBank(task.group_user, n_boot, metrics=("ndcg@10", "recall@10"))
+    for seed, sc in zip(seeds, score_list):
+        bank.add("full_pool", ranking_metrics(sc, labels, ptr, ks=(10,), n_pos_total=npos, seed=seed,
+                                              with_auc=False))
+        for k, mask in union_masks.items():
             staged = np.where(mask, sc, -np.inf)
-            bank.add("m", ranking_metrics(staged, labels, ptr, ks=(10,), n_pos_total=npos, seed=seed, with_auc=False))
-        res[f"union@{k}"] = bank.summary("m")
+            bank.add(f"union@{k}", ranking_metrics(staged, labels, ptr, ks=(10,), n_pos_total=npos, seed=seed,
+                                                   with_auc=False))
+    res = {}
+    for k in union_masks:
+        name = f"union@{k}"
+        res[name] = bank.summary(name)
+        res[name]["paired_vs_full_pool"] = bank.diff(name, "full_pool")
     return res
 
 
