@@ -51,6 +51,10 @@ sysctl -q --system
 
 # --- 2) 패키지 --------------------------------------------------------------------------------
 log "패키지 갱신"
+# iptables-persistent가 (재)설치될 때 현재 규칙을 저장하지 않게 한다 - Docker가 떠 있으면 Docker 체인까지
+# rules.v4에 박힌다(아래 3번 참고). OCI Ubuntu 이미지에는 이미 설치돼 있어 보통은 효과가 없다.
+echo "iptables-persistent iptables-persistent/autosave_v4 boolean false" | debconf-set-selections
+echo "iptables-persistent iptables-persistent/autosave_v6 boolean false" | debconf-set-selections
 apt-get update -q
 apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold full-upgrade -y -q
 # docker.io/docker-compose-v2는 Ubuntu 아카이브 패키지 - 외부 apt 저장소를 추가하지 않아
