@@ -89,5 +89,27 @@
             "seconds": 2.45
         }
     },
-    "total_seconds": 49.4
+    "total_seconds": 49.4,
+    "operator_observations": {
+        "note": "스크립트가 기록하지 않은 운영자 관찰(2026-09-26 13:00-13:01 UTC, colab CLI 0.7.4). 사전 등록 리뷰 지적으로 추가; 원 JSON 값은 바꾸지 않음.",
+        "usage_rate_cu_per_hour": 1.07,
+        "exec_wall_seconds": 58,
+        "session_lifetime_seconds": 66,
+        "first_attempt_empty_session_seconds": 40,
+        "estimated_cu_used": 0.03,
+        "balance_cu_before": 199.76,
+        "balance_cu_after": 199.76,
+        "balance_display_resolution": 0.01,
+        "determinism_scope": "같은 프로세스·같은 VM 안에서 합성 배치 연산을 두 번 실행한 결과. 실제 하네스 코드, 다른 VM, 다른 GPU 종류에는 일반화하지 않음(E15 결정론 게이트로 실코드 검증).",
+        "not_exercised": [
+            "colab upload/download/rm",
+            "인자 있는 패키지 모듈 실행(python -m, 상대 import)",
+            "requirements 핀 설치(numpy/pandas/pyarrow/lightgbm)",
+            "호스트 RAM 피크",
+            "스칼라 블록·후기 융합 헤드",
+            "실제 P1 패딩(고정 30 vs 배치 최대 53~57)",
+            "실데이터 결정론",
+            "세션 장기 생존·재접속·재개"
+        ]
+    }
 }
