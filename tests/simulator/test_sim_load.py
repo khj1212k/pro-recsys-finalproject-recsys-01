@@ -10,7 +10,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
+
+pytest.importorskip("fastapi")  # not installed in the integration CI job
+
+from fastapi.testclient import TestClient  # noqa: E402
 
 from sim.catalog import synthetic_catalog
 from sim.driver import ApiClient, ApiError
@@ -119,6 +122,10 @@ def _free_port():
 
 
 def test_locustfile_runs_headless_against_the_fake_server(tmp_path):
+    # Starts a uvicorn server and a 6 s Locust run: CI (GitHub Actions sets CI=true) or
+    # an explicit opt-in only, so a plain local `pytest` never generates load on a dev machine.
+    if not (os.environ.get("CI") or os.environ.get("SIM_LOAD_SMOKE") == "1"):
+        pytest.skip("load smoke runs in CI only (set SIM_LOAD_SMOKE=1 to opt in locally)")
     # find_spec, not importorskip: importing locust monkey-patches this pytest process (gevent)
     if importlib.util.find_spec("locust") is None or importlib.util.find_spec("uvicorn") is None:
         pytest.skip("locust/uvicorn not installed")

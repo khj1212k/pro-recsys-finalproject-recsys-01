@@ -13,6 +13,11 @@ from pathlib import Path
 
 import pytest
 
+# Unit-test job only: the integration job installs neither the API stack nor passlib,
+# and pytest collects every module even under -m integration.
+pytest.importorskip("fastapi")
+pytest.importorskip("passlib")
+
 os.environ.setdefault("SECRET_KEY", "sim-contract-test")
 os.environ.setdefault("ALGORITHM", "HS256")
 os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
