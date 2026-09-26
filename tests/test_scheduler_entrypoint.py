@@ -53,8 +53,10 @@ def test_sigterm_reaches_job_process_group_and_scheduler_exits_cleanly(tmp_path)
     bin_dir.mkdir()
     _write_executable(bin_dir / "supercronic", f"""
         import signal, subprocess, sys
-        child = subprocess.Popen([{str(job)!r}], process_group=0)
+        # 잡이 ready를 쓰기 전에 핸들러가 있어야 한다: 반대 순서면 테스트의 SIGTERM이 핸들러보다
+        # 먼저 도착해 가짜 supercronic이 기본 동작으로 죽고(143), 엔트리포인트는 그 상태를 그대로 전달한다.
         signal.signal(signal.SIGTERM, lambda *a: None)
+        child = subprocess.Popen([{str(job)!r}], process_group=0)
         child.wait()
         sys.exit(0)
     """)
