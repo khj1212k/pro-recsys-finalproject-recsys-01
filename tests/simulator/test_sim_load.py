@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import os
 import socket
 import subprocess
@@ -18,8 +19,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sim.catalog import synthetic_catalog
 from sim.driver import ApiClient, ApiError
 from sim.fake_app import FakeBackend, create_fake_app
-from sim.load import LoadUser, UserPool, swallow_api_errors
-from sim.loadtest import markdown_table, summarize_locust_csv
+from sim.load import LoadUser, SourceTally, UserPool, swallow_api_errors
+from sim.loadtest import markdown_table, source_table, summarize_locust_csv
 
 REPO = Path(__file__).resolve().parents[2]
 MIDNIGHT = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -52,6 +53,37 @@ def test_newcomer_first_view_is_reported_under_its_own_name(fake):
     api = ApiClient(client)
     LoadUser(UserPool(1, run_tag="t").take(), api).newcomer_flow()
     assert api.calls[-1].endpoint == "today_first_view" and api.calls[-1].ok
+
+
+def test_reader_tallies_the_rec_source_of_every_feed(fake):
+    _, client = fake
+    tally = SourceTally()
+    reader = LoadUser(UserPool(2, run_tag="t").take(), ApiClient(client), tally=tally)
+    reader.start()
+    reader.today()
+    reader.today()
+    LoadUser(UserPool(1, run_tag="n").take(), ApiClient(client), tally=tally).newcomer_flow()
+
+    s = tally.summary()
+    assert s["today"]["responses"] == 2 and s["today_first_view"]["responses"] == 1
+    assert s["today"]["source_counts"] == {"personalized": 2}  # the fake app's reactive policy
+    assert s["today"]["fallback_rate"] == 0.0 and s["today"]["empty_rate"] == 0.0
+
+
+def test_source_tally_rates_and_missing_header():
+    tally = SourceTally()
+    for src, n in [("realtime", 10), ("popular", 3), ("recent", 1), ("empty", 0), ("batch", 10)]:
+        tally.record("today", src, n)
+    tally.record("legacy", None, 5)
+    s = tally.summary()
+    assert s["today"]["fallback_rate"] == 3 / 5  # popular, recent, empty; batch is ambiguous -> not counted
+    assert s["today"]["empty_rate"] == 1 / 5
+    assert s["legacy"]["fallback_rate"] is None  # no X-Rec-Source header: unmeasurable, not zero
+    assert s["legacy"]["source_counts"] == {SourceTally.NO_HEADER: 1}
+    table = source_table({"20": s})
+    assert "| 20 | today | 5 | 20.00% | 60.00% |" in table and "| 20 | legacy | 1 | 0.00% | - |" in table
+    tally.reset()
+    assert tally.summary() == {}
 
 
 def test_user_pool_hands_out_distinct_users_then_wraps():
@@ -141,11 +173,15 @@ def test_locustfile_runs_headless_against_the_fake_server(tmp_path):
                     pytest.fail("fake server exited")
                 time.sleep(0.2)
         prefix = tmp_path / "smoke"
+        sources = tmp_path / "smoke_sources.json"
         subprocess.run([sys.executable, "-m", "locust", "-f", "sim/locustfile.py", "--headless",
                         "--host", f"http://127.0.0.1:{port}", "-u", "4", "-r", "4", "-t", "6s",
                         "--only-summary", "--csv", str(prefix)],
-                       cwd=REPO, check=True, timeout=120, env={**os.environ, "SIM_LOAD_USERS": "20", "SIM_NEWCOMERS_PER_SEC": "1"})
+                       cwd=REPO, check=True, timeout=120,
+                       env={**os.environ, "SIM_LOAD_USERS": "20", "SIM_NEWCOMERS_PER_SEC": "1",
+                            "SIM_SOURCES_OUT": str(sources)})
         s = summarize_locust_csv(Path(f"{prefix}_stats.csv"))
+        tallied = json.loads(sources.read_text(encoding="utf-8"))
     finally:
         server.terminate()
         server.wait(timeout=10)
@@ -153,3 +189,4 @@ def test_locustfile_runs_headless_against_the_fake_server(tmp_path):
     assert s["today"]["requests"] > 0
     assert s["today_first_view"]["requests"] > 0
     assert {"signup", "login", "onboarding_news", "put_newsletters", "put_categories"} <= set(s)
+    assert tallied["today"]["responses"] > 0 and tallied["today"]["fallback_rate"] is not None

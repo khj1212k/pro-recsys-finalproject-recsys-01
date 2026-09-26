@@ -10,16 +10,23 @@ by wall-clock time and a fixed task mix instead of per-user session schedules:
 
 Locust counts requests by endpoint name (ApiClient passes `name=`), so the
 first-view request of a newcomer is reported as `today_first_view` separately
-from the steady-state `today`.
+from the steady-state `today`. Locust's CSV has no notion of *which path*
+answered, so every /today response's `X-Rec-Source` header (and whether the list
+was empty) is tallied in a SourceTally; the fallback rate per load stage comes
+from there (same FALLBACK_SOURCES definition as the behavior metrics).
 """
 
 import itertools
+import json
 import threading
+from collections import Counter
 from datetime import datetime, timezone
-from typing import List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional
 
 from sim.click_model import ClickModel, preset
 from sim.driver import ApiClient, ApiError, SimAgent
+from sim.metrics import FALLBACK_SOURCES
 from sim.personas import PopulationConfig, SimUser, generate_population
 
 TODAY_WEIGHT = 9
@@ -49,10 +56,52 @@ class UserPool:
             return self.users[next(self._next) % len(self.users)]
 
 
+class SourceTally:
+    """Counts /today responses by (endpoint, X-Rec-Source) and empty lists; thread-safe."""
+
+    NO_HEADER = "(none)"
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.sources: Dict[str, Counter] = {}
+        self.empty: Counter = Counter()
+
+    def reset(self) -> None:
+        with self._lock:
+            self.sources.clear()
+            self.empty.clear()
+
+    def record(self, endpoint: str, source: Optional[str], n_items: int) -> None:
+        with self._lock:
+            self.sources.setdefault(endpoint, Counter())[source or self.NO_HEADER] += 1
+            self.empty[endpoint] += int(n_items == 0)
+
+    def summary(self) -> Dict[str, dict]:
+        with self._lock:
+            out = {}
+            for ep, counts in sorted(self.sources.items()):
+                n = sum(counts.values())
+                has_header = any(src != self.NO_HEADER for src in counts)
+                out[ep] = {
+                    "responses": n,
+                    "source_counts": dict(counts),
+                    "empty_rate": self.empty[ep] / n if n else None,
+                    # None, not 0, when the API sends no X-Rec-Source (current main)
+                    "fallback_rate": (sum(c for src, c in counts.items() if src in FALLBACK_SOURCES) / n)
+                    if has_header and n else None,
+                }
+            return out
+
+    def write(self, path: Path) -> None:
+        Path(path).write_text(json.dumps(self.summary(), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 class LoadUser:
-    def __init__(self, user: SimUser, api: ApiClient, model: Optional[ClickModel] = None, seed: int = 0):
+    def __init__(self, user: SimUser, api: ApiClient, model: Optional[ClickModel] = None, seed: int = 0,
+                 tally: Optional[SourceTally] = None):
         self.agent = SimAgent(user, api, model or ClickModel(preset("default")), seed=seed, fetch_detail=False)
         self.api = api
+        self.tally = tally
 
     def start(self) -> None:
         """signup (400 = account exists -> fine) -> login -> onboarding."""
@@ -61,6 +110,8 @@ class LoadUser:
 
     def today(self, endpoint: str = "today") -> int:
         feed = self.api.today(endpoint=endpoint)
+        if self.tally is not None:
+            self.tally.record(endpoint, feed.source, len(feed.items))
         self.agent.last_feed = feed.items
         self.agent.hist.record_view(feed.items[: self.agent.model.cfg.view_depth])
         return len(feed.items)
