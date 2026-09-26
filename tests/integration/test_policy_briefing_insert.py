@@ -7,7 +7,8 @@ KST = timezone(timedelta(hours=9))
 
 
 def _xml(news_id):
-    body = "<p>" + ("합성 정책뉴스 문단입니다. " * 40) + "</p>"
+    # 본문 해시 부분 unique 인덱스가 있으므로 실행마다 본문도 달라야 한다(중단된 이전 실행의 행과 충돌 방지)
+    body = "<p>" + (f"합성 정책뉴스 {news_id} 문단입니다. " * 40) + "</p>"
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <response><header><resultCode>0</resultCode><resultMsg>OK</resultMsg></header>
 <body><NewsItem>
@@ -58,18 +59,6 @@ def test_collect_policy_briefing_inserts_body_and_is_idempotent(database_url, pg
             cur.execute("DELETE FROM press WHERE press_name = %s", (press_name,))
 
 
-# 수집 런타임 브랜치(PR #8)의 f87f7378672e·d48994e9d26e가 news_raw에 더하는 컬럼·인덱스와 같은 정의.
-# main의 Alembic head에는 없으므로 이 테스트 동안만 만들고, 이 테스트가 만든 것만 되돌린다
-# (그 브랜치가 병합돼 이미 있으면 건드리지 않는다).
-_RUNTIME_COLUMNS = [
-    ("raw_news_extract_status", "varchar(16)"),
-    ("raw_news_extracted_at", "timestamptz"),
-    ("raw_news_extract_attempts", "smallint NOT NULL DEFAULT 0"),
-    ("raw_news_content_sha256", "varchar(64)"),
-]
-_RUNTIME_INDEX = "uq_news_raw_content_sha256_ok"
-
-
 def _xml_items(*items):
     nodes = "".join(
         f"""<NewsItem>
@@ -87,8 +76,20 @@ def _xml_items(*items):
 <body>{nodes}<totalCount>{len(items)}</totalCount></body></response>"""
 
 
-def test_collect_on_runtime_schema_stores_rows_as_extracted_and_skips_same_body(database_url, pg_conn, monkeypatch):
+def test_collect_stores_rows_as_extracted_and_skips_same_body(database_url, pg_conn, monkeypatch):
+    """Alembic head(f87f7378672e·d48994e9d26e 포함)의 news_raw에서: 정책브리핑 행은 추출 완료('ok')와
+    본문 해시가 채워져 본문 추출기가 다시 내려받지 않고, 본문이 같은 두 번째 URL은 부분 unique
+    인덱스(uq_news_raw_content_sha256_ok) 때문에 배치를 롤백시키지 않고 건너뛴다."""
     from crawler import policy_briefing as pb
+
+    with pg_conn.cursor() as cur:
+        columns = pb.news_raw_columns(cur)
+        cur.execute("SELECT 1 FROM pg_indexes WHERE indexname = 'uq_news_raw_content_sha256_ok'")
+        has_index = cur.fetchone() is not None
+    # 이 컬럼·인덱스가 없는 DB(e725a62ffef1까지)에서는 수집기가 URL 충돌만 보는 INSERT로 내려간다 -
+    # 그 경로는 단위 테스트 test_insert_on_pre_runtime_schema_writes_only_existing_columns가 본다
+    assert {pb.EXTRACT_STATUS_COLUMN, pb.EXTRACTED_AT_COLUMN, pb.CONTENT_SHA256_COLUMN} <= columns
+    assert has_index
 
     tag = uuid.uuid4().hex[:10]
     a, b, c = f"itA{tag}", f"itB{tag}", f"itC{tag}"
@@ -102,34 +103,11 @@ def test_collect_on_runtime_schema_stores_rows_as_extracted_and_skips_same_body(
         # b는 a와 본문이 같고 URL만 다르다(같은 기사가 두 주소로 나오는 경우)
         return pb.parse_policy_news_xml(_xml_items((a, same_body), (b, same_body), (c, other_body)))
 
-    added_columns, added_index = [], False
-    with pg_conn.cursor() as cur:
-        cur.execute("SET lock_timeout = '10s'")  # 다른 연결이 잡고 있으면 멈추지 말고 실패
-        cur.execute(
-            """SELECT column_name FROM information_schema.columns
-               WHERE table_schema = current_schema() AND table_name = 'news_raw'"""
-        )
-        existing = {r[0] for r in cur.fetchall()}
-        cur.execute("SELECT 1 FROM pg_indexes WHERE indexname = %s", (_RUNTIME_INDEX,))
-        index_existed = cur.fetchone() is not None
     now = datetime(2026, 9, 26, 12, 0, tzinfo=KST)
     try:
-        with pg_conn.cursor() as cur:
-            for name, ddl in _RUNTIME_COLUMNS:
-                if name not in existing:
-                    cur.execute(f"ALTER TABLE news_raw ADD COLUMN {name} {ddl}")
-                    added_columns.append(name)
-            if not index_existed:
-                cur.execute(
-                    f"CREATE UNIQUE INDEX {_RUNTIME_INDEX} ON news_raw (raw_news_content_sha256) "
-                    "WHERE raw_news_extract_status = 'ok'"
-                )
-                added_index = True
-
         first = pb.collect_policy_briefing(days=1, now=now, fetch=fake_fetch, press_name=press_name)
         second = pb.collect_policy_briefing(days=1, now=now, fetch=fake_fetch, press_name=press_name)
 
-        # b는 본문 해시 인덱스에 걸려 배치를 롤백시키지 않고 건너뛴다
         assert (first["inserted"], first["skipped"]) == (2, 1)
         assert (second["inserted"], second["skipped"]) == (0, 3)
 
@@ -154,7 +132,3 @@ def test_collect_on_runtime_schema_stores_rows_as_extracted_and_skips_same_body(
         with pg_conn.cursor() as cur:
             cur.execute("DELETE FROM news_raw WHERE raw_news_url = ANY(%s)", (urls,))
             cur.execute("DELETE FROM press WHERE press_name = %s", (press_name,))
-            if added_index:
-                cur.execute(f"DROP INDEX IF EXISTS {_RUNTIME_INDEX}")
-            for name in reversed(added_columns):
-                cur.execute(f"ALTER TABLE news_raw DROP COLUMN IF EXISTS {name}")
