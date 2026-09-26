@@ -77,6 +77,17 @@ def test_fallback_softener_applies_the_longer_phrase_before_its_suffix(monkeypat
     assert converted["content"] == "📰 수요가 늘어날 것 같아요. 정부는 대책을 발표했어요."
 
 
+def test_fallback_softener_turns_bare_boimnida_into_a_real_word(monkeypatch):
+    # "것으로"가 없는 "보입니다"가 "입니다" 규칙에 걸려 "보이에요"가 되던 문제
+    monkeypatch.setattr(Settings, "MAX_RETRY_TONE_VALIDATION", 0)
+    fake = FakeLLMClient(results=[{"parsed": ToneResult(title="", summary="", content="", keywords=[])}])
+    draft = dict(DRAFT, content="회복세가 뚜렷해 보입니다. 발표는 다음 달입니다.")
+
+    converted = ToneConverter(llm_client=fake).convert(draft)
+
+    assert converted["content"] == "📰 회복세가 뚜렷해 보여요. 발표는 다음 달이에요."
+
+
 class _FakeDBConn:
     def cursor(self):
         raise AssertionError("임베딩이 없으면 cursor()를 부르지 않는다")
