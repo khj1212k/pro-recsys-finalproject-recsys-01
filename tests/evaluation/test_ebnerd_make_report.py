@@ -51,3 +51,19 @@ def test_recommended_mmr_lambda_is_smallest_within_relative_loss():
     sweep = {"0.5": 0.20, "0.6": 0.246, "0.7": 0.247, "0.8": 0.249, "0.9": 0.25, "1.0": 0.25}
     assert recommended_mmr_lambda(sweep, max_rel_loss=0.02) == "0.6"
     assert recommended_mmr_lambda({"0.9": 0.1, "1.0": 0.25}, max_rel_loss=0.02) == "1.0"
+
+
+def test_promotion_r4_lists_models_in_fixed_order():
+    from evaluation.recsys.ebnerd.make_report import promotion_verdict
+    iters = promotion_verdict(_d())["rules"]["R4"]["best_iterations"]
+    assert list(iters) == ["ranker_v2", "ranker_v2_poolneg"]
+    # 선택 모델이 ranker_v2 자신이면 한 번만
+    assert list(promotion_verdict(_d(chosen="ranker_v2"))["rules"]["R4"]["best_iterations"]) == ["ranker_v2"]
+
+
+def test_render_skips_verdict_for_only_models_partial_run():
+    from evaluation.recsys.ebnerd.make_report import _partial_run
+
+    assert _partial_run({"meta": {"argv": ["--only-models", "ranker_v2_poolneg"]}})
+    assert not _partial_run({"meta": {"argv": ["--dataset", "ebnerd_small"]}})
+    assert not _partial_run({})

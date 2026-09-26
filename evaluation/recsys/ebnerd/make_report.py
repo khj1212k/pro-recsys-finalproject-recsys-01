@@ -53,7 +53,9 @@ def promotion_verdict(d: dict) -> dict:
     diff, lo = _ci_lo(d.get("p2_vs", {}), f"{chosen}-vs-cosine_history")
     rules["R3"] = {"desc": f"P2 nDCG@10 {chosen} - cosine_history CI lo > 0", "diff": diff, "ci_lo": lo,
                    "pass": lo is not None and lo > 0}
-    iters = {n: [m["best_iteration"] for m in d.get("p1_models", {}).get(n, [])] for n in {"ranker_v2", chosen} if n}
+    # dict.fromkeys: 중복 제거하면서 순서 고정(set은 문자열 해시 seed에 따라 표의 모델 순서가 바뀐다)
+    iters = {n: [m["best_iteration"] for m in d.get("p1_models", {}).get(n, [])]
+             for n in dict.fromkeys(["ranker_v2", chosen]) if n}
     rules["R4"] = {"desc": f"best_iteration > {MIN_BEST_ITERATION} for every seed", "best_iterations": iters,
                    "pass": bool(iters) and all(its and min(its) > MIN_BEST_ITERATION for its in iters.values())}
     return {"passed": all(r["pass"] for r in rules.values()), "p2_chosen": chosen, "rules": rules}
@@ -134,8 +136,21 @@ def p2_table(d: dict) -> str:
 
 
 def two_stage_table(d: dict) -> str:
-    rows = [[k, ci(v["ndcg@10"]), ci(v["recall@10"])] for k, v in d.get("p2_two_stage", {}).items()]
-    return table(["후보 생성", "nDCG@10", "Recall@10"], rows)
+    """paired_vs_full_pool(같은 요청에서 전체 풀 랭킹 대비 쌍체 차이)이 있는 JSON만 차이 열을 붙인다
+    (v1 JSON에는 없다)."""
+    stages = d.get("p2_two_stage", {})
+    paired = any("paired_vs_full_pool" in v for v in stages.values())
+    rows = []
+    for k, v in stages.items():
+        row = [k, ci(v["ndcg@10"]), ci(v["recall@10"])]
+        if paired:
+            p = v.get("paired_vs_full_pool", {})
+            row += [dci(p[m]) if m in p else "-" for m in ("ndcg@10", "recall@10")]
+        rows.append(row)
+    header = ["후보 생성", "nDCG@10", "Recall@10"]
+    if paired:
+        header += ["ΔnDCG@10 vs 전체 풀 (쌍체)", "ΔRecall@10 vs 전체 풀 (쌍체)"]
+    return table(header, rows)
 
 
 def mmr_table(d: dict) -> str:
@@ -191,16 +206,22 @@ def verdict_table(d: dict) -> str:
     return table(["규칙", "내용", "측정값", "판정"], rows)
 
 
+def _partial_run(d: dict) -> bool:
+    """--only-models로 일부 모델만 학습한 실행인지(meta.argv 기준)."""
+    return "--only-models" in (d.get("meta", {}).get("argv") or [])
+
+
 def render(d: dict) -> str:
     parts = []
     if "embedding_sanity" in d:
         parts += ["### 임베딩 점검(카테고리 kNN leave-one-out)", sanity_table(d)]
-    parts += [
-        "### P1 전체", p1_table(d),
-        "### P1 ablation (인접 단계 쌍체 차이)", diff_table(d["p1_ablation_diffs"]),
-        "### P1 ranker v2 vs 베이스라인/변형", diff_table(d["p1_vs_baselines"]),
-        "### P1 seen 필터", seen_table(d),
-    ]
+    parts += ["### P1 전체", p1_table(d)]
+    # --only-models 부분 실행은 사슬이 비어 있어 ablation·기준 비교가 없을 수 있다
+    if d.get("p1_ablation_diffs"):
+        parts += ["### P1 ablation (인접 단계 쌍체 차이)", diff_table(d["p1_ablation_diffs"])]
+    if d.get("p1_vs_baselines"):
+        parts += ["### P1 ranker v2 vs 베이스라인/변형", diff_table(d["p1_vs_baselines"])]
+    parts += ["### P1 seen 필터", seen_table(d)]
     if "p2" in d:
         if "p2_selection" in d:
             parts += ["### P2 모델 선택(es 구간 표본, validation 미사용)", selection_table(d)]
@@ -217,7 +238,11 @@ def render(d: dict) -> str:
             lam = recommended_mmr_lambda({k: v["ndcg@10"]["mean"] for k, v in sweep.items()})
             parts += ["### MMR λ 스윕", mmr_table(d), f"사전 등록 규칙(λ=1.0 대비 nDCG@10 상대 손실 ≤2%)의 권장 λ: **{lam}**"]
         if d.get("protocol", {}).get("chain", "inview") == "inview":
-            parts += ["### 승격 규칙 판정(ADR 0013 사전 등록)", verdict_table(d)]
+            if _partial_run(d):
+                parts += ["### 승격 규칙 판정(ADR 0013 사전 등록)",
+                          "`--only-models` 부분 실행이라 판정하지 않음(판정은 전체 사슬을 돌린 JSON에서만)."]
+            else:
+                parts += ["### 승격 규칙 판정(ADR 0013 사전 등록)", verdict_table(d)]
     if "replay" in d:
         rp = d["replay"]
         parts += ["### 실시간 재생",
