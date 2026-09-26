@@ -1,0 +1,23 @@
+# Tier 0(1 GB 호스트) 수집 전용 이미지의 최상위 의존성 (docker/ingest.Dockerfile, ADR 0026).
+# 대상: jobs.migrate, jobs.run ingest --stages rss,extract, popularity, daily_report.
+# torch·BGE-M3·hdbscan·lightgbm·LLM SDK는 넣지 않는다 - embed/cluster/generate/train은 이 이미지에서 돌지 않는다.
+# 버전은 worker 잠금 파일을 제약으로 걸어 같은 버전을 쓴다(docs/runbook-hosting.md "의존성 잠금").
+
+# 수집·본문 추출
+feedparser
+trafilatura
+lxml_html_clean
+requests
+python-dateutil
+tqdm>=4.65.0
+
+# DB (db.connection이 pgvector 어댑터를 등록하므로 pgvector·numpy 필요)
+psycopg2-binary>=2.9.11
+pgvector>=0.4.2
+numpy
+python-dotenv>=1.2.1
+
+# migrate(alembic upgrade head)와 popularity(backend/scheduler/calculate_ranking.py)
+sqlalchemy>=2.0.46
+sqlmodel
+alembic

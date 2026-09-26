@@ -1,0 +1,48 @@
+# Tier 0 오버레이: OCI Always Free VM.Standard.E2.1.Micro (1/8 OCPU, 1 GB RAM + 2 GB 스왑).
+# 결정·측정 근거는 docs/adr/0026-hosting-tiers-and-contingency.md, 절차는 docs/runbook-hosting.md.
+#
+#   .env에: COMPOSE_FILE=docker-compose.yml:docker/compose.micro.yaml
+#   docker compose up -d --build        # db + migrate(1회) + scheduler (api는 뜨지 않음)
+#
+# - worker/migrate/scheduler는 수집 전용 이미지(docker/ingest.Dockerfile, torch 없음)를 쓴다.
+# - 스케줄은 docker/crontab.micro: ingest(rss,extract, 추출 워커 2개)·popularity·daily_report만.
+#   embed·cluster·generate·train은 이 호스트에서 돌지 않는다.
+# - api는 profiles로 기본 기동에서 뺀다(공개 데모 단계에서 `--profile api`로 켠다).
+# - Postgres는 1 GB에 맞춰 버퍼·연결 수를 줄인다.
+x-ingest-build: &ingest-build
+  context: .
+  dockerfile: docker/ingest.Dockerfile
+  args:
+    GIT_SHA: ${GIT_SHA:-unknown}
+
+services:
+  db:
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - effective_cache_size=256MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=32MB
+      - -c
+      - max_connections=30
+
+  migrate:
+    build: *ingest-build
+    image: newsletter-recsys/ingest:${IMAGE_TAG:-local}
+
+  worker:
+    build: *ingest-build
+    image: newsletter-recsys/ingest:${IMAGE_TAG:-local}
+
+  scheduler:
+    build: *ingest-build
+    image: newsletter-recsys/ingest:${IMAGE_TAG:-local}
+    entrypoint: ["sh", "/app/docker/scheduler-entrypoint.sh", "/app/docker/crontab.micro"]
+    mem_limit: ${SCHEDULER_MEM_LIMIT:-512m}
+
+  api:
+    profiles: ["api"]
