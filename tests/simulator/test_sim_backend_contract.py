@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "backend"))
 
 from fastapi.testclient import TestClient  # noqa: E402
 from passlib.context import CryptContext  # noqa: E402
+from sqlalchemy import text  # noqa: E402
 from sqlalchemy.pool import StaticPool  # noqa: E402
 from sqlmodel import Session, SQLModel, create_engine, select  # noqa: E402
 
@@ -36,11 +37,12 @@ from app.models.log import UserNewsLetterCTRLog  # noqa: E402
 from app.models.news import Category, NewsLetter, NewsLetterCategories  # noqa: E402
 from app.models.user import User, UserPreferredCategories  # noqa: E402
 
-from sim.catalog import CATEGORIES, synthetic_catalog  # noqa: E402
+from sim.catalog import synthetic_catalog  # noqa: E402
 from sim.click_model import ClickModel, preset  # noqa: E402
 from sim.driver import ApiClient, SimulationConfig, VirtualClock, run_simulation  # noqa: E402
 from sim.metrics import compute_metrics  # noqa: E402
 from sim.personas import PopulationConfig, generate_population  # noqa: E402
+from sim.seed import NotDisposableError, seed_catalog, write_today_batches  # noqa: E402
 
 START = datetime(2026, 1, 5, tzinfo=timezone.utc)
 N_DAYS = 3
@@ -57,17 +59,7 @@ def real_backend(monkeypatch):
     SQLModel.metadata.create_all(engine, tables=[SQLModel.metadata.tables[t] for t in API_TABLES])
     catalog = synthetic_catalog(n_days=N_DAYS, items_per_day=25, seed=1, start=START)
     with Session(engine) as s:
-        for i, (code, name) in enumerate(CATEGORIES.items(), start=1):
-            s.add(Category(category_id=i, category_name=name, category_code=code))
-        cat_pk = {code: i for i, code in enumerate(CATEGORIES, start=1)}
-        for it in catalog.items:
-            s.add(NewsLetter(news_letter_id=it.news_letter_id, news_letter_title=it.title,
-                             news_letter_sentence=it.sentence, news_letter_content=it.sentence,
-                             news_letter_created_at=it.created_at, news_letter_keywords=list(it.keywords),
-                             raw_news_count=it.raw_news_count))
-            s.add(NewsLetterCategories(news_letter_id=it.news_letter_id, category_id=cat_pk[it.category_id]))
-        s.add(NewsLettersCategory(news_letter_ids=[it.news_letter_id for it in reversed(catalog.items)]))
-        s.commit()
+        assert seed_catalog(s, catalog)["newsletters"] == len(catalog.items)
 
     def session_override():
         with Session(engine) as s:
@@ -78,21 +70,10 @@ def real_backend(monkeypatch):
     backend_app.dependency_overrides.clear()
 
 
-def nightly_batch_stand_in(engine, catalog, now):
-    """Writes one news_letter_today_batch row per user from their preferred categories."""
-    code_of = {}
+def nightly_batch_stand_in(engine, now):
+    """sim.seed's batch writer: one news_letter_today_batch row per user from their onboarding categories."""
     with Session(engine) as s:
-        for c in s.exec(select(Category)).all():
-            code_of[c.category_id] = c.category_code
-        fresh = [it for it in catalog.candidates(now)]
-        fresh.sort(key=lambda it: it.created_at, reverse=True)
-        for u in s.exec(select(User)).all():
-            prefs = {code_of[p.category_id] for p in
-                     s.exec(select(UserPreferredCategories).where(UserPreferredCategories.user_id == u.user_id))}
-            ids = [it.news_letter_id for it in fresh if it.category_id in prefs][:20]
-            if ids:
-                s.add(NewsLetterTodayBatch(user_id=u.user_id, news_letter_ids=ids))
-        s.commit()
+        write_today_batches(s, now)
 
 
 def test_driver_speaks_the_real_api_contract_and_measures_its_behavior(real_backend):
@@ -107,7 +88,7 @@ def test_driver_speaks_the_real_api_contract_and_measures_its_behavior(real_back
             model=ClickModel(preset("default")),
             cfg=SimulationConfig(n_days=N_DAYS, start=START),
             clock=clock,
-            on_day_end=lambda day: nightly_batch_stand_in(engine, catalog, clock.now()),
+            on_day_end=lambda day: nightly_batch_stand_in(engine, clock.now()),
         )
     m = compute_metrics(log)
 
@@ -129,3 +110,63 @@ def test_driver_speaks_the_real_api_contract_and_measures_its_behavior(real_back
     assert m["cold_start"]["first_view_coverage"] == 0.0
     assert m["reactivity"]["after_click_jaccard_mean"] == 1.0
     assert m["serving"]["fallback_rate"] is None  # no source header in the real API
+
+
+# --- sim.seed: the load-test seed goes through the same backend models --------
+
+NOW = START + timedelta(hours=12)
+
+
+def _user(s, email, codes=()):
+    u = User(user_email=email, user_password_hash="x", user_nickname="n")
+    s.add(u)
+    s.flush()
+    pk = {c.category_code: c.category_id for c in s.exec(select(Category)).all()}
+    for code in codes:
+        s.add(UserPreferredCategories(user_id=u.user_id, category_id=pk[code]))
+    s.commit()
+    return u.user_id
+
+
+def test_seed_catalog_writes_what_the_api_reads_and_is_idempotent(real_backend):
+    engine, catalog = real_backend
+    with Session(engine) as s:
+        assert len(s.exec(select(NewsLetter)).all()) == len(catalog.items)
+        assert len(s.exec(select(NewsLetterCategories)).all()) == len(catalog.items)
+        ranking = s.exec(select(NewsLettersCategory)).one().news_letter_ids
+        assert ranking[0] == max(catalog.items, key=lambda it: it.created_at).news_letter_id
+        again = seed_catalog(s, catalog)
+    assert again["newsletters"] == 0 and again["skipped_existing"] == len(catalog.items)
+
+
+def test_seed_batches_follow_onboarding_categories_within_the_freshness_window(real_backend):
+    engine, catalog = real_backend
+    with Session(engine) as s:
+        sports = _user(s, "a@sim.invalid", codes=(600,))
+        nothing = _user(s, "b@sim.invalid")
+        assert write_today_batches(s, NOW) == 2
+        rows = {r.user_id: r.news_letter_ids for r in s.exec(select(NewsLetterTodayBatch)).all()}
+    by_id = catalog.by_id
+    assert rows[sports] and all(by_id[i].category_id == 600 for i in rows[sports])
+    assert all(NOW - timedelta(days=3) <= by_id[i].created_at <= NOW for i in rows[sports] + rows[nothing])
+    fresh = sorted(catalog.candidates(NOW), key=lambda it: it.created_at, reverse=True)
+    assert rows[nothing] == [it.news_letter_id for it in fresh[:20]]  # no onboarding -> newest
+
+
+def test_seed_refuses_a_database_with_real_users_or_collected_articles(real_backend):
+    engine, catalog = real_backend
+    with Session(engine) as s:
+        _user(s, "someone@example.com")
+        with pytest.raises(NotDisposableError, match="non-synthetic"):
+            write_today_batches(s, NOW)
+        with pytest.raises(NotDisposableError, match="non-synthetic"):
+            seed_catalog(s, catalog)
+
+    fresh_engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    SQLModel.metadata.create_all(fresh_engine, tables=[SQLModel.metadata.tables[t] for t in API_TABLES])
+    with Session(fresh_engine) as s:
+        s.execute(text("CREATE TABLE news_raw (raw_news_id INTEGER PRIMARY KEY)"))
+        s.execute(text("INSERT INTO news_raw (raw_news_id) VALUES (1)"))
+        s.commit()
+        with pytest.raises(NotDisposableError, match="collection DB"):
+            seed_catalog(s, catalog)

@@ -1,0 +1,17 @@
+# Load-generator / simulator host (not the API image). Versions as tested on
+# 2026-09-26 (tests/simulator). See sim/README.md.
+numpy==2.4.6
+kiwipiepy==0.23.2
+requests==2.34.2
+locust==2.46.6
+# sim.seed writes through backend/app/models (SQLModel + pgvector column types)
+sqlmodel==0.0.47
+pgvector==0.5.0
+psycopg2-binary==2.9.13
+# in-process fake app (sim.run --target fake, sim.experiments, sim.fake_app server)
+fastapi==0.141.1
+httpx==0.28.1
+uvicorn==0.54.0
+# sim.calibration only (EB-NeRD / team-archive aggregates)
+pandas==3.0.6
+pyarrow==25.0.1
