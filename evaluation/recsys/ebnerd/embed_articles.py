@@ -11,8 +11,12 @@ gitignore된 data/ 아래에 둔다. 기사 본문은 어떤 로그/리포트에
 (토큰 길이 같은 통계만 기록).
 
 입력 텍스트는 "제목\\n부제\\n본문"이고 토큰 단위로 max_length(기본 512)에서 절단한다.
-절단의 영향은 --truncation-check로 일부 긴 기사를 더 긴 max_length로도 임베딩해
-두 벡터의 코사인을 meta.json에 남긴다.
+절단 길이는 NewsEmbedder 생성자에서 정한다(max_length). 절단의 영향은 --truncation-check로
+일부 긴 기사를 같은 모델에서 더 긴 max_length로도 임베딩해 두 벡터의 코사인을 meta.json에 남긴다.
+
+기록된 v1 임베딩(sha256 2f096ef8…ebeb)은 고정 크기 배치(배치 32)의 NewsEmbedder로 계산했다.
+배치 구성이 다른 구현(토큰 길이·attention 예산 기반 배치)으로 다시 돌리면 패딩이 달라져 fp16 수치 잡음
+수준의 차이가 생길 수 있으므로 sha256이 같다고 가정하지 않는다.
 """
 from __future__ import annotations
 
@@ -23,6 +27,7 @@ import os
 import platform
 import sys
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -49,8 +54,19 @@ def build_texts(articles: pd.DataFrame) -> list[str]:
     ]
 
 
+@contextmanager
+def max_length_override(embedder, max_length: int):
+    """같은 모델로 잠깐 다른 절단 길이를 쓴다(모델 재로딩 없이). 끝나면 원래 값으로 되돌린다."""
+    prev = embedder.max_length
+    embedder.max_length = max_length
+    try:
+        yield embedder
+    finally:
+        embedder.max_length = prev
+
+
 def embed_sorted(embedder, texts: list[str], lengths: np.ndarray, batch_size: int,
-                 max_length: int, partial_dir: Path, chunk: int = 512) -> tuple[np.ndarray, list[dict]]:
+                 partial_dir: Path, chunk: int = 512) -> tuple[np.ndarray, list[dict]]:
     # 길이순 정렬로 배치 내 padding 낭비를 줄이고, 끝나면 원래 순서로 되돌린다.
     # 수 시간짜리 작업이라 청크마다 partial_dir에 저장해 중단 시 이어서 돌 수 있게 한다
     # (정렬이 stable이라 같은 입력이면 청크 구성이 동일하다).
@@ -64,13 +80,11 @@ def embed_sorted(embedder, texts: list[str], lengths: np.ndarray, batch_size: in
         if part.exists():
             out[idx] = np.load(part).astype(np.float32)
             continue
-        vecs, elapsed = embedder.generate_embeddings_batch(
-            [texts[i] for i in idx], batch_size=batch_size, max_length=max_length
-        )
+        vecs, elapsed = embedder.generate_embeddings_batch([texts[i] for i in idx], batch_size=batch_size)
         out[idx] = np.asarray(vecs, dtype=np.float32)
         np.save(part, out[idx])
         timings.append({"n": int(len(idx)), "seconds": round(float(elapsed), 3),
-                        "mean_tokens": float(np.minimum(lengths[idx], max_length).mean())})
+                        "mean_tokens": float(np.minimum(lengths[idx], embedder.max_length).mean())})
         done = min(start + chunk, len(order))
         print(f"[embed] {done}/{len(order)} ({len(idx) / max(elapsed, 1e-9):.1f} art/s)", flush=True)
     return out, timings
@@ -102,7 +116,8 @@ def main(argv=None) -> int:
     texts = build_texts(articles)
 
     t_load = time.time()
-    embedder = NewsEmbedder(force_cpu=False, verbose=False, l2_normalize=True, use_fp16=not args.fp32)
+    embedder = NewsEmbedder(force_cpu=False, verbose=False, l2_normalize=True, max_length=args.max_length,
+                            use_fp16=not args.fp32)
     load_seconds = time.time() - t_load
     tokenizer = embedder.model.tokenizer
 
@@ -112,7 +127,7 @@ def main(argv=None) -> int:
 
     t0 = time.time()
     partial_dir = out_dir / f"partial_tsb{args.max_length}_n{len(texts)}"
-    emb, timings = embed_sorted(embedder, texts, lengths, args.batch_size, args.max_length, partial_dir)
+    emb, timings = embed_sorted(embedder, texts, lengths, args.batch_size, partial_dir)
     embed_seconds = time.time() - t0
 
     check = None
@@ -121,9 +136,8 @@ def main(argv=None) -> int:
         rng = np.random.default_rng(args.seed)
         pick = rng.choice(long_idx, size=min(args.truncation_check, len(long_idx)), replace=False)
         t0 = time.time()
-        long_vecs, _ = embedder.generate_embeddings_batch(
-            [texts[i] for i in pick], batch_size=4, max_length=args.check_max_length
-        )
+        with max_length_override(embedder, args.check_max_length):
+            long_vecs, _ = embedder.generate_embeddings_batch([texts[i] for i in pick], batch_size=4)
         long_vecs = np.asarray(long_vecs, dtype=np.float32)
         cos = (long_vecs * emb[pick]).sum(axis=1)
         check = {
