@@ -14,7 +14,6 @@
 # - 날짜 파라미터 형식(YYYYMMDD)은 공공데이터포털 API의 관례를 따른 것이고, 인증키가 없어
 #   실제 응답으로는 아직 확인하지 못했다. 형식이 틀리면 API가 에러 코드 97을 돌려주고
 #   PolicyBriefingAPIError로 드러난다.
-import hashlib
 import logging
 import os
 import re
@@ -31,6 +30,9 @@ from psycopg2.extras import execute_values
 from config.settings import Settings
 from config.sources import POLICY_BRIEFING_PRESS
 from crawler.content_extractor.cleaners import is_drop_article
+# 본문 추출기의 중복 판정(uq_news_raw_content_sha256_ok)과 같은 해시를 쓰도록 같은 함수를 쓴다.
+# 마이그레이션 d48994e9d26e의 encode(sha256(convert_to(content, 'UTF8')), 'hex')와 같은 값이다.
+from crawler.content_extractor.extractor import content_sha256
 from db.connection import get_connection, release_connection
 
 logger = logging.getLogger(__name__)
@@ -274,19 +276,14 @@ def fetch_policy_news(service_key: str, start: date, end: date, http_get: Callab
 
 _BASE_COLUMNS = ("press_id", "raw_news_title", "raw_news_content", "raw_news_url",
                  "raw_news_created_at", "raw_news_crawled_at")
-# 수집 런타임 브랜치(PR #8)의 마이그레이션 f87f7378672e·d48994e9d26e가 news_raw에 더하는 컬럼.
-# 그 스키마의 본문 추출기는 raw_news_extract_status IS NULL인 행을 골라 원문 페이지를 다시
-# 내려받아 본문을 덮어쓴다. API 본문(공공누리 텍스트만, 사진 캡션 제외)을 지키려면 이 행을
-# 처음부터 추출 완료('ok')로 넣어야 한다. 컬럼이 없는 스키마(main)에서는 넣지 않는다.
+# 마이그레이션 f87f7378672e·d48994e9d26e(수집 런타임, ADR 0006)가 news_raw에 더한 컬럼.
+# 본문 추출기(content_extractor/extractor.py)는 raw_news_extract_status IS NULL인 행을 골라
+# 원문 페이지를 다시 내려받아 본문을 덮어쓴다. API 본문(공공누리 텍스트만, 사진 캡션 제외)을
+# 지키려면 이 행을 처음부터 추출 완료('ok')로 넣어야 한다. 아직 그 리비전으로 올리지 않은
+# DB(e725a62ffef1까지)에는 컬럼이 없으므로 넣지 않는다.
 EXTRACT_STATUS_COLUMN = "raw_news_extract_status"
 EXTRACTED_AT_COLUMN = "raw_news_extracted_at"
 CONTENT_SHA256_COLUMN = "raw_news_content_sha256"
-
-
-def content_sha256(text: str) -> str:
-    """본문 해시. 마이그레이션 d48994e9d26e(encode(sha256(convert_to(content, 'UTF8')), 'hex'))와
-    그 브랜치 추출기의 content_sha256과 같은 값이다."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def news_raw_columns(cur) -> set:

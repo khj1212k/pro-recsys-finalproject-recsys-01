@@ -291,13 +291,13 @@ def test_collect_inserts_selected_rows_with_on_conflict_and_counts(monkeypatch):
 
 # --------------------------------------------------------------------------- 스키마별 INSERT
 
-# main(e725a62ffef1)의 news_raw 컬럼
-MAIN_NEWS_RAW_COLUMNS = {
+# e725a62ffef1(수집 런타임 마이그레이션 이전)의 news_raw 컬럼
+PRE_RUNTIME_NEWS_RAW_COLUMNS = {
     "raw_news_id", "press_id", "raw_news_title", "raw_news_content", "raw_news_url",
     "raw_news_created_at", "raw_news_crawled_at", "embedding_result",
 }
-# 수집 런타임 브랜치(PR #8)의 f87f7378672e·d48994e9d26e 적용 후
-RUNTIME_NEWS_RAW_COLUMNS = MAIN_NEWS_RAW_COLUMNS | {
+# f87f7378672e·d48994e9d26e(수집 런타임, 현재 Alembic head) 적용 후
+RUNTIME_NEWS_RAW_COLUMNS = PRE_RUNTIME_NEWS_RAW_COLUMNS | {
     "raw_news_extract_status", "raw_news_extracted_at", "raw_news_extract_attempts",
     "raw_news_content_sha256",
 }
@@ -364,8 +364,8 @@ def _collect_with_schema(monkeypatch, columns, days=3):
     return cur, sql, _inserted_rows(sql, ev.call_args.kwargs["template"], rows)
 
 
-def test_insert_on_main_schema_writes_only_existing_columns(monkeypatch):
-    cur, sql, rows = _collect_with_schema(monkeypatch, MAIN_NEWS_RAW_COLUMNS)
+def test_insert_on_pre_runtime_schema_writes_only_existing_columns(monkeypatch):
+    cur, sql, rows = _collect_with_schema(monkeypatch, PRE_RUNTIME_NEWS_RAW_COLUMNS)
 
     assert set(rows[0]) == {"press_id", "raw_news_title", "raw_news_content", "raw_news_url",
                             "raw_news_created_at", "raw_news_crawled_at"}
@@ -373,7 +373,7 @@ def test_insert_on_main_schema_writes_only_existing_columns(monkeypatch):
 
 
 def test_insert_on_runtime_schema_marks_rows_extracted_so_the_web_extractor_skips_them(monkeypatch):
-    # 그 스키마의 추출기는 raw_news_extract_status IS NULL인 행을 다시 내려받아 본문을 덮어쓴다.
+    # 본문 추출기는 raw_news_extract_status IS NULL인 행을 다시 내려받아 본문을 덮어쓴다.
     cur, sql, rows = _collect_with_schema(monkeypatch, RUNTIME_NEWS_RAW_COLUMNS, days=6)
 
     assert len(rows) == 4  # 3일 창 2개 x 2건
