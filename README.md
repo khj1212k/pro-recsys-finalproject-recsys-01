@@ -10,14 +10,14 @@
 
 ---
 
-## 현재 상태 (2026-09-26, `main` 기준)
+## 현재 상태 (2026-09-27 기준)
 
 ```mermaid
 flowchart LR
     A[RSS 수집<br/>8개 언론사] --> B[본문 추출<br/>trafilatura + 언론사별 정제]
     B --> C[BGE-M3 임베딩<br/>1024차원, pgvector]
     C --> D[HDBSCAN<br/>+ 혼합 클러스터 분리]
-    D --> E[LangGraph<br/>클러스터 평가 → 생성 → 뉴스레터 평가 → 문체 변환]
+    D --> E[LangGraph<br/>클러스터 평가 → 생성 → 사실성 게이트<br/>→ 뉴스레터 평가 → 문체 변환 → 드리프트 게이트]
     E --> F[(PostgreSQL)]
     F --> G[LightGBM LambdaRank + MMR<br/>일일 배치]
     G --> H[FastAPI] --> I[React]
@@ -25,12 +25,12 @@ flowchart LR
 
 | 영역 | 지금 있는 것 | 아직 없는 것 |
 |---|---|---|
-| 수집 | RSS UPSERT, 재시도, 언론사별 본문 정제 | 수집량·실패율 리포트 |
-| LLM | OpenAI 호환 어댑터 하나로 Gemini·Upstage·OpenAI 호출, 요청 타임아웃 60초·호출당 deadline 180초, 킬 스위치 ([ADR 0005](docs/adr/0005-llm-provider-abstraction.md)) | 모델 선정 근거(사전 등록 평가), `main`에서 실데이터로 끝까지 돈 생성 기록 |
-| 생성 품질 | 결정론적 사실성 검사 함수(`evaluation/llm/faithfulness.py`), 클러스터링 지표 함수(`evaluation/clustering/metrics.py`) | 사람 라벨로 보정한 품질·사실성 수치 |
+| 수집 | RSS UPSERT, 재시도, 언론사별 본문 정제, docker compose + supercronic 잡 런타임과 실행 기록(`job_runs`), 본문 해시 중복 제거 ([ADR 0006](docs/adr/0006-runtime-compose-and-scheduler.md)), 정책브리핑 Open API 수집기 ([ADR 0023](docs/adr/0023-data-sources-copyright-retention.md)) | 7일 연속 수집 성공률(ADR 0006에서 재확인 예정), 정책브리핑 실제 수집(인증키 발급 전이라 0건) |
+| LLM | OpenAI 호환 어댑터 하나로 Gemini·Upstage·OpenAI 호출, 요청 타임아웃 60초·호출당 deadline 180초, 킬 스위치 ([ADR 0005](docs/adr/0005-llm-provider-abstraction.md)) | 모델 선정 결과(평가 프로토콜과 선정 규칙만 사전 등록, [ADR 0009](docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md)), `main`에서 실데이터로 끝까지 돈 생성 기록 |
+| 생성 품질 | LangGraph 안의 결정론적 사실성 게이트·문체 드리프트 게이트와 judge v2 (`ai_workspace/core/faithfulness.py`, [ADR 0010](docs/adr/0010-faithfulness-gate-and-judge-v2.md), 차단 유형·임계값은 잠정값), 클러스터링 지표 함수(`evaluation/clustering/metrics.py`) | 사람 라벨로 보정한 품질·사실성 수치, 실제 생성물로 잰 게이트 차단율 |
 | 추천 | 팀 시절 LightGBM + MMR에 7월 셀프 리뷰 수정 반영 (시점 누출·그룹 정의·시드 등, [ADR 0003](docs/adr/0003-lightgbm-mmr-for-recommendation.md)·[0004](docs/adr/0004-continue-in-fork-and-port-july-fixes.md)) | 사람 클릭 데이터로 잰 추천 성능 |
 | DB | pgvector 어댑터 등록, `news_raw` URL UNIQUE·timestamptz ([ADR 0008](docs/adr/0008-db-layer-pgvector-schema-and-upsert.md)) | — |
-| 데이터 정책 | 출처별 라이선스 표와 본문 보존 원칙 ([ADR 0023](docs/adr/0023-data-sources-copyright-retention.md)) | 본문 보존 기한 잡(설계만, 구현은 수집 스키마 병합 후) |
+| 데이터 정책 | 출처별 라이선스 표와 본문 보존 원칙 ([ADR 0023](docs/adr/0023-data-sources-copyright-retention.md)) | 본문 보존 기한 잡(설계만, 미구현) |
 
 LLM 호출은 HyperCLOVA X가 아니라 위 어댑터를 거친다. 팀 시절에 쓰던 HyperCLOVA X는 더 이상 쓸 수 없어서 교체했다([ADR 0005](docs/adr/0005-llm-provider-abstraction.md)).
 
@@ -100,6 +100,7 @@ cd frontend && npm install && npm run dev
 
 - [설계 결정 기록(ADR)](docs/adr/README.md) — 컨텍스트, 검토한 대안, 결정, 증거, 한계.
 - [2026-07 셀프 리뷰 수정 로그](docs/fix-log-2026-07.md)
+- [운영 런북](docs/runbook.md) — compose 잡 런타임 띄우기, 상태 확인, 킬 스위치.
 - [평가 리포트](reports/README.md)
 - [평가 모듈](evaluation/README.md)
 

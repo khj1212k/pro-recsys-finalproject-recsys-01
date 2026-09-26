@@ -21,5 +21,6 @@
 | 리포트 | 내용 | 데이터 |
 |---|---|---|
 | [recsys/constant_feature_ablation_v1](recsys/constant_feature_ablation_v1.md) | 상수 피처 2개 제거 전후 LightGBM 예측 비교 | 합성 |
+| [ops/embedding_truncation_2026-09-26.json](ops/embedding_truncation_2026-09-26.json) | BGE-M3 입력 토큰 길이 분포와 `max_length`별 절단 영향. 해석은 [ADR 0006](../docs/adr/0006-runtime-compose-and-scheduler.md) 6절 | 한국어 수집 기사 456건(집계만) |
 
 평가 브랜치의 리포트는 병합되면 여기에 추가된다.
