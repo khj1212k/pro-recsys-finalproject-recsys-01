@@ -128,7 +128,8 @@ def test_schema_and_purpose():
 def test_shadow_mode_records_a_fail_but_does_not_block(monkeypatch):
     import workflow.nodes as nodes_module
 
-    fail = {"decision": "FAIL", "score": 2.0, "feedback": "f", "issues": []}
+    criteria = {"faithfulness": 4, "coverage": 1, "coherence": 3, "style": 2}
+    fail = {"decision": "FAIL", "score": 2.0, "feedback": "f", "issues": [], "criteria": criteria}
     state = {"newsletter_eval": fail, "newsletter_retry_count": 1}
 
     monkeypatch.setattr(nodes_module.Settings, "JUDGE_GATE_MODE", "enforce")
@@ -136,6 +137,15 @@ def test_shadow_mode_records_a_fail_but_does_not_block(monkeypatch):
 
     monkeypatch.setattr(nodes_module.Settings, "JUDGE_GATE_MODE", "shadow")
     assert nodes_module.route_after_newsletter_eval(state) == "pass"
+
+
+def test_shadow_mode_still_blocks_when_the_judge_produced_no_scores(monkeypatch):
+    import workflow.nodes as nodes_module
+
+    monkeypatch.setattr(nodes_module.Settings, "JUDGE_GATE_MODE", "shadow")
+    unjudged = {"decision": "FAIL", "score": 0, "feedback": "LLM response empty", "issues": [], "criteria": None}
+    assert nodes_module.route_after_newsletter_eval({"newsletter_eval": unjudged, "newsletter_retry_count": 1}) == "retry"
+    assert nodes_module.route_after_newsletter_eval({"newsletter_eval": unjudged, "newsletter_retry_count": 3}) == "max_retries"
 
 
 def test_article_prompt_chars_is_shared_with_generator():

@@ -223,18 +223,32 @@ def check_faithfulness(state: AgentState) -> Dict[str, Any]:
 
     LLM judge보다 먼저 돈다: 원문에 없는 수치처럼 규칙으로 확실히 잡히는 오류는 judge
     호출 비용을 쓰기 전에 걸러 구체적인 피드백으로 재생성한다.
+
+    생성기가 LLM 실패로 만든 로컬 폴백 초안(기사 제목 나열·휴리스틱 제목)은 게이트 모드와
+    무관하게 여기서 막는다. 제목은 원문에 그대로 있으니 사실성 검사를 통과하고, judge가
+    shadow면 그대로 발행되기 때문이다.
     """
     mode = Settings.FAITHFULNESS_GATE_MODE
     draft = state.get("newsletter_draft")
+    history = state.get("generation_history") or {"attempts": []}
+    fallback = (draft or {}).get("_fallback")
+    if fallback:
+        logger.info(f"🔎 [Cluster {state.get('current_cluster_id')}] 생성기 로컬 폴백 초안({fallback}) - 발행하지 않음")
+        report = {"passed": False, "gate_passed": False, "mode": mode, "reason": "generator_fallback",
+                  "fallback_parts": list(fallback)}
+        if history.get("attempts"):
+            history["attempts"][-1]["faithfulness"] = {"passed": False, "reason": "generator_fallback",
+                                                       "fallback_parts": list(fallback)}
+        return {"faithfulness_report": report, "generation_history": history}
     if mode == "off" or not draft:
         return {"faithfulness_report": None}
 
     result = check_newsletter_faithfulness(
         draft, state.get("current_articles") or [], blocking_types=Settings.FAITHFULNESS_BLOCKING_TYPES
     )
-    report = {**result.to_dict(), "mode": mode, "gate_passed": result.passed or mode == "shadow"}
+    report = {**result.to_dict(), "mode": mode, "gate_passed": result.passed or mode == "shadow",
+              "reason": None if result.passed else "faithfulness"}
 
-    history = state.get("generation_history") or {"attempts": []}
     if history.get("attempts"):
         history["attempts"][-1]["faithfulness"] = {
             "passed": result.passed,
@@ -546,7 +560,12 @@ def handle_newsletter_max_retries(state: AgentState) -> Dict[str, Any]:
     
     last_feedback = state.get("newsletter_feedback", "No feedback")
     report = state.get("faithfulness_report")
-    reason = "faithfulness" if report and not report.get("gate_passed") else "judge"
+    if report and not report.get("gate_passed"):
+        reason = report.get("reason") or "faithfulness"
+    elif not (state.get("newsletter_eval") or {}).get("criteria"):
+        reason = "judge_unavailable"  # judge 호출/파싱 실패 - 품질 판정이 아니다
+    else:
+        reason = "judge"
     return {
         "failed_clusters": failed,
         "failure_reason": reason,
@@ -572,9 +591,10 @@ def route_after_newsletter_eval(state: AgentState) -> str:
     if eval_result.get("decision") == "PASS":
         return "pass"
 
-    # judge가 사람 라벨과 충분히 맞지 않으면(OOF kappa < 0.40, ADR 0009) 판정을 기록만
-    # 하고 발행을 막지 않는다 - 사실성은 결정론적 게이트(check_faithfulness)가 맡는다.
-    if Settings.JUDGE_GATE_MODE == "shadow":
+    # shadow(ADR 0009/0010): judge가 사람 라벨과 충분히 맞는다고 확인되기 전(OOF kappa < 0.40)에는
+    # "실제로 채점한" FAIL을 기록만 하고 발행을 막지 않는다 - 사실성은 결정론적 게이트가 맡는다.
+    # 점수가 없는 FAIL(호출·파싱 실패)은 판정이 아니므로 enforce와 똑같이 막는다(main도 막았다).
+    if Settings.JUDGE_GATE_MODE == "shadow" and eval_result.get("criteria"):
         return "pass"
 
     if retry_count >= Settings.MAX_RETRY_NEWSLETTER_EVAL:

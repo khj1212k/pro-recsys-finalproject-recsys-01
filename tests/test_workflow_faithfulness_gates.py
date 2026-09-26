@@ -185,6 +185,70 @@ def test_tone_drift_fixed_on_reconversion_saves_the_casual_version(wire):
     assert saved[0]["newsletter"]["content"] == CASUAL_OK
 
 
+def _judge_fail():
+    return {"parsed": NewsletterEvalV2(scores=CriterionScores(faithfulness=4, coverage=1, coherence=3, style=1))}
+
+
+def test_generator_outage_publishes_nothing_even_when_judge_is_in_shadow(wire, monkeypatch):
+    # 생성기가 계속 실패하면 NewsReconstructor는 기사 제목을 나열한 로컬 폴백 초안을 만든다.
+    # 제목은 원문에 있으므로 사실성 검사는 통과한다 - shadow judge가 이것을 발행하면 안 된다.
+    monkeypatch.setattr(nodes_module.Settings, "JUDGE_GATE_MODE", "shadow")
+    judge = FakeLLMClient(results=[_cluster_pass()])
+    generator = FakeLLMClient(results=[{"parsed": None, "text": None, "error": "HTTP 503"}] * 6)
+    tone = FakeLLMClient(results=[])
+    saved = wire(judge, generator, tone)
+
+    final = compile_workflow().invoke(_state())
+
+    assert saved == []
+    assert final["failed_clusters"] == [1]
+    assert final["failure_reason"] == "generator_fallback"
+    assert generator.call_count == 6  # 생성 상한(3회)까지 재시도
+    assert judge.call_count == 1  # 폴백 초안은 judge에게 가지 않는다
+
+
+def test_meta_only_fallback_is_not_published(wire, monkeypatch):
+    monkeypatch.setattr(nodes_module.Settings, "JUDGE_GATE_MODE", "shadow")
+    judge = FakeLLMClient(results=[_cluster_pass(), _judge_pass()])
+    generator = FakeLLMClient(results=[_content(CLEAN), {"parsed": None, "error": "schema"}, _content(CLEAN), _meta()])
+    tone = FakeLLMClient(results=[_tone(CASUAL_OK)])
+    saved = wire(judge, generator, tone)
+
+    final = compile_workflow().invoke(_state())
+
+    assert len(saved) == 1
+    assert saved[0]["newsletter"]["title"] == "📰 HBM 투자 확대"  # 휴리스틱 제목이 아닌 두 번째 시도
+    assert final["generation_history"]["attempts"][0]["faithfulness"]["reason"] == "generator_fallback"
+
+
+def test_shadow_judge_does_not_pass_a_draft_it_could_not_judge(wire, monkeypatch):
+    monkeypatch.setattr(nodes_module.Settings, "JUDGE_GATE_MODE", "shadow")
+    judge_error = {"parsed": None, "text": None, "error": "HTTP 503"}
+    judge = FakeLLMClient(results=[_cluster_pass()] + [judge_error] * 3)
+    generator = FakeLLMClient(results=[_content(CLEAN), _meta()] * 3)
+    tone = FakeLLMClient(results=[])
+    saved = wire(judge, generator, tone)
+
+    final = compile_workflow().invoke(_state())
+
+    assert saved == []
+    assert final["failure_reason"] == "judge_unavailable"
+
+
+def test_shadow_judge_records_a_judged_fail_and_publishes(wire, monkeypatch):
+    monkeypatch.setattr(nodes_module.Settings, "JUDGE_GATE_MODE", "shadow")
+    judge = FakeLLMClient(results=[_cluster_pass(), _judge_fail()])
+    generator = FakeLLMClient(results=[_content(CLEAN), _meta()])
+    tone = FakeLLMClient(results=[_tone(CASUAL_OK)])
+    saved = wire(judge, generator, tone)
+
+    final = compile_workflow().invoke(_state())
+
+    assert len(saved) == 1
+    assert final["newsletter_eval"]["decision"] == "FAIL"
+    assert saved[0]["history"]["attempts"][0]["evaluation_result"] == "fail"
+
+
 def test_clean_run_calls_each_role_once(wire):
     judge = FakeLLMClient(results=[_cluster_pass(), _judge_pass()])
     generator = FakeLLMClient(results=[_content(CLEAN), _meta()])

@@ -40,6 +40,7 @@ class NewsReconstructor:
     def __init__(self, llm_client: Optional[LLMClient] = None):
         # role="generator" - GEN_PROVIDER/GEN_MODEL로 프로바이더를 정한다 (docs/adr/0005)
         self.client: LLMClient = llm_client or get_client("generator")
+        self._fallback_parts: List[str] = []
 
     def reconstruct(self, articles: List[Dict], feedback: Optional[str] = None) -> Optional[Dict]:
         """
@@ -47,6 +48,9 @@ class NewsReconstructor:
         """
         if not articles:
             return None
+        # LLM 호출이 실패해 로컬 휴리스틱으로 채운 부분("content"/"meta"). 워크플로우는
+        # 이 표시가 있는 초안을 발행하지 않는다(workflow/nodes.py::check_faithfulness).
+        self._fallback_parts = []
 
         # 기사 개수 제한 (컨텍스트 길이 초과 방지)
         articles = select_prompt_articles(articles)
@@ -81,6 +85,8 @@ class NewsReconstructor:
         result = normalize_meta(result)
         if not result:
             return None
+        if self._fallback_parts:
+            result["_fallback"] = list(self._fallback_parts)
 
         return result
 
@@ -146,6 +152,7 @@ class NewsReconstructor:
         if result.parsed is not None:
             return cleanup_content_text(result.parsed.content)
 
+        self._fallback_parts.append("content")
         return fallback_content()
 
     def _generate_meta(self, content_text: str) -> Optional[Dict]:
@@ -200,4 +207,5 @@ class NewsReconstructor:
         if result.parsed is not None:
             return result.parsed.model_dump()
 
+        self._fallback_parts.append("meta")
         return fallback_meta()
