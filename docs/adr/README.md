@@ -11,4 +11,6 @@
 | [0005](0005-llm-provider-abstraction.md) | HyperCLOVA X 이후 - OpenAI 호환 어댑터 하나로 여러 LLM 프로바이더 통합 | 채택됨 (모델 선정은 후속 bake-off ADR로 이관) | 2026-09-25 |
 | [0008](0008-db-layer-pgvector-schema-and-upsert.md) | pgvector 어댑터 등록, news_raw 스키마 정합성(UNIQUE·timestamptz), RSS 수집기 UPSERT | 채택됨 | 2026-09-25 |
 
+전 브랜치의 ADR 현황, 의존 관계 그래프, 파일 없는 참조 번호와 브랜치별 수정 항목은 [DECISION-MAP.md](DECISION-MAP.md)에 있다.
+
 > 날짜는 각 ADR이 이 fork(`port/july-self-review` 브랜치 계열)에 커밋된 날짜다. 0001–0003의 원 채택 시점(설계 당시)은 2026-07이지만, 이 fork로 문서가 이식된 시점은 2026-09-25다 — 자세한 배경은 [0004](0004-continue-in-fork-and-port-july-fixes.md)를 참고.
