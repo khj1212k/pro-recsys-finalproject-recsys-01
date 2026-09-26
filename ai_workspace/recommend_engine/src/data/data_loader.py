@@ -23,8 +23,7 @@ logger = get_logger("DataLoader")
 class UserProfile:
     """사용자 프로필 데이터 클래스"""
     user_id: int
-    age_band_idx: int       # (현재 DB에 없으면 기본값 처리)
-    gender_idx: int         # (현재 DB에 없으면 기본값 처리)
+    # (구) age_band_idx/gender_idx: DB에서 읽지 않고 항상 0으로 채워 피처로 넣던 상수 값이라 제거했다.
     onboarding_categories: List[int] = field(default_factory=list)
     history_embedding: np.ndarray = None 
 
@@ -362,10 +361,6 @@ class DataLoader:
 
             profiles[uid] = UserProfile(
                 user_id=uid,
-                # 현재 DB "user" 테이블에 age/gender 컬럼이 명시되지 않아 기본값(0) 처리
-                # 필요 시 쿼리에 추가해야 함
-                age_band_idx=0, 
-                gender_idx=0,
                 onboarding_categories=user_cat_map.get(uid, []),
                 history_embedding=hist_emb
             )

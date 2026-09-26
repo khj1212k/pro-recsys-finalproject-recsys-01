@@ -119,7 +119,7 @@ def test_create_features_uses_point_in_time_history_not_global_profile():
     fe.news_dict = news_dict
     fe.logs_df = logs_df
     fe.user_profiles = {
-        1: UserProfile(user_id=1, age_band_idx=0, gender_idx=0, onboarding_categories=[],
+        1: UserProfile(user_id=1, onboarding_categories=[],
                         history_embedding=np.array([0.3, 0.7]))  # '현재 시점' 글로벌 스냅샷 (누출된 값이라고 가정)
     }
 
