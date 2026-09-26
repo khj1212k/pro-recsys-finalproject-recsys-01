@@ -54,7 +54,7 @@ scripts/mac_embed_agent.sh keep-awake install   # 전원 연결 중 잠자기 �
 ### 운영 런타임은 전용 워크트리에서
 
 compose `.env`, `.venv-jobs`, launchd 에이전트가 가리키는 경로는 모두 "compose를 띄운 체크아웃"에 묶인다. 개발용
-워크트리(특히 `.claude/worktrees/` 아래의 일회성 워크트리)에서 띄우면 그 워크트리가 정리될 때 임베딩 에이전트가 조용히
+워크트리(특히 작업이 끝나면 정리되는 일회성 워크트리)에서 띄우면 그 워크트리가 정리될 때 임베딩 에이전트가 조용히
 실패한다. 그래서 운영은 개발과 분리된 detached 워크트리 `~/Projects/newsletter-runtime`에서 한다(2026-09-26부터):
 
 ```bash
