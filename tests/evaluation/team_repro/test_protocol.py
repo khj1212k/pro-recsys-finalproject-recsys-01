@@ -93,3 +93,18 @@ def test_seen_share_in_topk_computes_fraction_of_already_clicked():
     seen = {1: {10}, 2: {20, 21}}
     share = PR.seen_share_in_topk(recs, seen, k=3)
     assert share == pytest.approx(3 / 6)
+
+
+def test_shown_items_by_user_counts_unclicked_exposures_before_cutoff():
+    """unshown-only 필터: 경계 이전 노출은 클릭 여부와 무관하게 '이미 보여준 것'이다."""
+    logs = pd.DataFrame(
+        [
+            {"user_id": 1, "news_letter_id": 10, "timestamp": _ts("2026-01-01T00:00:00"), "is_clicked": 1},
+            {"user_id": 1, "news_letter_id": 11, "timestamp": _ts("2026-01-01T00:01:00"), "is_clicked": 0},
+            {"user_id": 1, "news_letter_id": 12, "timestamp": _ts("2026-01-01T00:10:00"), "is_clicked": 0},
+        ]
+    )
+    shown = PR.shown_items_by_user(logs, _ts("2026-01-01T00:05:00"))
+    assert shown[1] == {10, 11}
+    seen = PR.seen_items_by_user(logs[logs["is_clicked"] == 1], _ts("2026-01-01T00:05:00"))
+    assert seen[1] == {10}

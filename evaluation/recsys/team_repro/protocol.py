@@ -62,6 +62,17 @@ def seen_items_by_user(clicks_df: pd.DataFrame, answer_start) -> Dict[int, Set[i
     return out
 
 
+def shown_items_by_user(logs_df: pd.DataFrame, answer_start) -> Dict[int, Set[int]]:
+    """answer_start 이전에 그 유저에게 **노출된**(클릭 여부 무관) news_letter_id 집합.
+
+    이 아카이브는 페르소나마다 195건을 각각 정확히 한 번씩 노출하므로, 경계 이전에
+    노출된 아이템은(클릭했든 안 했든) 정답 구간에 다시 나타날 수 없다 - 클릭한 것만
+    지우는 seen-item filtering보다 한 단계 더 엄격한 'unshown-only' 필터가 이 집합을
+    쓴다(v2 리뷰 MINOR: 정답 1,857건 중 경계 이전 노출분은 0건).
+    `logs_df`는 is_clicked 필터를 하지 않은 전체 노출 로그여야 한다."""
+    return seen_items_by_user(logs_df, answer_start)
+
+
 def filter_seen(
     recommendations: Dict[int, List[int]], seen: Dict[int, Set[int]]
 ) -> Dict[int, List[int]]:

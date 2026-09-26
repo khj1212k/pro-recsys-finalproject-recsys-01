@@ -59,10 +59,23 @@ def random_baseline(user_ids, candidate_ids, top_k: int, seed: int = 0) -> Dict[
     return out
 
 
+def fixed_order_baseline(user_ids, candidate_ids, top_k: int) -> Dict[int, List[int]]:
+    """후보 리스트 순서(= newsletters_export.csv 행 순서) 그대로를 모든 유저에게 주는
+    고정 리스트. 추천기가 아니라 **진단용 기준선**이다: 동점이 많은(거의 학습되지 않은)
+    모델이나 cold 유저 폴백이 사실상 이 순서로 랭킹을 정하므로, 그 결과가 모델/유사도의
+    힘인지 이 순서의 우연인지 가르는 데 쓴다(v2 리뷰: 이 순서만으로 MRR 0.638)."""
+    rec = list(candidate_ids)[:top_k]
+    return {uid: list(rec) for uid in user_ids}
+
+
+def popularity_order(candidate_ids, train_click_counts: Dict[int, int]) -> List[int]:
+    return sorted(candidate_ids, key=lambda nid: (-train_click_counts.get(nid, 0), nid))
+
+
 def popularity_baseline(
     user_ids, candidate_ids, top_k: int, train_click_counts: Dict[int, int]
 ) -> Dict[int, List[int]]:
-    ranked = sorted(candidate_ids, key=lambda nid: (-train_click_counts.get(nid, 0), nid))
+    ranked = popularity_order(candidate_ids, train_click_counts)
     rec = ranked[:top_k]
     return {uid: list(rec) for uid in user_ids}
 
@@ -116,18 +129,24 @@ def cosine_history_baseline(
     cutoff: datetime,
     half_life_days: float = 7.0,
     min_weight: float = 0.01,
+    fallback_order: Optional[Sequence[int]] = None,
 ) -> Dict[int, List[int]]:
+    """fallback_order: 히스토리가 없는 유저에게 줄 순서. None이면(레거시) 후보 리스트
+    순서(CSV 행 순서) 그대로인데, 그 순서는 우연히 무작위보다 좋은 고정 리스트라
+    cold 유저 수치를 부풀린다(v2 리뷰 MINOR) - compute_all_baselines는 인기도 순서를
+    넘긴다."""
     out = {}
     cand_list = list(candidate_ids)
+    fallback = list(fallback_order) if fallback_order is not None else cand_list
     cand_matrix = np.stack([emb_by_id[nid] for nid in cand_list])
     cand_norm = np.linalg.norm(cand_matrix, axis=1)
     cand_norm[cand_norm == 0] = 1.0
     for uid in user_ids:
         hist = history_embedding(uid, cutoff, logs_df, emb_by_id, half_life_days, min_weight)
         if hist is None or np.linalg.norm(hist) == 0:
-            # 히스토리가 없으면 인기도로 폴백하지 않고 그냥 후보 순서(뉴스레터 id) 그대로 -
-            # cold-start를 감추지 않고 있는 그대로 평가에 노출시킨다.
-            out[uid] = cand_list[:top_k]
+            # 히스토리가 없는 유저: fallback_order(기본 호출부에서는 인기도 순). 몇 명이
+            # 폴백됐는지는 run_repro가 cold 유저 수로 따로 보고한다.
+            out[uid] = fallback[:top_k]
             continue
         sims = cand_matrix @ hist / (cand_norm * np.linalg.norm(hist))
         order = np.argsort(-sims)[:top_k]
@@ -141,10 +160,13 @@ def onboarding_newsletter_similarity_baseline(
     top_k: int,
     preferred_newsletters: pd.DataFrame,
     emb_by_id: Dict[int, np.ndarray],
+    fallback_order: Optional[Sequence[int]] = None,
 ) -> Dict[int, List[int]]:
     """온보딩 시 유저가 직접 선택한 뉴스레터(synthetic_user_preferred_newsletters.csv)의
-    평균 임베딩과 후보 뉴스레터 임베딩의 코사인 유사도로 랭킹."""
+    평균 임베딩과 후보 뉴스레터 임베딩의 코사인 유사도로 랭킹. 선택이 없는 유저는
+    fallback_order(None이면 후보 리스트 순서)."""
     cand_list = list(candidate_ids)
+    fallback = list(fallback_order) if fallback_order is not None else cand_list
     cand_matrix = np.stack([emb_by_id[nid] for nid in cand_list])
     cand_norm = np.linalg.norm(cand_matrix, axis=1)
     cand_norm[cand_norm == 0] = 1.0
@@ -155,12 +177,12 @@ def onboarding_newsletter_similarity_baseline(
         selected = user_selected.get(uid, [])
         vecs = [emb_by_id[nid] for nid in selected if nid in emb_by_id]
         if not vecs:
-            out[uid] = cand_list[:top_k]
+            out[uid] = fallback[:top_k]
             continue
         mean_vec = np.mean(np.stack(vecs), axis=0)
         norm = np.linalg.norm(mean_vec)
         if norm == 0:
-            out[uid] = cand_list[:top_k]
+            out[uid] = fallback[:top_k]
             continue
         sims = cand_matrix @ mean_vec / (cand_norm * norm)
         order = np.argsort(-sims)[:top_k]
@@ -178,7 +200,11 @@ def compute_all_baselines(
     top_k: int = 20,
     seed: int = 0,
 ) -> Dict[str, Dict[int, List[int]]]:
-    """모든 베이스라인은 `train_logs`(cutoff 이전 로그) + `cutoff`만 본다 - 이미 v1
+    """cosine_history/onboarding은 히스토리·온보딩 선택이 없는 유저에게 인기도 순서로
+    폴백한다(v2.1 - v2까지는 CSV 행 순서였다). `fixed_csv_order`는 그 레거시 폴백
+    순서 자체를 진단용 기준선으로 따로 보고한다.
+
+    모든 베이스라인은 `train_logs`(cutoff 이전 로그) + `cutoff`만 본다 - 이미 v1
     시점부터 point-in-time이었다(모델과 달리 미래 정보를 볼 방법이 없었다). v2가
     바꾼 것은 이 함수 자체가 아니라, 호출부(run_repro.py)가 넘기는 `cutoff`를
     모든 arm/시드가 공유하는 고정 answer_start로 통일한 것(MINOR #1 수정)이다."""
@@ -191,18 +217,20 @@ def compute_all_baselines(
     }
     train_click_counts = train_logs["news_letter_id"].value_counts().to_dict()
     user_pref_categories = bundle.preferred_categories.groupby("user_id")["category_id"].apply(set).to_dict()
+    pop_order = popularity_order(candidate_ids, train_click_counts)
 
     return {
         "random": random_baseline(user_ids, candidate_ids, top_k, seed=seed),
+        "fixed_csv_order": fixed_order_baseline(user_ids, candidate_ids, top_k),
         "popularity": popularity_baseline(user_ids, candidate_ids, top_k, train_click_counts),
         "recency": recency_baseline(user_ids, candidate_ids, top_k, created_at_by_id, cutoff),
         "category_match": category_match_baseline(
             user_ids, candidate_ids, top_k, user_pref_categories, category_map, created_at_by_id, cutoff
         ),
         "cosine_history": cosine_history_baseline(
-            user_ids, candidate_ids, top_k, train_logs, emb_by_id, cutoff
+            user_ids, candidate_ids, top_k, train_logs, emb_by_id, cutoff, fallback_order=pop_order
         ),
         "onboarding_newsletter_cosine": onboarding_newsletter_similarity_baseline(
-            user_ids, candidate_ids, top_k, bundle.preferred_newsletters, emb_by_id
+            user_ids, candidate_ids, top_k, bundle.preferred_newsletters, emb_by_id, fallback_order=pop_order
         ),
     }
