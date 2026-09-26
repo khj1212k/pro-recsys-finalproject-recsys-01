@@ -295,3 +295,103 @@ def test_run_one_generator_split_trains_only_on_train_keys(monkeypatch):
     # 학습 소스 뉴스레터 집합이 valid 뉴스레터와 절대 겹치지 않아야 함 (BLOCKER #6 회귀)
     train_bundle = FL.bundle_for_generator_split_training(bundle)
     assert set(train_bundle.ctr_logs["news_letter_id"].unique()).isdisjoint(valid_nids)
+
+
+# --- v2.1 ---------------------------------------------------------------------
+
+
+def test_time_group_safe_split_user_id_groups_never_straddle_when_interleaved():
+    """user_id 그룹이 시간상 섞여 있으면 인접 행 검사만으로는 한 유저가 양쪽에 걸친다
+    (v2 리뷰: 85명 중 32명). 그룹 소속 검사 후 그룹 단위 분할로 바꿔야 한다."""
+    base = datetime(2026, 1, 1)
+    rows = []
+    for i in range(100):  # 10명 유저의 행이 1분 간격으로 번갈아 나타남
+        rows.append({"user_id": i % 10, "news_id": i, "label": i % 2, "_timestamp": base + timedelta(minutes=i)})
+    df = pd.DataFrame(rows)
+    train_df, valid_df = PIPE._time_group_safe_split(df, val_ratio=0.2, group_key="user_id")
+    assert set(train_df["user_id"]).isdisjoint(set(valid_df["user_id"]))
+    assert len(train_df) + len(valid_df) == len(df)
+    assert len(valid_df) == 20  # 10행짜리 그룹 2개 = 목표 20%에 정확히 맞음
+    assert PIPE._n_groups_on_both_sides(train_df, valid_df, "user_id") == 0
+
+
+def test_team_final_written_ground_truth_clicks_only_vs_all_rows():
+    """정답 정의 BLOCKER 회귀: 올바른 번역은 클릭만, v2 정의 오류는 노출 전체."""
+    base = pd.Timestamp("2026-01-01")
+    logs = pd.DataFrame(
+        {
+            "user_id": [1, 1, 1, 2],
+            "news_letter_id": [10, 11, 12, 10],
+            "timestamp": [base] * 4,
+            "is_clicked": [1, 0, 0, 1],
+        }
+    )
+    clicks = PIPE.team_final_written_ground_truth(logs, clicks_only=True)
+    all_rows = PIPE.team_final_written_ground_truth(logs, clicks_only=False)
+    assert clicks == {1: {10}, 2: {10}}
+    assert all_rows == {1: {10, 11, 12}, 2: {10}}
+
+
+class _OrderKeepingReranker:
+    """MMR 대신 입력 순서를 그대로 top_k로 자르는 가짜 reranker(동점 처리만 격리)."""
+
+    def rerank_for_user(self, scores, embeddings, top_k, num_preferred_categories):
+        return [(i, scores[i]) for i in range(min(top_k, len(scores)))]
+
+
+def _scored_df_with_ties():
+    # 유저 1: 아이템 1이 최고점, 2~9는 동점
+    return pd.DataFrame(
+        {
+            "user_id": [1] * 9,
+            "news_id": list(range(1, 10)),
+            "score": [1.0] + [0.5] * 8,
+        }
+    )
+
+
+def test_build_recommendations_tie_rng_randomizes_only_tied_items():
+    scored = _scored_df_with_ties()
+    news_dict = {i: types.SimpleNamespace(embedding=np.zeros(2)) for i in range(1, 10)}
+    det = PIPE._build_recommendations(scored, _OrderKeepingReranker(), news_dict, {}, top_k=4)
+    det2 = PIPE._build_recommendations(scored, _OrderKeepingReranker(), news_dict, {}, top_k=4)
+    assert det == det2  # tie_rng=None이면 결정적(기존 경로 유지)
+    orders = set()
+    for seed in range(20):
+        rec = PIPE._build_recommendations(
+            scored, _OrderKeepingReranker(), news_dict, {}, top_k=4, tie_rng=np.random.default_rng(seed)
+        )
+        assert rec[1][0] == 1  # 동점이 아닌 최고점 아이템은 항상 1위
+        orders.add(tuple(rec[1][1:]))
+    assert len(orders) > 1  # 동점 구간의 순서는 추첨마다 바뀐다
+
+
+def test_top_tie_sizes_counts_items_tied_at_max():
+    assert PIPE._top_tie_sizes(_scored_df_with_ties()) == [1]
+    flat = pd.DataFrame({"user_id": [2] * 4, "news_id": [1, 2, 3, 4], "score": [0.3] * 4})
+    assert PIPE._top_tie_sizes(flat) == [4]
+
+
+@_needs_archive
+def test_run_one_tie_draws_and_fixed_rounds_are_recorded(small_real_bundle, monkeypatch):
+    monkeypatch.setattr(FL, "load_archive_bundle", lambda: small_real_bundle)
+    _install_torch_stub()
+    clicks = small_real_bundle.ctr_logs[small_real_bundle.ctr_logs["is_clicked"] == 1]
+    answer_start = PR.compute_fixed_answer_start(clicks, val_ratio=0.3)
+    args = argparse.Namespace(
+        engine_root=str(ENGINE_ROOT), version="current", protocol="team_split",
+        label_mode="clicks_only", leakage_mode="fixed", candidate_pool="full_195",
+        negative_source="random", objective_override="none",
+        answer_start=answer_start.isoformat(), code_sha="test", harness_sha="test",
+        seed=0, top_k=5, out="/tmp/_unused_test_pipeline_v21_out.json", tie_draws=2, fixed_rounds=3,
+    )
+    result = PIPE.run_one(args)
+    assert result["rounds_policy"] == "fixed_3_rounds_no_early_stopping"
+    assert result["n_trees"] == 3 and result["best_iteration"] is None
+    assert result["degenerate_single_tree"] is False
+    tr = result["primary"]["tie_random"]
+    assert tr["n_draws"] == 2 and "mrr" in tr["aggregate_mean"]
+    assert tr["aggregate_min"]["mrr"] <= tr["aggregate_mean"]["mrr"] <= tr["aggregate_max"]["mrr"]
+    assert result["as_written"]["tie_random"]["n_draws"] == 2
+    assert "unshown_filtered" in result["primary"]
+    assert result["inner_split_groups_on_both_sides"] == 0
