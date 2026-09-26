@@ -81,8 +81,10 @@ class BaseSettings:
     # 잠정값이다(ADR 0009의 2-fold 선택 결과로 교체).
     JUDGE_MIN_CRITERION_SCORE: int = int(os.getenv("JUDGE_MIN_CRITERION_SCORE", "3"))
     JUDGE_MAX_UNSUPPORTED_CLAIMS: int = int(os.getenv("JUDGE_MAX_UNSUPPORTED_CLAIMS", "0"))
-    # "enforce": FAIL이면 재생성 / "shadow": 기록만 하고 통과(OOF kappa < 0.40일 때, ADR 0009)
-    JUDGE_GATE_MODE: str = os.getenv("JUDGE_GATE_MODE", "enforce").lower()
+    # "enforce": FAIL이면 재생성 / "shadow": 채점된 FAIL은 기록만 하고 통과(점수 없는 FAIL은 막음).
+    # 기본 shadow: ADR 0009는 사람 라벨 대비 OOF kappa >= 0.40이 확인된 judge만 게이트로 쓰게
+    # 정했고(아직 미측정), 현재 기본 judge는 생성기와 같은 Gemini 계열이다 (ADR 0010).
+    JUDGE_GATE_MODE: str = os.getenv("JUDGE_GATE_MODE", "shadow").lower()
 
     # ========== 결정론적 게이트 (docs/adr/0010) ==========
     # 모드: "enforce"(막고 재생성) / "shadow"(기록만) / "off"
