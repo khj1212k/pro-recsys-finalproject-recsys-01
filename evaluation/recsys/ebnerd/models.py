@@ -69,6 +69,19 @@ NEGATIVE_VARIANTS = [
               "ranker v2 피처 + 노출 비클릭 + 48h 풀 무작위 네거티브 20개"),
 ]
 
+# 보충 사슬: 네거티브를 서빙 분포(48h 풀)로 고정하고 피처만 늘려 P2에서의 피처 기여를 따로 본다.
+# 마지막 단계가 ranker_v2_poolneg(= ranker v2 전체 피처)와 같다. team_binary는 사슬 밖 기준점.
+POOLNEG_ABLATION = [
+    ModelSpec("poolneg_team_features", "pool_neg", "lambdarank", "request", TEAM_FEATURES,
+              "48h 풀 무작위 네거티브 20개 + 팀 피처"),
+    ModelSpec("poolneg_plus_trailing_popularity", "pool_neg", "lambdarank", "request", TEAM_FEATURES + POP_FEATURES,
+              "+trailing 인기도"),
+    ModelSpec("poolneg_plus_short_term_session", "pool_neg", "lambdarank", "request",
+              TEAM_FEATURES + POP_FEATURES + SHORT_FEATURES, "+24h 단기·세션 벡터 코사인"),
+    NEGATIVE_VARIANTS[0],
+]
+CHAINS = {"inview": (ABLATION, NEGATIVE_VARIANTS), "poolneg": (POOLNEG_ABLATION, [ABLATION[0]])}
+
 
 def feature_matrix(feats: pd.DataFrame, task: RankTask, columns: list[str]) -> np.ndarray:
     pair_req = task.req.pair_req
