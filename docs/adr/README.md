@@ -6,10 +6,10 @@
 |------|------|------|------|
 | [0001](0001-langgraph-for-newsletter-generation.md) | 뉴스레터 생성 워크플로우에 LangGraph 사용 | 채택됨 | 2026-09-25 |
 | [0002](0002-hdbscan-for-news-clustering.md) | 뉴스 클러스터링에 HDBSCAN 사용 | 채택됨 | 2026-09-25 |
-| [0003](0003-lightgbm-mmr-for-recommendation.md) | 추천에 LightGBM(LambdaRank) + MMR 조합 사용 | 채택됨 (2026-07 갱신, `objective`를 `lambdarank`로 전환) | 2026-09-25 |
+| [0003](0003-lightgbm-mmr-for-recommendation.md) | 추천에 LightGBM(LambdaRank) + MMR 조합 사용 | 채택됨 (2026-07 갱신, `objective`를 `lambdarank`로 전환; 랭킹 부분은 0013이 대체) | 2026-09-25 |
 | [0004](0004-continue-in-fork-and-port-july-fixes.md) | 기존 fork에서 계속 개선하고, 7월 셀프 리뷰 수정을 주제별로 다시 이식한다 | 채택됨 | 2026-09-25 |
 | [0005](0005-llm-provider-abstraction.md) | HyperCLOVA X 이후 - OpenAI 호환 어댑터 하나로 여러 LLM 프로바이더 통합 | 채택됨 (모델 선정은 후속 bake-off ADR로 이관) | 2026-09-25 |
 | [0008](0008-db-layer-pgvector-schema-and-upsert.md) | pgvector 어댑터 등록, news_raw 스키마 정합성(UNIQUE·timestamptz), RSS 수집기 UPSERT | 채택됨 | 2026-09-25 |
-| [0013](0013-ranker-v2-design.md) | ranker v2 설계 — EB-NeRD 오프라인 벤치마크 프로토콜과 승격 규칙 | 제안됨 (사전 등록, 결과 전) | 2026-09-26 |
+| [0013](0013-ranker-v2-design.md) | ranker v2 설계 — EB-NeRD 오프라인 벤치마크 프로토콜과 승격 규칙 | 채택됨 (사전 등록 후 R1–R4 통과, 서빙은 shadow부터; 0003의 랭킹 부분 대체) | 2026-09-26 |
 
 > 날짜는 각 ADR이 이 fork(`port/july-self-review` 브랜치 계열)에 커밋된 날짜다. 0001–0003의 원 채택 시점(설계 당시)은 2026-07이지만, 이 fork로 문서가 이식된 시점은 2026-09-25다 — 자세한 배경은 [0004](0004-continue-in-fork-and-port-july-fixes.md)를 참고.
