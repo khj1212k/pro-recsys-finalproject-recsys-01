@@ -14,6 +14,8 @@
 #   scripts/mac_embed_agent.sh keep-awake install|uninstall   # 전원 연결 중 시스템 잠자기 방지(caffeinate -s)
 #
 # DB 접속 정보는 저장소 루트의 compose .env(POSTGRES_*, DB_HOST_PORT)에서 읽는다. 값은 출력하지 않는다.
+# launchd 등록은 이 스크립트가 있는 체크아웃 경로를 가리킨다 - 운영은 일회성 워크트리가 아니라 전용 런타임
+# 워크트리(~/Projects/newsletter-runtime)에서 setup/install 한다(docs/runbook.md 2절).
 set -euo pipefail
 
 REPO=${0:A:h:h}

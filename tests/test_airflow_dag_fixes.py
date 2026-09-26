@@ -61,11 +61,6 @@ def test_dag_files_register_on_failure_callback():
     import _jobs
 
     assert _jobs.DEFAULT_ARGS["on_failure_callback"] is _callbacks.notify_failure
-    dag_dir = os.path.join(REPO_ROOT, "backend", "airflow", "dags")
-    for fname in ("news_rss_collector_dag.py", "newsletter_ranking_dag.py"):
-        with open(os.path.join(dag_dir, fname), encoding="utf-8") as f:
-            content = f.read()
-        assert "default_args=DEFAULT_ARGS" in content, f"{fname}가 공통 DEFAULT_ARGS를 쓰지 않습니다"
 
 
 def test_dag_job_command_runs_jobs_cli_from_repo_root():

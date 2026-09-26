@@ -51,8 +51,27 @@ scripts/mac_embed_agent.sh install     # launchd 등록: 매시 20분 + 로그�
 scripts/mac_embed_agent.sh keep-awake install   # 전원 연결 중 잠자기 방지(caffeinate -s). 해제: keep-awake uninstall
 ```
 
-에이전트는 스크립트가 있는 체크아웃을 기준으로 돈다. 워크트리에서 설치했다면 브랜치가 머지된 뒤
-메인 체크아웃에서 `setup` → `install`을 다시 실행해 경로를 옮긴다(같은 라벨이라 덮어쓴다).
+### 운영 런타임은 전용 워크트리에서
+
+compose `.env`, `.venv-jobs`, launchd 에이전트가 가리키는 경로는 모두 "compose를 띄운 체크아웃"에 묶인다. 개발용
+워크트리(특히 `.claude/worktrees/` 아래의 일회성 워크트리)에서 띄우면 그 워크트리가 정리될 때 임베딩 에이전트가 조용히
+실패한다. 그래서 운영은 개발과 분리된 detached 워크트리 `~/Projects/newsletter-runtime`에서 한다(2026-09-26부터):
+
+```bash
+git -C ~/Projects/newsletter-recsys worktree add --detach ~/Projects/newsletter-runtime origin/<배포할 브랜치 또는 main>
+cp <이전 런타임>/.env ~/Projects/newsletter-runtime/.env && chmod 600 ~/Projects/newsletter-runtime/.env
+cd ~/Projects/newsletter-runtime
+scripts/mac_embed_agent.sh setup && scripts/mac_embed_agent.sh install   # 같은 라벨이라 이전 등록을 덮어쓴다
+GIT_SHA=$(git rev-parse HEAD) docker compose up -d --build              # 프로젝트 이름이 고정이라 같은 볼륨을 이어 쓴다
+```
+
+코드 갱신(배포): 잡이 돌고 있지 않은지(3절 advisory lock 쿼리) 확인한 뒤
+
+```bash
+cd ~/Projects/newsletter-runtime && git fetch origin && git checkout --detach origin/<브랜치>
+GIT_SHA=$(git rev-parse HEAD) docker compose up -d --build   # migrate가 먼저 upgrade head
+scripts/mac_embed_agent.sh setup                              # docker/requirements-worker.txt가 바뀐 경우만
+```
 
 `.env`는 gitignore 대상이다. **`.env`를 지우면 DB 비밀번호를 잃는다** - 그때는 7절의 재설정 절차를 쓴다.
 
@@ -141,13 +160,17 @@ docker compose run --rm worker --help                          # 잡 목록
 | **데이터까지 삭제** | `docker compose down -v` | **pgdata/hf_cache/model_checkpoints 삭제 - 되돌릴 수 없음** |
 
 Mac이 잠자기에 들어가면 VM도 멈추고, 그동안 예정된 실행은 건너뛴다(cron은 밀린 실행을 따라잡지 않음).
-RSS의 100시간 cutoff 덕분에 몇 시간 잠들었다 깨도 다음 ingest가 빠진 기사를 대부분 다시 수집한다.
+깨어난 뒤 ingest는 각 피드가 **지금 보여 주는** 항목만 받는다 - RSS의 100시간 cutoff는 피드가 내보내는 창을 넓히지
+못한다. 창이 짧은 피드(세계일보는 20건 ≈ 2.7시간)는 그보다 오래 잠들면 그 사이 기사를 영구히 잃는다(ADR 0006 결과와 한계).
 며칠 수집을 계속하려면 전원을 연결하고 `scripts/mac_embed_agent.sh keep-awake install`(caffeinate -s)을 켜 둔다.
 노트북 덮개를 닫으면(외부 디스플레이 없는 경우) 이 설정과 무관하게 잠든다.
 
 ## 6. LLM 킬 스위치
 
 `scheduler`/`worker`는 `${OPS_DIR}`를 `/ops`에 읽기 전용으로 마운트하고 `LLM_KILL_SWITCH_FILE=/ops/LLM_KILL_SWITCH`를 쓴다.
+디렉터리째 마운트하는 이유: 비용 가드가 파일을 만들고 지우므로 파일 하나만 바인드 마운트하면 없을 때 Docker가 그 자리에
+디렉터리를 만들고, 파일이 교체되면 마운트가 옛 inode를 가리킨다. 대가로 `.ops/`의 다른 파일(예산 상태, OCI 재시도 스크립트
+·로그)도 컨테이너 안에서 읽힌다 - 컨테이너는 이 저장소 코드만 돌리므로 받아들이되, `.ops/`에는 비밀값을 두지 않는다.
 호스트의 비용 가드가 `<OPS_DIR>/LLM_KILL_SWITCH`를 만들면 컨테이너 안의 LLM 호출도 즉시 막히고,
 `generate` 잡은 시작하자마자 `skipped (llm_kill_switch)`로 끝난다. 확인:
 

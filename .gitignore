@@ -158,3 +158,6 @@ mlruns/
 checkpoints/
 # Claude Code 로컬 상태 (AGENTS.md: AI 도구 상태, 리팩터링 대상 아님 - 여기서는 무시만)
 .claude/
+
+# 로컬 운영 상태(LLM 킬 스위치, 예산 가드 상태 등) - docs/runbook.md 6절
+.ops/
