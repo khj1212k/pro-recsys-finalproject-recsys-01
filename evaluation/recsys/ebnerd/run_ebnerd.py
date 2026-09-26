@@ -36,6 +36,7 @@ from ..metrics import (
     ranking_metrics,
     topk_items,
 )
+from .embedding_sanity import knn_category_accuracy
 from .loaders import ebnerd_root
 from .models import ABLATION, ALL_GROUPS, NEGATIVE_VARIANTS, baseline_scores, train
 from .prepare import (
@@ -527,6 +528,12 @@ def main(argv=None) -> int:
                      "ablation": [s.__dict__ for s in ABLATION]},
         "timing": {},
     }
+    if not args.fake_dim:
+        t0 = time.time()
+        san = knn_category_accuracy(bench.catalog.emb, bench.catalog.category, k=10)
+        san.pop("per_item_correct")
+        out["embedding_sanity"] = {"category_knn_loo": san, "seconds": round(time.time() - t0, 1)}
+        log.info("embedding sanity: %s", out["embedding_sanity"])
     t0 = time.time()
     p1 = run_p1(bench, W, args, args.seeds, out)
     out["timing"]["p1_seconds"] = round(time.time() - t0, 1)
