@@ -58,7 +58,7 @@ COPY backend/alembic.ini ./backend/alembic.ini
 COPY backend/scheduler ./backend/scheduler
 COPY evaluation ./evaluation
 COPY jobs ./jobs
-COPY docker/crontab ./docker/crontab
+COPY docker/crontab docker/scheduler-entrypoint.sh ./docker/
 
 RUN useradd --system --uid 10001 --home-dir /app --shell /usr/sbin/nologin app \
     && mkdir -p /hf /app/logs /app/ai_workspace/logs \

@@ -76,7 +76,10 @@ docker compose exec db psql -U newsletter -d newsletter -c "
 
 - `status`: `running` / `succeeded` / `failed` / `skipped`(락 점유·킬 스위치 등 정상 건너뜀) / `abandoned`(프로세스가 죽어 결과를 못 남긴 실행 - 다음 실행이 표시한다)
 - `failed`면 `error`에 traceback 끝부분이 있고, `SLACK_WEBHOOK_URL`이 설정돼 있으면 Slack으로도 온다.
-  `docker stop`/`kill -TERM`으로 끊긴 실행은 `failed` + `terminated by SIGTERM`으로 남고, 그때까지의 stats가 보존된다.
+  `docker compose stop scheduler`·재배포·`docker stop`으로 끊긴 실행은 `failed` + `terminated by SIGTERM`으로 남고,
+  그때까지의 stats가 보존된다. supercronic은 잡에 신호를 넘기지 않아서 `docker/scheduler-entrypoint.sh`가 잡의
+  프로세스 그룹에 SIGTERM을 직접 보낸다(유예 60초, `stop_grace_period`). 유예 안에 끝나지 않거나 OOM·SIGKILL로
+  죽은 실행은 `running`으로 남았다가 다음 실행이 `abandoned`로 바꾼다.
 - embed 행의 `device`가 `mps`면 호스트 에이전트, `cpu`면 컨테이너 실행이다.
 
 호스트 임베딩 에이전트:

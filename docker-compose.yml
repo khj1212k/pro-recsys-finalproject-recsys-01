@@ -23,8 +23,9 @@ x-worker: &worker
     args:
       GIT_SHA: ${GIT_SHA:-unknown}
   image: newsletter-recsys/worker:${IMAGE_TAG:-local}
-  # PID 1인 파이썬은 기본 SIGTERM 처리가 없어 `docker stop`이 10초 뒤 SIGKILL로 끝난다 -
-  # tini가 신호를 전달하게 해 jobs.run이 중단을 job_runs에 기록할 수 있게 한다.
+  # docker-init(tini)을 PID 1로 둬 신호 전달과 좀비 회수를 맡긴다. `docker compose run worker <job>`은
+  # 파이썬이 SIGTERM을 직접 받아 jobs.run이 중단을 job_runs에 기록한다. scheduler에서는 supercronic이
+  # 잡에 신호를 넘기지 않으므로 docker/scheduler-entrypoint.sh가 잡의 프로세스 그룹에 직접 보낸다.
   init: true
   environment:
     <<: *db-env
@@ -117,9 +118,12 @@ services:
   # 상시 스케줄러: docker/crontab에 적힌 잡만 `python -m jobs.run <job>`으로 실행한다.
   scheduler:
     <<: *worker
-    entrypoint: ["supercronic", "/app/docker/crontab"]
+    entrypoint: ["sh", "/app/docker/scheduler-entrypoint.sh", "/app/docker/crontab"]
     command: []
     restart: unless-stopped
+    # 잡이 SIGTERM을 받아 job_runs에 중단을 기록할 시간. CPU 임베딩 배치 하나가 끝나야 파이썬
+    # 시그널 핸들러가 돌 수 있어 기본 10초보다 길게 둔다.
+    stop_grace_period: 60s
     # 잡은 자식 프로세스로 돌고 끝나면 메모리를 돌려준다. 한도는 BGE-M3 CPU 임베딩 피크 기준.
     mem_limit: ${SCHEDULER_MEM_LIMIT:-6g}
 
