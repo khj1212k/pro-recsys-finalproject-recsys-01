@@ -326,7 +326,10 @@ def main() -> None:
     lk_es = get(boot, "leakage_lambdarank_early_stopping", "mrr", default={})
     lk_bn = get(boot, "leakage_binary", "mrr", default={})
     lk_fx = get(boot, "leakage_lambdarank_fixed100", "mrr", default={})
-    lk_all_inc = all(ci_verdict(e) == "inconclusive" for e in (lk_es, lk_bn, lk_fx))
+    lk_settings = [("lambdarank 조기 종료", lk_es), ("binary", lk_bn), ("lambdarank 100라운드", lk_fx)]
+    lk_all_inc = all(ci_verdict(e) == "inconclusive" for _, e in lk_settings)
+    lk_detected = [(name, e) for name, e in lk_settings if ci_verdict(e) in ("positive", "negative")]
+    lk_null = [name for name, e in lk_settings if ci_verdict(e) == "inconclusive"]
     A(
         f"6. **학습 시점 히스토리 누출(FIX #4)의 효과**(leaky − fixed, 1차 추론): lambdarank 조기 종료 MRR {fmt_eff(lk_es)} "
         f"({verdict_tag(lk_es)}), binary {fmt_eff(lk_bn)} ({verdict_tag(lk_bn)}), lambdarank 100라운드 {fmt_eff(lk_fx)} "
@@ -335,7 +338,12 @@ def main() -> None:
             "세 설정 모두 효과가 검출되지 않았다 - 합성 유저 31명·시드 5개로는 검정력이 부족해 '효과 없음'의 증거가 아니라 "
             "'판단 불가'다. "
             if lk_all_inc else
-            "설정에 따라 판정이 다르다 - 위 판정을 설정별로만 읽는다. "
+            "설정에 따라 판정이 다르다 - 위 판정을 설정별로만 읽는다"
+            + (
+                " (leaky가 낮게 나온 설정은, 학습 때 미래 클릭이 섞인 히스토리 유사도에 기대도록 학습된 모델이 "
+                "point-in-time 추론에서 그 신호를 잃는 학습-추론 불일치로 설명할 수 있다 - 가설이며 이 실험으로 검증하지 않았다). "
+                if any(ci_verdict(e) == "negative" for _, e in lk_detected) else ". "
+            )
         )
         + "FIX #4는 팀 프로젝트 이후 자체 리뷰에서 찾은 수정이며 팀 시절 코드에는 없었다."
     )
@@ -886,6 +894,13 @@ def main() -> None:
         A(
             f"- (결과가 '판단 불가'라는 형태로만) \"학습 시점 히스토리 누출을 없앤 수정(FIX #4)의 효과는 검출되지 않았다(MRR "
             f"{fmt_eff(lk_es)}, 합성 유저 {n_users}명, 시드 {len(seeds_main)}개 - 검정력 부족; binary·100라운드 모델에서도 동일).\""
+        )
+    elif lk_detected:
+        det = ", ".join(f"{name} {fmt_eff(e)}" for name, e in lk_detected)
+        rest = f", {'·'.join(lk_null)} 모델에서는 검출되지 않았다" if lk_null else ""
+        A(
+            f"- (설정별로만) \"학습 시점 히스토리 누출이 남은 코드(FIX #4 이전)는 수정본 대비 point-in-time MRR 차이(leaky − fixed)가 "
+            f"{det}였고{rest}(합성 유저 {n_users}명, 시드 {len(seeds_main)}개).\" (조기 종료 lambdarank는 퇴화 시드 포함 - 4-0절)"
         )
     if tfw_r.get("mrr") is not None and covers:
         A(
