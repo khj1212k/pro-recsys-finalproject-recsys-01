@@ -20,7 +20,7 @@ Airflow는 쓰지 않는다. 팀 시절 DAG은 `backend/airflow/dags/`에 보관
 
 | 잡 | 주기 | 비고 |
 |---|---|---|
-| `ingest --stages rss,extract` | 매시 05분 | RSS → 본문 추출. 세계일보 피드는 20건 ≈ 2.7시간 분량이라 매시 돌린다 |
+| `ingest --stages rss,extract` | 매시 05분 | RSS → 본문 추출. 세계일보 피드는 20건 ≈ 2.7시간 분량이라 매시 돌린다. rss 단계에서 정책브리핑 Open API도 받는다(`.env`에 `DATA_GO_KR_SERVICE_KEY`가 있을 때만, 본문을 API가 줘서 추출 대상이 아님, 실패해도 경고만 - [ADR 0023](adr/0023-data-sources-copyright-retention.md)) |
 | `embed --time-budget-s 2400` | 매시 20분 | 본문 있고 임베딩 없는 기사를 BGE-M3로. **Mac에서는 컨테이너 줄이 꺼져 있고**(`JOBS_DISABLED=embed`) 호스트 launchd 에이전트가 같은 시각에 MPS로 돈다 |
 | `popularity` | 매시 35분 | 뉴스레터가 아직 없어서 빈 랭킹이 저장되는 게 정상 |
 | `cluster` | 매일 14:50 UTC (23:50 KST) | LLM 호출 없이 클러스터 통계만 `job_runs`에 기록 |
