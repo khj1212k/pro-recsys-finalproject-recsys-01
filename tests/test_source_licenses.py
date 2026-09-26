@@ -11,6 +11,7 @@ sys.path.insert(
 from config.settings import Settings
 from config.sources import (
     POLICY_BRIEFING_PRESS,
+    SOURCE_LICENSES,
     UNKNOWN_SOURCE,
     is_redistributable,
     license_for,
@@ -38,9 +39,14 @@ def test_unknown_sources_fail_closed():
     assert is_redistributable("처음보는언론") is False
 
 
-def test_policy_briefing_is_redistributable_with_attribution():
-    lic = license_for(POLICY_BRIEFING_PRESS)
+def test_policy_briefing_collector_source_is_redistributable():
+    # 정책브리핑 수집기(crawler/policy_briefing.py)가 이 이름으로 press 행을 만든다
+    assert is_redistributable(POLICY_BRIEFING_PRESS) is True
 
-    assert lic.redistributable is True
-    assert lic.tag == "kogl-1"
-    assert "정책브리핑" in lic.attribution
+
+def test_every_redistributable_source_carries_an_attribution():
+    # 재배포 조건(출처 표시)을 붙일 문구가 없는 재배포 가능 출처가 생기지 않게 한다
+    redistributable = {p: lic for p, lic in SOURCE_LICENSES.items() if lic.redistributable}
+
+    assert redistributable
+    assert [p for p, lic in redistributable.items() if not lic.attribution.strip()] == []

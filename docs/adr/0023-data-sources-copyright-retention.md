@@ -143,7 +143,7 @@
 - 본문 저장량: 컨텍스트 절 표. 로컬 compose DB에서 `default_transaction_read_only=on` 연결의 SELECT로 집계했다. 본문 텍스트는 출력하지 않았다.
 - 테스트:
   - `tests/test_policy_briefing_source.py` 34건. 파싱, 성공 코드 표기 3가지, 두 종류의 에러 봉투, XML이 아닌 응답, 날짜 창, 공공누리 유형 정규화, HTML 정제, 선별 통계(삭제·상태 불명 기사 제외 포함), 키 비노출, 5xx 재시도, 키 없을 때 no-op, INSERT, 스키마별 INSERT 컬럼(main / 수집 런타임), Stage1 연결을 확인한다. XML은 명세 필드 이름으로 만든 합성 응답이다.
-  - `tests/test_source_licenses.py` 4건.
+  - `tests/test_source_licenses.py` 5건: 설정된 모든 RSS 출처에 판정이 있음, 상업 언론사는 재배포 불가, 모르는 출처는 fail closed, 정책브리핑 수집기의 출처는 재배포 가능, 재배포 가능 출처에는 모두 출처 표시 문구가 있음.
   - `tests/integration/test_policy_briefing_insert.py`
     - 1건: 실제 `news_raw`/`press` 스키마에서 본문 저장과 재실행 멱등성을 확인한다. 이 작업 전용 임시 pgvector 컨테이너에서 `alembic upgrade head` 후 통합 테스트 16건 전부 통과(수집 중인 compose DB는 건드리지 않음). CI integration 잡에서도 돈다.
     - 1건: 수집 런타임 브랜치의 컬럼 4개와 부분 unique 인덱스를 테스트 동안만 만든다. 그 상태에서 상태 `ok`·추출 시각·해시(SQL 식과 일치)가 채워지는지, 본문이 같은 두 번째 URL이 배치를 롤백시키지 않고 건너뛰어지는지 확인한다. 로컬에서는 돌리지 않았고 CI integration 잡에서 돈다.
