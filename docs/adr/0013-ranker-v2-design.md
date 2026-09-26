@@ -166,5 +166,16 @@ EBNERD_ROOT=<repo>/data/benchmarks/ebnerd .venv/bin/python -m evaluation.recsys.
 - 실행 피크 메모리 10.1GB(M2 16GB): large 데이터셋으로 키우려면 P2 표본·배치 계산을 더 나눠야 한다.
 
 ## 사후 변경 기록
-- 없음. 사전 등록 절(창·과제·모델·통계·판정 규칙·실행 명령)은 결과를 본 뒤 바꾸지 않았다. 결과 후 추가한 것은 리포트 해석
-  문단과 이 ADR의 결정·증거·한계뿐이다.
+- v1 판정 관련 변경 없음. 사전 등록 절(창·과제·모델·통계·판정 규칙·실행 명령)은 결과를 본 뒤 바꾸지 않았다. 결과 후 추가한 것은
+  리포트 해석 문단과 이 ADR의 결정·증거·한계뿐이다.
+- **A1 (2026-09-26, 보충 실험 v1.1 사전 등록 — 실행 전 커밋)**: v1 결과를 보고 생긴 질문 두 가지를 별도 보충 실험으로 잰다.
+  v1의 판정(R1–R4, 선택 모델, 권장 λ)은 이 보충 결과로 바꾸지 않는다. 결과는 `reports/recsys/ebnerd_v1_1_poolneg.json`과
+  `ebnerd_v1.md` 부록에 둔다.
+  1. *P2에서의 피처 기여*: 네거티브를 48h 풀(20개)로 고정하고 `poolneg_team_features` → `+trailing 인기도` → `+단기·세션` →
+     `ranker_v2_poolneg`(+카테고리 share·히스토리 길이)로 피처만 늘리는 사슬, 사슬 밖 기준점 `team_binary`. 창·표본·seed·부트스트랩은
+     v1과 동일. 해석 규칙은 v1과 같다(인접 단계 P2 ΔnDCG@10 CI > 0 기여 / < 0 해로움 / 0 포함 구분 불가).
+  2. *MMR 정확도 비용*: 같은 3,000 요청에서 λ=1.0 대비 λ별 nDCG@10·ILD@10 쌍체 차이 CI. "MMR의 정확도 비용이 측정됨"은
+     ΔnDCG@10 CI 상한 < 0일 때만, "다양성 이득이 측정됨"은 ΔILD@10 CI 하한 > 0일 때만 쓴다.
+  - 명령: `run_ebnerd --dataset ebnerd_small --chain poolneg --seeds 0 1 2 --n-boot 1000 --p2-sample 20000
+    --p2-select-sample 5000 --mmr-sample 3000 --threads 6 --skip replay --out-json reports/recsys/ebnerd_v1_1_poolneg.json`
+    (코드 `93bc8f1` 이후, 이 기록을 담은 커밋).
