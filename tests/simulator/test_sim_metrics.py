@@ -87,7 +87,7 @@ def test_cold_start_serving_errors_and_engagement_summaries():
     assert len(late) == 2
     a, b = late
     views = [
-        view(a.index, a.join_day, 0, 0, [], source="none"),
+        view(a.index, a.join_day, 0, 0, [], source="empty"),
         view(a.index, a.join_day + 1, 0, 0, [1, 2], clicked=[1], source="batch"),
         view(b.index, b.join_day, 0, 0, [3, 4, 6], source="fallback"),
         view(b.index, b.join_day, 1, 0, [], ok=False),
@@ -101,7 +101,7 @@ def test_cold_start_serving_errors_and_engagement_summaries():
     assert m["cold_start"]["first_view_onboarding_category_share"] == pytest.approx(2 / 3)
     assert m["cold_start"]["views_until_nonempty_median"] == 1.5
     assert m["serving"]["empty_rate"] == pytest.approx(1 / 3)
-    assert m["serving"]["fallback_rate"] == pytest.approx(1 / 3)
+    assert m["serving"]["fallback_rate"] == pytest.approx(2 / 3)  # "empty" + "fallback"
     assert m["errors"]["error_rate"] == pytest.approx(1 / 3)
     assert m["errors"]["by_endpoint"]["today"]["errors"] == 1
     assert m["engagement"]["ctr_top_k"] == pytest.approx(1 / 5)

@@ -7,7 +7,8 @@ production recommender and nothing here measures its quality:
 
   static_batch           per-user list snapshotted at day end (the current
                          design: /today reads news_letter_today_batch); users
-                         without a batch get []
+                         without a batch get [] (source "empty", as the
+                         request-time API labels an exhausted fallback chain)
   static_batch_fallback  same, but users without a batch get the popular list
   reactive               request-time re-ranking from onboarding + clicks
   reactive_explore       reactive, plus 3 of the top-10 slots given to
@@ -194,7 +195,7 @@ class FakeBackend:
                 return list(batch), "batch"
             if self.policy == "static_batch_fallback":
                 return self.popular(cands), "fallback"
-            return [], "none"
+            return [], "empty"
 
     def record_click(self, u: _User, nid: int) -> int:
         with self.lock:
