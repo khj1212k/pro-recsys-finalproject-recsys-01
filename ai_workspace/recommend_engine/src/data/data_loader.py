@@ -23,7 +23,10 @@ logger = get_logger("DataLoader")
 class UserProfile:
     """사용자 프로필 데이터 클래스"""
     user_id: int
-    # (구) age_band_idx/gender_idx: DB에서 읽지 않고 항상 0으로 채워 피처로 넣던 상수 값이라 제거했다.
+    # age_band_idx/gender_idx는 DB에서 읽지 않고 항상 0이던 값이라 피처에서 뺐다(ADR 0003).
+    # 필드는 기존 호출부(키워드·위치 인자)와의 호환을 위해서만 남긴다 - 어디서도 읽지 않는다.
+    age_band_idx: int = 0
+    gender_idx: int = 0
     onboarding_categories: List[int] = field(default_factory=list)
     history_embedding: np.ndarray = None 
 
