@@ -206,7 +206,11 @@ anon 3.9MiB / file 9.1MiB, 2026-09-26 00:16 UTC)였다. 그래서 범위는 11~4
   테스트가 만들지 않은 행이 있으면 실패하도록 막았다(운영 DB에 가짜 임베딩이 저장되는 사고 방지).
 - 리뷰에서 `cluster` 잡이 매번 실패할 것이 드러났다: 풀 연결마다 `register_vector`가 걸려 벡터가 `pgvector.Vector`로 오는데
   `parse_embedding`이 문자열·리스트만 처리했다. 고친 이미지로 운영 DB 읽기 전용 실행: 기사 547건 → 클러스터 41개, 노이즈 350건
-  (2026-09-25 23:57 UTC). `tests/integration/test_cluster_job.py`가 같은 경로를 검증한다(수정 전 코드로 TypeError 재현).
+  (2026-09-25 23:57 UTC). 중복 제거 마이그레이션 적용 뒤 `docker compose run --rm worker cluster`(실행 #29, 00:25 UTC):
+  succeeded, 기사 558건 → 클러스터 42개(최대 19건, 중앙값 3건), 노이즈 비율 0.64, 5.8초.
+  `tests/integration/test_cluster_job.py`가 같은 경로를 검증한다(수정 전 코드로 TypeError 재현).
+- 마이그레이션 `d48994e9d26e` 운영 적용(2026-09-26 00:22 UTC, 직전 `pg_dump` 백업): `duplicate` 2건(raw_news_id 3424, 3425 -
+  섹션 경로 URL 쪽), `ok` 558건 전부 해시·임베딩 보유.
 
 ### 8. 스케줄러 종료 신호 (colima, worker 이미지, TERM 트랩을 건 셸 잡)
 | 구성 | `docker stop -t 8` 결과 |
@@ -214,6 +218,7 @@ anon 3.9MiB / file 9.1MiB, 2026-09-26 00:16 UTC)였다. 그래서 범위는 11~4
 | supercronic 직접(`init: true`) | 트랩 미발동, 8초 뒤 exit 137 |
 | + `TINI_KILL_PROCESS_GROUP=1` | 같음 - 잡은 별도 그룹(supercronic pgrp 7, 잡 셸 pgrp 15) |
 | `docker/scheduler-entrypoint.sh` | 트랩 발동, 즉시 exit 0 |
+| 같은 엔트리포인트 + 실제 `jobs.run ingest --stages rss,extract`(일회용 테스트 DB, 본문 추출 도중 stop) | 즉시 exit 0, `job_runs`에 `failed` / `terminated by SIGTERM`, RSS 단계 통계(신규 432건)가 중간 기록으로 남음 |
 
 `tests/test_scheduler_entrypoint.py`(Linux 전용, 가짜 supercronic)가 같은 동작을 검증한다 - 엔트리포인트를
 `exec supercronic`으로 바꾸면 실패한다.
