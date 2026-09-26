@@ -79,10 +79,15 @@ python -m evaluation.clustering.metrics \
   P1 노출 재정렬·P2 48h 전체 풀·네거티브 샘플링), `models.py`(팀 방식 LightGBM → ranker v2
   ablation과 휴리스틱 베이스라인), `embed_articles.py`(BGE-M3, `.venv-embed`·MPS),
   `embedding_sanity.py`(카테고리 kNN), `run_ebnerd.py`(전체 실행), `make_report.py`(JSON → 표,
-  ADR 0013 승격 규칙 판정). 피처는 최상위 `recsys_core/`(numpy/pandas만, DB 없음)가 계산한다.
+  ADR 0013 승격 규칙 판정), `click_time_sensitivity.py`(클릭 시각 = 노출 시각 근사의 민감도, 인기도
+  베이스라인만). 피처는 최상위 `recsys_core/`(numpy/pandas만, DB 없음)가 계산한다.
 - 프로토콜·판정 규칙은 [ADR 0013](../docs/adr/0013-ranker-v2-design.md), 결과는
   `reports/recsys/ebnerd_v1.{md,json}`(본 ablation, `--chain inview`)과 `ebnerd_v1_1_poolneg.json`
-  (48h 풀 네거티브 고정 보충 사슬, `--chain poolneg`).
+  (48h 풀 네거티브 고정 보충 사슬, `--chain poolneg`), `ebnerd_v1_click_time_sensitivity.json`(리포트 부록 B).
+- 실행 준비: `run_ebnerd`의 MMR 스윕은 팀 구현(`from src.core.reranker import MMRReranker`)을 그대로 쓰므로
+  `ai_workspace/recommend_engine`을 venv에 editable로 설치해야 한다(CI unit 잡과 같은 방식):
+  `uv pip install --python .venv/bin/python --no-deps -e ai_workspace/recommend_engine`.
+  `recsys_core`는 저장소 루트에서 `python -m evaluation.recsys.ebnerd.run_ebnerd ...`로 실행하면 import된다.
 - demo 데이터 기반 테스트(로더·과제 구성·전 구간 스모크)는 데이터가 있어야 돈다. git worktree에서는
   `EBNERD_ROOT=<메인 체크아웃>/data/benchmarks/ebnerd`를 지정해 실행한다(없으면 skip).
 - **라이선스**: EB-NeRD는 연구/비상업 전용이고 이 Mac 밖으로 반출할 수 없다. 데이터·임베딩은
