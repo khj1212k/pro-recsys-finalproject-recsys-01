@@ -16,4 +16,10 @@
 - 라이선스가 반출을 막는 외부 데이터셋은 집계 수치만 커밋한다.
 - `reports/**/raw/`는 `.gitignore`로 추적하지 않는다.
 
-`main`에는 아직 리포트가 없다. 평가 브랜치가 병합되면 여기에 추가된다.
+## 목록
+
+| 리포트 | 내용 | 데이터 |
+|---|---|---|
+| [recsys/constant_feature_ablation_v1](recsys/constant_feature_ablation_v1.md) | 상수 피처 2개 제거 전후 LightGBM 예측 비교 | 합성 |
+
+평가 브랜치의 리포트는 병합되면 여기에 추가된다.
