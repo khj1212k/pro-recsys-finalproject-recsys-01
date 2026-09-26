@@ -67,3 +67,23 @@ def test_render_skips_verdict_for_only_models_partial_run():
     assert _partial_run({"meta": {"argv": ["--only-models", "ranker_v2_poolneg"]}})
     assert not _partial_run({"meta": {"argv": ["--dataset", "ebnerd_small"]}})
     assert not _partial_run({})
+
+
+def test_click_time_tables_render_gap_rows_and_diffs():
+    from evaluation.recsys.ebnerd.make_report import click_time_tables
+
+    m = {"mean": 0.5, "ci95": [0.49, 0.51]}
+    dd = {"diff": -0.001, "ci95": [-0.002, 0.0], "n": 10}
+    sec = lambda cols: {"results": {f"popularity_6h|gap{g}": {c: m for c in cols} for g in (0, 300)},
+                        "diffs_vs_gap0": {"popularity_6h: gap300 - gap0": {c: dd for c in cols}}}
+    d = {"meta": {"gaps_seconds": [0, 300]},
+         "read_time": {"n_impressions_with_click": 1000, "n_missing": 3,
+                       "quantiles_seconds": {"p50": 12.0, "p90": 80.0}, "share_over_seconds": {"300": 0.04}},
+         "p1": sec(("auc", "ndcg@10")), "p2": sec(("ndcg@10", "recall@10")),
+         "reproduces_reference": {"reference": "ebnerd_v1.json", "p1": {"max_abs_diff_of_means": 0.0},
+                                  "p2": {"max_abs_diff_of_means": 0.0}}}
+    out = click_time_tables(d)
+    assert "| 1,000 | 3 | 12 | 80 | 0.040 |" in out
+    assert "| popularity_6h|gap300 | 0.5000 [0.4900, 0.5100] | 0.5000 [0.4900, 0.5100] |" in out
+    assert "| popularity_6h: gap300 - gap0 | -0.0010 [-0.0020, +0.0000] | -0.0010 [-0.0020, +0.0000] |" in out
+    assert "최대 절대 차이: P1 0.0e+00, P2 0.0e+00" in out

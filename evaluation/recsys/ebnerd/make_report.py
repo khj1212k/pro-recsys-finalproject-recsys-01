@@ -252,11 +252,31 @@ def render(d: dict) -> str:
     return "\n\n".join(parts) + "\n"
 
 
+def click_time_tables(d: dict) -> str:
+    """click_time_sensitivity.py JSON(클릭 시각 근사 민감도)의 표."""
+    rt = d["read_time"]
+    q, over = rt["quantiles_seconds"], rt["share_over_seconds"]
+    parts = ["### 클릭이 있는 평가 노출의 read_time(페이지 체류 초)",
+             table(["노출 수", "결측"] + list(q) + [f">{s}초 비율" for s in over],
+                   [[f"{rt['n_impressions_with_click']:,}", f"{rt['n_missing']:,}"] + [f"{v:.0f}" for v in q.values()]
+                    + [f"{v:.3f}" for v in over.values()]])]
+    for sec, cols in (("p1", ("auc", "ndcg@10")), ("p2", ("ndcg@10", "recall@10"))):
+        rows = [[k] + [ci(v[c]) for c in cols] for k, v in d[sec]["results"].items()]
+        parts += [f"### {sec.upper()} 인기도 베이스라인(창 끝 = t − gap초)", table(["방법|gap"] + list(cols), rows),
+                  diff_table(d[sec]["diffs_vs_gap0"], cols=cols)]
+    rep = d.get("reproduces_reference")
+    if rep:
+        parts.append(f"gap0과 {rep['reference']}의 같은 베이스라인 평균 최대 절대 차이: "
+                     f"P1 {rep['p1']['max_abs_diff_of_means']:.1e}, P2 {rep['p2']['max_abs_diff_of_means']:.1e}")
+    return "\n\n".join(parts) + "\n"
+
+
 def main(argv=None) -> int:
     args = sys.argv[1:] if argv is None else argv
     with open(args[0]) as f:
         d = json.load(f)
-    sys.stdout.write(render(d))
+    # click_time_sensitivity.py JSON은 gap 목록을 meta에 담는다
+    sys.stdout.write(click_time_tables(d) if "gaps_seconds" in d.get("meta", {}) else render(d))
     return 0
 
 
