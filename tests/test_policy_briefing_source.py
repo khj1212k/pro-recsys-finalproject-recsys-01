@@ -25,13 +25,13 @@ LONG_PARAGRAPH = "합성 문단입니다. " * 40  # 정제 후에도 DROP_LEN(35
 
 
 def _item(news_id, kogl="1", url=None, contents=None, ctype="H", approve="09/24/2026 10:30:00",
-          embargo="", title=None):
+          embargo="", title=None, status="I"):
     url = f"https://www.korea.kr/news/policyNewsView.do?newsId={news_id}" if url is None else url
     contents = contents if contents is not None else f"<p>{LONG_PARAGRAPH}</p>"
     return f"""
     <NewsItem>
       <NewsItemId>{news_id}</NewsItemId>
-      <ContentsStatus>I</ContentsStatus>
+      <ContentsStatus>{status}</ContentsStatus>
       <ModifyId>1</ModifyId>
       <ModifyDate>{approve}</ModifyDate>
       <ApproveDate>{approve}</ApproveDate>
@@ -72,6 +72,7 @@ def test_parse_reads_items_with_kst_approve_date():
 
     assert [i.news_item_id for i in items] == ["101", "102"]
     first = items[0]
+    assert first.contents_status == "I"
     assert first.title == "합성 정책뉴스 101"
     assert first.contents_type == "H"
     assert first.original_url.endswith("newsId=101")
@@ -155,17 +156,34 @@ def test_select_rows_keeps_only_kogl_type_1_items_with_url_and_enough_text():
         _item("4", url=""),                           # 원문 URL 없음
         _item("5", contents="<p>짧은 본문</p>"),       # 정제 후 너무 짧음
         _item("6", embargo="09/27/2026 09:00:00"),    # 엠바고 미해제
+        _item("7", status="U"),                       # 수정된 기사 - 채택
+        _item("8", status="D"),                       # 삭제된 기사 - 저장하지 않음
+        _item("9", status=""),                        # 상태 표시 없음 - fail closed
     ))
 
     rows, stats = pb.select_rows(items, now=now)
 
-    assert [r.url for r in rows] == ["https://www.korea.kr/news/policyNewsView.do?newsId=1"]
+    assert [r.url for r in rows] == [
+        "https://www.korea.kr/news/policyNewsView.do?newsId=1",
+        "https://www.korea.kr/news/policyNewsView.do?newsId=7",
+    ]
     assert rows[0].title == "합성 정책뉴스 1"
     assert rows[0].published_at == datetime(2026, 9, 24, 10, 30, tzinfo=KST)
     assert "<p>" not in rows[0].content
     assert stats == {
-        "fetched": 6, "kept": 1, "not_kogl_type_1": 2, "no_url": 1, "too_short_or_filtered": 1, "embargoed": 1,
+        "fetched": 9, "kept": 2, "withdrawn": 1, "unknown_status": 1, "not_kogl_type_1": 2, "no_url": 1,
+        "too_short_or_filtered": 1, "embargoed": 1,
     }
+
+
+@pytest.mark.parametrize("status, stat_key", [("D", "withdrawn"), ("d", "withdrawn"), ("X", "unknown_status")])
+def test_select_rows_never_stores_withdrawn_or_unknown_status_items_even_if_kogl_type_1(status, stat_key):
+    items = pb.parse_policy_news_xml(_response(_item("1", status=status)))
+
+    rows, stats = pb.select_rows(items, now=datetime(2026, 9, 26, 12, 0, tzinfo=KST))
+
+    assert rows == []
+    assert stats[stat_key] == 1 and stats["kept"] == 0
 
 
 # --------------------------------------------------------------------------- HTTP

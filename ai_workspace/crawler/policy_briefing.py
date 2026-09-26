@@ -41,6 +41,12 @@ MAX_WINDOW_DAYS = 3
 REQUEST_TIMEOUT_S = 30
 KST = timezone(timedelta(hours=9))
 
+# ContentsStatus(기사 상태). 필드 이름은 명세에 있지만 값의 뜻은 인증키가 없어 실제 응답으로
+# 확인하지 못했다. 공공데이터포털 정책브리핑 API들이 쓰는 I(등록)/U(수정)/D(삭제)로 보고,
+# 그 밖의 값이나 빈 값은 KoglType처럼 저장하지 않는다(fail closed, 통계 unknown_status로 드러남).
+ACTIVE_CONTENTS_STATUSES = frozenset({"I", "U"})
+WITHDRAWN_CONTENTS_STATUS = "D"
+
 # 이미지·캡션·스크립트 등 텍스트 본문이 아닌 요소. 공공누리 표시는 텍스트에만 적용된다.
 _DROP_TAGS = ("script", "style", "img", "figure", "figcaption", "iframe", "video", "audio",
               "object", "embed", "noscript", "picture", "source", "svg")
@@ -66,6 +72,7 @@ class PolicyBriefingFetchError(RuntimeError):
 @dataclass
 class PolicyNewsItem:
     news_item_id: str
+    contents_status: str
     title: str
     contents_type: str
     data_contents: str
@@ -126,6 +133,7 @@ def parse_policy_news_xml(xml_text: str) -> List[PolicyNewsItem]:
     for node in root.iter("NewsItem"):
         items.append(PolicyNewsItem(
             news_item_id=_text(node, "NewsItemId"),
+            contents_status=_text(node, "ContentsStatus").upper(),
             title=_text(node, "Title"),
             contents_type=_text(node, "ContentsType").upper(),
             data_contents=_text(node, "DataContents"),
@@ -189,11 +197,22 @@ def clean_policy_news_content(item: PolicyNewsItem) -> str:
 
 
 def select_rows(items: List[PolicyNewsItem], now: datetime) -> Tuple[List[PolicyNewsRow], Dict[str, int]]:
-    """저장할 기사만 고른다: 공공누리 제1유형, 원문 URL 있음, 엠바고 해제, 정제 후 본문이 충분함."""
-    stats = {"fetched": len(items), "kept": 0, "not_kogl_type_1": 0, "no_url": 0,
-             "too_short_or_filtered": 0, "embargoed": 0}
+    """저장할 기사만 고른다: 삭제되지 않음, 공공누리 제1유형, 원문 URL 있음, 엠바고 해제,
+    정제 후 본문이 충분함.
+
+    삭제(D)된 기사는 저장하지 않는다. 이미 저장한 행에 나중의 수정(U)·삭제(D)를 반영하지는
+    않는다(ON CONFLICT DO NOTHING) - 한계와 공개 반출 때의 재확인은 ADR 0023 "남는 위험".
+    """
+    stats = {"fetched": len(items), "kept": 0, "withdrawn": 0, "unknown_status": 0,
+             "not_kogl_type_1": 0, "no_url": 0, "too_short_or_filtered": 0, "embargoed": 0}
     rows = []
     for item in items:
+        if item.contents_status == WITHDRAWN_CONTENTS_STATUS:
+            stats["withdrawn"] += 1
+            continue
+        if item.contents_status not in ACTIVE_CONTENTS_STATUSES:
+            stats["unknown_status"] += 1
+            continue
         if normalize_kogl_type(item.kogl_type) != 1:
             stats["not_kogl_type_1"] += 1
             continue
