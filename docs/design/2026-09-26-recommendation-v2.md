@@ -13,6 +13,10 @@
 > 이 문서는 설계 사양이다. 여기서 내린 결정은 §7의 ADR로 옮겨져야 효력을 갖고, 수치는 `reports/**`의 파일에서만 인용한다.
 > 팀 시절 추천기(`ai_workspace/recommend_engine`, LightGBM+MMR)는 팀원 성승우의 설계·구현이며, 이 문서에서 "ranker v2",
 > `recsys_core`, EB-NeRD 하네스, 요청 시점 서빙, 시뮬레이터는 `team-final` 태그 이후 본인 작업이다.
+>
+> 2026-09-26 추가(같은 날 사용자 결정 반영): §3.4 D·E(신경망 사용자 모델)를 "기각"에서 "E15로 측정 판정(보류)"로 바꾸고, §4.1에
+> E15 사전 등록과 Colab GPU 실행 계획, §5에 M4b를 넣었다. Colab 사용은 사용자가 EB-NeRD 라이선스를 확인한 뒤 **비공개 런타임에
+> 실행마다 업로드·실행 뒤 해제**하는 조건으로 허용했다(저장소·공개 데이터셋·영구 사본 금지는 그대로). 노트북은 무거운 계산을 하지 않는다.
 
 ---
 
@@ -23,9 +27,11 @@
    있는 nDCG 폭은 구조적으로 작고, 체감 품질은 (a) 같은 사건 재노출·반복 노출 억제, (b) 신선도·다양성 규칙, (c) 첫 클릭까지의
    순위로 결정된다. 따라서 v2의 1차 목표는 **"첫 사용자부터 정확한 propensity로 정책을 비교할 수 있는 서빙"**이고,
    2차 목표가 "공개 클릭 데이터에서 검증된 랭커를 콜드 regime에서도 무너지지 않게 shadow로 올리는 것"이다.
-2. **모델군은 확정한다:** 언어 무관 스칼라 point-in-time 피처 위 LightGBM LambdaRank(요청 단위 쿼리), 활성 스코어러는 EB-NeRD로
-   가중치를 적합한 4항 휴리스틱, 랭커는 shadow. two-tower/NRMS·ID 임베딩·세션 시퀀스 모델·정책 학습형 밴딧(Thompson/LinUCB)은
-   하지 않는다(근거 §3.4). 탐색은 ε-균등 슬롯(20 중 2, 콜드 4)로만 한다.
+2. **모델군은 확정하되 한 가지는 측정으로 판정한다:** 언어 무관 스칼라 point-in-time 피처 위 LightGBM LambdaRank(요청 단위 쿼리)가
+   shadow 주모델, 활성 스코어러는 EB-NeRD로 가중치를 적합한 4항 휴리스틱. ID 임베딩·BGE-M3 미세조정·정책 학습형 밴딧(Thompson/LinUCB)은
+   하지 않는다(근거 §3.4). 신경망 사용자 모델(NRMS-lite·SASRec-lite·GBDT 스태킹)은 이유만으로 기각하지 않고 **E15(§4.1)에서 같은
+   EB-NeRD 프로토콜·같은 튜닝 예산으로 측정해 판정**한다 — 통과해도 추가 shadow 후보일 뿐 활성이 아니며, §3.4 D·E의 원 기각 사유는
+   "GBDT가 이길 이유"라는 가설로 남긴다. 탐색은 ε-균등 슬롯(20 중 2, 콜드 4)로만 한다.
 3. **정확성 문제 중 즉시 고쳐야 하는 것**은 (C1) 노출↔클릭 연결키 부재, (C2) 팀 레시피 `train` 잡과 죽은 `LightGBMScorer`의
    두 경로, (C3·C4) 갱신되지 않는 장기 벡터와 세 벌의 프로필 정의, (C5) 서빙 인기도 = 클릭이 아니라 기사 수, (C6) EB-NeRD
    결과의 콜드 regime 전이 미측정, (C8) team_repro 어드버서리얼 수정 미반영, 그리고 두 리뷰가 모두 놓친 (C17) shadow 경로 부재,
@@ -35,9 +41,9 @@
    Locust 파일은 `b3b20e4`에 이미 커밋돼 있고, 두 리뷰 모두 `docs/decision-map`이 확인한 ADR 번호 충돌(0017·0026)을 반영하지
    않았다. 판정표는 §2.1.
 5. **마일스톤 순서**: M0 통합 브랜치·수집 복구(0.5~1일) → M1 team_repro 수정 병합(1일) → M2 로그 v2·탐색·shadow(≈4일) →
-   M3 recsys_core 서빙 어댑터·증분 프로필·parity 게이트(3일) → M4 EB-NeRD v1.2 콜드 regime(3일+실행 2h) → M5 인기도·휴리스틱
-   재설계(1.5일) → M6 [SIM]·[LOAD] 증거(1.5일) → M7 ADR·규칙(1일) → M8 조건부(스토리 최소판, 인터리빙 A/A). 총 ≈16 작업일,
-   LLM 비용 $0, 사람 라벨 시간 ≤2h(E12에서만).
+   M3 recsys_core 서빙 어댑터·증분 프로필·parity 게이트(3일) → M4 EB-NeRD v1.2 콜드 regime(3일+실행 2h) → M4b E15 신경망 사용자
+   모델 비교(3일+Colab T4 ≤30 CU, M5·M6와 병렬) → M5 인기도·휴리스틱 재설계(1.5일) → M6 [SIM]·[LOAD] 증거(1.5일) → M7 ADR·규칙(1일)
+   → M8 조건부(스토리 최소판, 인터리빙 A/A). 총 ≈19 작업일, LLM 비용 $0, Colab ≤30 CU(잔액 ≈200 CU), 사람 라벨 시간 ≤2h(E12에서만).
 6. **이력서 상한 문장**(그대로 채택): "공개 사람 클릭 데이터에서 검증된 랭커를, 첫 사용자부터 평가 가능한 로그와 탐색 위에
    shadow로 올린 시스템." "한국어 서비스에서 X% 향상"은 이 계획 어디에도 들어가지 않는다.
 
@@ -257,11 +263,12 @@ EventIndex(48h), static_categories=온보딩, user_hist_state=(hist_sum, hist_le
 
 | 대안 | 판정 | 근거 |
 |---|---|---|
-| A. LightGBM LambdaRank, 쿼리=요청, recsys_core 스칼라 피처(ranker_v2_poolneg 계열) | **shadow 주모델**, E1 통과 시 활성 후보 | [EB-NeRD] P2 0.2686 vs popularity_6h 0.1168; RecSys Challenge 2024 상위권이 시간 인식 피처+GBDT; EB-NeRD 논문 Table 3에서 NRMS 61.03 vs 인기 59.70 AUC. 하이퍼파라미터는 팀 설정 고정(num_leaves 31, lr 0.05, feature_fraction 0.9, bagging 0.8/5, early stop 50, ≤1000 라운드), `lambdarank_truncation_level` 기본 30 > K=20이라 그대로. |
+| A. LightGBM LambdaRank, 쿼리=요청, recsys_core 스칼라 피처(ranker_v2_poolneg 계열) | **shadow 주모델**, E1 통과 시 활성 후보 | [EB-NeRD] P2 0.2686 vs popularity_6h 0.1168; RecSys Challenge 2024 상위권이 시간 인식 피처+GBDT; EB-NeRD 논문 Table 3에서 NRMS 61.03 vs 인기 59.70 AUC. 하이퍼파라미터는 팀 설정 고정(num_leaves 31, lr 0.05, feature_fraction 0.9, bagging 0.8/5, early stop 50, ≤1000 라운드), `lambdarank_truncation_level` 기본 30 > K=20이라 그대로. E15에서는 이 고정 설정이 판정 기준 arm이고, 같은 시행 예산의 튜닝 arm(`*_tuned`)을 서술용·게이트로 함께 잰다(§4.1.4). |
 | B. 인기도 마스킹 학습 변형(poolneg_masked, E1) | E1 결정 규칙에 따라 shadow 주모델 교체 | 콜드 regime에서 pop_*=0 입력을 학습 중에 본 모델만이 초기 서비스에서 퇴화하지 않는다는 가설. |
 | C. 4항 휴리스틱(cos_long, cos_short, recency, log1p(pop_clicks_6h)) + 0.05 raw_news_count 동점 깨기, 가중치는 E7 적합 | **활성 스코어러**(초기), 랭커 폴백 | 사람 클릭 데이터에 적합된 유일한 활성 모델. 저트래픽 세트 기본, 일 노출 ≥5k에서 poolneg 세트로 전환(ADR 0014 사전 등록). |
-| D. two-tower / NRMS / 다국어 인코더 미세조정 | 기각 | zero-shot 교차언어 붕괴(NaSE), GPU 의존, 15k 유저 과적합. ADR 0003·0013 기각 사유 유지. |
-| E. 세션 시퀀스 모델(GRU4Rec/SASRec) | 기각 | 세션당 조회 ≤4, 풀 45~90개. short/sess 코사인 피처가 같은 정보를 담고 [EB-NeRD] +0.0234로 이미 측정됨. |
+| D. NRMS-lite(고정 BGE-M3 벡터 → 학습 투영, MHSA + additive attention 유저 인코더, 후보 내적) / two-tower 계열 | **E15로 측정 판정(보류)** — 판정 비교·게이트 통과 시 추가 shadow 후보, 활성 아님(§4.1.5) | GBDT가 이길 이유(원 기각 사유를 가설로 유지): zero-shot 교차언어 붕괴(NaSE), GPU 의존, 15k 유저 과적합, EB-NeRD 논문 Table 3에서 NRMS 61.03 vs 인기 59.70 AUC. 반대 가설: 후보의 1024차원 벡터를 직접 보는 학습형 유저 인코더는 hist/short/sess 코사인 스칼라보다 정보가 많다. 다국어 인코더 **미세조정**·ID 임베딩은 여전히 기각(15k 유저·언어 전이). |
+| E. 세션 시퀀스 모델(SASRec-lite; GRU4Rec은 대표 1개로 대체) | **E15로 측정 판정(보류)** — 콜드 조건(k≤5)에서 악화 없음이 채택 조건 | GBDT가 이길 이유(원 기각 사유를 가설로 유지): 세션당 조회 ≤4, 풀 45~90개, short/sess 코사인 피처가 같은 정보를 담고 [EB-NeRD] +0.0234로 이미 측정됨. E15는 이 가설을 같은 프로토콜에서 검정한다. |
+| I. 스태킹: LightGBM LambdaRank + D/E 중 나은 arm의 OOF 점수 피처 | **E15로 측정 판정(보류)** + 서빙 비용 게이트(CPU p95 추가 지연, M6 [LOAD-arm]에서 측정) | RecSys Challenge 2024 1위 해법(":D", Transformer + LightGBM + CatBoost 3단계, 시간 인식 피처)의 구조. 오프라인 이득이 있어도 요청 경로에 신경망 인코딩 1회가 들어가므로 지연 게이트를 따로 둔다. |
 | F. 정책 학습형 밴딧(LinUCB/Thompson) | 지연(실트래픽 후) | 지금 필요한 것은 정확한 propensity(ε-균등)이지 정책 최적화가 아니다. 아이템 콜드스타트는 pop 피처+탐색 슬롯이 담당. |
 | G. LLM 관심 프로필 → BGE-M3 코사인 | 보류(≤$5, 한국어 클릭 수천 건 후) | 콜드 유저(k≤5)에서만 이득 가설(LettinGo). EB-NeRD 제목 외부 API 반출은 라이선스 확인 필요. |
 | H. 카테고리 캘리브레이션(Steck 2018) | 선택(MMR 대안) | λ 튜닝보다 해석이 쉽고 C_KL로 측정 가능. 스택 추가 없이 `reranker` 교체 가능한 인터페이스만 둔다. |
@@ -368,6 +375,10 @@ M0에서 merge revision(`down_revision = ('d48994e9d26e', '8b7f830013b7')`) 후 
 | M3 | `scripts/register_model.py`(신규) | EB-NeRD 모델 → model_registry(role=shadow) |
 | M4 | `evaluation/recsys/ebnerd/{models,prepare,run_ebnerd}.py` | `--chain cold`, `--pop-mask p`, `--pop-subsample f`, `--pool-shrink n`, `--hist-truncate k`, `--rank-normalize`, `--p3-quantize`, `--candidate-config serving` |
 | M4 | `evaluation/recsys/ebnerd/make_report.py` | `promotion_verdict(min_effect=0.005, p2_baseline='popularity_6h')` 인자화 |
+| M4b | `evaluation/recsys/ebnerd/neural/{__init__,sequences,datasets,models,train,tune,stack,cold,report}.py`, `evaluation/recsys/ebnerd/run_neural.py`(신규) | E15 arm B/C/D(/E), OOF 스태킹, 콜드 조건 채점, `neural_verdict`(§4.1.8) |
+| M4b | `evaluation/recsys/ebnerd/{models,run_ebnerd}.py` | `SEEN_FILTER_METHODS`에 신경망 arm 추가, `MetricBank`·`_features`를 `run_neural`이 import(동작 변경 없음) |
+| M4b | `scripts/e15_colab_run.sh`, `requirements-colab.txt`, `tests/recsys/test_neural_demo.py` | 업로드·sha256 검증·실행·다운로드·삭제·해제·CU 기록 절차 고정; 버전 고정; `ebnerd_demo --fake-dim 16` CPU 테스트 |
+| M4b | `reports/recsys/ebnerd_v1_3_neural.{json,md}`, `docs/adr/0013` A3 | E15 결과·기계 판정 |
 | M5 | `recsys_core/features.py`, `backend/app/recsys/scoring.py`, `backend/scheduler/calculate_ranking.py` | pop_ctr_shrunk, 휴리스틱 4항+동점 깨기, 배치 인기 랭킹 클릭 항 |
 | M5 | `evaluation/recsys/ebnerd/heuristic_fit.py`(신규) | 두 조건 가중치 적합 |
 | M6 | `tests/recsys/test_latency_microbench.py`, `sim/locustfile.py`, `reports/serving/latency_v1.md`, `reports/sim/ope_validation.md` | 실측 기록 |
@@ -377,7 +388,7 @@ M0에서 merge revision(`down_revision = ('d48994e9d26e', '8b7f830013b7')`) 후 
 
 ## 4. 사전 등록 실험 계획
 
-공통: LLM 비용 $0. 실행 전에 명령·판정 규칙을 ADR(0013 A2 / 0014 / 0025 / 0031)에 커밋한 SHA를 리포트 머리말에 적는다. 다중 비교 보정
+공통: LLM 비용 $0. 실행 전에 명령·판정 규칙을 ADR(0013 A2 / 0013 A3 / 0014 / 0025 / 0031)에 커밋한 SHA를 리포트 머리말에 적는다. 다중 비교 보정
 없음 — 판정용 비교 수를 각 실험에 명시하고 나머지는 서술용. 최소 효과 크기 nDCG@10 0.005. 결과가 나온 뒤 사전 등록 절은 고치지 않는다.
 
 | ID | 라벨 | 가설 | 방법 | n·시드 | 성공/결정 기준 | 비용·시간 |
@@ -396,8 +407,165 @@ M0에서 merge revision(`down_revision = ('d48994e9d26e', '8b7f830013b7')`) 후 
 | E12 | [KR-eval, 조건부] 스토리 연속성 | 일 클러스터 중 연속 사건이 ≥20% | 일자별 스냅샷 재생, (cos τ∈{0.80,0.85,0.90}) × (개체 Jaccard j∈{0.2,0.35,0.5}) 격자, 블라인드 40쌍 라벨 | 한국어 5~7일치 | 연속 비율 CI, 연결 정밀도 ≥0.80(Wilson 하한 ≥0.65); ≥20%면 I7 최소판, <10%면 ADR 0012에 "불필요" | 라벨 1~2h, LLM $0 |
 | E13 | [KR-online, 사용자 생기면] 첫 온라인 수치 | 휴리스틱 슬롯 CTR > 탐색(균등 무작위) 슬롯 CTR, 위치 층화 | 같은 요청·같은 위치 분포에서 탐색 슬롯 vs 결정론 슬롯의 쌍체 CTR(위치별 층화, 탐색 propensity로 정확), 첫 클릭 순위 중앙값, clicks@5 | 파워: 2%→3%(α 0.05 양측, 80%) 팔당 ≈3,830 노출 = 탐색 슬롯 2/요청이면 ≈1,900 요청; 유저 20명×3요청/일이면 약 5주 | 1차 지표 사전 등록. A/B 전환 조건: 주간 요청 ≥6,000(팔당 ≥8.1만 노출 × 설계 효과 ≥1.5) | — |
 | E14 | [SIM] 인터리빙 A/A·감도(shadow 경로 후) | team-draft가 100~300 요청에서 알려진 우열을 가르고 A/A는 0.5를 포함 | (reactive vs random), (A/A), team-draft | ≤300 요청, 1회 | 우열 쌍 CI가 0.5 배제, A/A는 포함 | 0.5일 |
+| E15 | [EB-NeRD] 신경망 사용자 모델 vs LightGBM(상세 §4.1) | 같은 프로토콜·같은 정보·같은 튜닝 예산에서 학습형 시퀀스 유저 인코더(NRMS-lite/SASRec-lite) 또는 GBDT 스태킹이 LightGBM LambdaRank를 nDCG@10 +0.005 이상 이기고 콜드 조건에서 무너지지 않는다 | arm A(`ranker_v2` P1 / `ranker_v2_poolneg` P2, 팀 설정 고정) vs B NRMS-lite vs C SASRec-lite vs D 스태킹(OOF 점수 피처) [E DIN-lite·B0 콘텐츠만·`*_tuned` GBDT는 서술용/게이트]. P1 네거티브 = 노출 비클릭, P2 = 48h 풀 무작위 20개(poolneg와 같은 rng) — 두 학습기가 같은 `RankTask`를 받음. 콜드 조건(pop_*=0, 히스토리 k∈{0,1,3,5}) 재평가 | P1 test 244,647 노출 / P2 20k 요청(v1과 같은 표본), seed 3, 부트스트랩 1,000; 튠 12 trial/family(es 구간) | **판정 비교 4개**: 과제별 (B/C 중 es 선택 arm − A), (D − A) 쌍체 CI 하한 > +0.005 AND 게이트(콜드 5조건·튜닝 GBDT 대비 CI 하한 > −0.005, 재현 게이트) → shadow 후보(활성 아님); D는 CPU p95 게이트 추가. 아니면 ADR 0013 A3에 수치로 기각/보류 기록 | 코드 3일 + Colab T4 ≤30 CU(추정 10~14 CU, 스모크 근거 §4.1.7), LLM $0 |
 
-삭제: 리뷰 E8(A1은 실행됨, J1). 축소: E4·E5(J3·J4). 변경: E3(J5), E4→E3(J6), E6·E7(J7·J8).
+삭제: 리뷰 E8(A1은 실행됨, J1). 축소: E4·E5(J3·J4). 변경: E3(J5), E4→E3(J6), E6·E7(J7·J8). 추가(2026-09-26): E15.
+
+### 4.1 E15 상세 사전 등록 — 신경망 사용자 모델 vs LightGBM (같은 프로토콜, 같은 정보, 같은 예산)
+
+> 상태: **사전 등록(실행 전)**. 이 절은 결과가 나온 뒤 고치지 않는다(사후 변경은 ADR 0013 A3의 "사후 변경 기록"에만). 실행 명령·기계 판정
+> 함수(`neural_verdict`)를 담은 커밋 SHA를 리포트 머리말에 적는다. 실행은 M4b(§5), 결과는 `reports/recsys/ebnerd_v1_3_neural.{json,md}`.
+> 근거 라벨은 [EB-NeRD]이며 어떤 결과도 한국어 서비스 성능이 아니다(§4.1.6).
+
+**질문.** §3.4 D·E는 이유만으로 기각돼 있었고 2026-09-26 사용자가 "기각이 아니라 측정"을 요구했다(급하지 않음). 공개된 가장 강한 외부 근거는
+RecSys Challenge 2024(EB-NeRD) 1위 해법 ":D"가 Transformer + LightGBM + CatBoost 3단계 앙상블에 시간 인식 피처를 쓴 것이고(arXiv 2409.20483,
+DOI 10.1145/3687151.3687160), 리더보드 AUC는 우리 split·정답 창과 비교할 수 없다. 그래서 우리 프로토콜에서 직접 잰다.
+- Q1. 같은 정보(같은 스칼라 피처 22개 + 후보·히스토리의 고정 BGE-M3 벡터)를 받는 학습형 시퀀스 유저 인코더가 LightGBM LambdaRank를 이기는가?
+- Q2. 이기지 못해도 GBDT 위에 정보를 더하는가(스태킹)?
+- Q3. 콜드 조건(인기도 0, 히스토리 ≤5)에서 무너지지 않는가? — 이 제품의 초기 regime이 여기다(§1 결론 1).
+
+#### 4.1.1 프로토콜 — ebnerd_v1과 같은 부분(바꾸지 않음)
+- **데이터·임베딩**: `ebnerd_small`. 파일 sha256은 `ebnerd_v1.json` `data.files`와 같아야 한다(articles `b1cea52e…3d2`, train/validation behaviors·history 4개).
+  임베딩 = `derived/ebnerd_small/bge_m3_tsb512.f16.npy`(sha256 `2f096ef8…ebeb`, 1024차원, L2 정규화, 512 토큰 절단) — **고정**, 미세조정 없음, 신경망 arm도 같은 파일을 쓴다.
+- **창**(반열린, EB-NeRD 로컬 시각): fit 2023-05-20T07~05-24T07(129,080 노출) / es 05-24T07~05-25T07(32,559) / test = validation 전체 05-25T07~06-01T07(244,647).
+  `prepare.protocol_windows`·`impressions_in`을 그대로 쓴다. P2 = validation 요청 20,000건 표본(`SPLIT_SEED+2`, v1과 같은 인덱스), 풀 = [t−48h, t] 발행 − t 이전 seen, `n_pos_total` 벌점 동일.
+- **조기 종료는 es 구간(train 마지막 24h)에서만**: LightGBM 50라운드 인내·≤1,000라운드(v1 그대로), 신경망 epoch 단위 인내 2·≤20 epoch, 지표 = 같은 구성의 es 데이터 nDCG@10.
+  test는 모델 선택·튠·조기 종료 어디에도 쓰지 않는다.
+- **통계**: seed 0/1/2(모델 초기화·배치 순서·네거티브 표집·동점 처리). 노출별 지표를 seed 평균 → 유저 단위 클러스터 부트스트랩 1,000회 95% CI(`metrics.cluster_bootstrap`, seed 0),
+  같은 노출에서의 쌍체 차이 CI(`metrics.paired_bootstrap_diff`, seed 1). seed별 평균·표준편차 보고. 다중 비교 보정 없음 — 판정용 비교 수는 §4.1.5에 명시.
+- **seen**: P1은 seen 포함/제외 둘 다 보고(모든 신경망 arm을 `SEEN_FILTER_METHODS`에 추가), P2는 seen 제거 풀. seen 비율(v1: 후보 4.68%, 클릭 2.48%)을 다시 기록.
+- **재현 게이트**: 같은 실행에서 LightGBM arm을 `models.train`으로 다시 학습해 P1 `ranker_v2` nDCG@10 seed 평균이 v1 CI [0.6533, 0.6569] 안, P2 `ranker_v2_poolneg`가
+  [0.2640, 0.2728] 안이어야 실행이 유효하다(x86·2 vCPU·lightgbm 버전 차이 점검). 벗어나면 결과를 판정에 쓰지 않고 원인을 기록한다.
+
+#### 4.1.2 과제·네거티브 — 두 학습기가 같은 것을 받는다
+
+| 과제 | 쿼리 | 후보 | 양성 | 학습 네거티브 | 평가 후보 | 하네스 함수 |
+|---|---|---|---|---|---|---|
+| P1 노출 재정렬 | impression | `article_ids_inview`(≤100) | 클릭 | **같은 노출의 비클릭(in-view)** — `ranker_v2`의 `inview` 데이터와 동일 | in-view 전체 | `prepare.p1_task`(fit/es/test) |
+| P2 48h 풀 | impression(=요청) | [t−48h, t] 발행 − seen | 클릭 | **48h 풀 무작위 20개**(t 이전 seen·이번 클릭 제외) = `prepare.pool_negative_task(n_neg=20, window_h=48)`, rng `default_rng(1000+seed)` → `ranker_v2_poolneg`와 **같은 네거티브 표본** | 전체 풀(평균 235, 161~279) | `pool_negative_task`(fit/es), `p2_task`(test) |
+
+두 학습기는 같은 `RankTask` 객체를 받는다. LightGBM은 `compute_features(ctx, task.req, groups=ALL_GROUPS)`의 피처 행렬을, 신경망은 `task.req.{user, profile_cutoff, cand_item, cand_ptr}` +
+같은 피처 행렬(스칼라 블록)을 받으며, `labels`·`cand_ptr`가 두 경로에서 같은 배열인지 테스트로 단언한다. 다중 양성 노출(노출당 클릭 평균 1.01)은 LightGBM `label_gain=[0,1]`,
+신경망은 양성마다 softmax 항을 더해 평균한다. P1↔P2 교차(각 arm을 다른 과제에 적용)는 v1과 같이 서술용으로만 낸다.
+
+#### 4.1.3 Arm
+- **A. LightGBM LambdaRank(판정 기준)**: `ranker_v2`(P1), `ranker_v2_poolneg`(P2), `TEAM_PARAMS` 고정, 피처 = `V2_FEATURES` 22개(팀 10 + 인기도 5 + 단기·세션 5 + cat_share·hist_len),
+  es early-stop — ADR 0013 그대로. 서술·게이트용 `ranker_v2_tuned`·`ranker_v2_poolneg_tuned`는 §4.1.4.
+- **B. NRMS-lite**: 입력 = 요청 시각(`profile_cutoff` t) **이전** 마지막 N=50 클릭(`ctx.user_log` = split history 21일 + 행동 창 클릭; hist_cos와 같은 출처, `EventIndex.bounds(user, 0, t)`의
+  끝에서 N개, 오른쪽 정렬·패딩 마스크). 아이템 표현 = 고정 BGE-M3 1024 → `Linear(1024→d) + LayerNorm + Dropout`(투영은 히스토리·후보가 공유; 학습되는 유일한 아이템 파라미터).
+  유저 인코더 = multi-head self-attention(h) + additive attention(NRMS의 유저 인코더; 뉴스 인코더는 고정 임베딩으로 대체). 점수 = ⟨u, c⟩/√d + g(x), g = 2층 MLP → 스칼라,
+  x = A와 같은 22개 스칼라 피처를 fit 창 평균·표준편차로 표준화(NaN→0 + `hours_since_last_event` 결측 지표 1개). 빈 시퀀스(k=0)는 학습되는 `[EMPTY]` 벡터.
+  손실 = 쿼리(노출) 단위 masked softmax 교차 엔트로피(LambdaRank의 쿼리 그룹과 같은 단위), AdamW, grad-norm clip 1.0. 원 NRMS와 다른 점(뉴스 인코더 고정, 스칼라 블록 g, 그룹 전체 softmax)을 리포트에 명시.
+  - **B0(서술용)**: g를 뺀 콘텐츠·시퀀스만 — "스칼라 피처가 담는 정보량"과 "이득이 어느 블록에서 오는가"를 분해한다.
+- **C. SASRec-lite**: 같은 투영 위에 인과(causal) self-attention L층(pre-LN, FFN 4d) + 학습 위치 임베딩(N), 마지막 위치 출력 = u, 점수·스칼라 블록·손실은 B와 동일.
+  SASRec 원본의 next-item 자기회귀 목적함수 대신 B와 같은 요청 단위 listwise 목적을 쓴다(같은 후보·같은 네거티브를 받게 하려는 선택; 이 차이를 명시하고 "SASRec의 인코더만 차용"이라고 쓴다).
+- **D. 스태킹(GBDT + 신경망 점수)**: LightGBM LambdaRank(팀 설정 고정, es early-stop) 피처 = `V2_FEATURES` + `neural_score`(B/C 중 es 선택 arm, §4.1.4).
+  **누출 방지(OOF)**: fit 창 노출을 유저 단위 K=5 폴드로 나누고(seed 고정), 폴드 밖 4/5로 학습한 신경망이 폴드 안 노출을 채점 → fit 행 점수는 전부 out-of-fold. es·test 행은 5개 폴드
+  모델 점수의 평균. 어떤 행도 그 행의 유저를 학습에 본 모델로 채점되지 않음을 테스트로 단언한다. 폴드 모델의 epoch 수는 최종 arm의 best epoch(seed별)로 고정해 es를 두 번 쓰지 않는다.
+  fit 행을 전체 fit으로 학습한 모델로 채점하는 방식(누출)은 금지. 신경망 점수를 그대로 쓰는 것과 요청 내 랭크(0–1)로 바꾼 것 중 랭크 버전을 기본으로 한다(E3 언어 전이 계약과 일관).
+  - **서빙 비용 게이트**: 요청당 시퀀스 인코딩 1회 + ≤300 후보 내적 + g 300행을 CPU(ARM 2 vCPU, ONNX Runtime 또는 TorchScript)에서 실행했을 때 `/newsletters/today` p95 추가 지연
+    **≤ +30 ms**(예산 300 ms의 10%), 모델 파일 ≤ 20 MB. M6 [LOAD-arm]에서 측정하기 전까지 D의 판정은 "오프라인 통과, 서빙 게이트 대기"로만 쓴다.
+- **E. DIN-lite(선택, 서술용)**: 후보 조건부 target attention(MLP([h, c, h−c, h⊙c]) → 가중치) 합 → concat(c) → MLP → 점수 + g(x). B/C 코드 경로에서 0.5일 이내로 추가될 때만 넣고 판정에 쓰지 않는다.
+- **콜드 조건(E1·E2 정의 그대로, 평가 시 조건)**: (i) `pop_*` 5개를 0으로 강제(E1의 "pop_*=0 강제" 조건; 신경망은 x의 해당 열, LightGBM은 `--pop-mask` 평가 경로), (ii) 유저 로그를 요청 시각
+  기준 최근 k∈{0,1,3,5} 이벤트로 절단(E2 `--hist-truncate k`; 신경망은 시퀀스 절단, LightGBM은 hist/short/sess/cat_share 재계산 — 같은 절단 로그를 두 arm에 적용). 모델은 전체 히스토리로
+  학습한 채 평가만 바꾼다(서빙 콜드 유저에 대한 퇴화 측정, E2와 동일 논리).
+
+#### 4.1.4 튜닝 예산(공정성) — family당 같은 시행 수, 탐색 공간 공개
+- **신경망 family(B, C; E 포함 시 E)마다 무작위 탐색 12 trial**, seed 0, 선택 지표 = es 구간 nDCG@10(같은 구성: P1은 in-view es 노출, P2는 poolneg es 행), 튜닝 시 ≤6 epoch·인내 2.
+  최종은 best 설정으로 seed 0/1/2, ≤20 epoch·인내 2. 탐색 공간: d∈{128,256}, heads∈{2,4}, L(C만)∈{1,2}, dropout∈{0.1,0.3}, lr log-U[3e-4, 3e-3], weight_decay∈{0,1e-4,1e-2},
+  batch∈{256,512}, N∈{20,50}. 온도 1/√d 고정, label smoothing 없음. trial 표(설정·es 지표·epoch·시간)를 JSON에 전부 남긴다.
+- **LightGBM 판정 arm은 팀 설정 고정**. 이유: ADR 0013에 사전 등록되고 실제로 shadow에 올라갈 바로 그 모델이므로 비교 대상을 바꾸지 않는다. 대신 **같은 12 trial 예산의**
+  `ranker_v2_tuned`·`ranker_v2_poolneg_tuned`(num_leaves∈{15,31,63,127}, lr log-U[0.02,0.1], min_data_in_leaf∈{20,50,100,200}, feature_fraction∈{0.7,0.9,1.0}, lambda_l2∈{0,1,10},
+  lambdarank_truncation_level∈{10,20,30}; es nDCG@10로 선택, seed 0 튠 → 3 seed)를 함께 학습해 두 용도로 쓴다: (1) 서술용 표, (2) **게이트** — 신경망 arm이 튜닝 GBDT보다
+  CI 하한 −0.005 아래로 뒤지면 "신경망 우위"가 아니라 "기준선 튠 부족"이므로 채택하지 않는다(Ferrari Dacrema et al. 2019, Rendle et al. 2020의 교훈).
+- **B와 C 중 판정 arm 선택은 test를 보지 않고** es 지표(seed 0 튠 best)로 한다. 나머지 하나는 서술용. 선택 결과와 근거 수치를 JSON `selection`에 기록한다.
+
+#### 4.1.5 지표·판정 규칙(실행 전 고정)
+- **1차 지표**: 과제별 ΔnDCG@10 = (arm − 대응 LightGBM arm), 같은 노출 쌍체, 유저 클러스터 부트스트랩 1,000회 95% CI. 최소 효과 크기 0.005(§4 공통·I12).
+- **판정용 비교 4개**: (P1) `B|C_sel − ranker_v2`, `D − ranker_v2`; (P2) `B|C_sel − ranker_v2_poolneg`, `D − ranker_v2_poolneg`.
+- **게이트**(채택을 막을 수만 있고 채택 근거로 쓰지 않음; 판정 arm마다): 콜드 조건 5개(pop_*=0; k=0,1,3,5) 각각 Δ CI 하한 > −0.005; 튜닝 GBDT 대비 Δ CI 하한 > −0.005;
+  §4.1.1 재현 게이트 통과; 신경망 seed 표준편차 ≤ 그 arm CI 반폭(seed 불안정이면 "구분 불가"). D는 서빙 비용 게이트(M6) 추가.
+- **결정**: 과제별로 판정 비교 CI 하한 > +0.005 AND 게이트 전부 통과 → 그 arm을 **shadow 후보로 채택**(`model_registry` role=shadow에 등록, slot 로그 `scores_shadow`에 점수 병기;
+  활성 전환은 ADR 0013 결정 4 + §4.1.6 증거 후). 그 외 — CI가 0을 포함(구분 불가), 하한이 (0, 0.005](효과 미달), 게이트 실패 — 는 ADR 0013 A3에 수치와 함께 "측정 후 기각/보류"로
+  기록하고 §3.4 D·E·I를 그 상태로 갱신한다. 판정은 사람이 표를 읽지 않고 `neural_verdict`(JSON → 규칙 표)가 낸다.
+- **주장 범위**: 결과가 어느 쪽이든 §8의 "딥러닝 대비 우위" 금지는 E15가 **두 과제 모두** 통과할 때까지 유지하고, 통과해도 "[EB-NeRD] 같은 프로토콜에서 ΔnDCG@10 +x [CI]"라고만 쓴다.
+  통과하지 못하면 "같은 프로토콜·같은 예산에서 측정했고 기각했다"가 주장 가능한 전부다(§8).
+- **서술용(판정 없음)**: P1 AUC·MRR·nDCG@5, P2 recall@10·MRR·ILD@10·coverage@10·novelty@10, B0, E, `*_tuned` 표, trial 표, best epoch·학습 시간·파라미터 수, 콜드 k 곡선, P1↔P2 교차,
+  스태킹의 `neural_score` gain 비율.
+
+#### 4.1.6 언어 전이 caveat — EB-NeRD에서 이겨도 한국어 전이는 성립하지 않는다
+- 투영층·유저 인코더는 덴마크어 기사 벡터의 기하 위에서만 학습됐고, 클릭 역학(타블로이드 편집 프런트 페이지, 세션 ≤4 조회)도 이 제품과 다르다. 스칼라 피처는 언어 무관이지만
+  신경망 arm의 이득이 어느 블록에서 오는지(B0 vs B)를 서술용으로 분해해 둔다. 활성 후보로 올리기 전에 필요한 증거(사전 등록):
+  - **[KR-eval]** (a) 한국어 뉴스레터 ≥500건에서 BGE-M3 카테고리 kNN(k=10) LOO 정확도 ≥0.6(v1 임베딩 점검과 같은 기준); (b) 스칼라 블록에 E3 랭크 정규화 계약(손실 ≥ −0.01) 적용;
+    (c) §3.7 시작 조건(클릭 ≥2,000·요청 ≥5,000·탐색 슬롯 노출 ≥10,000) 충족 후 한국어 로그에서 같은 프로토콜로 신경망 − GBDT를 재측정해 **비열등**(CI 하한 > −0.005).
+  - **[KR-online]** (d) shadow 점수 병기 ≥4주 뒤 탐색 슬롯 replay CTR 쌍체 비교(E13 방식, 정확한 propensity)에서 신경망 shadow − GBDT shadow CI 하한 > 0;
+    (e) 한국어 로그의 유저 히스토리 길이 중앙값 ≥5 클릭 — 그 미만이면 시퀀스 모델은 E15 콜드 게이트 구간(k≤5)에서만 작동하므로 콜드 게이트 통과가 유일한 근거이고 활성은 미룬다.
+- 이 증거들이 없으면 E15 결과는 "[EB-NeRD]에서 측정된 오프라인 차이"로만 쓴다. "한국어 서비스에서 신경망이 낫다/못하다"는 어느 쪽으로도 쓰지 않는다.
+
+#### 4.1.7 실행 — Colab GPU(EB-NeRD 라이선스 범위 안), 예산 상한, 스모크 실측
+- **허용 범위**(2026-09-26 사용자 확인): 비공개 Colab 런타임에 **실행마다 업로드하고 실행 뒤 VM을 해제**한다. 저장소 커밋·공개 Kaggle 데이터셋·Drive 영구 사본 금지
+  (`colab drivemount`·`--keep` 사용 안 함), 리포트에 기사 텍스트 없음(v1과 동일). MacBook은 무거운 계산을 하지 않는다(로컬은 `--fake-dim` 단위 테스트·`make_report`만, `nice -n 19`).
+- **런타임**: T4(실측 1.07 CU/h; 표준 2 vCPU·RAM 12.7 GB·GPU 14.6 GB). v1 피크 메모리 10.1 GB(M2, replay·MMR 포함)이므로 E15는 단계별 스크립트(준비→npz 캐시 / 학습 / 평가)로
+  나눠 메모리를 돌려주고, 첫 실행에서 `psutil` 피크를 기록해 11 GB를 넘으면 `--high-mem`(CU/h 실측 기록)으로 옮긴다.
+- **실행 절차**(실행마다 동일, `scripts/e15_colab_run.sh`로 고정; 세션 생성 뒤 어떤 실패에도 `colab stop`을 부르는 trap):
+  1. `colab usage` → `cu_before` 기록. `colab new -s e15-<task>-<yyyymmdd> --gpu T4`.
+  2. `colab install -s … lightgbm==4.7.0 pyarrow psutil`(Colab 기본 lightgbm은 4.6.0이라 **반드시 고정**; torch는 Colab 기본값을 쓰고 버전을 기록 — 스모크 시점 2.11.0+cu128).
+  3. `colab upload`: 코드 tarball(`recsys_core/`, `evaluation/recsys/`, 하네스 커밋 SHA 파일), `ebnerd_small.zip`(80 MB, sha256 `84fc6fc9…bd4f`),
+     `derived/ebnerd_small/{bge_m3_tsb512.f16.npy(42 MB), article_ids.npy, bge_m3_tsb512.meta.json}`.
+  4. VM에서 sha256 검증(zip, npy는 meta의 `embeddings_sha256`·`article_ids_sha256`, 풀어낸 parquet 5개는 `ebnerd_v1.json data.files`) — 하나라도 다르면 즉시 중단·해제.
+  5. `colab exec -s … -f evaluation/recsys/ebnerd/run_neural.py --timeout 43200`(과제당 세션 1개: `--task p1` / `--task p2`; 진행 로그 stdout, 중간 산출물 `/content/out/`).
+  6. `colab download /content/out/ebnerd_v1_3_neural_<task>.json`(+ trial 로그) → 하네스 워크트리 `reports/recsys/`(현재
+     `/Users/brownee/Projects/newsletter-recsys/.claude/worktrees/wf_4c8228fa-9b4-2`; 하네스가 main/통합 브랜치에 들어간 뒤에는 그 브랜치의 같은 경로).
+  7. `colab rm` 데이터 파일 → `colab stop` → `colab sessions`가 비어 있는지 확인 → `colab usage` → `cu_after`. JSON `meta.compute = {gpu, driver, torch, cuda, cudnn, python, lightgbm,
+     numpy, cpu_count, ram_gb, wall_seconds, rate_cu_per_hour, cu_before, cu_after, cu_used}` — `cu_used`는 잔액 차(표시 해상도 0.01·지연 반영)와 `rate × wall`을 둘 다 적는다.
+- **환경 고정·결정론**: `torch.use_deterministic_algorithms(True)`, `CUBLAS_WORKSPACE_CONFIG=:4096:8`, `cudnn.benchmark=False`, seed별 generator로 초기화·배치 순서 고정,
+  numpy 네거티브 표집은 v1과 같은 `default_rng(1000+seed)`. 같은 GPU 종류에서는 같은 seed가 비트 단위로 재현된다(스모크 4/4 확인). GPU 종류가 바뀌면 비트 단위 재현은 기대하지
+  않으므로 한 실행의 seed 3개는 같은 GPU 종류에서 돌리고, 재현 기준은 "seed 평균이 보고된 CI 안"이다. LightGBM은 `num_threads`(Mac 6 vs Colab 2)에 따라 미세하게 달라질 수 있어
+  §4.1.1 재현 게이트로 확인한다. `requirements-colab.txt`에 lightgbm·numpy·pandas·pyarrow 버전을 적고 실행마다 실제 버전을 JSON에 남긴다.
+- **예산: E15 전체 ≤30 CU 상한**(≈28 T4-시간, 잔액 199.76 CU의 15%). 추정(스모크 실측 × fit 창 배수 5.22 × GPU 밖 오버헤드 1.2 — 시퀀스·스칼라 블록은 실행 전에 int32/f32 배열로
+  한 번 준비해 배치는 인덱스 슬라이스 → GPU gather이므로 CPU 오버헤드는 작다): NRMS-lite epoch ≈14 s, SASRec-lite ≈37 s. 튠 12 trial × 2 family × 2 과제 × ≤6 epoch ≈ 2.0 h;
+  최종 3 seed × 2 family × 2 과제 × ≤20 epoch ≈ 1.7 h; 스태킹 OOF 5 폴드 × 3 seed × 2 과제 ≈ 2.4 h(NRMS 선택 시)~6.0 h(SASRec); LightGBM(고정 2×3 seed + 튠 12×2 + 스태킹 2×3, 2 vCPU)
+  ≈ 2.5 h; 피처·시퀀스 준비 ≈ 0.5 h; 콜드 조건 채점 ≈ 0.5 h → **≈ 9.6~13.2 h ≈ 10~14 CU**, 상한의 절반. 실행 중 `rate × 경과 + 남은 단계 추정`이 24 CU(상한의 80%)를 넘을 것으로 보이면
+  그 시점에서 중단·해제하고 부분 결과만 기록한다. 실행마다 CU를 JSON에 남기고 ADR 0013 A3에 합계를 적는다.
+- **무엇을 어디서**: Mac = 코드·단위 테스트(`ebnerd_demo --fake-dim 16`, CPU, 수 초)·`make_report`. Colab GPU(T4) = E15 학습·평가. **M4 콜드 사슬 E1–E8도 Colab으로 옮길 수 있다**
+  (numpy+LightGBM만 필요 → CPU 런타임; `--high-mem` 필요 여부는 v1 피크 10.1 GB 기준으로 첫 실행에서 결정; CPU 런타임 CU/h는 그때 실측해 기록). 같은 업로드·검증·해제 절차를 쓴다.
+  M4·M4b가 Colab에서 도는 동안 Mac은 M5·M6 코드 작업을 한다.
+
+**스모크 실측**(2026-09-26 13:00–13:01 UTC; 스크립트 `docs/design/e15_colab_smoke.py`, 결과 `docs/design/e15_colab_smoke_result.json`). EB-NeRD는 업로드하지 않았고 ebnerd_demo 형태의
+무작위 텐서(기사 11,777×1024, 노출 24,724, 후보 30 패딩 / 1+20, 시퀀스 50, d=256, h=4, batch 256)만 썼다 — 손실 값은 무의미하고 시간·환경·결정론만 유효하다.
+
+| 항목 | 실측 |
+|---|---|
+| VM | Tesla T4 14.6 GB(capability 7.5), 드라이버 580.82.07, 2 vCPU, RAM 12.7 GB, x86_64 |
+| 소프트웨어(Colab 기본) | Python 3.13.15, torch 2.11.0+cu128, CUDA 12.8, cuDNN 9.19.0, numpy 2.1.3, pandas 2.2.3, **lightgbm 4.6.0**(로컬 4.7.0과 다름 → 고정 필요), pyarrow 23.0.1 |
+| 할당·실행 | `colab new` 4 s → READY, `colab exec` 벽시계 58 s(스크립트 자체 49.4 s), 세션 존속 ≈66 s, `colab stop` 뒤 `colab sessions` "No active sessions" |
+| NRMS-lite(592,128 학습 파라미터) | P1형 1 epoch(97 step) 2.21 s, P2형 2.09 s → small fit 창(×5.22) 추정 11.5 / 10.9 s; 20,000×235 채점 1.53 s; 피크 GPU 메모리 0.35 GB |
+| SASRec-lite(2층, 1,855,232) | 5.87 / 5.86 s → 30.6 s; 채점 2.45 s; 피크 0.78 GB |
+| 결정론 | 같은 seed 두 번 실행의 손실 합이 비트 단위로 동일 — 4/4(두 모델 × 두 과제형) |
+| 비용 | 세션 중 `colab usage` 사용률 **1.07 CU/h**; 시간 기준 ≈0.02 CU(+ 첫 시도에서 로컬 스크립트 오류로 빈 세션 40 s ≈0.012 CU) = **≈0.03 CU ≤ 1 CU**; 잔액 표시 199.76 → 199.76(해상도 0.01, 지연 반영 가능) |
+| 운영 메모 | colab CLI 0.7.2는 `jupyter_kernel_client` 불일치로 `exec`이 로컬에서 실패(VM은 정상 해제) → 0.7.4로 갱신 후 성공. 스모크는 `new`→`status`→`usage`→`exec`→`usage`→`stop`→`sessions`→`usage` 순서, 실패 시에도 `stop`을 부르는 trap 사용 |
+
+#### 4.1.8 코드 계획 — 재사용 / 신규(`evaluation/recsys/ebnerd/neural/`)
+- **재사용(수정 없음)**: `loaders.load_impressions/load_history_events/click_events`; `prepare.load_bench/protocol_windows/impressions_in/p1_task/p2_task/pool_negative_task/seen_mask/RankTask`;
+  `recsys_core.events.EventIndex.bounds`(마지막 N 클릭 gather), `recsys_core.features.compute_features`(스칼라 블록 = LightGBM 피처와 같은 행렬), `ItemCatalog.emb`(고정 벡터, L2 정규화 f32);
+  `evaluation.recsys.metrics.ranking_metrics/cluster_bootstrap/paired_bootstrap_diff/topk_items/intra_list_diversity/category_entropy/catalog_coverage`;
+  `run_ebnerd.MetricBank/SPLIT_SEED/_features/_list_metrics/_novelty`; `models.train/ABLATION/NEGATIVE_VARIANTS/TEAM_PARAMS/V2_FEATURES/feature_matrix/_order_and_groups`;
+  `make_report.ci/dci/table`. M4의 `--pop-mask`·`--hist-truncate` 평가 경로(콜드 조건)를 함수로 노출해 두 arm이 같은 것을 쓴다.
+- **신규**:
+  - `neural/sequences.py`: `last_n_clicks(user_log, users, cutoff, n) -> (items[n_req, n] int32, mask)`(오른쪽 정렬), `truncate_log(k)`, `scalar_block(feats, columns, stats)`, `standardization_stats(fit_feats)`.
+  - `neural/datasets.py`: `GroupBatches(task, seqs, scalars, labels, cand_ptr, batch_groups, seed)` — 가변 길이 후보 그룹 패딩(P1 ≤100, P2 학습 1+20, P2 평가 풀은 요청 단위 청크), seed별 결정론 순서.
+  - `neural/models.py`: `ItemProjection`, `NRMSLite`, `SASRecLite`, `DINLite`, `ScalarHead`, `listwise_loss` — 스모크 스크립트의 정의를 옮기고 `[EMPTY]`·스칼라 블록·온도를 추가.
+  - `neural/train.py`: `fit(spec, fit_batches, es_batches, seed, device, max_epochs, patience) -> TrainedNeural(state_dict, best_epoch, es_curve, seconds, n_params)`, `predict(task) -> scores[len(pairs)]`, `deterministic_setup(seed)`.
+  - `neural/tune.py`: `random_search(space, n_trials, seed=0)` + trial 로그(신경망·LightGBM 공통 인터페이스).
+  - `neural/stack.py`: `oof_scores(spec, fit_task, k=5, seed) -> (fit_scores, fold_models)`, `score_with_folds(fold_models, task)`, `stacked_spec(base_spec, 'neural_score_rank')`.
+  - `neural/cold.py`: 콜드 조건 5개를 두 arm에 같은 방식으로 적용하는 래퍼(M4 함수 호출).
+  - `neural/report.py`: `neural_verdict(d) -> {passed_by_task, comparisons(4), gates, selection}` + 표 렌더러(`make_report` 스타일).
+  - `run_neural.py`: `--dataset ebnerd_small --task p1|p2 --arms lgbm nrms sasrec din stack --trials 12 --seeds 0 1 2 --n-boot 1000 --stage prepare|train|evaluate|all --out-json …`;
+    JSON에 `meta.compute`, `protocol`(v1과 동일 항목), `selection`, `trials`, `p1|p2`, `diffs`, `cold`, `verdict`.
+  - `tests/recsys/test_neural_demo.py`(`ebnerd_demo --fake-dim 16`, CPU, 1 epoch): 두 경로의 `labels`·`cand_ptr` 동일성, OOF 비누출(폴드 모델이 자기 학습 유저를 채점하지 않음), CPU 비트 단위 반복 재현,
+    패딩 마스크가 점수에 영향 없음, k=0 절단이 `[EMPTY]` 경로를 탐.
+  - `scripts/e15_colab_run.sh`, `requirements-colab.txt`(§4.1.7).
+- **산출**: `reports/recsys/ebnerd_v1_3_neural.{json,md}`(표는 `neural/report.py`로 생성, 손으로 옮기지 않음), ADR 0013 A3(사전 등록 SHA·결과·판정·CU 합계), §3.4 D·E·I 갱신.
 
 ---
 
@@ -410,19 +578,21 @@ M0에서 merge revision(`down_revision = ('d48994e9d26e', '8b7f830013b7')`) 후 
 | M2 | 로그 v2 + 탐색 슬롯 + ScorerStack/shadow + OPE 추정기 + 폴백 단순화 + 피로 규칙(log) | M0 | 통합 테스트(200회 조인 1:1, propensity 합), [SIM] 로그 유실율 <0.5%, ADR 0025(제안됨) | ≈4일 |
 | M3 | recsys_core 서빙 어댑터 + 증분 프로필 상태 + parity 게이트 CI + 팀 레시피 은퇴 + 후보 구성 통일 + 모델 등록 스크립트 | M0, M2(로그 컬럼) | `reports/recsys/parity_v1.json`, CI job, shadow 점수가 slot 로그에 남는 통합 테스트, ADR 0033·0015 | 3일 |
 | M4 | EB-NeRD v1.2 콜드 regime(E1–E4, E6, E8; E5 선택) 사전 등록 → 1회 실행 | M0(하네스 코드), 사전 등록 커밋 | `reports/recsys/ebnerd_v1_2_cold.{json,md}`, ADR 0013 A2 결과, ADR 0031, k*·shadow 주모델 결정 | 3일 + 실행 ≈2h |
+| M4b | E15 신경망 사용자 모델 비교(§4.1): `neural/` 코드 + demo 테스트 → ADR 0013 A3 사전 등록 커밋 → Colab T4 실행(P1·P2 세션 각 1개, 실행마다 업로드·검증·해제·CU 기록) → 리포트·기계 판정 | M0(하네스 코드가 main/통합 브랜치에 있어야 함), M4(콜드 조건 평가 경로 `--pop-mask`·`--hist-truncate` 재사용); M5·M6와 병렬 | `reports/recsys/ebnerd_v1_3_neural.{json,md}`(`meta.compute`에 CU), ADR 0013 A3 결과·판정, §3.4 D·E·I 갱신, shadow 후보 채택 또는 수치 기록된 기각 | 3일 + Colab ≤30 CU(추정 10~14) |
 | M5 | 인기도·휴리스틱 재설계(E7, pop_ctr_shrunk, 배치 인기 랭킹 클릭 항) | M4 | ADR 0014(전환 규칙 사전 등록), `HeuristicWeights` 기본값 교체 커밋 | 1.5일 |
 | M6 | [SIM]·[LOAD] 증거(E9, E10, E11) | M2, M3 | `reports/sim/ope_validation.md`, `reports/serving/latency_v1.md`([LOAD-mac]), ADR 0016 한 문단, ADR 0019 증거 절 | 1.5일 |
 | M7 | 문서·규칙: ADR 0013 A2 판정 갱신(`promotion_verdict` 인자화 후 v1 재판정 표: lambdarank "기여"→"무시 가능", R3 기준선 popularity_6h로도 통과 +0.1518), ADR 0025 파워 표·전환 규칙·E13 사전 등록, 귀속 각주, 0003 상태 갱신 | M4~M6 | ADR diff, 재판정 표 | 1일 |
 | M8 | 조건부: E12 → I7 스토리 최소판; E14 인터리빙 A/A; 카테고리 캘리브레이션 선택 | 한국어 5~7일치, M2 | `reports/clustering/story_linking_v1.*`, ADR 0012 | 2일(조건부) |
 
-총 ≈16 작업일(+조건부 2일). M1은 M0과 병렬 가능. M4의 코드 변경은 M2·M3와 병렬 가능하나 실행은 M2 완료 후 노트북이 비는 시간에.
+총 ≈19 작업일(+조건부 2일). M1은 M0과 병렬 가능. M4의 코드 변경은 M2·M3와 병렬 가능하고, M4·M4b의 실행은 Colab에서 돌리므로(§4.1.7) 노트북 일정과 무관하다 —
+M4b의 Colab 실행(≈10~14 h)은 M5·M6 코드 작업과 겹쳐 진행한다.
 
 ---
 
 ## 6. 버릴 것 / 미룰 것
 
 **버림(이 계획에서 하지 않음)**
-- two-tower/NRMS·BGE-M3 미세조정·ID 임베딩, 세션 시퀀스 모델, LinUCB/Thompson 정책 학습(실트래픽 전).
+- BGE-M3 미세조정·ID 임베딩, LinUCB/Thompson 정책 학습(실트래픽 전). (NRMS-lite·SASRec-lite·GBDT 스태킹은 2026-09-26에 "버림"에서 "미룸"으로 옮겼다 — E15 측정 후 판정.)
 - 팀 레시피 `train` 잡의 운영 실행(ablation 시작 arm `team_binary`로만 보존, 성승우 원작 표기), `UserEmbedder`·`user_embed` 잡.
 - 팀 합성 데이터로 어떤 정확도 지표를 주장하는 것, `generator_split` 결과 인용.
 - LLM per-request 재랭커, LLM 판정을 클릭 라벨로 쓰는 경로.
@@ -437,7 +607,9 @@ M0에서 merge revision(`down_revision = ('d48994e9d26e', '8b7f830013b7')`) 후 
 - 카테고리 캘리브레이션 → MMR 대안 선택 과제, 스택 추가 금지.
 - 한국어 로그 자기 학습 → §3.7 시작 조건 충족 시.
 - [LOAD-arm] → OCI A1 확보 후(그 전엔 [LOAD-mac]만).
-- Optuna 튜닝 → 합성 목적함수 폐기, EB-NeRD es 구간으로만, M4 이후.
+- Optuna 튜닝 → 합성 목적함수 폐기, EB-NeRD es 구간으로만, M4 이후(E15의 12 trial 무작위 탐색이 첫 사례).
+- 신경망 사용자 모델(NRMS-lite/SASRec-lite/스태킹)의 shadow 후보 등록 → E15(§4.1) 판정 비교 CI 하한 > +0.005 AND 게이트 통과 시에만; 활성은 §4.1.6 [KR-eval]/[KR-online] 증거 후.
+  통과하지 못하면 수치와 함께 기각 기록(ADR 0013 A3)으로 종료.
 
 ---
 
@@ -449,6 +621,7 @@ M0에서 merge revision(`down_revision = ('d48994e9d26e', '8b7f830013b7')`) 후 
 | 0007 갱신 | 어드버서리얼 6건 반영(시드 수, 자리표시자, 퇴화 행 인용 삭제, 캐시 문구, best_iteration=1 지속) | 채택됨 | M1 | team_repro_v2 재실행 |
 | 0012 | 스토리 연속성과 추천 단위(뉴스레터 유지, story_id 정체성 계층, 적용 3가지, 불필요 시 기록) | 제안됨→E12 후 | §3.1 | story_linking_v1 |
 | 0013 A2 | EB-NeRD 보충 v1.2 콜드 regime 사전 등록(E1–E4, E6, E8; 최소 효과 크기 0.005; R3 기준선 popularity_6h; `promotion_verdict` 인자화·v1 재판정) | 채택됨(A2 결과 전 사전 등록) | §4 | ebnerd_v1_2_cold |
+| 0013 A3 | E15 신경망 사용자 모델 비교 사전 등록(arm A–E, 과제·네거티브 동일성, 튜닝 예산 12 trial/family, 판정 비교 4개·게이트, 언어 전이 caveat, Colab 실행 절차·≤30 CU 상한·CU 기록) → 결과·기계 판정(`neural_verdict`)·사후 변경 기록 | 채택됨(사전 등록; 결과 전 커밋) → 결과 후 "채택/기각 수치" 추가 | §4.1 | ebnerd_v1_3_neural, e15_colab_smoke_result |
 | 0014 | 활성 스코어러: 4항 휴리스틱 가중치 적합(두 조건), 전환 임계 규칙, 인기도 항(pop_clicks 원값 + shrunk CTR), MMR λ 잠정 0.5 재확인 | 제안됨→E7 후 | §3.4 C, §3.5 | heuristic_fit, E6 |
 | 0015 | 요청 시점 추천 설계(코드 14곳 참조): 후보 합집합·동적 창, 콜드 체인 k*, 폴백 `popular→recent→empty`, TTL 캐시(결정론 부분만), ScorerStack·shadow, `RECSYS_FEATURE_FN=recsys_core.serving`, 단기 상태 저장소 절(0017 흡수, 코드 주석 2곳 수정), 워커 수 규칙 | 채택됨(측정 대기→M6 후 채택됨) | §3.2·§3.4·§3.8 | latency_v1, parity_v1 |
 | 0016 | HNSW 미채택(exact scan p95 실측, 재검토 규모) | 채택됨 | §3.8 | latency_v1 한 표 |
@@ -477,9 +650,11 @@ M0에서 merge revision(`down_revision = ('d48994e9d26e', '8b7f830013b7')`) 후 
 | 검증된 랭커를 shadow로 서빙(점수 병기 로그), 활성은 사람 클릭 데이터에 적합한 휴리스틱 | 코드 없음 | M2 shadow 경로 + M5 E7 |
 | 요청 시점 추천 p95 < 300ms, 폴백률 <5% @20 RPS [LOAD-mac] | 코드 있음, 수치 없음 | M6 latency_v1 |
 | 사용자가 없을 때 무엇을 주장하지 않는가(절대 CTR·서비스 향상률·"배포됨"·"LightGBM 배포"를 쓰지 않는 규칙) | 규칙 문서화 대기 | M7 |
+| 신경망 사용자 모델(NRMS-lite/SASRec-lite/스태킹)과 GBDT를 같은 프로토콜·같은 정보·같은 튜닝 예산·사전 등록 판정으로 비교하고 결과가 어느 쪽이든 수치로 기록 [EB-NeRD] | 사전 등록 대기 | M4b. 통과해도 "우위"가 아니라 "ΔnDCG@10 +x [CI], 같은 프로토콜"로만; 미통과면 "측정 인프라와 수치가 있는 기각 근거"로 낮춰 말함 |
 
 **쓰면 안 되는 것(변동 없음)**: 한국어 절대 정확도, 서비스 CTR 향상률, 0.897 재현·설명, "LightGBM 배포/운영"(shadow 전),
-딥러닝 대비 우위, 다중 주(week) 일반화, EB-NeRD 리더보드 비교, 시뮬레이터 정확도, "MMR로 다양성 크게 개선", "정확도 손실 없이".
+딥러닝 대비 우위(E15가 두 과제 모두 통과하기 전까지; 통과해도 "[EB-NeRD] 같은 프로토콜에서 ΔnDCG@10 +x [CI]"라는 조건부 표현만, "신경망을 이겼다/썼다"는 없음),
+다중 주(week) 일반화, EB-NeRD 리더보드 비교(RecSys Challenge 2024 AUC 포함), 시뮬레이터 정확도, "MMR로 다양성 크게 개선", "정확도 손실 없이".
 
 ---
 
@@ -498,10 +673,22 @@ M0에서 merge revision(`down_revision = ('d48994e9d26e', '8b7f830013b7')`) 후 
 
 **데이터셋·대회**
 - EB-NeRD 데이터셋 논문: https://arxiv.org/abs/2410.03432
-- RecSys Challenge 2024 개요(시간 인식 피처+GBDT 앙상블이 상위권): https://arxiv.org/pdf/2409.20483
-- RecSys Challenge 2024 1위 해법: https://dl.acm.org/doi/abs/10.1145/3687151.3687160
+- RecSys Challenge 2024 1위 해법(팀 ":D" — Transformer + LightGBM + CatBoost 3단계, 시간 인식 피처; 리더보드 AUC는 우리 split과 비교 불가): https://arxiv.org/abs/2409.20483 ,
+  https://doi.org/10.1145/3687151.3687160
 - FeatureSalad(PoliMi) 공개 코드: https://github.com/recsyspolimi/recsys-challenge-2024-ekstrabladet
 - 교차언어 뉴스 추천 NaSE(zero-shot 전이): https://arxiv.org/html/2406.12634v1
+
+**신경망 사용자 모델·비교 방법론(E15)**
+- Wu et al. 2019 NRMS(multi-head self-attention 뉴스 추천): https://aclanthology.org/D19-1671/
+- Kang & McAuley 2018 SASRec(self-attentive sequential recommendation): https://arxiv.org/abs/1808.09781
+- Hidasi et al. 2016 GRU4Rec(세션 기반 RNN; E15에서는 SASRec-lite가 대표): https://arxiv.org/abs/1511.06939
+- Zhou et al. 2018 DIN(target attention): https://arxiv.org/abs/1706.06978
+- Chen et al. 2024 BGE M3-Embedding(다국어·다기능 임베딩; E15의 고정 아이템 벡터): https://arxiv.org/abs/2402.03216
+- Wolpert 1992 Stacked generalization(OOF 스태킹의 근거): https://doi.org/10.1016/S0893-6080(05)80023-1
+- Ferrari Dacrema, Cremonesi, Jannach 2019 "Are We Really Making Much Progress?"(신경망 추천 vs 튠된 기준선): https://arxiv.org/abs/1907.06902
+- Rendle, Krichene, Zhang, Anderson 2020 "Neural Collaborative Filtering vs. Matrix Factorization Revisited"(기준선 튠의 중요성): https://arxiv.org/abs/2005.09683
+- PyTorch 재현성 노트(`use_deterministic_algorithms`, `CUBLAS_WORKSPACE_CONFIG`): https://pytorch.org/docs/stable/notes/randomness.html
+- Colab CLI(`colab new/upload/exec/download/stop/usage`): https://github.com/googlecolab/colab-cli ; Colab 컴퓨트 유닛 FAQ: https://research.google.com/colaboratory/faq.html
 
 **오프폴리시 평가·탐색·위치 편향**
 - Li et al. 2010 LinUCB 뉴스 추천: https://arxiv.org/abs/1003.0146
