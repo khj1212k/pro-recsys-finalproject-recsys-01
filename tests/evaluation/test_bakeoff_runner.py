@@ -256,6 +256,21 @@ def test_cluster_eval_records_decision_and_confidence(tmp_path):
     assert row["article_ids"] == [0, 1, 2]
 
 
+def test_cluster_eval_records_whether_the_evaluator_actually_answered(tmp_path):
+    # ClusterEvaluator는 호출이 실패해도 FAIL(confidence 0.0)을 돌려준다 - ROC 분석이 이것을
+    # "매우 확신한 판정"으로 읽지 않도록 응답 파싱 여부를 따로 남긴다(ADR 0009 A3).
+    def fail(model, purpose, n):
+        if n == 1:
+            return LLMResult(text=None, parsed=None, usage=LLMUsage(), latency_s=0.1, attempts=3,
+                             provider="px", model=model, error="HTTP 503", http_status=503)
+    bo.run_cluster_eval(_items(2), tmp_path, {"provider": "px", "model": "judge-x"},
+                        client_factory=_factory([], **{"judge-x": {"fail": fail}}), pricing=PRICING,
+                        log=lambda *_: None)
+    first, second = _rows(tmp_path / "cluster_evals.jsonl")
+    assert (first["result"]["decision"], first["parsed"]) == ("FAIL", False)
+    assert second["parsed"] is True
+
+
 def test_blind_export_hides_candidates_and_keeps_the_key_separately(tmp_path):
     items = _items(2)
     run_dir, labels_dir = tmp_path / "run", tmp_path / "labels"

@@ -437,6 +437,8 @@ def run_cluster_eval(items, run_dir: Path, evaluator_spec: dict, *,
             "evaluator": evaluator_spec,
             # 워크플로우와 같은 순서의 기사 id - outlier_indices를 id로 되돌릴 때 쓴다
             "article_ids": [a.raw_news_id for a in item.articles],
+            # 호출 실패/휴리스틱도 FAIL을 돌려준다 - ROC 분석은 parsed=False 행을 뺀다(ADR 0009 A3)
+            "parsed": bool(client.calls) and client.calls[-1].parsed,
             "result": result,
             "calls": [asdict(c) for c in client.calls],
             "cost_usd": _cost(pricing, client.calls, on),

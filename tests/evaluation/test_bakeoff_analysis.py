@@ -219,3 +219,22 @@ def test_summary_has_no_generated_text():
     md = ba.summary_markdown(w.analyze())
     assert "삼성전자" not in md and A in md
     assert not math.isnan(w.analyze()["candidates"][A]["cost_per_100_usd"])
+
+
+def test_cluster_evaluator_analysis_drops_rows_where_the_evaluator_did_not_answer():
+    labels, rows = {}, []
+    for i in range(20):
+        single = i % 2 == 0
+        labels[f"i{i}"] = {"single_event": single}
+        rows.append({"item_id": f"i{i}", "evaluator": {"provider": "p", "model": "m"}, "parsed": True,
+                     "result": {"decision": "PASS" if single else "FAIL", "confidence": 0.9}})
+    for i in range(20, 26):
+        labels[f"i{i}"] = {"single_event": False}
+        # parsed 필드가 없는 행은 호출 기록(calls)으로 판단한다
+        rows.append({"item_id": f"i{i}", "evaluator": {"provider": "p", "model": "m"},
+                     "calls": [{"parsed": False}], "result": {"decision": "FAIL", "confidence": 0.0}})
+
+    out = ba.cluster_evaluator_analysis(rows, labels, PREREG)["p/m"]
+
+    assert out["auc"] == pytest.approx(1.0)
+    assert (out["n"], out["n_excluded_unparsed"]) == (20, 6)

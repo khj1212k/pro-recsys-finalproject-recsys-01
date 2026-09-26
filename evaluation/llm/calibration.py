@@ -329,12 +329,25 @@ def cluster_confidence_analysis(
     min_auc: float,
     min_gain: float,
     k: int = 2,
+    parsed: Optional[Sequence[bool]] = None,
 ) -> dict:
     """confidence 임계값 게이트가 기존 PASS/FAIL 결정보다 나은지 (ADR 0009 사전 등록 기준).
 
     기준선은 ClusterEvaluator의 PASS/FAIL 그대로의 balanced accuracy, 비교 대상은 점수
     s >= t (t는 학습 폴드에서 balanced accuracy 최대)의 out-of-fold balanced accuracy.
+
+    parsed가 False인 행(호출 실패 -> FAIL/0.0, 텍스트 휴리스틱 -> FAIL/0.1)은 뺀다(ADR 0009 A3).
+    점수 1 − c로 "가장 확신한 단일 사건"이 되어 AUC를 왜곡하는데, 판정이 아니고 운영에서는
+    어느 쪽 규칙이든 FAIL로 스킵되므로 두 규칙의 비교와도 무관하다. 개수는 따로 보고한다.
     """
+    n_excluded = 0
+    if parsed is not None:
+        keep = [i for i, ok in enumerate(parsed) if ok]
+        n_excluded = len(parsed) - len(keep)
+        decisions = [decisions[i] for i in keep]
+        confidences = [confidences[i] for i in keep]
+        single_event = [single_event[i] for i in keep]
+        groups = [groups[i] for i in keep]
     truth = [bool(x) for x in single_event]
     scores = [cluster_confidence_score(d, c) for d, c in zip(decisions, confidences)]
     baseline = balanced_accuracy(truth, [str(d).upper() == "PASS" for d in decisions])
@@ -355,6 +368,7 @@ def cluster_confidence_analysis(
     gain = oof_b - baseline
     return {
         "n": len(scores),
+        "n_excluded_unparsed": n_excluded,
         "auc": auc,
         "baseline_balanced_accuracy": baseline,
         "oof_balanced_accuracy": oof_b,

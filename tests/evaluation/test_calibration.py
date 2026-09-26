@@ -172,6 +172,38 @@ class TestClusterConfidence:
         assert out["gate_recommended"] is False
 
 
+class TestClusterConfidenceWithFailedCalls:
+    """호출 실패(FAIL, 0.0)나 텍스트 휴리스틱(FAIL, 0.1)은 점수 1 - c로 가장 확신한 단일 사건처럼
+    보인다. 이런 행은 판정이 아니므로 빼고 따로 센다(ADR 0009 A3)."""
+
+    @staticmethod
+    def _data():
+        decisions, confs, truth, parsed = [], [], [], []
+        for i in range(32):
+            single = i % 2 == 0
+            decisions.append("PASS" if single else "FAIL")
+            confs.append(0.6 + 0.01 * i)
+            truth.append(single)
+            parsed.append(True)
+        for i in range(6):
+            decisions.append("FAIL")
+            confs.append(0.0 if i % 2 else 0.1)
+            truth.append(False)
+            parsed.append(False)
+        return decisions, confs, truth, [f"c{i}" for i in range(38)], parsed
+
+    def test_failed_calls_would_otherwise_distort_the_auc(self):
+        d, c, t, g, _ = self._data()
+        naive = cal.cluster_confidence_analysis(d, c, t, g, seed=1, min_auc=0.75, min_gain=0.05)
+        assert naive["auc"] < 0.9
+
+    def test_failed_calls_are_excluded_and_counted(self):
+        d, c, t, g, parsed = self._data()
+        out = cal.cluster_confidence_analysis(d, c, t, g, seed=1, min_auc=0.75, min_gain=0.05, parsed=parsed)
+        assert out["auc"] == pytest.approx(1.0)
+        assert (out["n"], out["n_excluded_unparsed"]) == (32, 6)
+
+
 def test_intra_rater_kappa_uses_only_items_labeled_twice():
     first = {"a": True, "b": False, "c": True, "d": False}
     second = {"a": True, "b": False, "c": False}

@@ -223,3 +223,18 @@
    기준이고, `tone_drift`만 문체 변환본 기준이다(`docs/eval/labeling-guide.md`). judge v2와 결정론적
    검사기가 형식체 초안을 보므로 보정 대상과 라벨 대상이 같아야 κ가 의미가 있다. 실제 발행되는 캐주얼본의
    사실 보존은 G2(자동)와 `tone_drift`(사람)로 따로 본다.
+
+### A3 (2026-09-26) — ClusterEvaluator ROC에서 판정이 아닌 행 제외. 결과 열람: 해당 없음(bake-off 미실행)
+- 사유(리뷰 지적): `ClusterEvaluator`는 호출이 실패하면 FAIL·confidence 0.0을, JSON 파싱에 실패해
+  텍스트 휴리스틱을 쓰면 FAIL·0.1을 돌려준다. 점수 `s = 1 − confidence`(FAIL일 때)로는 각각 1.0·0.9가
+  되어 "가장 확신한 단일 사건"으로 정렬된다. 5xx·타임아웃·스키마 소진은 인프라 실패(실행 중단)가
+  아니라서 `cluster_evals.jsonl`에 그대로 남는다. 합성 확인(`tests/evaluation/test_calibration.py`의
+  `TestClusterConfidenceWithFailedCalls` 데이터): 완벽히 분리되는 판정 32개에 이런 행 6개(실제로는
+  단일 사건 아님)를 섞으면 AUC가 1.0에서 0.727로 떨어져 사전 등록 기준(AUC ≥ 0.75)을 밑돈다
+  (리뷰어의 별도 합성 예시에서는 0.667).
+- 변경: 러너가 행마다 `parsed`(응답이 스키마로 파싱됐는지)를 기록하고, 분석은 `parsed=False` 행을
+  AUC·기준선 balanced accuracy·OOF 임계값 계산에서 **모두 뺀 뒤 개수(`n_excluded_unparsed`)를 따로
+  보고**한다. 근거: 이 행들은 판정이 아니고, 운영에서는 기존 PASS/FAIL 규칙이든 confidence 게이트든
+  똑같이 FAIL(스킵)이 되므로 두 규칙을 비교하는 데 정보가 없다. 제외 비율 자체는 evaluator 신뢰성
+  지표로 결과에 함께 적는다.
+- 임계값(AUC ≥ 0.75, OOF balanced accuracy 향상 ≥ 0.05)과 폴드·seed는 바꾸지 않았다.

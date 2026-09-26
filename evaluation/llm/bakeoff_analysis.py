@@ -310,6 +310,14 @@ def _weighted(o1, o2) -> dict:
                                                      weights="linear")}
 
 
+def _evaluator_answered(row: dict) -> bool:
+    """ClusterEvaluator 응답이 스키마로 파싱됐는가. 러너가 남긴 parsed가 없으면 호출 기록으로 판단한다."""
+    if "parsed" in row:
+        return bool(row["parsed"])
+    calls = row.get("calls") or []
+    return bool(calls) and bool(calls[-1].get("parsed"))
+
+
 def cluster_evaluator_analysis(cluster_evals: Sequence[dict], cluster_labels: dict, prereg: dict) -> dict:
     cc = prereg["cluster_confidence"]
     out = {}
@@ -319,10 +327,10 @@ def cluster_evaluator_analysis(cluster_evals: Sequence[dict], cluster_labels: di
         if not rows:
             continue
         out[tag] = cal.cluster_confidence_analysis(
-            [r["result"]["decision"] for r in rows], [r["result"].get("confidence") or 0.0 for r in rows],
+            [r["result"]["decision"] for r in rows], [float(r["result"].get("confidence") or 0.0) for r in rows],
             [cluster_labels[r["item_id"]]["single_event"] for r in rows], [r["item_id"] for r in rows],
             seed=int(cc["fold_seed"]), min_auc=float(cc["min_auc"]), min_gain=float(cc["min_balanced_accuracy_gain"]),
-            k=int(cc["folds"]))
+            k=int(cc["folds"]), parsed=[_evaluator_answered(r) for r in rows])
     return out
 
 

@@ -1,7 +1,9 @@
 # 사전 등록(pre-registration) - docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md
 # 결과를 보기 전에 커밋된 값이다. evaluation/llm/bakeoff_analysis.py는 이 파일의
-# 상수만 읽어 규칙을 적용한다. 값을 바꾸려면 ADR 0009의 Addendum에 날짜/사유/
-# 결과 열람 여부를 남기고 새 id(bakeoff-v2 등)로 파일을 따로 만든다.
+# 상수만 읽어 규칙을 적용한다. 값을 바꿀 때는 ADR 0009의 Addendum에 날짜/사유/
+# 결과 열람 여부를 남긴다. bake-off를 한 번도 실행하지 않은 동안의 변경은 이 파일을
+# 고치고 아래 amendments에 기록한다(git 이력으로 원문 대조 가능). 실행(pre-flight 포함)이
+# 시작된 뒤의 변경은 새 id(bakeoff-v2 등)로 파일을 따로 만든다.
 id: bakeoff-v1
 registered_at: "2026-09-25"
 adr: docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md
@@ -10,6 +12,14 @@ amendments:
     date: "2026-09-26"
     results_viewed: false  # bake-off 미실행
     change: "judge 후보 gemini-3.1-flash-lite-v2 추가 (PR #6이 운영 judge 기본값을 이 모델로 교체)"
+  - id: A2
+    date: "2026-09-26"
+    results_viewed: false
+    change: "분석 정의 명확화 - 재라벨 kappa 미정의 시 대체 규칙 미발동, DiD 점수 정의, 라벨 대상은 형식체 초안(tone_drift만 변환본)"
+  - id: A3
+    date: "2026-09-26"
+    results_viewed: false
+    change: "ClusterEvaluator ROC에서 응답이 파싱되지 않은 행(호출 실패 FAIL/0.0, 휴리스틱 FAIL/0.1)을 제외하고 개수를 따로 보고"
 
 evalset:
   n_clusters: 40
