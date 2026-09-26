@@ -4,8 +4,10 @@
 > 부하 테스트 수치는 **[LOAD]**로 표시하며 측정한 하드웨어·대상 앱을 함께 적는다.
 
 ## 상태
-제안됨 (2026-09-26) — 아래 "사전 등록" 절은 지표 타당성 격자를 돌리기 **전에** 커밋했다.
-격자 결과가 나오면 "증거" 절을 채우고 상태를 갱신한다.
+채택됨 (2026-09-26). 아래 "사전 등록" 절은 지표 타당성 격자를 돌리기 **전에** 커밋했고(`b3b20e4`),
+격자 v1 결과를 "증거"에 채웠다: 사전 등록 판정 58건 중 위반 2건(둘 다 H5). 그에 따라 **drift 적응
+지표(`adapted_rate`, `requests_to_adapt_median`)는 "타당성 미확인"**이고, 나머지 지표는 장난감 정책 수준에서
+검증됐다. 부하 [LOAD] 수치는 아직 없다 — "재실행 대기(클라우드)".
 
 ## 컨텍스트
 - 실사용자가 없다. 추천 시스템이 "동작하는지"(신규 사용자에게 무엇을 보여주는지, 클릭에
@@ -127,6 +129,15 @@
   `--reset-stats`로 제외) 엔드포인트별 요청 수·달성 RPS·p50/p95/p99·오류율 표를 만든다.
   Locust는 2xx가 아니면 실패로 세므로, 계약상 기대 상태코드(재실행 시 signup 400)는 성공으로
   판정하도록 `ApiClient`가 `catch_response`를 쓴다.
+- Locust CSV는 어느 경로가 응답했는지 모른다. `/today` 응답의 `X-Rec-Source`와 빈 목록 여부를 단계마다
+  따로 세어(`SourceTally`, `--reset-stats`와 같은 구간) 지연 표 옆에 출처 분포·빈 응답률·폴백률 표를 붙인다.
+  폴백 정의는 행동 지표와 같고, 헤더가 없는 API에서는 0이 아니라 측정 불가로 적는다.
+- 실스택 부하는 **일회용 DB**에서만 돈다. `sim/seed.py`가 backend의 SQLModel 테이블로 합성 뉴스레터·
+  카테고리·온보딩 랭킹 행을 넣고, `@sim.invalid` 사용자마다 오늘 배치 행을 쓴다(밤 추천 잡 대역).
+  `news_raw`에 행이 있거나 합성이 아닌 사용자가 있으면 거부한다. 절차는 `sim/README.md` 3.3.
+- 실행 위치: 개발 Mac(응답성 유지를 위해 로컬 부하 금지)과 Tier 0 E2.1.Micro(1 GB, 유일한 수집기,
+  ADR 0026)에서는 돌리지 않는다. Tier 1 A1을 확보하면 수집 compose 프로젝트와 분리된 일회용 프로젝트에서
+  측정한다. CI는 가짜 앱 대상 6초 헤드리스 스모크만 돌린다(하네스 검증이지 성능 수치가 아니다).
 
 ## 사전 등록: 지표 타당성 격자
 
@@ -181,9 +192,89 @@
   깨지지 않는지 보는 회귀 점검이다.
 
 ## 증거
-(격자 실행 후 채움)
 
-### 기저 클릭률 (2026-09-26 로컬 실행, `python -m sim.calibration --ebnerd-dir ... --team-ctr-csv ...`)
+### 지표 타당성 격자 v1 (2026-09-26 로컬, [SIM])
+- 산출물: [`reports/sim/grid_v1.md`](../../reports/sim/grid_v1.md)·`.json` (판정 58건 전체와 정책별 지표 3시드
+  평균·최소·최대). 실행별 JSON은 커밋하지 않았다.
+- 실행: 사전 등록 그대로 G1(합성 카탈로그)·G2(팀 뉴스레터 195개, 실행마다 편향 재보정) 각 30회, 총 60회.
+  사전 등록 커밋(`b3b20e4`) 이후 격자 실행 커밋(`cea8e90`)까지 `sim/`에서 바뀐 것은 판정기(`sim/prereg.py`)
+  추가뿐이고 시뮬레이션 코드는 같다. 개발 Mac(M2)에서 `nice -n 19`, 워커 2개, G1 5분 19초·G2 4분 25초.
+  각 격자의 첫 1회(G1 random/default/시드 0, G2 reactive/default/시드 0)는 실행 시간을 재려고 먼저 따로 돌렸고
+  같은 출력 파일을 격자가 그대로 썼다. 그때 본 것은 실행 시간과 G2의 보정 결과뿐이다.
+  ```
+  python -m sim.experiments --out-dir <g1> --workers 2
+  python -m sim.experiments --out-dir <g2> --workers 2 --catalog team_archive --team-archive-dir data/team_archive --presets default
+  python -m sim.experiments --out-dir <g2> --workers 2 --catalog team_archive --team-archive-dir data/team_archive --presets category_only
+  python -m sim.prereg --runs-dir <g1> <g2> --out reports/sim/grid_v1 --git-sha cea8e90
+  ```
+- G2 보정: 시드별 편향 default −4.764 ~ −4.782, category_only −4.677 ~ −4.695, 무작위 top-10 2.00%,
+  오라클 6.2~6.7%(범위 안), 보정 시점 후보 54개.
+
+| 판정 | 합성·default | 합성·category_only | 팀·default | 팀·category_only |
+|---|---|---|---|---|
+| P1~P5 (시드별 전부) | 통과 | 통과 | 통과 | 통과 |
+| H1~H4, H6, H7 | 통과 | 통과 | 통과 | 통과 |
+| H5 drift | **위반** | 통과 | **위반** | 통과 |
+| H8 구조적 편향 (카탈로그별) | 통과: 2.58 > 1.98 | (같은 판정) | 통과: 1.90 > 1.87 | (같은 판정) |
+
+정책별 핵심 값(합성·default, 3시드 평균):
+
+| 정책 | 첫 응답 커버리지 | 첫 응답 온보딩 카테고리 비율 | 클릭 직후 Jaccard | similar_share_lift | 폴백률 | top-10 CTR |
+|---|---|---|---|---|---|---|
+| static_batch | 0 | - | 1 | 0 | 1.27% (= 빈 응답률) | 3.08% |
+| static_batch_fallback | 1 | 0.34 | 1 | 0.0000 | 1.54% | 3.06% |
+| reactive | 1 | 1.00 | 0.70 | 0.026 | 0 | 3.79% |
+| reactive_explore | 1 | 0.72 | 0.39 | 0.035 | 0 | 3.49% |
+| random | 1 | 0.35 | 0.05 | 0.004 | 0 | 1.47% |
+
+**H5 위반의 내용.** 합성·default: `adapted_rate` reactive 0.123 < static_batch 0.135(요청 수 중앙값은 3.83로 같음).
+팀·default: `adapted_rate`는 reactive 0.304 > 0.180이지만 `requests_to_adapt_median`이 2.33 > 1.67.
+사전 등록대로 정의를 바꾸지 않고 **지표의 약점**으로 기록한다. 원인으로 보이는 것(사후 해석, 검증하지 않음):
+1. 표본이 작다. 실행마다 drift 사용자 30명 중 drift 후 조회가 있는 사용자가 29~30명이라 1명이 약 3.4%p다.
+   합성·default의 차이(3시드 평균 1.2%p)는 1명 미만이다.
+2. `requests_to_adapt_median`은 적응한 사용자만의 중앙값이라, 적응률이 다른 정책끼리 비교하면 선택 편향이 있다.
+3. X1: 무작위 정책의 `adapted_rate`가 0.66~0.82로 어떤 정책보다 높다. "top-10의 50% 이상이 새 관심사가 된
+   **첫** 요청"이라는 정의는 목록의 요동을 재지 적응을 재지 않는다.
+4. 장난감 reactive 정책은 온보딩 카테고리에 감쇠 없는 가중치를 주고, drift 사용자는 온보딩을 다시 하지 않는다.
+   옛 관심사 목록만 보여 새 관심사 클릭이 드물어지는 착취 고리다 — 지표가 아니라 정책 쪽 원인일 수 있다.
+
+**판정 결과:** `drift.adapted_rate`, `drift.requests_to_adapt_median`은 **타당성 미확인** — 운영 시스템의 drift
+적응 근거로 쓰지 않는다. 다음 버전 후보(적용하지 않았고, 쓰려면 새 버전으로 먼저 사전 등록한다): drift 후
+요청 전체의 새 관심사 비율 평균에서 drift 전 값을 뺀 지속 지표, 무작위 정책을 우연 수준 기준선으로 둔 판정,
+drift 사용자 수 확대(예: 1,000명 또는 drift 30%).
+
+**X 항목과 등록하지 않은 관찰(있는 그대로, 주장 없음).**
+- X2: reactive / static_batch의 top-10 CTR — 합성 default 3.79% / 3.08%, 합성 category_only 2.90% / 2.09%,
+  팀 default 2.33% / 1.74%, 팀 category_only 2.26% / 1.72%.
+- X3: G2의 P·H 판정은 G1과 같다(H5가 default에서만 위반인 것까지 같음).
+- H7의 random CTR은 동적 시뮬레이션에서 합성 1.47%, 팀 1.2~1.23%로 정적 보정값 2%보다 낮다(반복 노출
+  피로·시간 경과). 사전 등록 범위 [1%, 3%] 안이다.
+- H8의 크기: 키워드 피처가 reactive를 random 대비 유리하게 만드는 정도가 합성 카탈로그(2.58 vs 1.98)에서
+  팀 카탈로그(1.90 vs 1.87)보다 훨씬 크다. 합성 카탈로그는 페르소나 키워드와 주제어를 같은 풀에서 뽑아
+  겹침이 구성상 참이기 때문으로 보인다 — 콘텐츠 기반 편향의 크기는 카탈로그에 크게 좌우된다.
+- reactive_explore의 `adapted_rate`는 합성에서 reactive보다 높고(default 0.236 vs 0.123), 팀에서는 낮다
+  (0.247 vs 0.304). drift 지표가 미확인이므로 결론을 내지 않는다.
+
+### 부하 테스트 [LOAD]
+수치 없음. 개발 Mac에서는 부하를 걸지 않기로 했고(2026-09-26), Tier 0은 대상이 될 수 없으며, A1은 아직
+확보하지 못했다(ADR 0026). CI의 헤드리스 스모크는 가짜 앱을 대상으로 한 하네스 동작 확인이다.
+
+> **재실행 대기(클라우드)** — A1 확보 후 `sim/README.md` 3.3 절차 그대로:
+> `docker compose -p newsletter-load --env-file .env.load up -d --build api` →
+> `python -m sim.seed --database-url "$LOAD_DB_URL" catalog --days 2` →
+> `python -m sim.loadtest --host http://127.0.0.1:8100 --rps 50 --duration 30s --out-dir out/load_warmup` →
+> `python -m sim.seed --database-url "$LOAD_DB_URL" batches` →
+> `python -m sim.loadtest --host http://127.0.0.1:8100 --rps 5 20 50 --duration 120s --out-dir out/load_v1` →
+> `docker compose -p newsletter-load --env-file .env.load down -v`. 결과는 `reports/serving/load_v1.md`에
+> VM 셰이프·부하 생성기 위치·대상 커밋과 함께 싣는다.
+
+### 테스트
+`tests/simulator/`(클릭 모델 수식, 시드 결정성, 페르소나 생성, 가짜 앱 대상 드라이버·지표, 실제 backend 라우터
+대상 계약 테스트와 `sim.seed`, 보정 회귀, 부하 사용자·출처 집계, 판정기)와
+`tests/integration/test_sim_seed_alembic_schema.py`(Alembic 스키마의 Postgres에서 시드, CI 통합 잡).
+로컬: 56 passed, 1 skipped(Locust 헤드리스 스모크는 CI 또는 `SIM_LOAD_SMOKE=1`에서만).
+
+### 기저 클릭률 (2026-09-26 로컬 실행, `python -m sim.calibration --ebnerd-dir ... --team-ctr-csv ...`, 출력 [`reports/sim/base_rates_v1.json`](../../reports/sim/base_rates_v1.json))
 | 출처 | 값 | 비고 |
 |---|---|---|
 | 시뮬레이터 default, 무작위 top-10 | 2.00% (b = −5.0177) | 보정 목표 |
@@ -198,9 +289,11 @@
 ### 이 시뮬레이터로 보일 수 있는 것
 - API 계약 수준의 **데이터 흐름**: 가입·온보딩·조회·클릭이 오류 없이 돌고, 클릭이 로그
   테이블까지 도달하는지(계약 테스트에서 클릭 ACK 수 = 로그 행 수).
-- 설계 차이에서 오는 **정성적 행동**: 신규 사용자가 빈 목록을 받는지, 클릭 후 목록이 바뀌는지,
-  관심이 바뀐 사용자를 며칠·몇 요청 만에 따라가는지, 폴백이 얼마나 자주 나가는지.
-  단, 이 판단은 지표 타당성 격자에서 해당 지표가 검증된 경우에만 쓴다.
+- 설계 차이에서 오는 **정성적 행동**: 신규 사용자가 빈 목록을 받는지(`first_view_coverage`), 클릭 후 목록이
+  바뀌는지(클릭 직후 Jaccard, `similar_share_lift`), 폴백·빈 응답이 얼마나 나가는지. 이 지표들은 격자 v1에서
+  장난감 정책들을 기대한 방향으로 구분했다(P1~P5, H1~H4 통과).
+  **관심이 바뀐 사용자를 따라가는지(drift 적응)는 격자 v1에서 H5가 깨져 타당성 미확인**이다 — 새 정의를
+  사전 등록해 다시 검증하기 전까지 근거로 쓰지 않는다.
 - 부하 [LOAD]: 주어진 하드웨어·대상에서 목표 RPS별 지연 분포와 오류율.
 - (예정) 오프폴리시 평가 파이프라인의 검증: 한 정책의 노출·propensity 로그로 다른 정책의 CTR을
   추정한 값이 시뮬레이터 안에서의 실측과 맞는지. 정답을 아는 환경이 필요할 때 쓰는 용도다.
@@ -219,5 +312,8 @@
   재생성본"을 반응성으로 셀 수 있으므로, 스토리 식별자가 생기기 전까지 실스택의 반응성 수치는
   이 위험을 적어 두고 해석한다.
 - **시간 모델 단순화.** 세션 시각은 하루 안에서 균등, 조회 간격 90초 고정, 요일·시간대 효과 없음.
-- 부하 수치는 측정한 대상에만 해당한다. 가짜 앱 대상 수치는 하네스 자체의 처리 능력이고,
-  실제 API 수치도 이 Mac·단일 uvicorn 워커·빈 캐시 조건의 값이다.
+- 부하 수치는 측정한 대상에만 해당한다. 가짜 앱 대상 수치는 하네스 자체의 처리 능력이고, 실제 API 수치도
+  측정한 VM·단일 uvicorn 워커·합성 시드 조건의 값이다. 합성 시드에는 임베딩이 없어 요청 시점 KNN 경로는
+  부하 테스트에서 타지 않는다(임베딩이 있는 콘텐츠 덤프를 복원해야 한다).
+- 격자는 장난감 정책을 구분하는지만 본다. "지표가 검증됐다"는 말은 "알려진 설계 차이를 구분한다"는
+  뜻이지, 운영 추천기의 품질을 잰다는 뜻이 아니다.
