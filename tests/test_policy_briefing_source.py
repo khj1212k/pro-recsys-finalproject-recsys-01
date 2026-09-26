@@ -77,6 +77,11 @@ def test_parse_reads_items_with_kst_approve_date():
     assert first.approve_date == datetime(2026, 9, 24, 10, 30, tzinfo=KST)
 
 
+@pytest.mark.parametrize("code", ["0", "00", "INFO-000"])
+def test_parse_accepts_zero_result_codes_as_success(code):
+    assert len(pb.parse_policy_news_xml(_response(_item("1"), code=code))) == 1
+
+
 def test_parse_raises_on_api_result_code_error():
     with pytest.raises(pb.PolicyBriefingAPIError) as exc:
         pb.parse_policy_news_xml(_response(code="98", msg="날짜범위 3일 초과"))

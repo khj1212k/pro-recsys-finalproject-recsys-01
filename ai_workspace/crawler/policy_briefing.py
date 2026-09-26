@@ -116,7 +116,9 @@ def parse_policy_news_xml(xml_text: str) -> List[PolicyNewsItem]:
 
     header = root.find("header")
     code = _text(header, "resultCode")
-    if code and not (code.isdigit() and int(code) == 0):
+    # 성공 코드 표기는 명세에 없다("0"/"00"/"INFO-000" 등이 쓰인다) - 숫자가 모두 0이면 성공으로 본다.
+    digits = re.sub(r"\D", "", code)
+    if code and not (digits and int(digits) == 0):
         raise PolicyBriefingAPIError(code, _text(header, "resultMsg"))
 
     items = []
