@@ -50,8 +50,9 @@ class NewsletterEval(BaseModel):
 
 
 class CriterionScores(BaseModel):
-    """judge v2 기준별 점수(1~5). 정의는 docs/eval/labeling-guide.md와 같다 - 사람
-    라벨과 judge를 같은 척도로 비교(보정)하기 위해서다(ADR 0009/0010)."""
+    """judge v2 기준별 점수(1~5). 사람 라벨(docs/eval/labeling-guide.md)과 대응시켜 보정한다
+    (ADR 0009/0010): faithfulness↔사실 오류 구간, coverage↔핵심 사실 커버리지,
+    coherence·style↔문장·구성 품질 1~5(가이드 2.3의 1/3/5 기준점이 프롬프트의 기준점과 같다)."""
 
     faithfulness: int
     coverage: int

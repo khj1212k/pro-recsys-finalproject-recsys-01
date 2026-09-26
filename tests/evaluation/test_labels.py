@@ -69,6 +69,21 @@ def test_cluster_label_rules(labels_dir):
     s.save("cluster", "r1-c0", 1, {"single_event": False, "outlier_ids": [3], "key_facts": []})
 
 
+def test_cluster_label_rules_from_the_labeling_guide(labels_dir):
+    # docs/eval/labeling-guide.md: single_event는 ClusterEvaluator PASS와 같은 정의(이상치 없이 전체가
+    # 한 사건). 이상치가 있으면 N이지만, 주된 사건이 있으면 그 핵심 사실은 3~6개 적는다.
+    s = LabelStore(labels_dir, now=Clock(T0))
+    with pytest.raises(LabelError, match="이상치"):
+        s.save("cluster", "r1-c0", 1, {**_cluster_label(), "outlier_ids": [3]})
+    with pytest.raises(LabelError, match="3~6"):
+        s.save("cluster", "r1-c0", 1, {**_cluster_label(n=2), "single_event": False, "outlier_ids": [3]})
+    with pytest.raises(LabelError, match="이상치 기사만"):
+        s.save("cluster", "r1-c0", 1, {"single_event": False, "outlier_ids": [3],
+                                       "key_facts": [{"text": f"사실 {k}", "source_ids": [3 if k == 0 else 1]}
+                                                     for k in range(3)]})
+    s.save("cluster", "r1-c0", 1, {**_cluster_label(ids=(1, 2)), "single_event": False, "outlier_ids": [3]})
+
+
 def test_output_needs_its_cluster_label_first_and_valid_fact_indexes(labels_dir):
     s = LabelStore(labels_dir, now=Clock(T0))
     with pytest.raises(LabelError, match="클러스터 라벨"):

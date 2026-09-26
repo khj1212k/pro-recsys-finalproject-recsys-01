@@ -122,12 +122,12 @@ function renderCluster(task) {
   notes.value = ex.notes || "";
   const form = el("div", {},
     el("h2", {text: `클러스터 라벨 · ${task.target_id}`}),
-    el("fieldset", {}, el("legend", {text: "하나의 사건인가?"}),
+    el("fieldset", {}, el("legend", {text: "하나의 사건인가? (이상치가 하나라도 있으면 아니오)"}),
       radio("single_event", "true", "예", ex.single_event === true), radio("single_event", "false", "아니오", ex.single_event === false)),
     el("fieldset", {}, el("legend", {text: "이상치(다른 사건) 기사"}),
       ...ids.map(id => { const c = el("input", {type: "checkbox", name: "outlier", value: id}); c.checked = ex.outlier_ids.includes(id);
                           return el("label", {}, c, ` ${id}  `); })),
-    el("fieldset", {}, el("legend", {text: "핵심 사실 3~6개 (단일 사건일 때 필수)"}), facts,
+    el("fieldset", {}, el("legend", {text: "핵심 사실 3~6개 (주된 사건이 있으면 필수, 이상치 기사는 근거로 쓰지 않음)"}), facts,
       el("button", {type: "button", onclick: () => addFact(), text: "+ 핵심 사실"})),
     notes,
     el("p", {}, el("button", {class: "primary", onclick: () => submit("cluster", task.target_id, {

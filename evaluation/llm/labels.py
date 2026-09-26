@@ -169,8 +169,17 @@ class LabelStore:
             bad += [i for f in label.key_facts for i in f.source_ids if i not in ids]
             if bad:
                 raise LabelError(f"이 클러스터에 없는 기사 id: {sorted(set(bad))}")
+            # 규칙은 docs/eval/labeling-guide.md "클러스터 라벨"과 같다
+            if label.single_event and label.outlier_ids:
+                raise LabelError("단일 사건(Y)은 이상치가 없는 클러스터입니다 - 이상치가 있으면 N으로 표시하세요")
             if label.single_event and not 3 <= len(label.key_facts) <= 6:
                 raise LabelError("단일 사건 클러스터는 핵심 사실 3~6개가 필요합니다")
+            if label.key_facts and not 3 <= len(label.key_facts) <= 6:
+                raise LabelError("핵심 사실은 적지 않거나(주된 사건 없음) 3~6개를 적습니다")
+            outliers = set(label.outlier_ids)
+            only_outliers = [f.text for f in label.key_facts if set(f.source_ids) <= outliers]
+            if only_outliers:
+                raise LabelError(f"이상치 기사만 근거로 든 핵심 사실: {only_outliers}")
             return label.model_dump()
 
         out = self.outputs_by_id.get(target_id)
