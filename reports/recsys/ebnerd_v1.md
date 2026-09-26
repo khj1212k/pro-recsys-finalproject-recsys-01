@@ -238,8 +238,19 @@ popularity_6h·recency·popularity_24h·cosine 상위 50개 합집합(평균 121
 | union@100 | 0.2691 [0.2645, 0.2733] | 0.5148 [0.5075, 0.5217] |
 | union@200 | 0.2687 [0.2640, 0.2728] | 0.5144 [0.5071, 0.5213] |
 
-출처 합집합 밖 후보를 맨 뒤로 보내도 nDCG@10이 떨어지지 않는다(union@50 0.2700 vs 전체 풀 0.2686). 후보 생성으로 풀을 절반으로
-줄여도 된다는 근거다(요청 시점 계산량 절감).
+출처 합집합 밖 후보를 맨 뒤로 보내도 nDCG@10 **점 추정치**는 떨어지지 않았다(union@50 0.2700 vs 전체 풀 0.2686). 다만 v1은
+두 값 각각의 CI만 냈고, 이 보고서의 다른 비교와 달리 같은 요청에서의 쌍체 차이 CI는 계산하지 않았다(쌍체 CI 미계산).
+CI가 겹친다는 것은 차이가 없다는 증거가 아니므로, "후보 생성으로 풀을 절반으로 줄여도 된다"(요청 시점 계산량 절감)는
+**잠정** 근거로만 쓴다.
+
+> **재실행 대기** — 쌍체 차이(`p2_two_stage.union@k.paired_vs_full_pool`, 같은 점수·같은 요청의 전체 풀 랭킹 대비)는
+> 코드에 추가했지만 이 수치는 아직 없다. 전체 재학습(약 1시간, 피크 메모리 약 10GB)이라 맥 가벼운 모드 중에는 돌리지 않았고,
+> EB-NeRD는 라이선스상 이 Mac 밖으로 옮기지 않으므로 가벼운 모드가 풀린 뒤 이 Mac에서 실행한다. v1이 고른 모델만 같은 seed로
+> 다시 학습한다(학습은 결정적 — v1.1에서 겹치는 모델 수치가 v1과 같게 재현됨):
+> `EBNERD_ROOT=<repo>/data/benchmarks/ebnerd .venv/bin/python -m evaluation.recsys.ebnerd.run_ebnerd --dataset ebnerd_small
+> --seeds 0 1 2 --n-boot 1000 --p2-sample 20000 --p2-select-sample 5000 --mmr-sample 3000 --threads 6
+> --only-models ranker_v2_poolneg --skip replay --out-json reports/recsys/ebnerd_v1_2_two_stage.json`
+> (확인할 것: union@50 nDCG@10이 0.2700으로 재현되는지, 그다음 쌍체 ΔnDCG@10의 CI.)
 
 ## 6. MMR λ 스윕 (ranker_v2_poolneg seed 0, P2 3,000 요청)
 
