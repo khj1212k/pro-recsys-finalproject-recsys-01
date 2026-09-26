@@ -3,9 +3,11 @@
 In-process fake app (no server needed):
     python -m sim.run --target fake --policy reactive --users 300 --days 7 --seed 0 --out out/sim.json
 
-Against a running stack (disposable DB only - this creates users and click logs):
-    python -m sim.run --target http://localhost:8000 --users 50 --days 3 \
-        --day-end-cmd "docker compose exec -T airflow airflow dags trigger newsletter_ranking" \
+Against a running stack (disposable DB only - this creates users and click logs;
+sim/README.md has the full procedure). The day-end command stands in for the
+nightly job that writes news_letter_today_batch:
+    python -m sim.run --target http://127.0.0.1:8100 --users 50 --days 3 \
+        --day-end-cmd "python -m sim.seed --database-url $LOAD_DB_URL batches" \
         --out out/sim_stack.json
 """
 
