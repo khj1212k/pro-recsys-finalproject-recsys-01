@@ -56,3 +56,105 @@ def test_collect_policy_briefing_inserts_body_and_is_idempotent(database_url, pg
         with pg_conn.cursor() as cur:
             cur.execute("DELETE FROM news_raw WHERE raw_news_url = %s", (url,))
             cur.execute("DELETE FROM press WHERE press_name = %s", (press_name,))
+
+
+# 수집 런타임 브랜치(PR #8)의 f87f7378672e·d48994e9d26e가 news_raw에 더하는 컬럼·인덱스와 같은 정의.
+# main의 Alembic head에는 없으므로 이 테스트 동안만 만들고, 이 테스트가 만든 것만 되돌린다
+# (그 브랜치가 병합돼 이미 있으면 건드리지 않는다).
+_RUNTIME_COLUMNS = [
+    ("raw_news_extract_status", "varchar(16)"),
+    ("raw_news_extracted_at", "timestamptz"),
+    ("raw_news_extract_attempts", "smallint NOT NULL DEFAULT 0"),
+    ("raw_news_content_sha256", "varchar(64)"),
+]
+_RUNTIME_INDEX = "uq_news_raw_content_sha256_ok"
+
+
+def _xml_items(*items):
+    nodes = "".join(
+        f"""<NewsItem>
+  <NewsItemId>{news_id}</NewsItemId><ContentsStatus>I</ContentsStatus>
+  <ApproveDate>09/24/2026 10:30:00</ApproveDate>
+  <Title>합성 정책뉴스 {news_id}</Title><ContentsType>H</ContentsType>
+  <DataContents><![CDATA[<p>{body}</p>]]></DataContents>
+  <OriginalUrl>https://www.korea.kr/news/policyNewsView.do?newsId={news_id}</OriginalUrl>
+  <KoglType>1</KoglType>
+</NewsItem>"""
+        for news_id, body in items
+    )
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<response><header><resultCode>0</resultCode><resultMsg>OK</resultMsg></header>
+<body>{nodes}<totalCount>{len(items)}</totalCount></body></response>"""
+
+
+def test_collect_on_runtime_schema_stores_rows_as_extracted_and_skips_same_body(database_url, pg_conn, monkeypatch):
+    from crawler import policy_briefing as pb
+
+    tag = uuid.uuid4().hex[:10]
+    a, b, c = f"itA{tag}", f"itB{tag}", f"itC{tag}"
+    same_body = f"합성 정책뉴스 공통 문단 {tag}. " * 30
+    other_body = f"합성 정책뉴스 다른 문단 {tag}. " * 30
+    urls = [f"https://www.korea.kr/news/policyNewsView.do?newsId={i}" for i in (a, b, c)]
+    press_name = f"정책브리핑-itest-{uuid.uuid4().hex[:6]}"
+    monkeypatch.setenv(pb.SERVICE_KEY_ENV, "itest-key")
+
+    def fake_fetch(service_key, start, end):
+        # b는 a와 본문이 같고 URL만 다르다(같은 기사가 두 주소로 나오는 경우)
+        return pb.parse_policy_news_xml(_xml_items((a, same_body), (b, same_body), (c, other_body)))
+
+    added_columns, added_index = [], False
+    with pg_conn.cursor() as cur:
+        cur.execute("SET lock_timeout = '10s'")  # 다른 연결이 잡고 있으면 멈추지 말고 실패
+        cur.execute(
+            """SELECT column_name FROM information_schema.columns
+               WHERE table_schema = current_schema() AND table_name = 'news_raw'"""
+        )
+        existing = {r[0] for r in cur.fetchall()}
+        cur.execute("SELECT 1 FROM pg_indexes WHERE indexname = %s", (_RUNTIME_INDEX,))
+        index_existed = cur.fetchone() is not None
+    now = datetime(2026, 9, 26, 12, 0, tzinfo=KST)
+    try:
+        with pg_conn.cursor() as cur:
+            for name, ddl in _RUNTIME_COLUMNS:
+                if name not in existing:
+                    cur.execute(f"ALTER TABLE news_raw ADD COLUMN {name} {ddl}")
+                    added_columns.append(name)
+            if not index_existed:
+                cur.execute(
+                    f"CREATE UNIQUE INDEX {_RUNTIME_INDEX} ON news_raw (raw_news_content_sha256) "
+                    "WHERE raw_news_extract_status = 'ok'"
+                )
+                added_index = True
+
+        first = pb.collect_policy_briefing(days=1, now=now, fetch=fake_fetch, press_name=press_name)
+        second = pb.collect_policy_briefing(days=1, now=now, fetch=fake_fetch, press_name=press_name)
+
+        # b는 본문 해시 인덱스에 걸려 배치를 롤백시키지 않고 건너뛴다
+        assert (first["inserted"], first["skipped"]) == (2, 1)
+        assert (second["inserted"], second["skipped"]) == (0, 3)
+
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                """SELECT raw_news_url, raw_news_extract_status, raw_news_extracted_at IS NOT NULL,
+                          raw_news_extract_attempts,
+                          raw_news_content_sha256 = encode(sha256(convert_to(raw_news_content, 'UTF8')), 'hex')
+                   FROM news_raw WHERE raw_news_url = ANY(%s) ORDER BY raw_news_url""",
+                (urls,),
+            )
+            rows = cur.fetchall()
+        assert [r[0] for r in rows] == sorted([urls[0], urls[2]])
+        for _url, status, has_extracted_at, attempts, hash_matches_sql in rows:
+            # 추출기(WHERE raw_news_extract_status IS NULL ...)가 다시 내려받지 않는 상태
+            assert status == "ok"
+            assert has_extracted_at
+            assert attempts == 0
+            # 파이썬 해시가 마이그레이션 d48994e9d26e의 SQL 식과 같은 값
+            assert hash_matches_sql is True
+    finally:
+        with pg_conn.cursor() as cur:
+            cur.execute("DELETE FROM news_raw WHERE raw_news_url = ANY(%s)", (urls,))
+            cur.execute("DELETE FROM press WHERE press_name = %s", (press_name,))
+            if added_index:
+                cur.execute(f"DROP INDEX IF EXISTS {_RUNTIME_INDEX}")
+            for name in reversed(added_columns):
+                cur.execute(f"ALTER TABLE news_raw DROP COLUMN IF EXISTS {name}")

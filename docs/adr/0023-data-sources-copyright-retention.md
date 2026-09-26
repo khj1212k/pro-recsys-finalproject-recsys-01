@@ -122,7 +122,11 @@
   - 이미지, figure, figcaption, 스크립트를 지운다. 사진·이미지는 공공누리 대상이 아니다.
   - 블록 요소 경계에만 공백을 넣는다. 인라인 태그 경계에 공백을 넣으면 "정부는" 같은 어절이 쪼개진다.
   - 결과는 다른 언론사 본문과 같은 형태(모든 공백을 한 칸으로)다.
-- 본문을 API가 주므로 본문 추출(Stage2)을 거치지 않고 `news_raw`에 바로 넣는다. `ON CONFLICT (raw_news_url) DO NOTHING`이라 재실행해도 안전하다. press 행 `정책브리핑`은 시드에 추가했고, 기존 DB에서는 수집 시 get-or-create로 만든다.
+- 본문을 API가 주므로 본문 추출(Stage2)을 거치지 않고 `news_raw`에 바로 넣는다. press 행 `정책브리핑`은 시드에 추가했고, 기존 DB에서는 수집 시 get-or-create로 만든다.
+- INSERT는 스키마를 보고 만든다. 수집 1회마다 `information_schema.columns`를 한 번 조회한다.
+  - `main` 스키마: `ON CONFLICT (raw_news_url) DO NOTHING`. 재실행해도 안전하다.
+  - 수집 런타임 브랜치(PR #8)의 컬럼이 있으면 `raw_news_extract_status='ok'`, `raw_news_extracted_at=now()`, `raw_news_content_sha256`(UTF-8 본문의 sha256 hex, 마이그레이션 `d48994e9d26e`와 같은 식)을 함께 넣는다. 그 브랜치의 본문 추출기는 상태가 비어 있는 행을 원문 페이지에서 다시 내려받아 본문을 덮어쓰는데, 이렇게 넣은 행은 대상이 아니다. 따라서 API 본문(사진 캡션이 빠진 공공누리 텍스트)이 웹 추출 결과로 바뀌지 않는다.
+  - 그 스키마에는 `'ok'` 행끼리 본문 해시가 유일해야 하는 부분 unique 인덱스가 있다. 대상을 `raw_news_url`로 좁히면 본문이 같은 기사 한 건 때문에 배치 전체가 롤백된다. 그래서 대상 없는 `ON CONFLICT DO NOTHING`을 쓴다. URL이나 본문이 이미 있는 행은 `skipped`로 센다.
 - `Stage1_RSSCollection`이 RSS 다음에 호출한다. 이 출처가 실패해도 RSS 결과는 버리지 않고 에러만 기록한다.
 
 ### 30일 본문 보존
@@ -137,9 +141,11 @@
 - RSS 채널 저작권 표시: 2026-09-26에 `feedparser`로 8개 피드의 채널 `copyright` 요소를 읽었다(값은 컨텍스트 절).
 - 본문 저장량: 컨텍스트 절 표. 로컬 compose DB에서 `default_transaction_read_only=on` 연결의 SELECT로 집계했다. 본문 텍스트는 출력하지 않았다.
 - 테스트:
-  - `tests/test_policy_briefing_source.py` 27건. 파싱, 성공 코드 표기 3가지, 두 종류의 에러 봉투, 날짜 창, 공공누리 유형 정규화, HTML 정제, 선별 통계, 키 비노출, 5xx 재시도, 키 없을 때 no-op, INSERT, Stage1 연결을 확인한다. XML은 명세 필드 이름으로 만든 합성 응답이다.
+  - `tests/test_policy_briefing_source.py` 29건. 파싱, 성공 코드 표기 3가지, 두 종류의 에러 봉투, 날짜 창, 공공누리 유형 정규화, HTML 정제, 선별 통계, 키 비노출, 5xx 재시도, 키 없을 때 no-op, INSERT, 스키마별 INSERT 컬럼(main / 수집 런타임), Stage1 연결을 확인한다. XML은 명세 필드 이름으로 만든 합성 응답이다.
   - `tests/test_source_licenses.py` 4건.
-  - `tests/integration/test_policy_briefing_insert.py` 1건: 실제 `news_raw`/`press` 스키마에서 본문 저장과 재실행 멱등성을 확인한다. 이 작업 전용 임시 pgvector 컨테이너에서 `alembic upgrade head` 후 통합 테스트 16건 전부 통과(수집 중인 compose DB는 건드리지 않음). CI integration 잡에서도 돈다.
+  - `tests/integration/test_policy_briefing_insert.py`
+    - 1건: 실제 `news_raw`/`press` 스키마에서 본문 저장과 재실행 멱등성을 확인한다. 이 작업 전용 임시 pgvector 컨테이너에서 `alembic upgrade head` 후 통합 테스트 16건 전부 통과(수집 중인 compose DB는 건드리지 않음). CI integration 잡에서도 돈다.
+    - 1건: 수집 런타임 브랜치의 컬럼 4개와 부분 unique 인덱스를 테스트 동안만 만든다. 그 상태에서 상태 `ok`·추출 시각·해시(SQL 식과 일치)가 채워지는지, 본문이 같은 두 번째 URL이 배치를 롤백시키지 않고 건너뛰어지는지 확인한다. 로컬에서는 돌리지 않았고 CI integration 잡에서 돈다.
 
 ## 결과와 한계
 - **정책브리핑은 아직 한 건도 수집하지 않았다.**
@@ -203,5 +209,5 @@
    - 두 번째 실행: 0행을 갱신한다.
 
 ### 병합 시 확인할 것
-- 수집 런타임 브랜치와 병합한 뒤, 정책브리핑 수집기가 넣는 행에도 `raw_news_extract_status='ok'`, `raw_news_extracted_at`, `raw_news_content_sha256`을 채워야 한다. 그렇지 않으면 그 브랜치의 본문 추출기가 상태가 비어 있는 이 행들을 다시 내려받아 API 본문을 웹 추출 결과로 덮어쓴다.
-- 그 브랜치의 `jobs.run ingest`는 `collect_rss`를 직접 부른다. 따라서 정책브리핑 수집을 ingest 단계로 따로 연결해야 한다(`Stage1_RSSCollection` 연결은 `main.py` 경로에만 적용된다).
+- (코드로 처리함) 정책브리핑 행의 추출 상태·시각·해시는 위 "스키마를 보고 만드는 INSERT"가 채운다. 병합 후에는 CI의 `alembic upgrade head`에 컬럼이 이미 있으므로, 통합 테스트는 컬럼을 새로 만들지 않고 그대로 확인한다.
+- (병합하는 쪽이 할 일) 그 브랜치의 `jobs.run ingest`는 `collect_rss`를 직접 부른다. 따라서 `jobs/tasks/ingest.py`의 rss 단계 뒤에 `collect_policy_briefing()`을 따로 연결해야 한다. `Stage1_RSSCollection`처럼 예외를 잡아 `ctx.stats["policy_briefing"]`에 에러만 남기고, RSS 결과는 버리지 않는다. 지금의 연결은 `main.py` 경로(`Stage1_RSSCollection`)에만 적용된다. 이 브랜치는 `main` 기준이라 그 파일이 없어서 여기서 고칠 수 없다.

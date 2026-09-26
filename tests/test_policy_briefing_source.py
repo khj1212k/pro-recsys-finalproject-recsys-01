@@ -2,7 +2,9 @@
 # korea.kr RSS는 2026-07-01에 중단됐고, 같은 콘텐츠를 공공데이터포털 Open API
 # (문화체육관광부_정책브리핑_정책뉴스_API, 공공누리 제1유형)로 받는다.
 # 아래 XML은 API 명세(swagger)의 필드 이름으로 만든 합성 응답이다 - 실제 기사 본문이 아니다.
+import hashlib
 import os
+import re
 import sys
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
@@ -254,6 +256,106 @@ def test_collect_inserts_selected_rows_with_on_conflict_and_counts(monkeypatch):
     assert "ON CONFLICT (raw_news_url) DO NOTHING" in sql
     assert {r[0] for r in rows} == {42}
     conn.commit.assert_called_once()
+
+
+# --------------------------------------------------------------------------- 스키마별 INSERT
+
+# main(e725a62ffef1)의 news_raw 컬럼
+MAIN_NEWS_RAW_COLUMNS = {
+    "raw_news_id", "press_id", "raw_news_title", "raw_news_content", "raw_news_url",
+    "raw_news_created_at", "raw_news_crawled_at", "embedding_result",
+}
+# 수집 런타임 브랜치(PR #8)의 f87f7378672e·d48994e9d26e 적용 후
+RUNTIME_NEWS_RAW_COLUMNS = MAIN_NEWS_RAW_COLUMNS | {
+    "raw_news_extract_status", "raw_news_extracted_at", "raw_news_extract_attempts",
+    "raw_news_content_sha256",
+}
+
+
+class _FakeCursor:
+    """information_schema 조회와 press 조회에만 답하는 커서. INSERT는 execute_values를 가로채 본다."""
+
+    def __init__(self, columns):
+        self.columns = columns
+        self.queries = []
+        self._result = []
+
+    def execute(self, sql, params=None):
+        self.queries.append(sql)
+        if "information_schema.columns" in sql:
+            self._result = [(c,) for c in sorted(self.columns)]
+        elif "SELECT press_id FROM press" in sql:
+            self._result = [(42,)]
+        else:
+            self._result = []
+
+    def fetchall(self):
+        return list(self._result)
+
+    def fetchone(self):
+        return self._result[0] if self._result else None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _inserted_rows(sql, template, rows):
+    """INSERT 컬럼 목록과 템플릿 슬롯을 맞춰 "어느 컬럼에 무엇이 들어가는지"로 풀어 쓴다."""
+    columns = [c.strip() for c in re.search(r"INSERT INTO news_raw \(([^)]*)\)", sql).group(1).split(",")]
+    slots = [s.strip() for s in template[1:-1].split(",")]
+    assert len(columns) == len(slots)
+    out = []
+    for values in rows:
+        it = iter(values)
+        out.append({c: (next(it) if slot == "%s" else slot) for c, slot in zip(columns, slots)})
+        assert list(it) == []  # 값 개수 = %s 개수
+    return out
+
+
+def _collect_with_schema(monkeypatch, columns, days=3):
+    monkeypatch.setenv(pb.SERVICE_KEY_ENV, "KEY")
+    now = datetime(2026, 9, 26, 12, 0, tzinfo=KST)
+
+    def fake_fetch(service_key, start, end):
+        return pb.parse_policy_news_xml(_response(_item(f"{start:%d}a"), _item(f"{start:%d}b")))
+
+    cur = _FakeCursor(columns)
+    conn = MagicMock()
+    conn.cursor.return_value = cur
+    with patch("crawler.policy_briefing.get_connection", return_value=conn), \
+         patch("crawler.policy_briefing.release_connection"), \
+         patch("crawler.policy_briefing.execute_values", return_value=[]) as ev:
+        pb.collect_policy_briefing(days=days, now=now, fetch=fake_fetch)
+    sql, rows = ev.call_args[0][1], ev.call_args[0][2]
+    return cur, sql, _inserted_rows(sql, ev.call_args.kwargs["template"], rows)
+
+
+def test_insert_on_main_schema_writes_only_existing_columns(monkeypatch):
+    cur, sql, rows = _collect_with_schema(monkeypatch, MAIN_NEWS_RAW_COLUMNS)
+
+    assert set(rows[0]) == {"press_id", "raw_news_title", "raw_news_content", "raw_news_url",
+                            "raw_news_created_at", "raw_news_crawled_at"}
+    assert "ON CONFLICT (raw_news_url) DO NOTHING" in sql
+
+
+def test_insert_on_runtime_schema_marks_rows_extracted_so_the_web_extractor_skips_them(monkeypatch):
+    # 그 스키마의 추출기는 raw_news_extract_status IS NULL인 행을 다시 내려받아 본문을 덮어쓴다.
+    cur, sql, rows = _collect_with_schema(monkeypatch, RUNTIME_NEWS_RAW_COLUMNS, days=6)
+
+    assert len(rows) == 4  # 3일 창 2개 x 2건
+    for row in rows:
+        assert row["raw_news_extract_status"] == "'ok'"
+        assert row["raw_news_extracted_at"] == "now()"
+        # 마이그레이션 d48994e9d26e와 같은 식: UTF-8 바이트의 sha256 hex
+        assert row["raw_news_content_sha256"] == hashlib.sha256(row["raw_news_content"].encode("utf-8")).hexdigest()
+        assert "raw_news_extract_attempts" not in row  # 웹 추출을 시도한 적 없음 - 기본값 0 유지
+    # 본문 해시 부분 unique 인덱스 충돌도 배치 롤백 대신 건너뛰도록 대상 없는 ON CONFLICT
+    assert "ON CONFLICT DO NOTHING" in sql and "ON CONFLICT (" not in sql
+    # 스키마 조회는 수집 1회당 1번
+    assert sum("information_schema.columns" in q for q in cur.queries) == 1
 
 
 # --------------------------------------------------------------------------- 파이프라인 Stage1 연결
