@@ -271,3 +271,14 @@ def test_fix4_null_sentence_only_when_all_inconclusive(tmp_path, monkeypatch):
     data["decomposition_bootstrap"]["leakage_binary"] = _pair(-0.1, -0.2, -0.02)
     mixed = _render(tmp_path / "b", monkeypatch, data)
     assert "검정력 부족" not in _section(mixed, "### 쓸 수 있는 문장", "### 쓰면 안 되는 문장")
+
+
+def test_fix4_detected_setting_named_with_its_ci(tmp_path, monkeypatch):
+    data = _base_data()
+    data["decomposition_bootstrap"]["leakage_binary"] = _pair(-0.13, -0.22, -0.04)
+    text = _render(tmp_path, monkeypatch, data)
+    safe = _section(text, "### 쓸 수 있는 문장", "### 쓰면 안 되는 문장")
+    assert "binary -0.1300 [-0.2200, -0.0400]" in safe
+    assert "lambdarank 조기 종료·lambdarank 100라운드 모델에서는 검출되지 않았다" in safe
+    summary = _section(text, "## 0. 요약", "## 1.")
+    assert "가설" in summary
