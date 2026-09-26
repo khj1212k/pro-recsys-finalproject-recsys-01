@@ -33,9 +33,9 @@
 | :--- | :--- | :--- |
 | `news_category_repr` | Int | 뉴스의 대표 카테고리 ID. (모델이 카테고리별 선호도를 학습하도록 유도) |
 
-## 5. 사용자 속성 (User Demographics)
+## 5. 사용자 속성 (User Attributes)
 | Feature Name | Type | Description |
 | :--- | :--- | :--- |
-| `user_age_band` | Int | 사용자 연령대 (0~6). |
-| `user_gender` | Int | 사용자 성별 (1: Male, 2: Female). |
 | `user_onboarding_cnt` | Int | 유저가 온보딩 시 선택한 카테고리 개수. 유저의 관심사 폭(Width)을 나타냄. |
+
+> 팀 시절 문서에는 `user_age_band`/`user_gender`가 있었으나, 로더가 DB에서 읽지 않고 항상 0으로 채우던 상수 열이라 2026-09-26에 제거했다(ADR 0003 한계 절). 모델 입력 열 목록은 `tests/recommend_engine/test_feature_columns_contract.py`가 고정한다.
