@@ -29,6 +29,43 @@ def pareto_front(points: Sequence[Sequence[float]]) -> list[bool]:
     return out
 
 
+PROMOTION_MARGIN = 0.02
+MIN_BEST_ITERATION = 5
+
+
+def _ci_lo(diffs: dict, key: str, metric: str = "ndcg@10"):
+    v = diffs.get(key, {}).get(metric)
+    return (None, None) if v is None else (v["diff"], v["ci95"][0])
+
+
+def promotion_verdict(d: dict) -> dict:
+    """ADR 0013 사전 등록 승격 규칙 R1-R4를 JSON 수치에서 기계적으로 판정한다(비교가 없으면 실패)."""
+    p1 = d.get("p1_vs_baselines", {})
+    chosen = d.get("p2_selection", {}).get("chosen")
+    rules = {}
+    diff, lo = _ci_lo(p1, "ranker_v2-vs-popularity_24h")
+    rules["R1"] = {"desc": f"P1 nDCG@10 ranker_v2 - popularity_24h >= +{PROMOTION_MARGIN} and CI lo > 0",
+                   "diff": diff, "ci_lo": lo,
+                   "pass": diff is not None and diff >= PROMOTION_MARGIN and lo > 0}
+    diff, lo = _ci_lo(p1, "ranker_v2-vs-team_binary")
+    rules["R2"] = {"desc": "P1 nDCG@10 ranker_v2 - team_binary CI lo > 0", "diff": diff, "ci_lo": lo,
+                   "pass": lo is not None and lo > 0}
+    diff, lo = _ci_lo(d.get("p2_vs", {}), f"{chosen}-vs-cosine_history")
+    rules["R3"] = {"desc": f"P2 nDCG@10 {chosen} - cosine_history CI lo > 0", "diff": diff, "ci_lo": lo,
+                   "pass": lo is not None and lo > 0}
+    iters = {n: [m["best_iteration"] for m in d.get("p1_models", {}).get(n, [])] for n in {"ranker_v2", chosen} if n}
+    rules["R4"] = {"desc": f"best_iteration > {MIN_BEST_ITERATION} for every seed", "best_iterations": iters,
+                   "pass": bool(iters) and all(its and min(its) > MIN_BEST_ITERATION for its in iters.values())}
+    return {"passed": all(r["pass"] for r in rules.values()), "p2_chosen": chosen, "rules": rules}
+
+
+def recommended_mmr_lambda(ndcg_by_lambda: dict, max_rel_loss: float = 0.02) -> str:
+    """nDCG@10이 lambda=1.0(순수 관련도) 대비 상대 max_rel_loss 이내인 가장 작은 lambda."""
+    ref = ndcg_by_lambda["1.0"]
+    ok = [lam for lam, v in ndcg_by_lambda.items() if v >= (1 - max_rel_loss) * ref]
+    return min(ok, key=float)
+
+
 def ci(m: dict, digits: int = 4) -> str:
     lo, hi = m["ci95"]
     return f"{m['mean']:.{digits}f} [{lo:.{digits}f}, {hi:.{digits}f}]"
@@ -121,14 +158,45 @@ def replay_table(d: dict) -> str:
     return table(["모델|프로필", "AUC", "nDCG@10"], rows)
 
 
+def sanity_table(d: dict) -> str:
+    s = d["embedding_sanity"]["category_knn_loo"]
+    return table(["k", "기사 수", "카테고리 수", "kNN LOO 정확도", "다수 클래스 비율"],
+                 [[s["k"], s["n"], s["n_categories"], f"{s['accuracy']:.4f}", f"{s['majority_baseline']:.4f}"]])
+
+
+def selection_table(d: dict) -> str:
+    sel = d["p2_selection"]
+    rows = [[n, f"{v['ndcg@10_seed_mean']:.4f}", " / ".join(f"{x:.4f}" for x in v["seed_values"]),
+             "선택" if n == sel["chosen"] else ""] for n, v in sel["table"].items()]
+    return table(["모델", "es 표본 P2 nDCG@10(seed 평균)", "seed별", ""], rows)
+
+
+def verdict_table(d: dict) -> str:
+    v = promotion_verdict(d)
+    rows = []
+    for k, r in v["rules"].items():
+        if "diff" in r:
+            val = "-" if r["diff"] is None else f"{r['diff']:+.4f} (CI 하한 {r['ci_lo']:+.4f})"
+        else:
+            val = ", ".join(f"{n}: {its}" for n, its in r["best_iterations"].items())
+        rows.append([k, r["desc"], val, "통과" if r["pass"] else "실패"])
+    rows.append(["종합", "R1-R4 모두", "", "통과" if v["passed"] else "실패"])
+    return table(["규칙", "내용", "측정값", "판정"], rows)
+
+
 def render(d: dict) -> str:
-    parts = [
+    parts = []
+    if "embedding_sanity" in d:
+        parts += ["### 임베딩 점검(카테고리 kNN leave-one-out)", sanity_table(d)]
+    parts += [
         "### P1 전체", p1_table(d),
         "### P1 ablation (인접 단계 쌍체 차이)", diff_table(d["p1_ablation_diffs"]),
         "### P1 ranker v2 vs 베이스라인/변형", diff_table(d["p1_vs_baselines"]),
         "### P1 seen 필터", seen_table(d),
     ]
     if "p2" in d:
+        if "p2_selection" in d:
+            parts += ["### P2 모델 선택(es 구간 표본, validation 미사용)", selection_table(d)]
         parts += ["### P2 후보 출처 recall", p2_sources_table(d), "### P2 전체 풀 랭킹", p2_table(d)]
         if d.get("p2_ablation_diffs"):
             parts += ["### P2 ablation (인접 단계 쌍체 차이)",
@@ -138,9 +206,16 @@ def render(d: dict) -> str:
         if "p2_two_stage" in d:
             parts += ["### P2 2단계(출처 합집합 -> 랭커)", two_stage_table(d)]
         if "p2_mmr" in d:
-            parts += ["### MMR λ 스윕", mmr_table(d)]
+            sweep = d["p2_mmr"]["sweep"]
+            lam = recommended_mmr_lambda({k: v["ndcg@10"]["mean"] for k, v in sweep.items()})
+            parts += ["### MMR λ 스윕", mmr_table(d), f"사전 등록 규칙(λ=1.0 대비 nDCG@10 상대 손실 ≤2%)의 권장 λ: **{lam}**"]
+        parts += ["### 승격 규칙 판정(ADR 0013 사전 등록)", verdict_table(d)]
     if "replay" in d:
-        parts += ["### 실시간 재생", replay_table(d), diff_table(d["replay"]["diffs"])]
+        rp = d["replay"]
+        parts += ["### 실시간 재생",
+                  f"대상: {rp['definition']} — 조건을 만족하는 노출은 평가 노출의 {rp['share_of_test_impressions']:.1%}"
+                  f"(이 중 평가 {rp['n_impressions']:,}건, 유저 {rp['n_users']:,}명)",
+                  replay_table(d), diff_table(rp["diffs"])]
     return "\n\n".join(parts) + "\n"
 
 

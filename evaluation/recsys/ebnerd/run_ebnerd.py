@@ -57,6 +57,8 @@ P2_SOURCE_KS = (50, 100, 200)
 # P2에서는 학습한 모든 모델을 평가한다(P1 ablation이 네거티브 분포 차이와 섞이는지 P2에서 따로 보기 위해).
 P2_MODELS = tuple(s.name for s in ABLATION + NEGATIVE_VARIANTS)
 SPLIT_SEED = 20260925
+SEEN_FILTER_METHODS = ("popularity_24h", "recency", "cosine_history", "team_binary", "ranker_v2",
+                       "ranker_v2_poolneg", "ranker_v2_mixed")
 
 
 def _git_sha() -> str:
@@ -147,10 +149,15 @@ def run_p1(bench, W, args, seeds, out) -> dict:
     }
 
     scores_keep: dict[str, list[np.ndarray]] = {}
+
+    def keep_scores(name: str, sc: np.ndarray):
+        if name in SEEN_FILTER_METHODS:
+            scores_keep.setdefault(name, []).append(sc)
+
     for seed in seeds:
         for name, sc in baseline_scores(ft, len(labels), seed).items():
             bank.add(name, ranking_metrics(sc, labels, ptr, ks=P1_KS, seed=seed))
-            scores_keep.setdefault(name, []).append(sc)
+            keep_scores(name, sc)
 
     models: dict[str, list] = {}
     rn_cache: dict[int, tuple] = {}
@@ -180,7 +187,7 @@ def run_p1(bench, W, args, seeds, out) -> dict:
             m = train(spec, fit, es, seed=seed, num_threads=args.threads)
             sc = m.predict(ft, test)
             bank.add(spec.name, ranking_metrics(sc, labels, ptr, ks=P1_KS, seed=seed))
-            scores_keep.setdefault(spec.name, []).append(sc)
+            keep_scores(spec.name, sc)
             models.setdefault(spec.name, []).append(m)
             log.info("trained %s seed=%d best_it=%d es=%.4f %.0fs", spec.name, seed, m.best_iteration,
                      m.best_score, m.seconds)
@@ -203,8 +210,7 @@ def run_p1(bench, W, args, seeds, out) -> dict:
     keep = ~seen
     fptr = np.concatenate([[0], np.cumsum(np.bincount(g[keep], minlength=test.req.n))])
     fbank = MetricBank(test.group_user, args.n_boot)
-    for name in [n for n in ("popularity_24h", "recency", "cosine_history", "team_binary", "ranker_v2",
-                             "ranker_v2_poolneg", "ranker_v2_mixed") if n in scores_keep]:
+    for name in [n for n in SEEN_FILTER_METHODS if n in scores_keep]:
         for seed, sc in zip(seeds, scores_keep[name]):
             fbank.add(name, ranking_metrics(sc[keep], labels[keep], fptr, ks=P1_KS, seed=seed))
     out["p1_seen_filtered"] = {n: fbank.summary(n) for n in fbank.runs}
@@ -286,29 +292,35 @@ def run_p2(bench, W, args, seeds, p1, out):
     # --- 전체 풀 랭킹: 베이스라인 + 팀 방식 + ranker v2 ---
     bank = MetricBank(task.group_user, args.n_boot, metrics=("ndcg@10", "recall@10", "mrr"))
     lists: dict[str, np.ndarray] = {}
-    score_sets: dict[str, list[np.ndarray]] = {}
+    chosen = out.get("p2_selection", {}).get("chosen")
+    chosen_scores: list[np.ndarray] = []
+
+    # 풀이 요청당 수백 개라 (방법 x seed) 점수를 전부 들고 있으면 수 GB가 된다: 지표를 바로 계산하고
+    # 목록(seed 0)과 선택 모델 점수만 남긴다.
+    def _add(name: str, seed: int, sc: np.ndarray):
+        bank.add(name, ranking_metrics(sc, labels, ptr, ks=(10,), n_pos_total=npos, seed=seed, with_auc=False))
+        if seed == seeds[0]:
+            lists[name] = _positions_topk(sc, ptr, 10, seed=seeds[0])
+        if name == chosen:
+            chosen_scores.append(sc)
+
     for seed in seeds:
         for name, sc in baseline_scores(feats, len(labels), seed).items():
-            score_sets.setdefault(name, []).append(sc)
+            _add(name, seed, sc)
     for name in P2_MODELS:
         for m in p1["models"].get(name, []):
-            score_sets.setdefault(name, []).append(m.predict(feats, task))
-    for name, scs in score_sets.items():
-        for seed, sc in zip(seeds, scs):
-            bank.add(name, ranking_metrics(sc, labels, ptr, ks=(10,), n_pos_total=npos, seed=seed, with_auc=False))
-        lists[name] = _positions_topk(scs[0], ptr, 10, seed=seeds[0])
+            _add(name, m.seed, m.predict(feats, task))
     out["p2"] = {}
     for name in bank.runs:
         out["p2"][name] = bank.summary(name)
         out["p2"][name].update(_list_metrics(bench, task, feats, lists[name], args.n_boot))
-    chosen = out.get("p2_selection", {}).get("chosen")
     if chosen in bank.runs:
         out["p2_vs"] = {f"{chosen}-vs-{n}": bank.diff(chosen, n) for n in bank.runs if n != chosen}
     steps = [s.name for s in ABLATION if s.name in bank.runs]
     out["p2_ablation_diffs"] = {f"{b}-vs-{a}": bank.diff(b, a) for a, b in zip(steps, steps[1:])}
     if chosen in bank.runs:
-        out["p2_two_stage"] = _two_stage(task, score_sets[chosen], seeds, union_masks, args.n_boot)
-        out["p2_mmr"] = run_mmr(bench, task, feats, score_sets[chosen][0], args, chosen)
+        out["p2_two_stage"] = _two_stage(task, chosen_scores, seeds, union_masks, args.n_boot)
+        out["p2_mmr"] = run_mmr(bench, task, feats, chosen_scores[0], args, chosen)
 
 
 def _two_stage(task, score_list, seeds, union_masks, n_boot) -> dict:
@@ -431,6 +443,7 @@ def run_replay(bench, W, args, seeds, p1, out):
     eligible = day_start >= window_start
     same_day = ctx.user_log.count(va.user_id[idx_test], day_start, t) >= 1
     idx = idx_test[eligible & same_day]
+    n_eligible = len(idx)
     if args.replay_max and len(idx) > args.replay_max:
         idx = np.sort(np.random.default_rng(SPLIT_SEED + 4).choice(idx, size=args.replay_max, replace=False))
     tt = va.time[idx]
@@ -453,7 +466,7 @@ def run_replay(bench, W, args, seeds, p1, out):
     out["replay"] = {
         "definition": "validation 둘째 날(00:00 >= 행동 창 시작)부터, 같은 날 t 이전 유저 로그 이벤트 1건 이상인 노출",
         "n_impressions": int(len(idx)), "n_users": int(len(np.unique(va.user_id[idx]))),
-        "share_of_test_impressions": float(len(idx) / len(idx_test)),
+        "n_eligible": int(n_eligible), "share_of_test_impressions": float(n_eligible / len(idx_test)),
         "results": {n: bank.summary(n) for n in bank.runs},
         "diffs": {},
     }
