@@ -74,6 +74,47 @@ python -m evaluation.clustering.metrics \
   전후의 숫자/날짜/개체 드리프트(추가/누락)를 비교해 `DriftReport`를
   반환한다. 추후 LangGraph 게이트의 입력이 된다.
 
+### `evaluation/llm/` — LLM bake-off와 judge 보정 (ADR 0009/0010)
+
+규칙은 결과를 보기 전에 [ADR 0009](../docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md)와
+`evaluation/llm/preregistration/bakeoff-v1.yaml`에 사전 등록했다. 분석기는 yaml의 상수만 읽는다.
+기사 본문·생성물·라벨은 전부 `data/`(gitignore) 아래에만 쓰고, 저장소에는 id·URL·SHA-256만 커밋한다.
+
+| 모듈 | 역할 |
+|---|---|
+| `evalset.py` | `cluster_history`에서 층화 추출(크기×카테고리×split_v2) + 어려운 사례(n과 별도, 생성 안 함) |
+| `bakeoff.py` | 재개 가능한 러너: `generate` / `judge` / `cluster-eval` / `export-blind` |
+| `labels.py`, `labeling_app.py` | 라벨 저장소와 로컬 라벨링 UI(127.0.0.1 전용). 정의는 [라벨링 가이드](../docs/eval/labeling-guide.md) |
+| `calibration.py` | Cohen's κ·Spearman, 클러스터 단위 2-fold 임계값 선택, 자기선호 DiD, ClusterEvaluator ROC |
+| `bakeoff_analysis.py` | 사전 등록 규칙을 기계적으로 적용해 승자·judge·게이트 결정 |
+| `gate_probe.py` | 결정론적 게이트의 오탐/검출 프로브(LLM·DB 호출 없음) |
+
+전체 흐름 (실제 LLM 호출 단계는 비용이 든다 - `config/llm_pricing.yaml` 단가, 킬 스위치를 존중한다):
+
+```bash
+# 0) 평가셋 고정 (DB 필요). 매니페스트는 커밋, 본문은 data/evalsets/v1/
+python -m evaluation.llm.evalset sample --name v1 --n 40 --seed 20260925 --warmup 2
+python -m evaluation.llm.evalset verify --name v1
+
+# 1) pre-flight: 워밍업 2개로 설정 오류만 확인 (본 실행과 다른 run 이름)
+python -m evaluation.llm.bakeoff generate --evalset v1 --split warmup --run bakeoff-v1-preflight
+
+# 2) 본 실행 - 중간에 402/킬 스위치로 멈추면 같은 명령으로 이어서 실행
+python -m evaluation.llm.bakeoff generate --evalset v1
+python -m evaluation.llm.bakeoff judge --evalset v1
+python -m evaluation.llm.bakeoff cluster-eval --evalset v1 --provider gemini --model gemini-3.1-flash-lite
+
+# 3) 블라인드 내보내기 -> 라벨링 (클러스터 라벨 먼저, 48시간 뒤 재라벨: /?round=2)
+python -m evaluation.llm.bakeoff export-blind --evalset v1
+python -m evaluation.llm.labeling_app --run bakeoff-v1
+
+# 4) 분석 (data/bakeoff/bakeoff-v1/analysis.json + 요약 표, 생성 텍스트는 출력하지 않음)
+python -m evaluation.llm.bakeoff_analysis --run bakeoff-v1
+
+# 게이트 프로브 (로컬 뉴스레터 JSON이 있으면 실제 문장 변형까지)
+python -m evaluation.llm.gate_probe --newsletters 'data/team_archive/newsletters/*.json'
+```
+
 ## 설치
 
 ```bash
