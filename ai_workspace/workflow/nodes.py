@@ -374,7 +374,11 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
     if not newsletter_to_save.get("content"):
         newsletter_to_save["content"] = draft.get("content") or ""
     embedding = state.get("newsletter_embedding")  # 원본 기반 임베딩
-    article_ids = state["current_article_ids"]
+    # 클러스터 평가가 아웃라이어를 빼거나 서브그룹 하나만 남기면 current_articles만 줄어든다.
+    # current_article_ids(원래 클러스터 전체)로 저장하면 생성에 쓰이지 않은 기사까지
+    # news_letter_id가 채워져 다음 클러스터링에서 영구 제외되고 raw_news_count도 부풀려진다.
+    used_articles = state.get("current_articles") or []
+    article_ids = [a["id"] for a in used_articles if a.get("id") is not None] or state["current_article_ids"]
     cluster_id = state["current_cluster_id"]
     
     logger.info(f"💾 뉴스레터 저장 중 (Cluster {cluster_id})...")
