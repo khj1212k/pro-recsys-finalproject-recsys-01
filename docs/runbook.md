@@ -118,6 +118,8 @@ docker compose exec db psql -U newsletter -d newsletter -c "
   SELECT p.press_name, count(*) AS total,
          count(*) FILTER (WHERE n.raw_news_extract_status = 'ok') AS with_body,
          count(*) FILTER (WHERE n.raw_news_extract_status = 'dropped') AS dropped,
+         count(*) FILTER (WHERE n.raw_news_extract_status = 'duplicate') AS duplicate,
+         count(*) FILTER (WHERE n.raw_news_extract_status IN ('fetch_failed', 'error')) AS failed,
          count(*) FILTER (WHERE n.embedding_result IS NOT NULL) AS embedded,
          min(n.raw_news_crawled_at) AS first_seen, max(n.raw_news_crawled_at) AS last_seen
   FROM news_raw n JOIN press p USING (press_id) GROUP BY 1 ORDER BY 2 DESC;"
