@@ -23,7 +23,14 @@ ENGINE_ROOT = REPO_ROOT / "ai_workspace" / "recommend_engine"
 
 sys.path.insert(0, str(TEAM_REPRO_DIR))
 import file_loader as FL  # noqa: E402
-import pipeline as PIPE  # noqa: E402
+import importlib.util  # noqa: E402
+
+# 하네스 pipeline.py를 최상위 이름 `pipeline`으로 import하면 ai_workspace의 `pipeline`
+# 패키지(tests/test_stage5_run_id.py 등이 쓰는)를 sys.modules에서 가려버려, 전체
+# 스위트에서 수집 순서에 따라 다른 테스트가 깨진다 - 고유한 별칭으로만 로드한다.
+_spec = importlib.util.spec_from_file_location("team_repro_pipeline", TEAM_REPRO_DIR / "pipeline.py")
+PIPE = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(PIPE)
 import protocol as PR  # noqa: E402
 
 
