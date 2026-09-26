@@ -47,6 +47,10 @@ class NewsClusterer:
         self.lookback_hours = lookback_hours
         self.labels_ = None
         self.data = None
+        # cluster_with_split이 만든 최종 그룹마다 split_v2로 쪼개졌는지 기록한다.
+        # 평가셋 층화(evaluation/llm/evalset.py, ADR 0009)가 cluster_history에서 읽는다.
+        self.group_meta_: List[Dict] = []
+        self.cluster_meta: Dict[int, Dict] = {}
 
     def fit_predict(self, embeddings: np.ndarray) -> np.ndarray:
         clusterer = hdbscan.HDBSCAN(
@@ -60,6 +64,7 @@ class NewsClusterer:
 
     def cluster_with_split(self, data: Dict) -> List[Tuple[List[int], List[str]]]:
         embeddings = data['embeddings']
+        self.group_meta_ = []
         if len(embeddings) == 0: return []
 
         # 1차 cluster
@@ -83,8 +88,10 @@ class NewsClusterer:
                 for split_idx in ['idx0', 'idx1']:
                     sub_idxs = dec.debug[split_idx]
                     final_groups.append(([c_ids[j] for j in sub_idxs], [c_titles[j] for j in sub_idxs]))
+                    self.group_meta_.append({"split_v2": True})
             else:
                 final_groups.append((c_ids, c_titles))
+                self.group_meta_.append({"split_v2": False})
         return final_groups
 
     def _load_data_from_db(self, exclude_clustered: bool = True, lookback_hours: int = 24) -> Dict:
@@ -147,13 +154,13 @@ class NewsClusterer:
         if lookback_hours is not None:
             self.lookback_hours = lookback_hours
 
+        self.cluster_meta = {}
         self.data = self._load_data_from_db(lookback_hours=self.lookback_hours)
         if not self.data or len(self.data['ids']) == 0:
             return {}
-            
+
         groups = self.cluster_with_split(self.data)
-        
-        
+        self.cluster_meta = dict(enumerate(self.group_meta_))
         return {idx: g_ids for idx, (g_ids, _) in enumerate(groups)}
 
     def get_clustered_articles(self, cluster_ids: List[int] = None) -> Dict:

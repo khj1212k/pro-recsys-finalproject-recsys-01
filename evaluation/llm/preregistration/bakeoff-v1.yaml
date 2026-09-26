@@ -1,0 +1,99 @@
+# 사전 등록(pre-registration) - docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md
+# 결과를 보기 전에 커밋된 값이다. evaluation/llm/bakeoff_analysis.py는 이 파일의
+# 상수만 읽어 규칙을 적용한다. 값을 바꿀 때는 ADR 0009의 Addendum에 날짜/사유/
+# 결과 열람 여부를 남긴다. bake-off를 한 번도 실행하지 않은 동안의 변경은 이 파일을
+# 고치고 아래 amendments에 기록한다(git 이력으로 원문 대조 가능). 실행(pre-flight 포함)이
+# 시작된 뒤의 변경은 새 id(bakeoff-v2 등)로 파일을 따로 만든다.
+id: bakeoff-v1
+registered_at: "2026-09-25"
+adr: docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md
+amendments:
+  - id: A1
+    date: "2026-09-26"
+    results_viewed: false  # bake-off 미실행
+    change: "judge 후보 gemini-3.1-flash-lite-v2 추가 (PR #6이 운영 judge 기본값을 이 모델로 교체)"
+  - id: A2
+    date: "2026-09-26"
+    results_viewed: false
+    change: "분석 정의 명확화 - 재라벨 kappa 미정의 시 대체 규칙 미발동, DiD 점수 정의, 라벨 대상은 형식체 초안(tone_drift만 변환본)"
+  - id: A3
+    date: "2026-09-26"
+    results_viewed: false
+    change: "ClusterEvaluator ROC에서 응답이 파싱되지 않은 행(호출 실패 FAIL/0.0, 휴리스틱 FAIL/0.1)을 제외하고 개수를 따로 보고"
+  - id: A4
+    date: "2026-09-26"
+    results_viewed: false
+    change: "judge 일치도(OOF kappa, Spearman, 주장 정밀도)는 judge 자신의 계열이 만든 출력을 빼고 계산"
+  - id: A5
+    date: "2026-09-26"
+    results_viewed: false
+    change: "어려운 사례는 n_clusters와 별도로 round(n x hard_case_fraction)개 뽑고 생성하지 않음(클러스터 라벨/ROC 전용). 비율은 가중치 없는 표본 비율"
+  - id: A6
+    date: "2026-09-26"
+    results_viewed: false
+    change: "ADR 본문 수치 정정(짝짓지 않은 MDE 양방향, 라벨링 10~17시간) - 규칙 변경 없음"
+
+evalset:
+  n_clusters: 40  # 생성·출력 라벨 대상인 일반 클러스터 수 (A5)
+  seed: 20260925
+  size_buckets: [[3, 4], [5, 9], [10, null]]
+  hard_case_fraction: 0.2  # n_clusters와 별도로 round(40 x 0.2)=8개, 생성하지 않음 (A5)
+  warmup_clusters: 2
+
+candidates:
+  - name: gemini-3.5-flash-lite
+    generator: {provider: gemini, model: gemini-3.5-flash-lite}
+    tone: {provider: gemini, model: gemini-3.5-flash-lite}
+  - name: solar-pro3
+    generator: {provider: upstage, model: solar-pro3}
+    tone: {provider: upstage, model: solar-pro3}
+  - name: gpt-4.1-mini
+    generator: {provider: openai, model: gpt-4.1-mini}
+    tone: {provider: openai, model: gpt-4.1-mini}
+
+judges:
+  - {name: haiku-4.5-v2, provider: anthropic, model: claude-haiku-4-5, version: v2}
+  - {name: gemini-3.5-flash-v2, provider: gemini, model: gemini-3.5-flash, version: v2}
+  - {name: gpt-4.1-mini-v2, provider: openai, model: gpt-4.1-mini, version: v2}
+  - {name: solar-pro3-v2, provider: upstage, model: solar-pro3, version: v2}
+  - {name: gemini-3.1-flash-lite-v2, provider: gemini, model: gemini-3.1-flash-lite, version: v2}  # A1
+  - {name: haiku-4.5-v1, provider: anthropic, model: claude-haiku-4-5, version: v1}
+
+replicates: 1
+
+decision_rule:
+  primary: human_publishable_rate
+  gates:
+    unsupported_number_rate_max: 0.15
+    tone_drift_rate_max: 0.20
+    first_try_schema_pass_min: 0.95
+    p95_latency_s_max: 60.0
+  superiority:
+    method: paired_bootstrap_ci
+    n_resamples: 10000
+    ci_level: 0.95
+    seed: 20260925
+  tie_break: cost_per_100_newsletters_usd
+  # 100 * (gen_cost * (1 + p + p^2) + tone_cost * (1 + q))
+  # p = 운영 게이트 기본 차단 실패율(수치/인용), q = 문체 드리프트율
+  cost_model:
+    generation_attempts_max: 3
+    tone_attempts_max: 2
+
+judge_selection:
+  require_cross_family: true
+  folds: 2
+  fold_seed: 20260925
+  min_oof_kappa: 0.40
+
+human_reliability:
+  relabel_outputs: 30
+  relabel_clusters: 10
+  min_hours_between_rounds: 48
+  min_publishable_kappa: 0.60
+
+cluster_confidence:
+  min_auc: 0.75
+  min_balanced_accuracy_gain: 0.05
+  folds: 2
+  fold_seed: 20260925

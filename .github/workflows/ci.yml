@@ -50,7 +50,9 @@ jobs:
             pydantic \
             kiwipiepy \
             hdbscan \
-            rapidfuzz
+            rapidfuzz \
+            fastapi \
+            httpx
 
       - name: Install ai_workspace package (no deps, editable)
         run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace
