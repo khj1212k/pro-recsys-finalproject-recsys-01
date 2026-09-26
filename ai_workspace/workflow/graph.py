@@ -7,6 +7,7 @@
 # compile_workflow()로 만든 그래프를 app.invoke(state)로 반복 실행하는 방식으로 담당한다.
 from langgraph.graph import StateGraph, END
 
+from config.settings import Settings
 from workflow.state import AgentState
 from workflow.nodes import (
     initialize_cluster_processing,
@@ -142,7 +143,29 @@ def create_newsletter_workflow() -> StateGraph:
     return workflow
 
 
+# 최장 경로 계산이 한두 스텝 어긋나도 정상 경로를 끊지 않을 여유분
+RECURSION_MARGIN = 5
+
+
+def max_supersteps(settings=Settings) -> int:
+    """재시도 설정이 허용하는 최장 경로의 superstep(노드 실행) 수.
+
+    init 1 + 클러스터 평가 (rc+1)회와 실패 처리 rc회 + (생성, 사실성, judge) × rn회
+    + 임베딩 1 + (문체 변환, 드리프트 검사) × (1+rt)회 + 저장 1.
+    """
+    rc = int(settings.MAX_RETRY_CLUSTER_EVAL)
+    rn = max(int(settings.MAX_RETRY_NEWSLETTER_EVAL), 1)
+    rt = int(settings.MAX_RETRY_TONE_DRIFT)
+    return 1 + (2 * rc + 1) + 3 * rn + 1 + 2 * (1 + rt) + 1
+
+
 def compile_workflow():
-    """Compile and return the workflow"""
+    """Compile and return the workflow.
+
+    recursion_limit을 재시도 설정에서 계산해 붙인다. 라이브러리 기본값은 버전마다 다르고
+    (langchain-core 25 / langgraph 1.x 10007), 25면 재시도 설정을 조금만 올려도 정상 경로가
+    GraphRecursionError로 끊기고, 10007이면 라우팅 버그 하나가 LLM 호출 수천 번이 된다.
+    """
     workflow = create_newsletter_workflow()
-    return workflow.compile()
+    # +1: 입력을 처리하는 첫 스텝도 한도에 포함된다(노드 21회 경로는 한도 22가 필요 - 테스트로 확인)
+    return workflow.compile().with_config(recursion_limit=max_supersteps() + 1 + RECURSION_MARGIN)

@@ -249,6 +249,67 @@ def test_shadow_judge_records_a_judged_fail_and_publishes(wire, monkeypatch):
     assert saved[0]["history"]["attempts"][0]["evaluation_result"] == "fail"
 
 
+def test_recursion_limit_follows_retry_settings(wire, monkeypatch):
+    # 문체 재변환 12회면 경로가 33 superstep으로 langchain-core 기본 recursion_limit(25)를 넘는다
+    # (langgraph 1.x 기본값은 10007이지만 버전을 고정하지 않았다). 재시도 설정을 올렸다고
+    # GraphRecursionError로 클러스터가 통째로 에러 처리되면 안 된다.
+    monkeypatch.setattr(nodes_module.Settings, "MAX_RETRY_TONE_DRIFT", 12)
+    judge = FakeLLMClient(results=[_cluster_pass(), _judge_pass()])
+    generator = FakeLLMClient(results=[_content(CLEAN), _meta()])
+    tone = FakeLLMClient(results=[_tone(CASUAL_DRIFT)] * 13)
+    saved = wire(judge, generator, tone)
+
+    final = compile_workflow().invoke(_state())
+
+    assert tone.call_count == 13
+    assert final["tone_fallback"] == "formal"
+    assert len(saved) == 1
+
+
+def test_worst_case_path_fits_the_computed_budget_exactly(wire, monkeypatch):
+    # 여유분 없이 max_supersteps()만으로 최장 경로(클러스터 재시도 2 + 생성 3회 + 문체 재변환 1)가
+    # 끝나야 한다 - 계산식이 실제 그래프와 어긋나면 여기서 드러난다.
+    import workflow.graph as graph_module
+
+    monkeypatch.setattr(graph_module, "RECURSION_MARGIN", 0)
+    monkeypatch.setattr(nodes_module.Settings, "MAX_RETRY_CLUSTER_EVAL", 2)
+    monkeypatch.setattr(nodes_module.Settings, "MAX_RETRY_NEWSLETTER_EVAL", 3)
+    monkeypatch.setattr(nodes_module.Settings, "MAX_RETRY_TONE_DRIFT", 1)
+    state = _state()
+    state["all_cluster_groups"] = {1: [10, 11, 12, 13, 14, 15]}
+    state["data"] = {"ids": [10, 11, 12, 13, 14, 15], "titles": TITLES * 2, "contents": BODIES * 2,
+                     "press_names": ["동아일보"] * 6}
+    outlier = {"parsed": ClusterEval(decision="FAIL", confidence=0.8, outlier_indices=[0])}
+    judge = FakeLLMClient(results=[outlier, outlier, _cluster_pass(), _judge_fail(), _judge_fail(), _judge_pass()])
+    generator = FakeLLMClient(results=[_content(CLEAN), _meta()] * 3)
+    tone = FakeLLMClient(results=[_tone(CASUAL_DRIFT)] * 2)
+    saved = wire(judge, generator, tone)
+
+    assert graph_module.max_supersteps() == 21
+    final = graph_module.compile_workflow().invoke(state)
+
+    assert (judge.call_count, generator.call_count, tone.call_count) == (6, 6, 2)
+    assert final["tone_fallback"] == "formal"
+    assert len(saved) == 1
+
+
+def test_a_routing_loop_is_cut_off_by_the_retry_budget_not_the_library_default(wire, monkeypatch):
+    # 라우팅 버그로 무한 루프가 생기면 LLM 호출이 그대로 비용이 된다. 한도는 재시도 설정에서
+    # 나온 최장 경로 기준이어야 한다(langgraph 기본 10007 superstep이면 호출 수천 번).
+    import workflow.graph as graph_module
+    from langgraph.errors import GraphRecursionError
+
+    monkeypatch.setattr(graph_module, "route_after_tone_drift", lambda state: "retry")
+    judge = FakeLLMClient(results=[_cluster_pass(), _judge_pass()])
+    generator = FakeLLMClient(results=[_content(CLEAN), _meta()])
+    tone = FakeLLMClient(results=[_tone(CASUAL_OK)] * 200)
+    wire(judge, generator, tone)
+
+    with pytest.raises(GraphRecursionError):
+        graph_module.compile_workflow().invoke(_state())
+    assert tone.call_count <= graph_module.max_supersteps()
+
+
 def test_clean_run_calls_each_role_once(wire):
     judge = FakeLLMClient(results=[_cluster_pass(), _judge_pass()])
     generator = FakeLLMClient(results=[_content(CLEAN), _meta()])
