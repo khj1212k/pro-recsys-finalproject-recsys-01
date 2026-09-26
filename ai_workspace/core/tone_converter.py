@@ -70,6 +70,20 @@ TONE_CONVERSION_PROMPT = """당신은 뉴스를 대중에게 쉽고 친근하게
 4) 규칙을 지키기 어려우면 빈 문자열로라도 JSON 형식을 먼저 지키세요."""
 
 
+def _draft_summary(newsletter: Dict) -> str:
+    """초안의 한줄 요약. 생성기 초안(core/reconstruction/generator.py)과 DB 저장
+    (core/reconstruction/repository.py)은 "sentence" 키를 쓰고, 이 모듈의 프롬프트/출력
+    스키마(ToneResult)는 "summary"를 쓴다 - 둘 다 받아들인다."""
+    return newsletter.get("summary") or newsletter.get("sentence") or ""
+
+
+def _with_sentence_alias(converted: Dict) -> Dict:
+    """변환된 요약을 "sentence" 키로도 싣는다. save_newsletter_to_db가 초안과 변환본을
+    합칠 때 초안의 형식체 sentence가 캐주얼 요약을 덮지 않게 하기 위함."""
+    converted["sentence"] = converted.get("summary", "")
+    return converted
+
+
 class ToneConverter:
 
     def __init__(self, llm_client: Optional[LLMClient] = None):
@@ -79,7 +93,7 @@ class ToneConverter:
     def create_prompt(self, newsletter: Dict) -> str:
         prompt = TONE_CONVERSION_PROMPT.format(
             title=newsletter.get("title", ""),
-            summary=newsletter.get("summary", ""),
+            summary=_draft_summary(newsletter),
             content=newsletter.get("content", ""),
             keywords=json.dumps(newsletter.get("keywords", []), ensure_ascii=False)
         )
@@ -125,7 +139,7 @@ class ToneConverter:
         if not isinstance(keywords, list) or not keywords:
             keywords = original.get("keywords", []) or []
         result["keywords"] = keywords
-        return result
+        return _with_sentence_alias(result)
 
     def _parse_response(self, response: str, original: Dict) -> Optional[Dict]:
         if not response:
@@ -145,12 +159,17 @@ class ToneConverter:
             keywords = original.get("keywords", []) or []
         result["keywords"] = keywords
 
-        for field in ("title", "summary", "content"):
+        defaults = {
+            "title": original.get("title", "") or "",
+            "summary": _draft_summary(original),
+            "content": original.get("content", "") or "",
+        }
+        for field, default in defaults.items():
             val = result.get(field)
             if not isinstance(val, str) or not val.strip():
-                result[field] = original.get(field, "") or ""
+                result[field] = default
 
-        return result
+        return _with_sentence_alias(result)
 
     def _fallback_convert(self, original: Dict, last: Optional[Dict]) -> Dict:
         def soften(text: str) -> str:
@@ -171,7 +190,7 @@ class ToneConverter:
 
         base = last or {}
         title = soften(base.get("title") or original.get("title", "")).strip()
-        summary = soften(base.get("summary") or original.get("summary", "")).strip()
+        summary = soften(base.get("summary") or _draft_summary(original)).strip()
         content = soften(base.get("content") or original.get("content", "")).strip()
 
         if title and not title.startswith(("📰", "📌", "🔥", "✅", "⭐")):
@@ -181,12 +200,12 @@ class ToneConverter:
         if content and "📰" not in content:
             content = f"📰 {content}"
 
-        return {
+        return _with_sentence_alias({
             "title": title or "📰 뉴스 요약",
             "summary": summary or (title or "뉴스 요약"),
             "content": content or (original.get("content", "") or ""),
             "keywords": original.get("keywords", []) or []
-        }
+        })
     
     def validate_conversion(self, original: Dict, converted: Dict) -> bool:
         if not converted.get("title") or not converted.get("summary") or not converted.get("content"):

@@ -363,6 +363,11 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
     draft = state.get("newsletter_draft") or {}
     converted = state.get("converted_newsletter") or {}
     newsletter_to_save = {**draft, **converted} if converted else draft.copy()
+    # 초안의 한줄 요약은 "sentence", 문체 변환 출력(ToneResult)은 "summary" 키다. 변환본의
+    # 요약이 있으면 그것을 저장한다 - 병합만 하면 초안의 형식체 sentence가 남는다.
+    casual_summary = converted.get("sentence") or converted.get("summary")
+    if casual_summary:
+        newsletter_to_save["sentence"] = casual_summary
     if not newsletter_to_save.get("sentence"):
         newsletter_to_save["sentence"] = (
             newsletter_to_save.get("summary")
