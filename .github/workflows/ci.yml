@@ -21,9 +21,12 @@ jobs:
       - name: Create virtualenv
         run: uv venv --python 3.11 .venv
 
+      # evaluation/requirements.txt의 고정 버전(pandas·lightgbm·numpy·pyarrow 등)을 함께 넣어, 추천 평가 테스트가
+      # 리포트를 만든 버전과 같은 버전에서 돈다(고정이 없으면 새 릴리스가 조용히 섞인다).
       - name: Install test dependencies
         run: |
           uv pip install --python .venv/bin/python \
+            -r evaluation/requirements.txt \
             pytest \
             langgraph \
             langchain-openai \
