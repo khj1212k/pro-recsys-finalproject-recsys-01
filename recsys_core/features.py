@@ -99,7 +99,7 @@ class FeatureConfig:
     pop_windows_h: Sequence[float] = (6, 24, 48)
     ctr_window_h: float = 24.0
     request_chunk: int = 8192
-    event_chunk: int = 65536
+    event_chunk: int = 16384
     pair_chunk: int = 32768
 
 
@@ -206,6 +206,68 @@ def window_category_counts(index: EventIndex, item_category: np.ndarray, n_categ
     return out
 
 
+def _bounded_chunks(counts: np.ndarray, max_events: int, max_rows: int) -> Iterable[tuple[int, int]]:
+    for s, e in _request_chunks(counts, max_events):
+        for a in range(s, e, max_rows):
+            yield a, min(a + max_rows, e)
+
+
+def _history_cosine_segments(index: EventIndex, emb: np.ndarray, users: np.ndarray, cutoff: np.ndarray,
+                             cand_ptr: np.ndarray, cand_item: np.ndarray,
+                             cfg: FeatureConfig) -> tuple[np.ndarray, np.ndarray]:
+    """감쇠 가중 히스토리 벡터와 후보의 코사인을 유저별 누적합으로 계산한다.
+
+    지수 감쇠 w = 2^-((cutoff - t)/h)는 2^-(cutoff/h) * 2^(t/h)로 나뉘고 코사인은 크기에
+    불변이라, 요청마다 전체 히스토리를 다시 더하는 대신(비용 O(요청 x 히스토리 x d))
+    유저의 요청을 cutoff 순으로 세워 직전 요청 이후 새로 생긴 이벤트 구간만 더해 누적하면
+    (비용 O((이벤트 + 요청) x d)) 같은 방향을 얻는다. 기준 시각(anchor)은 유저의 마지막
+    cutoff로 둬 가중치가 1 이하로 유지되게 한다. 내림/하한이 있는 팀 감쇠식은 이렇게
+    분해되지 않으므로 호출부가 기존 경로를 쓴다.
+    """
+    n, d = len(users), emb.shape[1]
+    hist_cos = np.zeros(len(cand_item), dtype=np.float32)
+    hist_len = np.zeros(n, dtype=np.float32)
+    if n == 0:
+        return hist_cos, hist_len
+    order = np.lexsort((cutoff, users))
+    k_s, c_s = users[order], cutoff[order]
+    lo, hi = index.bounds(k_s, 0, c_s)
+    hist_len[order] = hi - lo
+    new_user = np.ones(n, dtype=bool)
+    new_user[1:] = k_s[1:] != k_s[:-1]
+    prev_hi = np.concatenate([[0], hi[:-1]])
+    seg_lo = np.where(new_user, lo, np.minimum(prev_hi, hi))
+    group = np.cumsum(new_user) - 1
+    last_of_group = np.concatenate([np.flatnonzero(new_user)[1:] - 1, [n - 1]])
+    anchor = c_s[last_of_group][group]
+    h = cfg.half_life_days * DAY
+    carry = np.zeros(d, dtype=np.float64)
+    for s, e in _bounded_chunks(hi - seg_lo, cfg.event_chunk, cfg.request_chunk):
+        m = e - s
+        seg_counts = hi[s:e] - seg_lo[s:e]
+        seg = np.zeros((m, d), dtype=np.float64)
+        if seg_counts.sum() > 0:
+            rows, pos = expand_ranges(seg_lo[s:e], hi[s:e])
+            w = np.exp2((index.time[pos] - anchor[s:e][rows]) / h).astype(np.float32)
+            x = emb[index.item[pos]] * w[:, None]
+            nonempty = seg_counts > 0
+            starts = (np.cumsum(seg_counts) - seg_counts)[nonempty]
+            seg[nonempty] = np.add.reduceat(x, starts, axis=0)
+        cs = np.cumsum(seg, axis=0)
+        nu = new_user[s:e]
+        gstart = np.maximum.accumulate(np.where(nu, np.arange(m), 0))
+        vec = cs - np.where((gstart > 0)[:, None], cs[np.maximum(gstart - 1, 0)], 0.0)
+        continuing = gstart == 0 if not nu[0] else np.zeros(m, dtype=bool)
+        vec[continuing] += carry
+        carry = vec[-1].copy()
+        norms = np.linalg.norm(vec, axis=1, keepdims=True)
+        vec32 = np.divide(vec, norms, out=np.zeros_like(vec), where=norms > 0).astype(np.float32)
+        req_ids = order[s:e]
+        prow, ppos = expand_ranges(cand_ptr[req_ids], cand_ptr[req_ids + 1])
+        hist_cos[ppos] = _pair_dot(vec32, prow, emb, cand_item[ppos], cfg.pair_chunk)
+    return hist_cos, hist_len
+
+
 def _pair_dot(vecs: np.ndarray, local_rows: np.ndarray, emb: np.ndarray, items: np.ndarray,
               chunk: int) -> np.ndarray:
     out = np.empty(len(items), dtype=np.float32)
@@ -268,13 +330,19 @@ def compute_features(ctx: FeatureContext, req: Requests,
         cols["is_cat_match"] = match.astype(np.float32)
         cols["user_ncat"] = user_ncat[pair_req]
 
-    need_user_loop = any(g in groups for g in ("history", "category", "short_term"))
-    if need_user_loop:
+    fast_history = "history" in groups and not cfg.floor_days and cfg.min_weight <= 0
+    if fast_history:
+        hc, hl = _history_cosine_segments(ctx.user_log, cat.emb, req.user, req.profile_cutoff, req.cand_ptr,
+                                          items, cfg)
+        cols["hist_cos"] = hc
+        cols["hist_len"] = hl[pair_req]
+    loop_groups = [g for g in ("history", "category", "short_term") if g in groups
+                   and not (g == "history" and fast_history)]
+    if loop_groups:
         n_pairs = len(items)
-        for g in ("history", "category", "short_term"):
-            if g in groups:
-                for name in names[g]:
-                    cols[name] = np.zeros(n_pairs, dtype=np.float32)
+        for g in loop_groups:
+            for name in names[g]:
+                cols[name] = np.zeros(n_pairs, dtype=np.float32)
         cutoff = req.profile_cutoff
         for a in range(0, req.n, cfg.request_chunk):
             b = min(a + cfg.request_chunk, req.n)
@@ -285,16 +353,16 @@ def compute_features(ctx: FeatureContext, req: Requests,
             it = items[pa:pb]
             users = req.user[a:b]
             cut = cutoff[a:b]
-            if "history" in groups:
+            if "history" in loop_groups:
                 v, cnt = window_vectors(ctx.user_log, cat.emb, users, 0, cut, ref_time=cut,
                                         config=cfg, decay=True)
                 cols["hist_cos"][pa:pb] = _pair_dot(v, local, cat.emb, it, cfg.pair_chunk)
                 cols["hist_len"][pa:pb] = cnt[local]
-            if "category" in groups:
+            if "category" in loop_groups:
                 cc = window_category_counts(ctx.user_log, cat.category, cat.n_categories, users, 0, cut, cfg)
                 share = cc / np.maximum(cc.sum(axis=1, keepdims=True), 1.0)
                 cols["cat_share"][pa:pb] = share[local, cat.category[it]]
-            if "short_term" in groups:
+            if "short_term" in loop_groups:
                 v, cnt = window_vectors(ctx.user_log, cat.emb, users, cut - int(cfg.short_window_h * HOUR), cut,
                                         config=cfg)
                 cols["short_cos"][pa:pb] = _pair_dot(v, local, cat.emb, it, cfg.pair_chunk)

@@ -187,3 +187,42 @@ def test_window_vectors_zero_for_empty_and_unit_norm_otherwise():
 def test_unknown_group_is_rejected():
     with pytest.raises(ValueError):
         compute_features(_ctx([]), _req([0]), groups=["nope"])
+
+
+def _reference_hist_cos(emb, user_events, users, cutoffs, cand_ptr, cands, half_life_days):
+    """요청마다 직접 계산: cutoff 이전 이벤트의 감쇠 가중합 방향과 후보의 코사인."""
+    out = np.zeros(cand_ptr[-1])
+    lens = np.zeros(len(users))
+    for r, (u, c) in enumerate(zip(users, cutoffs)):
+        ev = [(t, i) for (k, t, i) in user_events if k == u and t < c]
+        lens[r] = len(ev)
+        if not ev:
+            continue
+        v = sum(0.5 ** ((c - t) / (half_life_days * DAY)) * emb[i].astype(np.float64) for t, i in ev)
+        v /= np.linalg.norm(v)
+        for p in range(cand_ptr[r], cand_ptr[r + 1]):
+            out[p] = v @ emb[cands[p]]
+    return out, lens
+
+
+@pytest.mark.parametrize("chunks", [{}, {"request_chunk": 4, "event_chunk": 5, "pair_chunk": 3}])
+def test_history_cosine_matches_direct_per_request_computation(chunks):
+    rng = np.random.default_rng(1)
+    n_users, n_req = 12, 80
+    # 사용자 11은 이벤트가 없고, 이벤트가 몰린 사용자·같은 시각 이벤트·cutoff 이전 이벤트가 없는 요청을 섞는다.
+    user_events = [(int(rng.integers(n_users - 1)), T - int(rng.integers(0, 30 * DAY)), int(rng.integers(4)))
+                   for _ in range(400)]
+    user_events += [(3, T - 5 * DAY, 1), (3, T - 5 * DAY, 2)]
+    users = rng.integers(n_users, size=n_req)
+    times = T + rng.integers(-40 * DAY, DAY, size=n_req)
+    cutoffs = times - rng.integers(0, 3, size=n_req) * DAY
+    ncand = rng.integers(1, 5, size=n_req)
+    ptr = np.concatenate([[0], np.cumsum(ncand)])
+    cands = rng.integers(0, 4, size=ptr[-1])
+    req = Requests(user=users, time=times, cand_ptr=ptr, cand_item=cands, profile_cutoff=cutoffs)
+    ctx = _ctx(user_events, half_life_days=7.0, **chunks)
+    got = compute_features(ctx, req, groups=["history"])
+    want_cos, want_len = _reference_hist_cos(ctx.catalog.emb, user_events, users, cutoffs, ptr, cands, 7.0)
+    np.testing.assert_allclose(got["hist_cos"], want_cos, atol=1e-5)
+    np.testing.assert_array_equal(got["hist_len"], want_len[req.pair_req])
+    assert (want_len == 0).any() and (want_len > 0).sum() > n_req // 2
