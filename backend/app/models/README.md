@@ -21,4 +21,9 @@
 - **`NewsLetterTodayBatch`**: 사용자별 "오늘의 추천" 뉴스레터 배치 결과 저장
 
 #### `log.py`
-- **`UserNewsLetterCTRLog`**: 사용자 - 뉴스레터 클릭 로그 저장
+- **`UserNewsLetterCTRLog`**: 사용자 - 뉴스레터 클릭 로그 저장. 선택 컬럼 `request_id`·`position`(클릭이 나온 추천 응답과 그 안의 순위), `event`(`click` | `detail_view`), `dwell_ms` (ADR 0025)
+
+#### `recsys.py`
+- **`RecommendationRequestLog`**: 추천 응답 하나가 한 행(후보 집합, 탐색 위치, 프로필 출처, 캐시 적중, 폴백 사유, 정책·모델 버전)
+- **`RecommendationImpressionLog`**: 화면에 나간 칸 하나가 한 행(순위, 점수, 탐색 여부, propensity, 결정론 순위, shadow 점수, 피처)
+- **`ModelRegistry`**: 요청 시점 랭커의 모델 저장소. `role` = `active`(목록을 만든다) | `shadow`(점수만 로그에 남긴다) | `retired`
