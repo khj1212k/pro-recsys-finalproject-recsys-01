@@ -52,13 +52,16 @@ def test_sigterm_reaches_job_process_group_and_scheduler_exits_cleanly(tmp_path)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _write_executable(bin_dir / "supercronic", f"""
-        import signal, subprocess, sys
+        import os, signal, subprocess
         # 잡이 ready를 쓰기 전에 핸들러가 있어야 한다: 반대 순서면 테스트의 SIGTERM이 핸들러보다
         # 먼저 도착해 가짜 supercronic이 기본 동작으로 죽고(143), 엔트리포인트는 그 상태를 그대로 전달한다.
         signal.signal(signal.SIGTERM, lambda *a: None)
         child = subprocess.Popen([{str(job)!r}], process_group=0)
         child.wait()
-        sys.exit(0)
+        # sys.exit이 아니라 os._exit: 파이썬은 인터프리터를 정리하면서 파이썬 수준 핸들러를 기본 동작으로 되돌린다.
+        # 엔트리포인트는 /proc을 다 훑은 뒤에야 supercronic에 SIGTERM을 보내므로, 잡이 먼저 끝나 이 프로세스가
+        # 정리 중일 때 그 신호가 오면 143으로 죽는다(진짜 supercronic에는 없는 창이다). 정리 단계를 건너뛴다.
+        os._exit(0)
     """)
 
     env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
