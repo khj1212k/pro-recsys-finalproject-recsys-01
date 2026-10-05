@@ -136,6 +136,19 @@ python -m evaluation.llm.gate_probe --newsletters 'data/team_archive/newsletters
   `recsys_core`는 저장소 루트에서 `python -m evaluation.recsys.ebnerd.run_ebnerd ...`로 실행하면 import된다.
 - demo 데이터 기반 테스트(로더·과제 구성·전 구간 스모크)는 데이터가 있어야 돈다. git worktree에서는
   `EBNERD_ROOT=<메인 체크아웃>/data/benchmarks/ebnerd`를 지정해 실행한다(없으면 skip).
+- **콜드 regime 사슬(v1.2, 결과 대기)**: 인기도 0·저트래픽·작은 풀·짧은 히스토리에서 랭커가 얼마나 버티는지 재는
+  실험 묶음이다. 규칙은 [ADR 0013 "A2 사전 등록"](../docs/adr/0013-ranker-v2-design.md)과
+  `ebnerd/preregistration/cold-v1.2.yaml`에 결과 전에 고정했다.
+  - `ebnerd/neural/cold.py`(히스토리 절단·인기도 0 강제 — 이후 신경망 비교와 공유), `cold_transforms.py`(학습 마스킹,
+    유저 서브샘플, 풀 축소, 요청 내 랭크, 축소 CTR, 릴리스 양자화), `candidate_config.py`(서빙 5출처 라운드로빈·cap),
+    `heuristic_fit.py`(4항 가중치 적합), `cold_verdicts.py`(기계 판정), `run_cold.py`(단계별 체크포인트 실행기),
+    `make_cold_report.py`(JSON → 표), `synthetic.py`(EB-NeRD 스키마의 합성 데이터 — CI와 드라이 런용).
+  - 판정용 실행은 원격 CPU 런타임에서 `scripts/m4_colab_driver.py`로 한다(명령은 ADR 0013 A2.8, 핀은
+    `requirements-colab.txt`). 개발용 Mac에서는 돌리지 않는다.
+  - 로컬에서는 배선 확인만 한다. 등록한 인자·입력과 다른 실행은 리포트 머리말에 "demo, not evidence"가 찍힌다:
+    `python -m evaluation.recsys.ebnerd.synthetic --out /tmp/synth` 뒤
+    `python -m evaluation.recsys.ebnerd.run_cold --dataset ebnerd_synth --root /tmp/synth --out-dir /tmp/cold --seeds 0
+    --n-boot 20 --p2-sample 150 --sub-cap 100 --stage all`(약 10초).
 - **라이선스**: EB-NeRD는 연구/비상업 전용이다. 데이터·임베딩은 gitignore된 `data/benchmarks/ebnerd/`(또는
   `EBNERD_ROOT`)에만 두고 저장소에는 집계 수치만 커밋한다. 저장소 커밋·공개 데이터셋·영구 사본은 금지이고, 무거운 재실행은
   비공개 클라우드 런타임에 실행마다 올려서 돌린 뒤 지운다(ADR 0013 "사후 변경 기록"의 통합 기록).
