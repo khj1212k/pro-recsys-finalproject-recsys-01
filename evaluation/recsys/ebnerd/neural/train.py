@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -18,8 +19,16 @@ from typing import Callable, Mapping, Optional
 # CUDA의 결정론적 행렬곱에 필요하다. CUDA가 초기화되기 전에 있어야 하므로 torch를 임포트하기 전에 둔다.
 os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
+import lightgbm  # noqa: E402,F401 — torch보다 먼저 불러야 한다(아래 주석)
 import numpy as np  # noqa: E402
 import torch  # noqa: E402
+
+# macOS에서는 LightGBM과 torch의 wheel이 각자 OpenMP 런타임(libomp)을 싣고 온다. 한 프로세스에서 (1) torch를 LightGBM보다
+# 먼저 임포트하거나 (2) LightGBM이 스레드를 쓴 뒤 torch가 여러 스레드로 돌면 멈추거나 죽는다(로컬 실측). E15는 한 단계
+# 안에서 두 학습기를 번갈아 쓰므로, macOS에서는 임포트 순서를 위처럼 고정하고 torch를 1스레드로 둔다. macOS는 테스트와
+# 배선 확인에만 쓰고 판정용 실행은 Linux 런타임에서 돈다(거기서는 스레드 수를 건드리지 않는다).
+if sys.platform == "darwin":
+    torch.set_num_threads(1)
 
 from .datasets import NeuralInputs, collate, eval_batches, group_batches  # noqa: E402
 from .models import NeuralRanker, NeuralSpec, listwise_loss, next_click_loss  # noqa: E402

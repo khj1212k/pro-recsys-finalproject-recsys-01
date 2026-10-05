@@ -14,6 +14,8 @@ from typing import Callable, Sequence
 import numpy as np
 import pandas as pd
 
+from recsys_core import expand_ranges
+
 from ..cold_transforms import average_rank01
 
 
@@ -70,7 +72,7 @@ def forward_chain_scores(req_time: np.ndarray, cand_ptr: np.ndarray, edges: np.n
         model = train(source)
         models.append(model)
         s = np.asarray(score(model, target), dtype=np.float32)
-        pos = np.concatenate([np.arange(cand_ptr[r], cand_ptr[r + 1]) for r in target]) if len(target) else np.zeros(0, int)
+        _, pos = expand_ranges(cand_ptr[target], cand_ptr[target + 1])
         if len(s) != len(pos):
             raise ValueError("score가 돌려준 점수의 수가 대상 요청의 후보 수와 다릅니다")
         scores[pos] = s

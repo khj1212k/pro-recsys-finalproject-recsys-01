@@ -5,6 +5,7 @@ torch가 없으면 통째로 건너뛴다(기본 CI). torch가 있는 CI job과 
 import dataclasses
 import math
 
+import lightgbm  # noqa: F401 — macOS에서는 torch보다 먼저 불러야 한다(neural/train.py의 주석)
 import numpy as np
 import pytest
 

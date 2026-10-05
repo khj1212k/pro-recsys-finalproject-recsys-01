@@ -11,6 +11,7 @@ import math
 from dataclasses import asdict, dataclass
 from typing import Mapping, Optional
 
+import lightgbm  # noqa: F401 — macOS에서는 torch보다 먼저 불러야 한다(neural/train.py의 주석)
 import torch
 import torch.nn.functional as F
 from torch import nn

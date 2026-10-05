@@ -1,4 +1,5 @@
 """EB-NeRD 스키마의 합성 데이터셋 fixture (실데이터 없이 도는 테스트용, 세션에 한 번만 만든다)."""
+import lightgbm  # noqa: F401 — macOS에서는 torch보다 먼저 불러야 한다(evaluation/recsys/ebnerd/neural/train.py의 주석)
 import pytest
 
 
