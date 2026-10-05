@@ -204,7 +204,7 @@ def api_client(engine, database_url):
         app_engine = app_engine or engine
         if service is None:
             cfg = RecsysConfig(**{"time_budget_ms": 5000, **cfg_overrides})
-            service = build_sql_service(cfg, app_engine, database_url)
+            service = build_sql_service(cfg, database_url)
         services.append(service)
 
         def session_dep():
@@ -454,7 +454,7 @@ def test_request_sessions_holding_every_app_connection_do_not_starve_the_realtim
     app_engine = create_engine(database_url, pool_size=2, max_overflow=0, pool_timeout=10)
     register_pgvector_on_connect(app_engine)
     uid = seeded.add_user(long_term=seeded.vec_of[seeded.by_topic[0][0]])
-    service = build_sql_service(RecsysConfig(time_budget_ms=5000), app_engine, database_url)
+    service = build_sql_service(RecsysConfig(time_budget_ms=5000), database_url)
     try:
         with Session(app_engine) as held, Session(app_engine) as request_session:
             held.execute(text("SELECT 1"))
@@ -534,3 +534,33 @@ def test_a_sql_error_in_one_fallback_step_does_not_poison_the_next_step(engine, 
     assert rec.source == "popular"
     assert rec.news_letter_ids
     assert service.counters.get("fallback_step_error.batch") == 1
+
+
+def test_one_request_needs_only_one_app_pool_connection(api_client, database_url, seeded, pg_conn):
+    """요청 세션 1개 말고는 앱 풀을 쓰지 않는다: 실시간 계산은 전용 풀, 모델 레지스트리 확인과
+    노출 로그 쓰기는 보조 풀을 쓴다. 그래서 앱 풀이 1개뿐이어도 /newsletters/today가 realtime으로
+    응답하고 노출 로그까지 남는다 - 응답 뒤 작업과 요청 세션 정리의 순서(FastAPI 버전에 따라
+    다르다)에 기대지 않는다."""
+    from sqlalchemy import create_engine
+
+    from app.database import register_pgvector_on_connect
+
+    app_engine = create_engine(database_url, pool_size=1, max_overflow=0, pool_timeout=1)
+    register_pgvector_on_connect(app_engine)
+    uid = seeded.add_user(long_term=seeded.vec_of[seeded.by_topic[0][0]])
+    try:
+        resp = api_client(uid, app_engine=app_engine).get("/newsletters/today")
+    finally:
+        app_engine.dispose()
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Rec-Source"] == "realtime"
+    shown = [item["news_letter_id"] for item in resp.json()]
+    assert shown
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT news_letter_id FROM recommendation_impression_log WHERE user_id = %s ORDER BY position",
+            (uid,),
+        )
+        logged = [r[0] for r in cur.fetchall()]
+    assert logged == shown

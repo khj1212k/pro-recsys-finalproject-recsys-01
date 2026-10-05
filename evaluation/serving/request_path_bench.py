@@ -424,7 +424,7 @@ def _measure(args, rng, now, url) -> dict:
             app_engine = create_engine(url, pool_timeout=10)
             register_pgvector_on_connect(app_engine)
             if wiring == "dedicated_pool":
-                service = build_sql_service(cfg, app_engine, url)
+                service = build_sql_service(cfg, url)
             else:
                 service = build_service(
                     cfg, repo_factory=partial(sql_repo_scope, app_engine, cfg.time_budget_ms)

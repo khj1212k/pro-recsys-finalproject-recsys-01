@@ -104,6 +104,27 @@ def test_stats_endpoint_requires_a_logged_in_user(wired):
     assert wired.client.get("/recsys/stats").status_code == 401
 
 
+def test_a_config_typo_fails_at_startup_instead_of_on_the_first_request(monkeypatch):
+    monkeypatch.setenv("RECSYS_MODE", "realtme")
+
+    with pytest.raises(ValueError, match="RECSYS_MODE"):
+        with TestClient(app):
+            pass
+
+
+def test_lifespan_builds_the_service_at_startup_and_releases_it_at_shutdown():
+    from app.recsys import runtime
+
+    with TestClient(app):
+        service = runtime._service
+        assert service is not None
+        assert runtime.get_recommendation_service() is service
+
+    assert runtime._service is None
+    with pytest.raises(RuntimeError):  # 작업 스레드 풀이 닫혔다
+        service._executor.submit(lambda: None)
+
+
 def test_stats_endpoint_reports_counters(wired):
     wired.client.get("/newsletters/today")
     wired.client.get("/newsletters/today")

@@ -1,3 +1,5 @@
+import threading
+import time
 from datetime import timedelta
 
 import lightgbm as lgb
@@ -129,6 +131,46 @@ def test_model_is_hot_reloaded_only_after_the_interval():
     assert reloaded.model_version == "lgbm:ranker@v2"
     assert reloaded.scores[0] < reloaded.scores[1]
     assert source.version_calls == 2
+
+
+class BlockingSource(FakeSource):
+    """레지스트리 조회가 멈춘 상황(앱이 바빠 커넥션을 못 빌리거나 DB가 느린 경우)."""
+
+    def __init__(self):
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def active_version(self, name):
+        self.entered.set()
+        assert self.release.wait(5)
+        return super().active_version(name)
+
+
+def test_background_reload_never_makes_a_request_wait_for_the_registry():
+    source = BlockingSource()
+    source.publish("v1", _train_text(+1))
+    scorer = LightGBMScorer(
+        source, fallback=HeuristicScorer(), feature_fn=feature0_is_axis0_cosine,
+        clock=lambda: 0.0, reload_in_background=True,
+    )
+
+    started = time.perf_counter()
+    while_blocked = scorer.score(_state(), _items(), NOW)
+    elapsed = time.perf_counter() - started
+
+    try:
+        assert source.entered.wait(2)
+        assert while_blocked.model_version == "heuristic-v1"
+        assert elapsed < 0.5
+    finally:
+        source.release.set()
+
+    deadline = time.monotonic() + 5
+    while scorer._current is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert scorer.score(_state(), _items(), NOW).model_version == "lgbm:ranker@v1"
+    assert source.version_calls == 1
 
 
 def test_deactivating_the_model_returns_to_the_heuristic_after_reload():

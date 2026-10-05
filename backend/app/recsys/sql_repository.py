@@ -203,22 +203,53 @@ class SqlRecsysRepository:
         return created_at, [int(i) for i in (ids or [])]
 
 
+# 접속 자체가 멈춘 경우(네트워크 단절 등) 작업 스레드가 pool_timeout보다 오래 붙잡히지 않게 한다.
+# libpq는 2초 미만 값을 2초로 올려 쓴다.
+CONNECT_TIMEOUT_S = 2
+
+
 def create_recsys_engine(database_url: str, workers: int, time_budget_ms: int) -> Engine:
     """실시간 경로 전용 커넥션 풀(벌크헤드). API 요청은 인증 조회 때부터 앱 풀 커넥션을 쥔 채
     추천 결과를 기다리므로, 작업 스레드가 같은 풀에서 빌리면 동시 요청이 풀 크기에 닿을 때
     순환 대기가 생긴다. 작업 스레드 수만큼 따로 두면 작업 스레드는 풀을 기다리지 않고,
-    앱 풀 사용량은 요청당 1개로 이전과 같다."""
+    앱 풀 사용량은 요청당 1개로 이전과 같다.
+
+    pool_pre_ping: DB가 재시작되면 풀에 남은 커넥션이 전부 죽어 있다. 미리 확인하지 않으면
+    죽은 커넥션 하나마다 요청 하나가 오류 폴백으로 끝난다(체크아웃마다 왕복 1번을 더 낸다)."""
     from app.database import register_pgvector_on_connect
 
     eng = create_engine(
         database_url,
-        connect_args={"options": "-c client_encoding=utf8"},
+        connect_args={"options": "-c client_encoding=utf8", "connect_timeout": CONNECT_TIMEOUT_S},
         pool_size=workers,
         max_overflow=0,
         pool_timeout=max(0.001, time_budget_ms / 1000.0),
+        pool_pre_ping=True,
     )
     register_pgvector_on_connect(eng)
     return eng
+
+
+def create_aux_engine(database_url: str) -> Engine:
+    """요청 밖에서 도는 작은 작업(모델 레지스트리 확인, 노출 로그 쓰기) 전용 풀.
+
+    이 둘이 앱 풀을 쓰면 요청 하나가 앱 풀 커넥션을 2개까지 필요로 하게 된다: 레지스트리
+    확인은 요청 세션이 살아 있는 동안 돌고, 노출 로그는 응답 뒤 BackgroundTasks에서 쓰는데
+    그때 요청 세션이 이미 반납됐는지는 FastAPI 버전의 의존성 정리 순서에 달려 있다. 따로 두면
+    앱 풀 사용량은 FastAPI 버전과 무관하게 요청당 1개다. 쓰기는 건당 1ms 안팎이라 2개면
+    충분하고, 못 빌리면 2초 뒤 포기한다(노출 로그는 impressions.failed, 레지스트리는
+    scorer.reload_error로 센다)."""
+    return create_engine(
+        database_url,
+        connect_args={
+            "options": "-c client_encoding=utf8 -c statement_timeout=5000",
+            "connect_timeout": CONNECT_TIMEOUT_S,
+        },
+        pool_size=1,
+        max_overflow=1,
+        pool_timeout=2,
+        pool_pre_ping=True,
+    )
 
 
 @contextmanager

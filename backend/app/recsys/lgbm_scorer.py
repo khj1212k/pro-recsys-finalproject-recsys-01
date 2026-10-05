@@ -5,6 +5,11 @@
 모델은 model_registry 테이블의 활성 행을 reload_interval_s(기본 60초)마다 확인해
 버전이 바뀌면 다시 읽는다. 활성 모델이나 피처 함수가 없거나, 피처 계산/예측이
 실패하면 휴리스틱 점수로 대신한다.
+
+운영 배선(runtime.build_sql_service)은 reload_in_background=True로 쓴다: 레지스트리 조회와
+lightgbm 임포트·모델 파싱을 데몬 스레드가 하고, 요청을 처리하는 작업 스레드는 그동안 현재
+모델(없으면 휴리스틱)로 점수를 낸다. 요청 시간 예산 안에서 DB 풀이나 모델 로드를 기다리지
+않는다.
 """
 import importlib
 import logging
@@ -98,12 +103,14 @@ class LightGBMScorer:
         reload_interval_s: float = 60.0,
         clock: Callable[[], float] = time.monotonic,
         counters: Optional[RecsysCounters] = None,
+        reload_in_background: bool = False,
     ):
         self.source = source
         self.fallback = fallback
         self.feature_fn = feature_fn
         self.model_name = model_name
         self.reload_interval_s = reload_interval_s
+        self.reload_in_background = reload_in_background
         self.clock = clock
         self.counters = counters or RecsysCounters()
         self._current: Optional[_Loaded] = None
@@ -111,14 +118,29 @@ class LightGBMScorer:
         self._reload_lock = threading.Lock()
 
     def maybe_reload(self) -> None:
+        """레지스트리를 확인할 때가 됐으면 확인한다. reload_in_background면 확인·로드를 데몬
+        스레드에 넘기고 바로 돌아온다(호출한 요청은 현재 모델로 진행)."""
         now = self.clock()
         if self._last_check is not None and now - self._last_check < self.reload_interval_s:
             return
         # 동시에 들어온 요청 중 하나만 레지스트리를 확인하고, 나머지는 현재 모델로 진행한다.
         if not self._reload_lock.acquire(blocking=False):
             return
+        self._last_check = now
+        if not self.reload_in_background:
+            self._reload_and_release()
+            return
         try:
-            self._last_check = now
+            threading.Thread(
+                target=self._reload_and_release, name="recsys-model-reload", daemon=True
+            ).start()
+        except Exception:
+            self._reload_lock.release()
+            logger.exception("could not start the model reload thread; keeping current model")
+            self.counters.inc("scorer.reload_error")
+
+    def _reload_and_release(self) -> None:
+        try:
             version = self.source.active_version(self.model_name)
             if version is None:
                 if self._current is not None:

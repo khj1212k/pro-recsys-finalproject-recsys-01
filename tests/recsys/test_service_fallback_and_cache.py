@@ -1,3 +1,4 @@
+import logging
 import time
 from contextlib import contextmanager
 from datetime import timedelta
@@ -236,3 +237,26 @@ def test_impression_write_failure_is_swallowed_and_counted():
     service.log_impressions(user_id=1, rec=rec, shown_ids=rec.news_letter_ids)
 
     assert service.counters.get("impressions.failed") == 1
+
+
+def test_a_persistent_realtime_failure_logs_one_traceback_per_minute_not_one_per_request(caplog):
+    repo = _repo()
+    repo.fail_on.add("knn_ids")
+    t = [0.0]
+    service = _service(repo, RecsysConfig(cache_ttl_s=0), clock=lambda: t[0])
+
+    def tracebacks():
+        return [r for r in caplog.records if r.exc_info and "realtime recommendation failed" in r.getMessage()]
+
+    with caplog.at_level(logging.ERROR, logger="app.recsys.service"):
+        for _ in range(3):
+            service.recommend(1, fallback_repo=repo)
+        assert len(tracebacks()) == 1
+
+        t[0] = 61.0
+        service.recommend(1, fallback_repo=repo)
+
+    assert len(tracebacks()) == 2
+    assert "+2 similar failures" in tracebacks()[1].getMessage()
+    # 로그를 줄여도 건수는 빠짐없이 센다
+    assert service.counters.get("fallback.error") == 4
