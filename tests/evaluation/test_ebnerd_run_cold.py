@@ -408,6 +408,44 @@ def test_only_the_registered_arguments_and_inputs_earn_the_evidence_grade():
     assert run_cold.evidence_grade(cfg, PREREG["run"]["n_boot"], PREREG) == {"grade": EVIDENCE_GRADE, "reasons": []}
 
 
+def test_report_stamps_the_recorded_preregistration_commit_not_the_one_passed_in(tmp_path, monkeypatch, caplog):
+    """리포트 머리말의 사전 등록 커밋은 저장소에 같이 든 .commit 파일의 값이다. 실행할 때 넘긴 값(M4_PREREG_COMMIT)은
+    그 파일이 없을 때만 쓴다 — 출처 기록에 아무 SHA나 찍을 수 있으면 안 된다."""
+    import logging
+
+    from evaluation.recsys.ebnerd.cold_verdicts import prereg_commit
+
+    recorded = prereg_commit()
+    assert recorded and len(recorded) == 40
+    monkeypatch.delenv("M4_PREREG_COMMIT", raising=False)
+    assert run_cold.report_prereg_commit() == {"commit": recorded, "commit_source": "file"}
+    with caplog.at_level(logging.WARNING, logger="ebnerd.cold"):
+        monkeypatch.setenv("M4_PREREG_COMMIT", recorded[:7])                 # 같은 커밋의 짧은 표기는 경고하지 않는다
+        assert run_cold.report_prereg_commit() == {"commit": recorded, "commit_source": "file"}
+        assert not caplog.records
+        monkeypatch.setenv("M4_PREREG_COMMIT", "0" * 40)
+        assert run_cold.report_prereg_commit() == {"commit": recorded, "commit_source": "file"}
+        assert len(caplog.records) == 1 and "0" * 40 in caplog.records[0].getMessage()
+    # 파일이 없는 곳(등록 디렉터리 없이 옮긴 코드)에서만 넘긴 값을 쓰고, 어디서 온 값인지 적는다
+    monkeypatch.setattr(run_cold, "prereg_commit", lambda: None)
+    assert run_cold.report_prereg_commit() == {"commit": "0" * 40, "commit_source": "env"}
+    monkeypatch.delenv("M4_PREREG_COMMIT")
+    assert run_cold.report_prereg_commit() == {"commit": None, "commit_source": None}
+
+
+def test_assembled_report_carries_the_recorded_commit_even_when_told_otherwise(full_run, tmp_path, monkeypatch):
+    from evaluation.recsys.ebnerd.cold_verdicts import prereg_commit
+
+    out, d = full_run
+    assert d["meta"]["preregistration"]["commit"] == prereg_commit()
+    assert d["meta"]["preregistration"]["commit_source"] == "file"
+    monkeypatch.setenv("M4_PREREG_COMMIT", "0" * 40)
+    js, md = tmp_path / "again.json", tmp_path / "again.md"
+    assert run_cold.main(["--out-dir", str(out), *SMALL, "--stage", "assemble", "--out-json", str(js),
+                          "--out-md", str(md)]) == 0
+    assert json.loads(js.read_text()) == d and "0" * 40 not in md.read_text()
+
+
 def test_report_separates_the_registered_articles_sha_from_what_the_run_was_told(synth_root, tmp_path, monkeypatch, caplog):
     """리포트의 기사 원본 sha는 등록 상수를 베낀 값과 이 실행이 받은 값(manifest → 드라이버 → 환경변수)을 따로 적는다.
     단계 함수는 빈 것으로 바꿔, 환경변수 → 설정 → progress.json → 리포트로 가는 길만 본다."""

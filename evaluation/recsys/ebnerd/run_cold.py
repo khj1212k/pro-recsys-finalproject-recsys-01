@@ -925,6 +925,18 @@ def assemble(store: Store, prereg: dict, seeds: list[int], n_boot: int, meta: di
     return d
 
 
+def report_prereg_commit() -> dict:
+    """리포트 머리말에 찍는 사전 등록 커밋과 그 출처.
+
+    기준은 yaml 옆의 .commit 파일이다(테스트가 그 커밋의 yaml과 지금 파일을 바이트로 비교한다). 실행할 때 넘긴 값
+    (M4_PREREG_COMMIT)은 그 파일이 없을 때만 쓴다 — 출처 기록을 운영자가 넘긴 값이 덮어쓰면 안 된다.
+    """
+    recorded, claimed = prereg_commit(), os.getenv("M4_PREREG_COMMIT") or None
+    if recorded and claimed and not recorded.startswith(claimed):
+        log.warning("M4_PREREG_COMMIT(%s)이 등록 파일에 적힌 커밋(%s)과 다릅니다. 등록 파일의 값을 씁니다.", claimed, recorded)
+    return {"commit": recorded or claimed, "commit_source": "file" if recorded else ("env" if claimed else None)}
+
+
 def stage_assemble(store: Store, prereg: dict, args, config: dict, bench_info: Optional[dict]):
     from .make_cold_report import render
 
@@ -934,7 +946,7 @@ def stage_assemble(store: Store, prereg: dict, args, config: dict, bench_info: O
     meta = {
         "label": prereg["evidence_label"], "evidence": evidence_grade(config, args.n_boot, prereg),
         "preregistration": {"id": prereg["id"], "sha256": config["prereg_sha256"], "adr": prereg["adr"],
-                            "commit": os.getenv("M4_PREREG_COMMIT") or prereg_commit()},
+                            **report_prereg_commit()},
         "code_sha": config["code_sha"], "dataset": config["dataset"], "seeds": config["seeds"],
         "n_boot": args.n_boot, "p2_sample": config["p2_sample"], "sub_cap": config["sub_cap"],
         "fake_dim": config["fake_dim"], "max_fit": config["max_fit"], "max_test": config["max_test"],

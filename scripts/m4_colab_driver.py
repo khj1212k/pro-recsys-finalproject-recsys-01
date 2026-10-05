@@ -720,7 +720,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--cu-warn", type=float, default=CU_WARN)
     run.add_argument("--cu-before", type=float, default=None, help="실행 전 잔액(기록용)")
     run.add_argument("--runtime-label", default=None, help="기록용 런타임 이름(생략하면 자동 판별)")
-    run.add_argument("--prereg-commit", default=None, help="사전 등록을 담은 커밋 SHA(리포트 머리말에 적힌다)")
+    run.add_argument("--prereg-commit", default=None,
+                     help="사전 등록을 담은 커밋 SHA. 코드에 든 등록 기록(.commit 파일)이 없을 때만 리포트 머리말에 쓰인다")
     run.add_argument("--python", default=None)
     run.add_argument("--skip-install", action="store_true")
     run.add_argument("--fresh", action="store_true", help="이전 산출물·데이터를 지우고 처음부터")
