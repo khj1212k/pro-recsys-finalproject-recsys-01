@@ -27,6 +27,8 @@ class UserNewsLetterCTRLog(SQLModel, table=True):
             postgresql_where=text("request_id IS NOT NULL"),
         ),
         CheckConstraint("event IN ('click', 'detail_view')", name="ck_user_newsletter_ctr_log_event"),
+        # 아이템별 최근 클릭 수(인기도 창 집계, ADR 0033)
+        Index("ix_user_newsletter_ctr_log_news_letter_id_created_at", "news_letter_id", "created_at"),
     )
 
     log_id: Optional[int] = Field(default=None, primary_key=True)

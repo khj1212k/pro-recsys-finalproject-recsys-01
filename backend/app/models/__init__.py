@@ -5,4 +5,9 @@ from .news import Category, Press, RSS_URI, NewsRaw, NewsLetter, NewsLetterCateg
 from .batch import NewsLettersCategory, NewsLetterTodayBatch
 from .log import UserNewsLetterCTRLog
 from .job import JobRun
-from .recsys import RecommendationImpressionLog, RecommendationRequestLog, ModelRegistry
+from .recsys import (
+    ModelRegistry,
+    RecommendationImpressionLog,
+    RecommendationRequestLog,
+    UserProfileState,
+)

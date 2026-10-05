@@ -4,6 +4,9 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
+from recsys_core.profile import HistState
+from recsys_core.serving import ClickEvent, WindowCounts
+
 # X-Rec-Source 값. realtime/cold_start_*는 요청 시점 파이프라인이 만든 결과이고,
 # batch/popular/recent는 폴백 체인(또는 RECSYS_MODE=batch)이 만든 결과다.
 SOURCE_REALTIME = "realtime"
@@ -34,18 +37,39 @@ class Item:
     embedding: np.ndarray
     created_at: datetime
     raw_news_count: int
+    # 대표 카테고리(매핑된 카테고리 ID 중 가장 작은 것). 화면에 내보낼 수 있는 아이템은 항상 값이 있다.
+    category_id: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class ProfileState:
+    """user_profile_state 한 행: 클릭마다 갱신되는 장기 프로필의 증분 상태(ADR 0033).
+
+    last_event_at은 반영된 클릭 중 가장 늦은 것의 시각(마이크로초)이다. 요청 시각보다 늦으면 이 상태는
+    그 요청의 피처 입력으로 쓸 수 없다(recsys_core.serving.check_inputs)."""
+
+    hist: HistState = field(default_factory=HistState)
+    last_event_at: Optional[datetime] = None
 
 
 @dataclass
 class UserState:
     user_id: int
+    # 장기 벡터 = 증분 상태의 방향(반감기 7일 감쇠 합). 클릭 이력이 없으면 None이다.
     long_term: Optional[np.ndarray] = None
+    # 단기 벡터 = 최근 24시간·최근 20클릭의 단위 벡터 합(ADR 0017)
     short_term: Optional[np.ndarray] = None
     category_ids: List[int] = field(default_factory=list)
     clicked_ids: Set[int] = field(default_factory=set)
     # long_term이 없을 때 콜드스타트 체인이 채우는 대체 프로필(온보딩 평균/카테고리 중심)
     profile: Optional[np.ndarray] = None
     profile_source: str = "none"
+    # --- recsys_core 서빙 어댑터의 입력(ADR 0033). 휴리스틱 스코어러는 읽지 않는다.
+    hist: Optional[HistState] = None
+    hist_last_event_at: Optional[datetime] = None
+    recent_clicks: List[ClickEvent] = field(default_factory=list)
+    # 후보 아이템의 인기도 창 집계. None은 "아직 읽지 않음"이다(어댑터가 값을 내지 않는다).
+    popularity: Optional[Dict[int, WindowCounts]] = None
 
     @property
     def has_personal_signal(self) -> bool:

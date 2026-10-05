@@ -1,5 +1,7 @@
+import logging
 import uuid
-from typing import Literal, Optional
+from datetime import datetime
+from typing import Callable, Literal, Optional
 
 from fastapi import APIRouter, Depends
 from sqlmodel import Field, Session, SQLModel
@@ -7,8 +9,19 @@ from app.database import get_session
 from app.api.user_check import get_current_user
 from app.models.user import User
 from app.models.log import UserNewsLetterCTRLog
+from app.recsys import profile_store
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/logs", tags=["logs"])
+
+# (클릭 행을 쓴 트랜잭션의 커넥션, user_id, news_letter_id, 클릭 시각) -> 상태에 반영했는지
+ProfileUpdater = Callable[[object, int, int, datetime], bool]
+
+
+def get_profile_updater() -> ProfileUpdater:
+    """클릭을 장기 프로필의 증분 상태에 반영하는 함수(ADR 0033). 테스트에서 바꿔 끼운다."""
+    return profile_store.apply_click
 
 
 class LogRequest(SQLModel):
@@ -36,11 +49,12 @@ class LogResponse(SQLModel):
 def create_newsletter_click_log(
     log_req: LogRequest,
     user: User = Depends(get_current_user),
-    session: Session = Depends(get_session)
+    session: Session = Depends(get_session),
+    update_profile: ProfileUpdater = Depends(get_profile_updater),
 ):
-
+    user_id = user.user_id
     new_log = UserNewsLetterCTRLog(
-        user_id=user.user_id,
+        user_id=user_id,
         news_letter_id=log_req.news_letter_id,
         request_id=log_req.request_id,
         position=log_req.position,
@@ -49,6 +63,16 @@ def create_newsletter_click_log(
     )
 
     session.add(new_log)
+    session.flush()
+    if log_req.event == "click":
+        # 클릭 행과 같은 트랜잭션에서 장기 프로필 상태를 한 번 갱신한다(ADR 0033): 다음 요청이 이 클릭을
+        # 반영한 프로필을 읽는다. 상태는 클릭 로그의 캐시라, 갱신이 실패해도 클릭은 잃지 않는다 - savepoint까지만
+        # 되돌리고 클릭 행은 커밋한다. 어긋난 상태는 `jobs.run rebuild_user_state`가 로그에서 다시 만든다.
+        try:
+            with session.begin_nested():
+                update_profile(session.connection(), user_id, log_req.news_letter_id, new_log.created_at)
+        except Exception:
+            logger.exception("profile state update failed for user %s; the click is still stored", user_id)
     session.commit()
     session.refresh(new_log)
 

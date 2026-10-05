@@ -18,6 +18,9 @@ COPY backend/app ./app
 # 이 목록만으로 app.main이 뜨는지는 tests/recsys/test_api_image_import_closure.py와 CI 스모크가 확인한다.
 COPY ai_workspace/recommend_engine/src/__init__.py ./src/__init__.py
 COPY ai_workspace/recommend_engine/src/core ./src/core
+# 오프라인 하네스와 같이 쓰는 피처 코어(ADR 0033): 후보 구성, 장기 프로필 상태, 서빙 피처 어댑터.
+# 서빙이 쓰는 경로는 numpy만 임포트한다(pandas는 DataFrame을 돌려주는 함수 안에서만 읽는다).
+COPY recsys_core ./recsys_core
 
 RUN useradd --system --uid 10001 --home-dir /app --shell /usr/sbin/nologin app
 USER app
