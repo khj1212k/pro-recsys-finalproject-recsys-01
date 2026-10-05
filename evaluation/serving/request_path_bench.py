@@ -194,6 +194,18 @@ def seed(url: str, args, rng, now: datetime) -> dict:
                 for i in range(u)
             ),
         )
+        # 장기 프로필의 증분 상태(ADR 0033). 요청 경로는 "user".user_embedding이 아니라 이 행을 읽는다.
+        # 여기서는 지연을 재려는 것이라 클릭 로그에서 만들지 않고 합성 장기 벡터(uemb)를 그대로 넣는다
+        # (float64 little-endian 바이트 = 운영과 같은 크기의 행). 콜드 사용자는 행이 없다.
+        copy_rows(
+            cur,
+            "user_profile_state (user_id, hist_sum, hist_anchor_ts, hist_len, hist_cat_counts)",
+            (
+                (int(user_ids[i]), "\\\\x" + uemb[i].astype("<f8").tobytes().hex(),
+                 (now - timedelta(days=2)).isoformat(), 1, '{"0": 1}')
+                for i in range(cold_users, u)
+            ),
+        )
         pref_rows = []
         for i in range(u):
             for c in rng.choice(TOPICS, size=int(rng.integers(1, 4)), replace=False):
@@ -278,12 +290,14 @@ def explain(engine, now: datetime, sample_user: int, sample_vec: np.ndarray) -> 
             "AND n.news_letter_embedding IS NOT NULL ORDER BY n.news_letter_embedding <=> :q LIMIT 100",
             {"since": since72, "q": np.ascontiguousarray(sample_vec, dtype=np.float32)},
         ),
-        "short_term_avg": (
-            "SELECT vector_send(AVG(t.e)) FROM (SELECT n.news_letter_embedding AS e "
+        # 최근 클릭 20건(시각 + 벡터). 예전에는 DB에서 AVG로 한 벡터를 받았다(결과 파일의 short_term_avg).
+        "recent_clicks": (
+            "SELECT l.created_at::timestamptz, vector_send(n.news_letter_embedding) "
             "FROM user_newsletter_ctr_log l JOIN news_letter n ON n.news_letter_id = l.news_letter_id "
-            "WHERE l.user_id = :uid AND l.created_at >= :since AND n.news_letter_embedding IS NOT NULL "
-            "ORDER BY l.created_at DESC LIMIT 20) t",
-            {"uid": sample_user, "since": since24},
+            "WHERE l.user_id = :uid AND l.created_at >= :since AND l.created_at < :until "
+            "AND l.event = 'click' AND n.news_letter_embedding IS NOT NULL "
+            "ORDER BY l.created_at DESC, l.log_id DESC LIMIT 20",
+            {"uid": sample_user, "since": since24, "until": now},
         ),
         "last_click_id": (
             "SELECT log_id FROM user_newsletter_ctr_log WHERE user_id = :uid "
@@ -340,7 +354,7 @@ def _measure(args, rng, now, url) -> dict:
 
     from app.database import register_pgvector_on_connect
     from app.recsys.config import RecsysConfig
-    from app.recsys.pipeline import popular_ids
+    from app.recsys.pipeline import load_popularity, popular_ids
     from app.recsys.service import build_service
     from app.recsys.sql_repository import SqlRecsysRepository, sql_repo_scope, vector_from_send
 
@@ -364,15 +378,17 @@ def _measure(args, rng, now, url) -> dict:
     with Session(engine) as s:
         repo = SqlRecsysRepository(s)
         repo.recent_ids(1)  # 커넥션 워밍
-        profile = repo.long_term_and_categories(active[0])[0]
+        profile = repo.profile_state(active[0])[0].hist.direction()
         window = [r[0] for r in s.execute(
             text("SELECT news_letter_id FROM news_letter WHERE news_letter_created_at >= :s"), {"s": since72}
         ).fetchall()]
         cands = window[:300]
         q["last_click_id"] = stats(timed(repo.last_click_id, pick(active)))
-        q["long_term_and_categories"] = stats(timed(repo.long_term_and_categories, pick(active)))
-        q["short_term_avg_active"] = stats(timed(lambda u: repo.short_term_vector(u, since24, 20), pick(active)))
-        q["short_term_avg_heavy"] = stats(timed(lambda u: repo.short_term_vector(u, since24, 20), pick(heavy)))
+        # 이름이 바뀐 줄(ADR 0033): 장기 벡터는 user_profile_state에서, 단기는 최근 클릭 20건을 읽어 프로세스에서 더한다.
+        # 이전 결과 파일의 long_term_and_categories / short_term_avg_*와 같은 자리의 값이다(쿼리는 다르다).
+        q["profile_state"] = stats(timed(repo.profile_state, pick(active)))
+        q["recent_clicks_20_active"] = stats(timed(lambda u: repo.recent_clicks(u, since24, now, 20), pick(active)))
+        q["recent_clicks_20_heavy"] = stats(timed(lambda u: repo.recent_clicks(u, since24, now, 20), pick(heavy)))
         q["knn_100_in_window"] = stats(timed(lambda _: repo.knn_ids(profile, since72, 100), range(R)))
         q["recent_100"] = stats(timed(lambda _: repo.recent_ids(100), range(R)))
         q["popular_100(window_meta+compute_scores)"] = stats(
@@ -381,6 +397,9 @@ def _measure(args, rng, now, url) -> dict:
         q["category_recent_50"] = stats(timed(lambda _: repo.category_recent_ids([1, 2], since72, 50), range(R)))
         q["clicked_among_300"] = stats(timed(lambda u: repo.clicked_among(u, cands), pick(heavy)))
         q["items_300_uncached"] = stats(timed(lambda _: repo.items(cands), range(max(20, R // 10))))
+        # 피처 어댑터의 인기도 창 집계(후보 300개, 클릭 6/24/48시간 + 노출 24시간). 요청 경로 밖(응답 뒤)에서 돈다.
+        # 이 벤치의 DB에는 노출 로그가 없어 노출 쪽은 빈 인덱스를 읽는 비용만 든다.
+        q["item_window_counts_300"] = stats(timed(lambda _: load_popularity(repo, cands, now), range(R)))
         q["latest_batch"] = stats(timed(repo.latest_batch, pick(active)))
     result["query"] = q
     result["explain"] = explain(engine, now, heavy[0], profile)
@@ -473,8 +492,11 @@ def _measure(args, rng, now, url) -> dict:
     st = {}
     with Session(engine) as s:
         repo = SqlRecsysRepository(s)
-        st["postgres_avg_in_db(heavy)"] = stats(timed(lambda u: repo.short_term_vector(u, since24, 20), pick(heavy)))
-        st["postgres_avg_in_db(active)"] = stats(timed(lambda u: repo.short_term_vector(u, since24, 20), pick(active)))
+        # 지금의 요청 경로: 최근 클릭 20건의 시각과 벡터를 읽는다(예전 키 postgres_avg_in_db는 DB 안 AVG였다).
+        st["postgres_recent_clicks(heavy)"] = stats(
+            timed(lambda u: repo.recent_clicks(u, since24, now, 20), pick(heavy)))
+        st["postgres_recent_clicks(active)"] = stats(
+            timed(lambda u: repo.recent_clicks(u, since24, now, 20), pick(active)))
 
         def pg_ids(uid):
             ids = [r[0] for r in s.execute(text(

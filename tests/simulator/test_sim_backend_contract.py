@@ -49,6 +49,7 @@ from app.models.batch import NewsLettersCategory, NewsLetterTodayBatch  # noqa: 
 from app.models.log import UserNewsLetterCTRLog  # noqa: E402
 from app.models.news import Category, NewsLetter, NewsLetterCategories  # noqa: E402
 from app.models.user import User, UserPreferredCategories  # noqa: E402
+from app.recsys.types import ProfileState  # noqa: E402
 
 from sim.catalog import synthetic_catalog  # noqa: E402
 from sim.click_model import ClickModel, preset  # noqa: E402
@@ -195,13 +196,16 @@ class SqliteRecsysRepo:
         return self.session.exec(select(func.max(UserNewsLetterCTRLog.log_id))
                                  .where(UserNewsLetterCTRLog.user_id == user_id)).one()
 
-    def long_term_and_categories(self, user_id):
+    def profile_state(self, user_id):
         cats = self.session.exec(select(UserPreferredCategories.category_id)
                                  .where(UserPreferredCategories.user_id == user_id)).all()
-        return None, sorted(cats)
+        return ProfileState(), sorted(cats)
 
-    def short_term_vector(self, user_id, since, limit):
-        return None
+    def recent_clicks(self, user_id, since, until, limit):
+        return []
+
+    def item_window_counts(self, news_letter_ids, click_starts, inview_start, end):
+        return {}
 
     def onboarding_vector(self, user_id):
         return None

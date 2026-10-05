@@ -3,8 +3,23 @@ import os
 from dataclasses import dataclass, fields
 from typing import Mapping, Optional
 
+from recsys_core import SERVING_CANDIDATE_SPEC, CandidateSpec
+
 MODES = ("realtime", "batch")
 FATIGUE_MODES = ("off", "log", "enforce")
+
+# 후보 생성기의 출처·순서·기본값은 recsys_core.SERVING_CANDIDATE_SPEC 한곳에 있다(ADR 0033). 아래는 출처마다
+# 그 k를 덮어쓰는 설정 필드다(두 KNN 출처는 RECSYS_KNN_K 하나를 같이 쓴다).
+CANDIDATE_SOURCE_FIELDS = {
+    "knn_profile": "knn_k",
+    "knn_short": "knn_k",
+    "recent": "recent_n",
+    "popular": "popular_n",
+    "category": "category_n",
+}
+_DEFAULT_K = dict(SERVING_CANDIDATE_SPEC.sources)
+assert set(_DEFAULT_K) == set(CANDIDATE_SOURCE_FIELDS), "후보 출처 목록이 설정 필드와 다릅니다"
+assert _DEFAULT_K["knn_profile"] == _DEFAULT_K["knn_short"], "두 KNN 출처는 같은 k를 쓴다"
 
 
 @dataclass(frozen=True)
@@ -15,12 +30,12 @@ class RecsysConfig:
     time_budget_ms: int = 300
     top_k: int = 20
 
-    freshness_hours: int = 72
-    knn_k: int = 100
-    recent_n: int = 100
-    popular_n: int = 100
-    category_n: int = 50
-    candidate_cap: int = 300
+    freshness_hours: int = int(SERVING_CANDIDATE_SPEC.window_h)
+    knn_k: int = _DEFAULT_K["knn_profile"]
+    recent_n: int = _DEFAULT_K["recent"]
+    popular_n: int = _DEFAULT_K["popular"]
+    category_n: int = _DEFAULT_K["category"]
+    candidate_cap: int = SERVING_CANDIDATE_SPEC.cap
 
     short_term_hours: int = 24
     short_term_max_clicks: int = 20
@@ -70,6 +85,18 @@ class RecsysConfig:
             raise ValueError("RECSYS_EXPLORE_SLOTS and RECSYS_EXPLORE_SLOTS_COLD must not be negative")
         if self.shadow_max < 0:
             raise ValueError("RECSYS_SHADOW_MAX must not be negative")
+
+    def candidate_spec(self) -> CandidateSpec:
+        """지금 설정으로 도는 후보 생성기 구성. 출처와 라운드로빈 순서는 SERVING_CANDIDATE_SPEC의 것이고
+        값만 환경변수로 덮어쓴다. parity 게이트가 하네스의 서빙 구성과 비교하는 대상이다."""
+        return CandidateSpec(
+            window_h=float(self.freshness_hours),
+            sources=tuple(
+                (name, int(getattr(self, CANDIDATE_SOURCE_FIELDS[name])))
+                for name, _ in SERVING_CANDIDATE_SPEC.sources
+            ),
+            cap=int(self.candidate_cap),
+        )
 
     def explore_slots_for(self, cold: bool) -> int:
         if not self.explore_enabled:

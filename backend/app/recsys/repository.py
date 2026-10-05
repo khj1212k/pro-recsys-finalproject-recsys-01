@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, Protocol, Sequence, Set, Tuple
 
 import numpy as np
 
-from app.recsys.types import Item, NewsletterMeta
+from app.recsys.types import ClickEvent, Item, NewsletterMeta, ProfileState, WindowCounts
 
 
 class RecsysRepository(Protocol):
@@ -15,9 +15,26 @@ class RecsysRepository(Protocol):
 
     def last_click_id(self, user_id: int) -> Optional[int]: ...
 
-    def long_term_and_categories(self, user_id: int) -> Tuple[Optional[np.ndarray], List[int]]: ...
+    def profile_state(self, user_id: int) -> Tuple[ProfileState, List[int]]:
+        """(장기 프로필의 증분 상태, 온보딩에서 고른 선호 카테고리 ID). 상태 행이 없으면 빈 상태다."""
+        ...
 
-    def short_term_vector(self, user_id: int, since: datetime, limit: int) -> Optional[np.ndarray]: ...
+    def recent_clicks(
+        self, user_id: int, since: datetime, until: datetime, limit: int
+    ) -> List[ClickEvent]:
+        """[since, until) 구간의 클릭(event = 'click', 임베딩이 있는 뉴스레터) 중 가장 늦은 limit개."""
+        ...
+
+    def item_window_counts(
+        self,
+        news_letter_ids: Sequence[int],
+        click_starts: Sequence[datetime],
+        inview_start: datetime,
+        end: datetime,
+    ) -> Dict[int, WindowCounts]:
+        """아이템별 인기도 창 집계(ADR 0033). 클릭은 창마다 [click_starts[j], end), 노출은 [inview_start, end).
+        모든 사용자의 클릭·노출을 센다. 어느 창에도 행이 없는 아이템은 결과에 없다."""
+        ...
 
     def onboarding_vector(self, user_id: int) -> Optional[np.ndarray]: ...
 

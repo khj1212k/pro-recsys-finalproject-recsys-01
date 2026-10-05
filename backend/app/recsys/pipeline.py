@@ -20,6 +20,10 @@ from app.recsys.metrics import RecsysCounters
 from app.recsys.repository import RecsysRepository
 from app.recsys.scoring import Scorer, ScorerStack
 from app.recsys.throttle import ThrottledExceptionLog
+from recsys_core import round_robin_union
+from recsys_core import serving as core_serving
+from recsys_core.profile import unit_rows
+
 from app.recsys.types import (
     SOURCE_COLD_CATEGORY,
     SOURCE_COLD_ONBOARDING,
@@ -30,6 +34,7 @@ from app.recsys.types import (
     Recommendation,
     SlotInfo,
     UserState,
+    WindowCounts,
 )
 
 logger = logging.getLogger(__name__)
@@ -55,18 +60,43 @@ class CandidateSet:
     contributed: Dict[str, int] = field(default_factory=dict)
 
 
+def _unit_sum(clicks) -> Optional[np.ndarray]:
+    """클릭한 뉴스레터의 단위 벡터 합(방향만 쓴다). 어댑터의 단기 벡터와 같은 방향이다."""
+    if not clicks:
+        return None
+    return unit_rows(np.stack([c.embedding for c in clicks])).sum(axis=0)
+
+
 def build_user_state(
     repo: RecsysRepository, user_id: int, now: datetime, cfg: RecsysConfig
 ) -> UserState:
-    long_term, category_ids = repo.long_term_and_categories(user_id)
-    short_term = repo.short_term_vector(
-        user_id, now - timedelta(hours=cfg.short_term_hours), cfg.short_term_max_clicks
+    """요청 시각 now의 사용자 상태. 클릭 이력에서 오는 것은 now보다 엄격히 이전의 클릭만이다.
+
+    장기 벡터는 클릭마다 갱신해 둔 증분 상태의 방향이고(읽을 때 감쇠를 다시 계산하지 않는다),
+    단기 벡터는 최근 클릭을 한 번 읽어 여기서 더한다. 같은 클릭 행들이 피처 어댑터의 입력이 된다."""
+    profile_state, category_ids = repo.profile_state(user_id)
+    # 어댑터가 정의한 창(24시간·20건)과 설정의 창 중 넓은 쪽으로 한 번 읽고, 각자 자기 몫을 쓴다.
+    adapter_since = core_serving.short_window_start(now)
+    heuristic_since = now - timedelta(hours=cfg.short_term_hours)
+    clicks = repo.recent_clicks(
+        user_id,
+        min(adapter_since, heuristic_since),
+        now,
+        max(core_serving.SHORT_MAX_EVENTS, cfg.short_term_max_clicks),
     )
+    clicks = sorted(clicks, key=lambda c: c.at)
+    for_adapter = [c for c in clicks if c.at >= adapter_since][-core_serving.SHORT_MAX_EVENTS:]
+    for_heuristic = [c for c in clicks if c.at >= heuristic_since][-cfg.short_term_max_clicks:]
+
+    long_term = profile_state.hist.direction()
     state = UserState(
         user_id=user_id,
         long_term=long_term,
-        short_term=short_term,
+        short_term=_unit_sum(for_heuristic),
         category_ids=list(category_ids),
+        hist=profile_state.hist,
+        hist_last_event_at=profile_state.last_event_at,
+        recent_clicks=for_adapter,
     )
     # 콜드스타트 체인: 장기 벡터가 없으면 온보딩 선호 뉴스레터 평균 -> 선호 카테고리
     # 최근 뉴스레터 중심 순으로 대체 프로필을 만든다. 끝까지 없으면 인기 목록(추천기).
@@ -86,6 +116,16 @@ def build_user_state(
     return state
 
 
+def load_popularity(repo: RecsysRepository, ids: Sequence[int], now: datetime) -> Dict[int, WindowCounts]:
+    """후보 ids의 인기도 창 집계를 어댑터의 시각 규칙대로 읽는다(창의 끝은 요청보다 앞이다)."""
+    return repo.item_window_counts(
+        ids,
+        core_serving.item_window_starts(now),
+        core_serving.inview_window_start(now),
+        core_serving.item_window_end(now),
+    )
+
+
 def popular_ids(
     repo: RecsysRepository, since: datetime, now: datetime, n: int
 ) -> List[int]:
@@ -93,40 +133,33 @@ def popular_ids(
 
 
 def _round_robin_union(sources: Dict[str, List[int]], cap: int) -> CandidateSet:
-    seen, merged = set(), []
-    contributed = {name: 0 for name in sources}
-    iters = {name: iter(ids) for name, ids in sources.items()}
-    while iters and len(merged) < cap:
-        for name in list(iters):
-            for nid in iters[name]:
-                if nid not in seen:
-                    seen.add(nid)
-                    merged.append(nid)
-                    contributed[name] += 1
-                    break
-            else:
-                del iters[name]
-                continue
-            if len(merged) >= cap:
-                break
+    merged, contributed = round_robin_union(sources, cap)
     return CandidateSet(ids=merged, by_source=sources, contributed=contributed)
 
 
 def generate_candidates(
     repo: RecsysRepository, state: UserState, cfg: RecsysConfig, now: datetime
 ) -> CandidateSet:
-    since = now - timedelta(hours=cfg.freshness_hours)
+    """출처·순서·k·창·상한은 전부 cfg.candidate_spec()에서 온다(recsys_core.SERVING_CANDIDATE_SPEC, ADR 0033).
+    신호가 없는 출처(프로필 없음, 최근 클릭 없음, 선호 카테고리 없음)는 목록 자체를 내지 않는다."""
+    spec = cfg.candidate_spec()
+    since = now - timedelta(hours=spec.window_h)
+    producers = {
+        "knn_profile": lambda k: None if state.profile is None else repo.knn_ids(state.profile, since, k),
+        "knn_short": lambda k: None if state.short_term is None else repo.knn_ids(state.short_term, since, k),
+        "recent": lambda k: repo.recent_ids(k),
+        "popular": lambda k: popular_ids(repo, since, now, k),
+        "category": lambda k: (
+            repo.category_recent_ids(state.category_ids, since, k) if state.category_ids else None
+        ),
+    }
     sources: Dict[str, List[int]] = {}
-    if state.profile is not None:
-        sources["knn_profile"] = repo.knn_ids(state.profile, since, cfg.knn_k)
-    if state.short_term is not None:
-        sources["knn_short"] = repo.knn_ids(state.short_term, since, cfg.knn_k)
-    sources["recent"] = repo.recent_ids(cfg.recent_n)
-    sources["popular"] = popular_ids(repo, since, now, cfg.popular_n)
-    if state.category_ids:
-        sources["category"] = repo.category_recent_ids(state.category_ids, since, cfg.category_n)
+    for name, k in spec.sources:
+        ids = producers[name](k)
+        if ids is not None:
+            sources[name] = ids
     # 캡을 넘으면 한 생성기(예: KNN 100개)가 자리를 독식하지 않도록 순서를 번갈아 합친다.
-    return _round_robin_union(sources, cfg.candidate_cap)
+    return _round_robin_union(sources, spec.cap)
 
 
 def _finite_or_none(value) -> Optional[float]:

@@ -8,12 +8,14 @@ import pandas as pd
 import pytest
 import yaml
 
+import recsys_core
 from evaluation.recsys.ebnerd.candidate_config import (
     HARNESS,
     SERVING,
     CandidateConfig,
     config_from_prereg,
     round_robin_union,
+    spec_of,
     union_mask,
 )
 
@@ -29,14 +31,15 @@ def _serving_pipeline():
     return pytest.importorskip("app.recsys.pipeline")
 
 
-def test_round_robin_matches_the_serving_implementation_on_random_inputs():
+def test_harness_and_serving_merge_candidates_with_the_same_function():
+    """합치기 구현이 한 벌이다: 하네스의 2단계 수치와 서빙의 후보 합집합이 같은 코드에서 나온다."""
     pipeline = _serving_pipeline()
+
+    assert round_robin_union is recsys_core.round_robin_union is pipeline.round_robin_union
     rng = np.random.default_rng(0)
-    for _ in range(200):
-        sources = {}
-        for name in ("knn_profile", "knn_short", "recent", "popular", "category"):
-            if rng.random() < 0.8:
-                sources[name] = rng.choice(60, size=int(rng.integers(0, 25)), replace=False).tolist()
+    for _ in range(50):
+        sources = {name: rng.choice(60, size=int(rng.integers(0, 25)), replace=False).tolist()
+                   for name in ("knn_profile", "knn_short", "recent", "popular", "category") if rng.random() < 0.8}
         cap = int(rng.integers(1, 50))
         want = pipeline._round_robin_union(sources, cap)
         merged, contributed = round_robin_union(sources, cap)
@@ -44,17 +47,17 @@ def test_round_robin_matches_the_serving_implementation_on_random_inputs():
 
 
 def test_registered_serving_config_equals_the_serving_defaults():
-    """사전 등록한 서빙 구성이 지금 서빙 코드의 기본값과 같아야 E8의 2단계 수치가 서빙의 것이다."""
+    """사전 등록한 서빙 구성이 지금 서빙 코드의 기본값과 같아야 E8의 2단계 수치가 서빙의 것이다.
+    기본값의 출처는 recsys_core.SERVING_CANDIDATE_SPEC 한곳이고(ADR 0033), 사전 등록 yaml은 그 값의 등록본이다."""
     _serving_pipeline()
     from app.recsys.config import RecsysConfig
 
-    rc = RecsysConfig()
     cfg = config_from_prereg("serving", PREREG["e8"]["serving"])
-    assert cfg.window_h == rc.freshness_hours and cfg.cap == rc.candidate_cap
-    assert dict(cfg.sources) == {"knn_profile": rc.knn_k, "knn_short": rc.knn_k, "recent": rc.recent_n,
-                                 "popular": rc.popular_n, "category": rc.category_n}
-    # 라운드로빈 순서 = generate_candidates가 출처를 넣는 순서
-    assert [s for s, _ in cfg.sources] == ["knn_profile", "knn_short", "recent", "popular", "category"]
+
+    assert spec_of(cfg) == RecsysConfig().candidate_spec() == recsys_core.SERVING_CANDIDATE_SPEC
+    assert spec_of(SERVING).as_dict() == RecsysConfig().candidate_spec().as_dict()
+    with pytest.raises(ValueError):
+        spec_of(HARNESS)  # cap 없는 v1 구성은 서빙 구성과 비교하는 대상이 아니다
 
 
 def test_module_constants_are_the_registered_configs():

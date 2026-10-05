@@ -219,14 +219,17 @@ def test_detail_view_rows_are_not_read_as_clicks_by_the_request_path(api_client,
         repo = SqlRecsysRepository(s)
         assert repo.last_click_id(uid) is None
         assert repo.clicked_among(uid, [viewed, clicked]) == set()
-        assert repo.short_term_vector(uid, since, 20) is None
+        assert repo.recent_clicks(uid, since, datetime.now(timezone.utc), 20) == []
+        assert repo.profile_state(uid)[0].hist.empty  # 체류 보고는 장기 프로필에도 들어가지 않는다
 
     click_log_id = client.post("/logs/newsletter/click", json={"news_letter_id": clicked}).json()["log_id"]
     with Session(engine) as s:
         repo = SqlRecsysRepository(s)
         assert repo.last_click_id(uid) == click_log_id
         assert repo.clicked_among(uid, [viewed, clicked]) == {clicked}
-        np.testing.assert_allclose(repo.short_term_vector(uid, since, 20), seeded.vec_of[clicked], atol=1e-6)
+        (event,) = repo.recent_clicks(uid, since, datetime.now(timezone.utc), 20)
+        np.testing.assert_allclose(event.embedding, seeded.vec_of[clicked], atol=1e-6)
+        assert repo.profile_state(uid)[0].hist.hist_len == 1
     with pg_conn.cursor() as cur:
         cur.execute(
             "SELECT request_id::text, position, event, dwell_ms FROM user_newsletter_ctr_log "

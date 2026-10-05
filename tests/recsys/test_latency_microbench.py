@@ -19,7 +19,9 @@ from app.recsys.config import RecsysConfig
 from app.recsys.pipeline import Deadline, RealtimeRecommender, build_recommendation
 from app.recsys.scoring import HeuristicScorer
 from app.recsys.service import build_service, rng_for_request
-from app.recsys.types import Item, NewsletterMeta, UserState
+from app.recsys.types import ClickEvent, Item, NewsletterMeta, ProfileState, UserState
+from recsys_core.profile import HistState
+from recsys_core.serving import epoch_seconds
 from src.core.reranker import CategoryBasedMMRReranker
 from tests.recsys.fakes import NOW
 
@@ -47,11 +49,16 @@ class StaticRepo:
     def last_click_id(self, user_id):
         return None
 
-    def long_term_and_categories(self, user_id):
-        return self.long, [1, 2]
+    def profile_state(self, user_id):
+        hist = HistState(hist_sum=self.long.astype(np.float64), anchor_s=epoch_seconds(NOW) - 3600, hist_len=1,
+                         cat_counts={0: 1})
+        return ProfileState(hist, NOW - timedelta(hours=1)), [1, 2]
 
-    def short_term_vector(self, user_id, since, limit):
-        return self.short
+    def recent_clicks(self, user_id, since, until, limit):
+        return [ClickEvent(NOW - timedelta(hours=1), self.short)]
+
+    def item_window_counts(self, news_letter_ids, click_starts, inview_start, end):
+        return {}
 
     def onboarding_vector(self, user_id):
         return None
