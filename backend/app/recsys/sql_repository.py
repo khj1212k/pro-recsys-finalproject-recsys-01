@@ -319,6 +319,22 @@ def create_aux_engine(database_url: str) -> Engine:
     )
 
 
+def create_feature_engine(database_url: str, workers: int, budget_ms: int) -> Engine:
+    """요청 경로 밖의 shadow·피처 작업 전용 풀(ADR 0033). 그 작업이 읽는 것은 후보의 인기도 창 집계다.
+
+    실시간 풀이나 보조 풀을 같이 쓰지 않는 이유: 이 조회의 비용은 노출 로그의 크기를 따라 커진다. 느려졌을 때
+    붙잡히는 것이 요청을 처리하는 커넥션이나 로그를 쓰는 커넥션이어서는 안 된다. 전용 스레드 수만큼만 두고,
+    못 빌리면 작업의 시간 예산만큼 기다리다 포기한다(features.error로 센다)."""
+    return create_engine(
+        database_url,
+        connect_args={"options": "-c client_encoding=utf8", "connect_timeout": CONNECT_TIMEOUT_S},
+        pool_size=max(1, workers),
+        max_overflow=0,
+        pool_timeout=max(0.001, budget_ms / 1000.0),
+        pool_pre_ping=True,
+    )
+
+
 @contextmanager
 def sql_repo_scope(engine: Engine, statement_timeout_ms: Optional[int]) -> Iterator[SqlRecsysRepository]:
     """실시간 경로 전용 세션. statement_timeout을 트랜잭션 로컬로 걸어, 요청이 이미

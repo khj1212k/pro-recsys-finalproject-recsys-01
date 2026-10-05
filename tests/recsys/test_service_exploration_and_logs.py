@@ -7,7 +7,7 @@ import time
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import numpy as np
 import pytest
@@ -327,7 +327,7 @@ def test_logged_values_are_plain_python_types_the_database_driver_accepts():
     rec = service.recommend(WARM, fallback_repo=repo)
     service.log_impressions(WARM, rec, rec.news_letter_ids)
 
-    plain = (int, float, str, bool, bytes, type(None))
+    plain = (int, float, str, bool, bytes, datetime, type(None))
     for row in log.slots + log.requests:
         for key, value in row.items():
             if isinstance(value, dict):

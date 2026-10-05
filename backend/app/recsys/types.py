@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -82,9 +82,11 @@ class ScoreResult:
     model_version: str
     # shadow 모델 버전 -> 같은 아이템 순서의 점수. 응답 순서에는 쓰이지 않고 로그에만 남는다(ADR 0025).
     extra_scores: Dict[str, np.ndarray] = field(default_factory=dict)
-    # 활성 스코어러가 쓴 피처 (아이템 수, 피처 수) float32와 그 해석 버전(scoring.FEATURE_SCHEMAS).
+    # 로그에 남길 피처 (아이템 수, 피처 수) float32와 그 해석 버전(scoring.FEATURE_SCHEMAS).
     features: Optional[np.ndarray] = None
     feature_schema_version: Optional[int] = None
+    # 요청 경로 밖으로 넘긴 shadow·피처 작업의 손잡이(app.recsys.shadow.DeferredScores). 없으면 None.
+    deferred: Optional[Any] = None
 
 
 @dataclass
@@ -109,6 +111,10 @@ class DeterministicList:
     feature_schema_version: Optional[int] = None
     fatigue_mode: str = "off"
     fatigued_count: Optional[int] = None
+    # 이 목록(과 피처)을 계산한 요청 시각. 캐시에서 꺼내 쓴 요청도 로그에 이 값을 적는다(ADR 0033).
+    computed_at: Optional[datetime] = None
+    # 요청 경로 밖에서 계산 중이거나 끝난 shadow 점수·피처. 로그를 쓸 때 찾아간다.
+    deferred: Optional[Any] = None
 
     def __post_init__(self):
         self.eligible_ids = np.asarray(self.eligible_ids, dtype=np.int32)
@@ -123,6 +129,9 @@ class SlotInfo:
     det_rank: Optional[int] = None
     scores_shadow: Optional[Dict[str, Optional[float]]] = None
     features: Optional[np.ndarray] = None
+    # 이 칸의 아이템이 후보 배열(DeterministicList.eligible_ids)에서 놓인 자리. 요청 경로 밖에서 계산한
+    # 값(Recommendation.deferred)에서 이 칸의 행을 찾는 데 쓴다.
+    row: Optional[int] = None
 
 
 POLICY_NONE = "none"  # 폴백 응답: 탐색 정책이 만든 화면이 아니다
@@ -150,6 +159,8 @@ class Recommendation:
     fatigue_mode: Optional[str] = None
     fatigued_count: Optional[int] = None
     latency_ms: Optional[int] = None
+    features_as_of: Optional[datetime] = None
+    deferred: Optional[Any] = None
 
     def score_by_id(self) -> Dict[int, Optional[float]]:
         return dict(zip(self.news_letter_ids, self.scores))

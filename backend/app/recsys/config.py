@@ -51,7 +51,9 @@ class RecsysConfig:
 
     model_name: str = "ranker"
     model_reload_s: float = 60.0
-    feature_fn: Optional[str] = None
+    # 서빙 피처 함수 "모듈:함수". 기본값은 하네스와 같은 코드로 피처를 만드는 어댑터다(ADR 0033): 칸 로그에
+    # 어댑터 피처가 남고, 레지스트리의 모델이 그 피처로 점수를 낸다. RECSYS_FEATURE_FN=off로 끈다(휴리스틱만).
+    feature_fn: Optional[str] = "recsys_core.serving:features"
 
     # --- 탐색 슬롯 (ADR 0025). 화면 top_k칸 중 explore_slots칸을 무작위 위치에 무작위 후보로 채운다.
     # 개인 신호가 전혀 없는 사용자(profile_source = none)는 explore_slots_cold칸. explore_enabled=false나
@@ -71,6 +73,13 @@ class RecsysConfig:
     # 점수만 매긴다. 활성 점수를 낸 뒤 남은 예산 비율이 shadow_deadline_fraction 미만이면 건너뛴다.
     shadow_max: int = 2
     shadow_deadline_fraction: float = 0.5
+    # shadow 점수와 로그용 피처는 요청 경로 밖의 전용 스레드에서 계산한다(ADR 0033, app/recsys/shadow.py).
+    # 넘긴 시점부터 shadow_budget_ms 안에 끝나지 않은 작업은 버린다(응답 뒤의 로그 쓰기가 기다리는 상한이기도 하다).
+    # 밀린 작업이 shadow_max_pending개면 더 받지 않는다. shadow_deadline_fraction은 전용 스레드 없이 요청
+    # 경로에서 바로 도는 배선(테스트)에만 쓰인다.
+    shadow_budget_ms: int = 500
+    shadow_workers: int = 1
+    shadow_max_pending: int = 16
 
     def __post_init__(self):
         if self.mode not in MODES:
@@ -85,6 +94,12 @@ class RecsysConfig:
             raise ValueError("RECSYS_EXPLORE_SLOTS and RECSYS_EXPLORE_SLOTS_COLD must not be negative")
         if self.shadow_max < 0:
             raise ValueError("RECSYS_SHADOW_MAX must not be negative")
+        if self.shadow_budget_ms <= 0 or self.shadow_workers <= 0 or self.shadow_max_pending <= 0:
+            raise ValueError(
+                "RECSYS_SHADOW_BUDGET_MS, RECSYS_SHADOW_WORKERS and RECSYS_SHADOW_MAX_PENDING must be positive"
+            )
+        if self.feature_fn is not None and self.feature_fn.strip().lower() in ("", "off", "none", "false", "0"):
+            object.__setattr__(self, "feature_fn", None)
 
     def candidate_spec(self) -> CandidateSpec:
         """지금 설정으로 도는 후보 생성기 구성. 출처와 라운드로빈 순서는 SERVING_CANDIDATE_SPEC의 것이고

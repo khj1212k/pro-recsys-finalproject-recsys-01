@@ -11,6 +11,11 @@ lightgbm 임포트·모델 파싱을 데몬 스레드가 하고, 요청을 처�
 모델(없으면 휴리스틱)로 점수를 낸다. 요청 시간 예산 안에서 DB 풀이나 모델 로드를 기다리지
 않는다.
 
+피처와 스키마(ADR 0033): 운영의 피처 함수는 recsys_core.serving:features(서빙 어댑터)다. 모델에 열 이름이나
+스키마 지문이 등록돼 있고 피처 함수의 것과 다르면 그 모델로 점수를 내지 않는다(이름은 같은데 정의가 달라진
+피처로 예전 모델이 점수를 내는 일을 막는다). 점수를 낼 때 쓴 피처 행렬은 ScoreResult.features로 함께 나간다.
+묶음(ScorerStack)이 같은 후보의 피처 행렬을 이미 계산했으면 features 인자로 받아 다시 계산하지 않는다.
+
 역할(ADR 0025): role="active"는 레지스트리의 활성 행을 읽어 목록을 만드는 점수를 낸다. role="shadow"는
 같은 이름의 shadow 행 중 최신에서 slot번째를 읽고, 폴백을 두지 않는다(fallback=None) - 모델이 없거나
 피처가 맞지 않으면 휴리스틱 점수를 대신 내는 것이 아니라 ScorerUnavailable로 "이번에는 점수 없음"을 알린다.
@@ -29,12 +34,10 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from app.recsys.metrics import RecsysCounters
-from app.recsys.scoring import Scorer, ScorerUnavailable
+from app.recsys.scoring import FeatureFn, Scorer, ScorerUnavailable
 from app.recsys.types import Item, ScoreResult, UserState
 
 logger = logging.getLogger(__name__)
-
-FeatureFn = Callable[[UserState, Sequence[Item], datetime], np.ndarray]
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,7 @@ class RegisteredModel:
     version: str
     model_text: str
     feature_names: Optional[List[str]] = None
+    feature_schema_hash: Optional[str] = None
 
 
 class ModelSource(Protocol):
@@ -85,14 +89,14 @@ class SqlModelSource:
         with self.engine.connect() as conn:
             row = conn.execute(
                 text(
-                    "SELECT model_text, feature_names FROM model_registry "
+                    "SELECT model_text, feature_names, feature_schema_hash FROM model_registry "
                     "WHERE model_name = :n AND model_version = :v AND model_format = 'lightgbm_text'"
                 ),
                 {"n": name, "v": version},
             ).first()
         if row is None:
             return None
-        return RegisteredModel(name, version, row[0], row[1])
+        return RegisteredModel(name, version, row[0], row[1], row[2])
 
 
 @dataclass(frozen=True)
@@ -101,6 +105,7 @@ class _Loaded:
     booster: object
     num_features: int
     feature_names: Optional[List[str]]
+    feature_schema_hash: Optional[str] = None
 
 
 def resolve_feature_fn(dotted: Optional[str]) -> Optional[FeatureFn]:
@@ -193,7 +198,10 @@ class LightGBMScorer:
             import lightgbm as lgb
 
             booster = lgb.Booster(model_str=record.model_text)
-            self._current = _Loaded(version, booster, booster.num_feature(), record.feature_names)
+            self._current = _Loaded(
+                version, booster, booster.num_feature(), record.feature_names,
+                getattr(record, "feature_schema_hash", None),
+            )
             logger.info("loaded model %s@%s", self.model_name, version)
         except Exception:
             logger.exception("model registry reload failed; keeping current model")
@@ -201,7 +209,18 @@ class LightGBMScorer:
         finally:
             self._reload_lock.release()
 
-    def score(self, state: UserState, items: Sequence[Item], now: datetime) -> ScoreResult:
+    @property
+    def needs_features(self) -> bool:
+        """지금 피처 함수로 점수를 낼 상태인가(피처 함수가 있고 모델이 올라와 있다)."""
+        return self.feature_fn is not None and self._current is not None
+
+    def score(
+        self,
+        state: UserState,
+        items: Sequence[Item],
+        now: datetime,
+        features: Optional[np.ndarray] = None,
+    ) -> ScoreResult:
         # 피처 함수가 주입되지 않았으면 모델이 있어도 쓸 수 없으니 레지스트리 조회도 생략한다.
         if self.feature_fn is None:
             return self._without_model(state, items, now, "no feature function")
@@ -214,8 +233,13 @@ class LightGBMScorer:
         if model.feature_names and fn_names and list(fn_names) != list(model.feature_names):
             self.counters.inc("scorer.feature_mismatch")
             return self._without_model(state, items, now, "feature names differ from the model's")
+        fn_hash = getattr(self.feature_fn, "schema_hash", None)
+        if model.feature_schema_hash and fn_hash and fn_hash != model.feature_schema_hash:
+            self.counters.inc("scorer.schema_mismatch")
+            return self._without_model(state, items, now, "feature schema hash differs from the model's")
         try:
-            X = np.asarray(self.feature_fn(state, items, now), dtype=np.float64)
+            # 하네스처럼 피처 함수가 낸 행렬(어댑터는 float32)을 그대로 넘긴다.
+            X = np.asarray(self.feature_fn(state, items, now) if features is None else features)
             if X.shape != (len(items), model.num_features):
                 raise ValueError(
                     f"feature matrix {X.shape} != ({len(items)}, {model.num_features})"
@@ -227,4 +251,11 @@ class LightGBMScorer:
                 raise  # shadow: 묶음(ScorerStack)이 삼키고 센다
             logger.exception("lightgbm scoring failed; using heuristic for this request")
             return self.fallback.score(state, items, now)
-        return ScoreResult(scores=scores, model_version=f"lgbm:{self.model_name}@{model.version}")
+        # 해석 버전이 없는 피처 함수의 행렬은 로그에 남기지 않는다(풀 방법이 없는 바이트가 된다).
+        schema_version = getattr(self.feature_fn, "schema_version", None)
+        return ScoreResult(
+            scores=scores,
+            model_version=f"lgbm:{self.model_name}@{model.version}",
+            features=None if schema_version is None else X.astype(np.float32, copy=False),
+            feature_schema_version=schema_version,
+        )

@@ -6,9 +6,10 @@
 import logging
 import math
 import uuid
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -167,6 +168,12 @@ def _finite_or_none(value) -> Optional[float]:
     return value if math.isfinite(value) else None
 
 
+def shadow_scores_at(extra_scores: Dict[str, np.ndarray], row: int) -> Optional[Dict[str, Optional[float]]]:
+    """후보 배열의 row번째 아이템에 대한 {shadow 모델 버전: 점수}. shadow가 없으면 None(SQL NULL로 남는다).
+    JSON에는 NaN/inf가 없으므로 유한하지 않은 점수는 null이다."""
+    return {v: _finite_or_none(arr[row]) for v, arr in extra_scores.items()} or None
+
+
 def build_recommendation(
     det: DeterministicList,
     cfg: RecsysConfig,
@@ -186,9 +193,9 @@ def build_recommendation(
             explored=slot.explored,
             propensity=slot.propensity,
             det_rank=slot.det_rank,
-            # JSON에는 NaN/inf가 없다: 유한하지 않은 shadow 점수는 null로 남긴다.
-            scores_shadow={v: _finite_or_none(arr[i]) for v, arr in det.extra_scores.items()} or None,
+            scores_shadow=shadow_scores_at(det.extra_scores, i),
             features=None if det.features is None else det.features[i],
+            row=i,
         )
         for slot, i in zip(plan.slots, rows)
     ]
@@ -210,7 +217,12 @@ def build_recommendation(
         feature_schema_version=det.feature_schema_version,
         fatigue_mode=det.fatigue_mode,
         fatigued_count=det.fatigued_count,
+        features_as_of=det.computed_at,
+        deferred=det.deferred,
     )
+
+
+RepoFactory = Callable[[], AbstractContextManager]
 
 
 class RealtimeRecommender:
@@ -221,9 +233,13 @@ class RealtimeRecommender:
         reranker: Optional[CategoryBasedMMRReranker] = None,
         item_cache: Optional[TTLCache] = None,
         counters: Optional[RecsysCounters] = None,
+        feature_repo_factory: Optional[RepoFactory] = None,
     ):
         self.cfg = cfg
         self.scorer = scorer
+        # 요청 경로 밖에서 도는 피처 작업이 인기도 창 집계를 읽을 때 쓰는 저장소(자기 커넥션). 없으면 그 작업은
+        # 인기도 입력을 읽지 못하고, 어댑터 피처는 남지 않는다.
+        self.feature_repo_factory = feature_repo_factory
         self.counters = counters or RecsysCounters()
         # 스코어러 하나만 받으면 shadow 없는 묶음으로 감싼다. 묶음을 받으면 그대로 쓴다.
         self.stack = scorer if isinstance(scorer, ScorerStack) else ScorerStack(scorer, counters=self.counters)
@@ -321,7 +337,13 @@ class RealtimeRecommender:
             raise EmptyRecommendation("no scorable candidates")
         deadline.check("scoring")
 
-        result = self.stack.score(state, items, now, deadline)
+        item_ids = [int(it.news_letter_id) for it in items]
+        if self.stack.active_needs_features():
+            # 활성 모델이 어댑터 피처로 점수를 낸다: 인기도 입력을 요청 경로에서 읽어야 한다.
+            state.popularity = self._popularity_in_path(repo, item_ids, now)
+        result = self.stack.score(
+            state, items, now, deadline, popularity_loader=self._popularity_loader(item_ids, now)
+        )
         embeddings = np.stack([it.embedding for it in items])
         # MMR은 항상 top_k개를 고른다. 탐색 칸이 있으면 앞쪽 (top_k - 탐색 칸 수)개만 화면에 들어가고,
         # 탐욕 선택이라 그 앞부분은 탐색을 켜고 꺼도 같다.
@@ -349,7 +371,34 @@ class RealtimeRecommender:
             feature_schema_version=result.feature_schema_version,
             fatigue_mode=self.cfg.fatigue_mode,
             fatigued_count=fatigued_count,
+            computed_at=now,
+            deferred=result.deferred,
         )
+
+    def _popularity_in_path(
+        self, repo: RecsysRepository, ids: Sequence[int], now: datetime
+    ) -> Optional[Dict[int, WindowCounts]]:
+        """활성 모델을 위한 인기도 조회. 실패하면 None을 돌려준다: 어댑터가 값을 내지 않고, 활성 LightGBM
+        스코어러는 그 요청을 휴리스틱으로 채점한다(조회 하나가 요청을 폴백으로 보내지 않는다)."""
+        try:
+            return load_popularity(repo, ids, now)
+        except Exception:
+            self._errors.exception("popularity", "popularity lookup for the active model failed")
+            self.counters.inc("features.popularity_error")
+            repo.rollback()  # 실패한 문장 뒤의 조회가 거부되지 않게(피로 규칙 조회와 같은 이유)
+            return None
+
+    def _popularity_loader(self, ids: Sequence[int], now: datetime):
+        """요청 경로 밖에서 인기도 입력을 읽는 함수. 자기 저장소(자기 커넥션)를 연다."""
+        factory = self.feature_repo_factory
+        if factory is None:
+            return None
+
+        def load() -> Dict[int, WindowCounts]:
+            with factory() as feature_repo:
+                return load_popularity(feature_repo, ids, now)
+
+        return load
 
     def recommend(
         self, repo: RecsysRepository, user_id: int, now: datetime, deadline: Deadline

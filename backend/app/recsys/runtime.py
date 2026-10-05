@@ -18,18 +18,33 @@ def build_sql_service(cfg: RecsysConfig, database_url: str) -> RecommendationSer
 
     - 실시간 계산: 작업 스레드 수만큼의 전용 풀(create_recsys_engine)
     - 모델 레지스트리 확인(백그라운드 스레드)과 요청·칸 로그 쓰기(응답 뒤): 보조 풀(create_aux_engine)
+    - shadow 점수·로그용 피처(요청 경로 밖의 전용 스레드, ADR 0033): 그 스레드 수만큼의 풀
+      (create_feature_engine). 피처 함수가 없으면 전용 스레드도 이 풀도 만들지 않는다.
     """
     from app.recsys.lgbm_scorer import SqlModelSource, resolve_feature_fn
+    from app.recsys.shadow import ShadowRunner
     from app.recsys.sql_repository import (
         SqlImpressionWriter,
         create_aux_engine,
+        create_feature_engine,
         create_recsys_engine,
         sql_repo_scope,
     )
 
     counters = RecsysCounters()
     aux_engine = create_aux_engine(database_url)
-    scorer = build_scorer_stack(cfg, SqlModelSource(aux_engine), resolve_feature_fn(cfg.feature_fn), counters)
+    feature_fn = resolve_feature_fn(cfg.feature_fn)
+    runner = feature_engine = feature_repo_factory = None
+    if feature_fn is not None:
+        runner = ShadowRunner(
+            workers=cfg.shadow_workers,
+            max_pending=cfg.shadow_max_pending,
+            budget_s=cfg.shadow_budget_ms / 1000.0,
+            counters=counters,
+        )
+        feature_engine = create_feature_engine(database_url, cfg.shadow_workers, cfg.shadow_budget_ms)
+        feature_repo_factory = partial(sql_repo_scope, feature_engine, cfg.shadow_budget_ms)
+    scorer = build_scorer_stack(cfg, SqlModelSource(aux_engine), feature_fn, counters, runner=runner)
     recsys_engine = create_recsys_engine(database_url, cfg.workers, cfg.time_budget_ms)
     service = build_service(
         cfg,
@@ -37,9 +52,13 @@ def build_sql_service(cfg: RecsysConfig, database_url: str) -> RecommendationSer
         scorer=scorer,
         impression_writer=SqlImpressionWriter(aux_engine),
         counters=counters,
+        feature_repo_factory=feature_repo_factory,
     )
     service.add_shutdown_hook(recsys_engine.dispose)
     service.add_shutdown_hook(aux_engine.dispose)
+    if runner is not None:
+        service.add_shutdown_hook(runner.shutdown)
+        service.add_shutdown_hook(feature_engine.dispose)
     # 첫 요청이 오기 전에 레지스트리의 모델을 읽기 시작한다(백그라운드라 기동을 막지 않는다).
     # 피처 함수가 없으면 모델이 있어도 쓸 수 없으므로 조회하지 않는다.
     for model_scorer in (scorer.active, *scorer.shadows):
@@ -48,12 +67,16 @@ def build_sql_service(cfg: RecsysConfig, database_url: str) -> RecommendationSer
     return service
 
 
-def build_scorer_stack(cfg: RecsysConfig, source, feature_fn, counters: RecsysCounters) -> ScorerStack:
-    """활성 스코어러 하나 + shadow 스코어러들 (ADR 0025).
+def build_scorer_stack(
+    cfg: RecsysConfig, source, feature_fn, counters: RecsysCounters, runner=None
+) -> ScorerStack:
+    """활성 스코어러 하나 + shadow 스코어러들 (ADR 0025, 0033).
 
     - 활성: 레지스트리에 role='active' 모델이 있고 피처 함수가 있으면 그 모델, 아니면 4항 휴리스틱.
     - shadow: 레지스트리의 role='shadow' 모델 중 최신 shadow_max개. 같은 후보에 점수만 매겨 칸 로그에
       남긴다. 피처 함수가 없으면 어떤 모델도 점수를 낼 수 없으므로 만들지 않는다.
+    - 피처 함수는 묶음에도 준다: 후보의 피처 행렬을 한 번 계산해 칸 로그에 남기고 모델들이 같이 쓴다.
+    - runner(app.recsys.shadow.ShadowRunner)가 있으면 shadow와 피처 계산을 요청 경로 밖에서 한다.
     """
     from app.recsys.lgbm_scorer import LightGBMScorer
 
@@ -73,7 +96,12 @@ def build_scorer_stack(cfg: RecsysConfig, source, feature_fn, counters: RecsysCo
     if feature_fn is not None:
         shadows = [model_scorer(fallback=None, role="shadow", slot=i) for i in range(cfg.shadow_max)]
     return ScorerStack(
-        active, shadows, deadline_fraction=cfg.shadow_deadline_fraction, counters=counters
+        active,
+        shadows,
+        deadline_fraction=cfg.shadow_deadline_fraction,
+        counters=counters,
+        feature_fn=feature_fn,
+        runner=runner,
     )
 
 

@@ -266,24 +266,56 @@ def test_registry_is_not_polled_when_no_feature_function_is_injected():
     assert source.version_calls == 0
 
 
-def test_default_runtime_wires_the_lgbm_adapter_with_env_config(monkeypatch):
+def test_default_runtime_wires_the_serving_adapter_shadows_and_the_off_path_runner(monkeypatch):
+    """기본 배선(ADR 0033): 피처 함수는 recsys_core 서빙 어댑터, shadow 자리는 shadow_max개, shadow와 로그용
+    피처는 요청 경로 밖의 전용 스레드와 전용 풀에서 돈다."""
     from app.recsys import runtime
     from app.recsys.lgbm_scorer import LightGBMScorer
+    from app.recsys.shadow import ShadowRunner
+    from recsys_core import serving
 
     monkeypatch.setenv("RECSYS_MODE", "batch")
     monkeypatch.setenv("RECSYS_TIME_BUDGET_MS", "250")
+    monkeypatch.setenv("RECSYS_SHADOW_BUDGET_MS", "120")
+    monkeypatch.setattr(LightGBMScorer, "maybe_reload", lambda self: None)  # 이 테스트에서는 레지스트리에 접속하지 않는다
     service = runtime._build_default_service()
     try:
         assert service.cfg.mode == "batch"
         assert service.cfg.time_budget_ms == 250
+        assert service.cfg.feature_fn == "recsys_core.serving:features"
         stack = service.recommender.stack
         assert isinstance(stack, ScorerStack)
         assert isinstance(stack.active, LightGBMScorer) and stack.active.role == "active"
         assert stack.active.counters is service.counters and stack.counters is service.counters
-        # 피처 함수가 없으면 어떤 등록 모델도 점수를 낼 수 없다: shadow를 만들지 않는다
-        assert stack.shadows == []
+        assert stack.feature_fn is serving.features and stack.active.feature_fn is serving.features
+        assert [(s.role, s.slot, s.feature_fn is serving.features) for s in stack.shadows] == [
+            ("shadow", 0, True), ("shadow", 1, True)
+        ]
+        assert isinstance(stack.runner, ShadowRunner) and stack.runner.budget_s == pytest.approx(0.12)
+        assert stack.runner.counters is service.counters
+        assert service.recommender.feature_repo_factory is not None
     finally:
         service.shutdown()
+
+
+def test_turning_the_feature_function_off_leaves_only_the_heuristic(monkeypatch):
+    from app.recsys import runtime
+    from app.recsys.config import RecsysConfig
+
+    monkeypatch.setenv("RECSYS_FEATURE_FN", "off")
+    service = runtime._build_default_service()
+    try:
+        stack = service.recommender.stack
+        assert service.cfg.feature_fn is None and stack.feature_fn is None
+        # 피처 함수가 없으면 어떤 등록 모델도 점수를 낼 수 없다: shadow도, 전용 스레드도, 전용 풀도 만들지 않는다
+        assert stack.shadows == [] and stack.runner is None
+        assert service.recommender.feature_repo_factory is None
+    finally:
+        service.shutdown()
+    assert RecsysConfig.from_env({}).feature_fn == "recsys_core.serving:features"
+    assert RecsysConfig.from_env({"RECSYS_FEATURE_FN": "my.module:fn"}).feature_fn == "my.module:fn"
+    with pytest.raises(ValueError, match="SHADOW"):
+        RecsysConfig(shadow_budget_ms=0)
 
 
 # ----------------------------------------------------------------------------- shadow 역할 (ADR 0025)
