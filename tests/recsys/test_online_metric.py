@@ -78,7 +78,9 @@ def test_mixing_users_with_different_exploration_rates_does_not_fake_a_differenc
 
     assert pooled > 0.003  # 층을 나누지 않으면 없는 차이가 보인다
     assert result.value == pytest.approx(0.0, abs=1e-12)
-    assert result.verdict == VERDICT_UNDECIDED
+    # 잡음이 없는 로그라 재표집한 값도 전부 0이다(부동소수점 오차만 남는다). 구간이 0으로 줄어든 이 경우의
+    # 판정은 그 오차의 부호가 정하므로 보지 않는다 - 판정 규칙은 잡음 있는 로그로 아래에서 본다.
+    assert result.ci == pytest.approx((0.0, 0.0), abs=1e-12)
     assert result.strata_used == 40  # (2칸, 위치 20개) + (4칸, 위치 20개)
 
 
