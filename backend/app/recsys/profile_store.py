@@ -6,8 +6,9 @@
 
 - 이벤트 = event = 'click'인 클릭 로그 행 중 임베딩이 있는 뉴스레터의 것. 임베딩이 없는 뉴스레터의 클릭은
   더할 벡터가 없으므로 상태에 들어가지 않는다(오프라인 재계산 경로도 같은 규칙으로 뺀다).
-- hist_sum은 float64 little-endian 바이트다. pgvector의 vector는 float32라 클릭 수백 건이 쌓이면 갱신마다의
-  반올림이 방향 오차로 남는다.
+- hist_sum은 float64 little-endian 바이트다(누적을 계산한 정밀도 그대로 둔다). pgvector의 vector(float32)로
+  저장해도 parity 임계 안이었다 - 클릭 5,000건에서 hist_cos 오차 8.9e-8 대 float64 3.0e-8(ADR 0033 증거).
+  float64는 필요해서가 아니라 여유로 고른 것이고, 형식을 바꾸려면 재구축 잡으로 다시 쓰면 된다.
 - 같은 사용자의 갱신은 상태 행의 잠금(SELECT ... FOR UPDATE)으로 줄을 선다.
 """
 import json
