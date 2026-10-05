@@ -49,7 +49,12 @@ class NewsEmbedder:
     
 
     def __init__(self, force_cpu: bool = False, verbose: bool = True, l2_normalize: bool = True,
-                 max_length: Optional[int] = None, attention_budget: Optional[int] = None):
+                 max_length: Optional[int] = None, attention_budget: Optional[int] = None,
+                 use_fp16: Optional[bool] = None):
+        # max_length: 토큰 단위 절단 길이. None이면 Settings.EMBEDDING_MAX_LENGTH. 대량 오프라인
+        # 임베딩(EB-NeRD 벤치마크)은 attention 비용 때문에 512로 줄여 쓴다.
+        # use_fp16=None이면 기존 동작(CUDA에서만 fp16). MPS에서 True로 주면 처리량이 늘고 dense 벡터는
+        # fp32와 사실상 같다(공유 M2에서 기사 96건, 512 토큰: 1.48 -> 2.18건/s, fp16-fp32 코사인 1.0000).
         from config.settings import Settings
 
         self.verbose = verbose
@@ -67,7 +72,7 @@ class NewsEmbedder:
         start_time = time.time()
         self.model = BGEM3FlagModel(
             'BAAI/bge-m3',
-            use_fp16=(self.device == 'cuda'),
+            use_fp16=(self.device == 'cuda') if use_fp16 is None else use_fp16,
             device=self.device
         )
         load_time = time.time() - start_time

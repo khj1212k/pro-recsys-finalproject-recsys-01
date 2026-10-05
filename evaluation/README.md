@@ -115,6 +115,32 @@ python -m evaluation.llm.bakeoff_analysis --run bakeoff-v1
 python -m evaluation.llm.gate_probe --newsletters 'data/team_archive/newsletters/*.json'
 ```
 
+### `evaluation/recsys/` — 추천 오프라인 평가 (EB-NeRD 공개 벤치마크)
+
+- `evaluation/recsys/metrics.py` — 그룹(노출/요청)별 AUC·MRR·nDCG@k·Recall@k(풀 밖 정답을
+  분모에 넣는 `n_pos_total`), 목록 다양성(ILD)·카테고리 엔트로피·카탈로그 커버리지, 유저 단위
+  클러스터 부트스트랩과 쌍체 차이 CI. 점수 동점은 seed 고정 무작위로 깬다.
+- `evaluation/recsys/ebnerd/` — EB-NeRD(덴마크 Ekstra Bladet 클릭 로그) 하네스.
+  `loaders.py`(parquet → CSR 노출, 기사 본문은 읽지 않음), `prepare.py`(point-in-time 이벤트 인덱스,
+  P1 노출 재정렬·P2 48h 전체 풀·네거티브 샘플링), `models.py`(팀 방식 LightGBM → ranker v2
+  ablation과 휴리스틱 베이스라인), `embed_articles.py`(BGE-M3, `.venv-embed`·MPS),
+  `embedding_sanity.py`(카테고리 kNN), `run_ebnerd.py`(전체 실행), `make_report.py`(JSON → 표,
+  ADR 0013 승격 규칙 판정), `click_time_sensitivity.py`(클릭 시각 = 노출 시각 근사의 민감도, 인기도
+  베이스라인만). 피처는 최상위 `recsys_core/`(numpy/pandas만, DB 없음)가 계산한다.
+- 프로토콜·판정 규칙은 [ADR 0013](../docs/adr/0013-ranker-v2-design.md), 결과는
+  `reports/recsys/ebnerd_v1.{md,json}`(본 ablation, `--chain inview`)과 `ebnerd_v1_1_poolneg.json`
+  (48h 풀 네거티브 고정 보충 사슬, `--chain poolneg`), `ebnerd_v1_click_time_sensitivity.json`(리포트 부록 B).
+- 실행 준비: `run_ebnerd`의 MMR 스윕은 팀 구현(`from src.core.reranker import MMRReranker`)을 그대로 쓰므로
+  `ai_workspace/recommend_engine`을 venv에 editable로 설치해야 한다(CI unit 잡과 같은 방식):
+  `uv pip install --python .venv/bin/python --no-deps -e ai_workspace/recommend_engine`.
+  `recsys_core`는 저장소 루트에서 `python -m evaluation.recsys.ebnerd.run_ebnerd ...`로 실행하면 import된다.
+- demo 데이터 기반 테스트(로더·과제 구성·전 구간 스모크)는 데이터가 있어야 돈다. git worktree에서는
+  `EBNERD_ROOT=<메인 체크아웃>/data/benchmarks/ebnerd`를 지정해 실행한다(없으면 skip).
+- **라이선스**: EB-NeRD는 연구/비상업 전용이다. 데이터·임베딩은 gitignore된 `data/benchmarks/ebnerd/`(또는
+  `EBNERD_ROOT`)에만 두고 저장소에는 집계 수치만 커밋한다. 저장소 커밋·공개 데이터셋·영구 사본은 금지이고, 무거운 재실행은
+  비공개 클라우드 런타임에 실행마다 올려서 돌린 뒤 지운다(ADR 0013 "사후 변경 기록"의 통합 기록).
+  데이터가 없는 환경(CI)에서는 관련 테스트가 skip된다.
+
 ## 설치
 
 ```bash
