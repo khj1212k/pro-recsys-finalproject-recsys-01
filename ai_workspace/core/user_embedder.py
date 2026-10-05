@@ -62,8 +62,9 @@ class UserEmbedder:
 
         batch_update_all_users는 NULL인 사용자만 채우므로 한 번 만들어진 벡터는 클릭이
         쌓여도 바뀌지 않았다. 요청 시점 추천(backend/app/recsys, ADR 0015)은 이 벡터를
-        장기 선호로 읽으므로 주기적으로 이 함수를 돌려 최근 활동을 반영한다(스케줄링은
-        별도 잡). since는 tz-aware datetime을 권장한다 - psycopg2가 timestamptz로 넘겨
+        장기 선호로 읽으므로 주기적으로 이 함수를 돌려 최근 활동을 반영한다
+        (`python -m jobs.run user_embed`가 매 실행마다 최근 24시간 기준으로 부른다).
+        since는 tz-aware datetime을 권장한다 - psycopg2가 timestamptz로 넘겨
         DB 서버 TimeZone 기준으로 비교된다.
         """
         return self._update_users(
