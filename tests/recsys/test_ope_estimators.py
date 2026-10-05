@@ -28,6 +28,7 @@ from evaluation.recsys.ope import (
     effective_sample_size,
     fit_position_bias_eta,
     ips_slate,
+    position_based_slate,
     position_ctr,
     power_law_theta,
     replay_exploration,
@@ -132,6 +133,23 @@ def test_position_based_replay_is_unbiased_under_the_position_based_model(n_expl
     assert est.value == pytest.approx(_slot_value(slate, in_pool) / len(in_pool), abs=1e-12)
     # 위치까지 맞추는 replay보다 채점되는 칸이 화면 칸 수 배만큼 많다
     assert est.n_matched == TOP_K * replay_exploration(log, target).n_matched
+
+
+@pytest.mark.parametrize("n_explore", [1, 2])
+@pytest.mark.parametrize("slate", [[10, 11, 12, 13], [13, 12, 11, 10], [16, 10, 15, 11], [14, 15, 16, 13]])
+def test_the_full_slate_position_based_estimator_supports_any_target_inside_the_candidate_set(n_explore, slate):
+    """결정론 칸의 아이템(항상 보임)과 탐색 풀의 아이템을 함께 쓰면 후보 집합 안의 어떤 화면이든 지지된다.
+    위치 기반 모델이 참이고 θ가 맞을 때 기대값은 타깃 화면 전체의 칸당 클릭률이다."""
+    log, target, _, _ = _enumerated_log(n_explore, slate)
+
+    est = position_based_slate(log, target, THETA)
+
+    assert est.coverage == pytest.approx(1.0, abs=1e-12)
+    assert est.value == pytest.approx(_slot_value(slate) / TOP_K, abs=1e-12)
+    # 결정론 칸의 기여는 θ를 믿는다: θ가 틀리면 지지가 완전해도 값이 틀린다
+    wrong = position_based_slate(log, target, np.ones(TOP_K)).value
+    if slate != ELIGIBLE[:TOP_K]:
+        assert wrong != pytest.approx(_slot_value(slate) / TOP_K, rel=1e-3)
 
 
 def test_a_wrong_position_bias_makes_position_based_replay_wrong():

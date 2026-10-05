@@ -21,6 +21,8 @@
 - replay_position_based: 탐색 칸에서 위치를 맞추지 않고 "타깃 화면 안의 아이템인가"만 본 뒤,
   위치 편향 비 θ[타깃 위치]/θ[기록 위치]로 보정한다. 위치까지 맞추는 replay보다 표본이 화면 칸 수
   배만큼 많지만, 클릭 = 위치 검토 확률 x 아이템 매력(position-based model)이라는 가정이 더 든다.
+- position_based_slate: 위 보정을 화면 전체에 쓴다. 후보 집합 안의 어떤 타깃이든 지지되지만, 결정론
+  칸의 기여는 무작위화가 아니라 위치 편향 모델에 기댄다.
 - position_ctr / fit_position_bias_eta: 탐색 칸은 위치가 균등 무작위이고 아이템이 위치와 독립이라,
   위치별 클릭률의 비가 곧 위치 편향의 비다.
 - effective_sample_size: Kish의 (Σw)² / Σw².
@@ -198,6 +200,27 @@ def ips_slate(log: SlotLog, target: Target) -> Estimate:
     return _exact(log, target, np.ones(len(log), dtype=bool), normalize=False)
 
 
+def _position_based(
+    log: SlotLog, target: Target, theta, scope: np.ndarray, weight: np.ndarray
+) -> Estimate:
+    theta = np.asarray(theta, dtype=np.float64)
+    rank = target_rank(log, target)
+    in_range = (rank >= 0) & (rank < len(theta)) & (log.position < len(theta))
+    last = max(len(theta) - 1, 0)
+    theta_logged = np.where(in_range, theta[np.clip(log.position, 0, last)], 0.0)
+    theta_target = np.where(in_range, theta[np.clip(rank, 0, last)], 0.0)
+    use = scope & in_range & (theta_logged > 0)
+    gain = np.where(use, theta_target / np.where(theta_logged > 0, theta_logged, 1.0), 0.0)
+    return _weighted(log, target, scope, use, weight, gain, normalize=True)
+
+
+def _slate_size(log: SlotLog, slate_size: Optional[np.ndarray]) -> np.ndarray:
+    if slate_size is None:
+        requests, inv = _requests(log)
+        slate_size = np.bincount(inv, minlength=len(requests))[inv]
+    return np.asarray(slate_size, dtype=np.float64)
+
+
 def replay_position_based(
     log: SlotLog, target: Target, theta, slate_size: Optional[np.ndarray] = None
 ) -> Estimate:
@@ -207,21 +230,27 @@ def replay_position_based(
     가중치는 1/(그 아이템이 탐색 칸 어디에든 놓일 확률) = 1/(화면 칸 수 x propensity)다.
     theta는 위치별 검토 확률의 상대값(척도 무관)이고 position_ctr나 power_law_theta로 만든다.
     θ[p]가 0인 위치에서 기록된 칸은 버린다(그 위치에서는 클릭이 관측되지 않았다).
-    slate_size(칸마다 그 요청의 화면 칸 수)를 주지 않으면 로그에 요청의 모든 칸이 들어 있다고 보고 센다."""
-    theta = np.asarray(theta, dtype=np.float64)
+    slate_size(칸마다 그 요청의 화면 칸 수)를 주지 않으면 로그에 요청의 모든 칸이 들어 있다고 보고 센다.
+
+    지지: 타깃 화면의 아이템 중 탐색 풀에 있는 것만. 로그 정책의 결정론 칸에 들어간 아이템은 탐색 칸에
+    나오지 않으므로, 로그 정책과 많이 겹치는 타깃에서는 coverage가 낮다."""
     explored = np.asarray(log.explored, dtype=bool)
-    rank = target_rank(log, target)
-    if slate_size is None:
-        requests, inv = _requests(log)
-        slate_size = np.bincount(inv, minlength=len(requests))[inv]
-    slate_size = np.asarray(slate_size, dtype=np.float64)
-    in_range = (rank >= 0) & (rank < len(theta)) & (log.position < len(theta))
-    last = max(len(theta) - 1, 0)
-    theta_logged = np.where(in_range, theta[np.clip(log.position, 0, last)], 0.0)
-    theta_target = np.where(in_range, theta[np.clip(rank, 0, last)], 0.0)
-    use = explored & in_range & (theta_logged > 0)
-    gain = np.where(use, theta_target / np.where(theta_logged > 0, theta_logged, 1.0), 0.0)
-    return _weighted(log, target, explored, use, 1.0 / (slate_size * log.propensity), gain, normalize=True)
+    weight = 1.0 / (_slate_size(log, slate_size) * log.propensity)
+    return _position_based(log, target, theta, explored, weight)
+
+
+def position_based_slate(
+    log: SlotLog, target: Target, theta, slate_size: Optional[np.ndarray] = None
+) -> Estimate:
+    """화면 전체 + 아이템 단위 매칭 + 위치 편향 보정(클릭 모델 기반 추정).
+
+    결정론 칸의 아이템은 확률 1로 화면에 나오므로 가중치 1, 탐색 칸의 아이템은 replay_position_based와 같은
+    가중치를 준다. 후보 집합 안의 모든 아이템이 어느 쪽으로든 화면에 나올 수 있으므로, 타깃 화면이 후보
+    집합 안에 있으면 지지가 완전하다. 대신 결정론 칸의 위치는 무작위가 아니다: 그 칸의 기여는 위치
+    편향 모델(클릭 = θ[위치] x 아이템 매력)과 θ가 맞을 때만 옳다."""
+    explored = np.asarray(log.explored, dtype=bool)
+    weight = np.where(explored, 1.0 / (_slate_size(log, slate_size) * log.propensity), 1.0)
+    return _position_based(log, target, theta, np.ones(len(log), dtype=bool), weight)
 
 
 @dataclass(frozen=True)
