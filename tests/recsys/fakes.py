@@ -166,6 +166,9 @@ class FakeRepo:
         self._call("latest_batch")
         return self.batches.get(user_id)
 
+    def rollback(self):
+        pass
+
 
 def two_topic_corpus(dim=16, per_topic=15, now=NOW, seed=0):
     """topic A(축 0 근처)와 topic B(축 1 근처) 뉴스레터를 같은 시각대에 만든다."""

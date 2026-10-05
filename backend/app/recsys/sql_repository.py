@@ -58,6 +58,9 @@ class SqlRecsysRepository:
     def _scalar(self, sql: str, **params):
         return self.session.execute(text(sql), params).scalar()
 
+    def rollback(self) -> None:
+        self.session.rollback()
+
     def last_click_id(self, user_id: int) -> Optional[int]:
         return self._scalar(
             "SELECT log_id FROM user_newsletter_ctr_log WHERE user_id = :uid "

@@ -97,14 +97,17 @@ def get_today_news(
 ):
     # RECSYS_MODE=realtime이면 요청 시점에 계산하고, 실패/시간 초과면 배치 행 -> 인기
     # -> 최신 순으로 폴백한다(app/recsys/service.py, ADR 0015). 응답 본문 형식은 그대로다.
-    rec = service.recommend(user.user_id, fallback_repo=request_repo)
+    # 폴백 단계가 SQL 오류를 만나면 요청 세션을 rollback하고 다음 단계로 간다. rollback은 세션에
+    # 붙은 ORM 객체(user)를 만료시키므로 필요한 값은 미리 꺼내 둔다.
+    user_id = user.user_id
+    rec = service.recommend(user_id, fallback_repo=request_repo)
     items = hydrate(rec.news_letter_ids)
 
     response.headers["X-Rec-Source"] = rec.source
     response.headers["X-Model-Version"] = rec.model_version
     response.headers["X-Request-Id"] = rec.request_id
     background_tasks.add_task(
-        service.log_impressions, user.user_id, rec, [i.news_letter_id for i in items]
+        service.log_impressions, user_id, rec, [i.news_letter_id for i in items]
     )
     return items
 

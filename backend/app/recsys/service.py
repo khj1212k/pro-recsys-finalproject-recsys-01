@@ -176,6 +176,7 @@ class RecommendationService:
             except Exception:
                 logger.exception("fallback step %s failed for user %s", source, user_id)
                 self.counters.inc(f"fallback_step_error.{source}")
+                self._rollback(repo)
                 continue
             if got is None:
                 continue
@@ -198,6 +199,17 @@ class RecommendationService:
             model_version="none",
             fallback_reason=reason,
         )
+
+    @staticmethod
+    def _rollback(repo: RecsysRepository) -> None:
+        # 폴백 단계들은 같은 요청 세션을 쓴다. PostgreSQL은 문장 하나가 실패하면 트랜잭션을
+        # 중단 상태로 두므로, 되돌리지 않으면 다음 단계도 "current transaction is aborted"로
+        # 실패해 체인이 인기/최신에 닿지 못하고 empty로 끝난다. 이 시점의 요청 세션은 읽기만
+        # 했으므로 되돌려도 잃는 것이 없다.
+        try:
+            repo.rollback()
+        except Exception:
+            logger.exception("rollback after a failed fallback step failed")
 
     def _batch_ids(self, repo: RecsysRepository, user_id: int, now: datetime):
         row = repo.latest_batch(user_id)

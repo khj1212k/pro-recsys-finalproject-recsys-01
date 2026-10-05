@@ -480,3 +480,32 @@ def test_batch_rows_are_filtered_to_what_the_screen_can_show(api_client, seeded,
     # 배치 행에 보여 줄 수 있는 것이 하나도 없으면 빈 화면 대신 인기 목록으로 넘어간다.
     assert nothing_visible.headers["X-Rec-Source"] == "popular"
     assert nothing_visible.json()
+
+
+def test_a_sql_error_in_one_fallback_step_does_not_poison_the_next_step(engine, seeded):
+    """폴백 단계들은 요청 세션 하나를 같이 쓴다. PostgreSQL은 문장이 실패하면 트랜잭션을 중단
+    상태로 두므로, 되돌리지 않으면 뒤 단계가 전부 "current transaction is aborted"로 실패해
+    체인이 인기/최신에 닿지 못하고 empty로 끝난다."""
+    from sqlalchemy.orm import Session
+
+    from app.recsys.config import RecsysConfig
+    from app.recsys.service import build_service
+    from app.recsys.sql_repository import SqlRecsysRepository, sql_repo_scope
+
+    class BrokenBatchRepo(SqlRecsysRepository):
+        def latest_batch(self, user_id):
+            self.session.execute(text("SELECT 1/0"))
+
+    uid = seeded.add_user()
+    service = build_service(
+        RecsysConfig(mode="batch"), repo_factory=partial(sql_repo_scope, engine, 5000)
+    )
+    try:
+        with Session(engine) as session:
+            rec = service.recommend(uid, fallback_repo=BrokenBatchRepo(session))
+    finally:
+        service.shutdown()
+
+    assert rec.source == "popular"
+    assert rec.news_letter_ids
+    assert service.counters.get("fallback_step_error.batch") == 1

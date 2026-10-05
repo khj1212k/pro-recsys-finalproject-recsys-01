@@ -107,6 +107,41 @@ def test_fallback_chain_reaches_recent_when_popular_fails_and_never_raises():
     assert service.counters.get("fallback.exhausted") == 1
 
 
+class AbortingRepo(FakeRepo):
+    """PostgreSQL처럼 동작한다: 문장 하나가 실패하면 rollback 전까지 뒤 문장도 모두 실패한다."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.aborted = False
+        self.rollbacks = 0
+
+    def _call(self, name):
+        if self.aborted:
+            raise RuntimeError("current transaction is aborted, commands ignored")
+        try:
+            super()._call(name)
+        except RuntimeError:
+            self.aborted = True
+            raise
+
+    def rollback(self):
+        self.rollbacks += 1
+        self.aborted = False
+
+
+def test_a_failed_fallback_step_is_rolled_back_so_the_next_step_can_still_query():
+    repo = _repo(repo_cls=AbortingRepo)
+    repo.fail_on.add("latest_batch")
+    service = _service(repo, RecsysConfig(mode="batch"))
+
+    rec = service.recommend(1, fallback_repo=repo)
+
+    assert rec.source == SOURCE_POPULAR
+    assert rec.news_letter_ids
+    assert repo.rollbacks == 1
+    assert service.counters.get("fallback_step_error.batch") == 1
+
+
 def test_cache_hit_until_a_click_changes_the_key():
     repo = _repo()
     service = _service(repo)

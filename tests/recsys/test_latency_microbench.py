@@ -82,6 +82,9 @@ class StaticRepo:
     def latest_batch(self, user_id):
         return None
 
+    def rollback(self):
+        pass
+
 
 def _pcts(samples_ms):
     s = sorted(samples_ms)
