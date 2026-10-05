@@ -20,11 +20,16 @@ Every response carries an `X-Rec-Source` header, so the fallback rate can be
 measured directly. Of the real APIs only the request-time /today (branch
 feat/realtime-recommendation) sends it; the batch-only /today does not, and the
 metrics then report the fallback rate as unknown (None) rather than 0.
+
+Like the request-time API, /today also sends `X-Request-Id`, and the click route
+accepts the optional `request_id` / `position` / `event` / `dwell_ms` fields of
+logging v2 (ADR 0025). The ids are a counter, so a seeded run stays reproducible.
 """
 
 import itertools
 import math
 import threading
+import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -33,7 +38,7 @@ from typing import Dict, List, Optional, Set, Tuple
 import numpy as np
 
 from sim.catalog import CATEGORIES, Catalog, Item
-from sim.driver import REC_SOURCE_HEADER
+from sim.driver import REC_SOURCE_HEADER, REQUEST_ID_HEADER
 
 POLICIES = ("static_batch", "static_batch_fallback", "reactive", "reactive_explore", "random")
 EXPLORE_SLOTS = (2, 5, 8)
@@ -70,6 +75,10 @@ class FakeBackend:
         self._ids = itertools.count(1)
         self._tok = itertools.count(1)
         self._req = itertools.count(1)
+        # request ids for X-Request-Id: a separate counter, so that adding the header did not change
+        # the random streams that are seeded with _req
+        self._rid = itertools.count(1)
+        self.click_links: List[Tuple[Optional[str], Optional[int]]] = []  # (request_id, position) per click
 
     def now(self) -> datetime:
         return self.clock.now() if self.clock is not None else datetime.now(timezone.utc)
@@ -200,10 +209,15 @@ class FakeBackend:
                 return self.popular(cands), "fallback"
             return [], "empty"
 
-    def record_click(self, u: _User, nid: int) -> int:
+    def next_request_id(self) -> str:
+        return str(uuid.UUID(int=next(self._rid)))
+
+    def record_click(self, u: _User, nid: int, request_id: Optional[str] = None,
+                     position: Optional[int] = None) -> int:
         with self.lock:
             now = self.now()
             self.clicks.append((u.user_id, nid, now))
+            self.click_links.append((request_id, position))
             self.user_clicks[u.user_id].append((nid, now))
             return len(self.clicks)
 
@@ -231,6 +245,10 @@ def create_fake_app(backend: FakeBackend):
 
     class ClickBody(BaseModel):
         news_letter_id: int
+        request_id: Optional[uuid.UUID] = None
+        position: Optional[int] = Field(default=None, ge=0)
+        event: str = Field(default="click", pattern="^(click|detail_view)$")
+        dwell_ms: Optional[int] = Field(default=None, ge=0)
 
     app = FastAPI(title="newsletter API fake (simulator)")
     app.state.backend = backend
@@ -290,6 +308,7 @@ def create_fake_app(backend: FakeBackend):
         u = require_user(authorization)
         ids, source = backend.feed(u)
         response.headers[REC_SOURCE_HEADER] = source
+        response.headers[REQUEST_ID_HEADER] = backend.next_request_id()
         return [backend.catalog.by_id[i].to_api(include_press=backend.expose_press) for i in ids]
 
     @app.get("/newsletters/{news_letter_id}")
@@ -305,7 +324,9 @@ def create_fake_app(backend: FakeBackend):
         if body.news_letter_id not in backend.catalog.by_id:
             # the real table has an FK to news_letter; an unknown id is a 500 there
             raise HTTPException(status_code=500, detail="foreign key violation")
-        return {"status": "success", "log_id": backend.record_click(u, body.news_letter_id)}
+        request_id = None if body.request_id is None else str(body.request_id)
+        return {"status": "success",
+                "log_id": backend.record_click(u, body.news_letter_id, request_id, body.position)}
 
     @app.post("/__sim__/day_end")
     async def day_end():

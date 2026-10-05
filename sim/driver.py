@@ -9,6 +9,11 @@ Routes/payloads mirror backend/app/api/*:
   GET  /newsletters/{id}
 The frontend's onboarding order (newsletters, then categories) is kept.
 
+Clicks are linked to the feed they came from when the API says which answer that was: if
+/newsletters/today carried an `X-Request-Id` header, the click body also sends `request_id` and the
+0-based `position` of the item in that feed (logging v2, ADR 0025). Against an API without the
+header the click body is {news_letter_id} alone, as before.
+
 `session` can be anything with requests' `.request(method, url, **kw)`:
 requests.Session, fastapi TestClient, httpx.Client or Locust's HttpSession.
 """
@@ -25,6 +30,7 @@ from sim.click_model import ClickModel, ExposureHistory
 from sim.personas import Profile, SimUser
 
 REC_SOURCE_HEADER = "X-Rec-Source"
+REQUEST_ID_HEADER = "X-Request-Id"
 TOKEN_EXPIRED_SUFFIX = "_token_expired"  # Locust request name of a 401 that was retried after re-login
 
 
@@ -52,6 +58,7 @@ class ApiError(RuntimeError):
 class Feed:
     items: List[Item]
     source: Optional[str]
+    request_id: Optional[str] = None
 
 
 class ApiClient:
@@ -143,11 +150,14 @@ class ApiClient:
 
     def today(self, endpoint: str = "today") -> Feed:
         resp = self._request(endpoint, "GET", "/newsletters/today", auth=True)
-        return Feed([Item.from_api(p) for p in resp.json()], resp.headers.get(REC_SOURCE_HEADER))
+        return Feed([Item.from_api(p) for p in resp.json()], resp.headers.get(REC_SOURCE_HEADER),
+                    resp.headers.get(REQUEST_ID_HEADER))
 
-    def click(self, news_letter_id: int) -> int:
-        resp = self._request("click", "POST", "/logs/newsletter/click", auth=True,
-                             json={"news_letter_id": news_letter_id})
+    def click(self, news_letter_id: int, request_id: Optional[str] = None, position: Optional[int] = None) -> int:
+        payload = {"news_letter_id": news_letter_id}
+        if request_id is not None and position is not None:
+            payload.update(request_id=request_id, position=int(position))
+        resp = self._request("click", "POST", "/logs/newsletter/click", auth=True, json=payload)
         return int(resp.json().get("log_id", -1))
 
     def detail(self, news_letter_id: int) -> dict:
@@ -188,6 +198,7 @@ class ViewEvent:
     after_click: bool = False
     is_first_view: bool = False
     drifted: bool = False
+    request_id: Optional[str] = None
 
 
 class SimAgent:
@@ -205,6 +216,7 @@ class SimAgent:
         self.request_seq = 0
         self.onboarding: Optional[OnboardingRecord] = None
         self.last_feed: List[Item] = []
+        self.last_request_id: Optional[str] = None
 
     def ensure_account(self) -> None:
         self.api.signup(self.user)
@@ -236,11 +248,11 @@ class SimAgent:
             feed = self.api.today()
         except ApiError:
             return ev
-        ev.ok, ev.source = True, feed.source
+        ev.ok, ev.source, ev.request_id = True, feed.source, feed.request_id
         ev.item_ids = [it.news_letter_id for it in feed.items]
         for it in feed.items:
             self.items[it.news_letter_id] = it
-        self.last_feed = feed.items
+        self.last_feed, self.last_request_id = feed.items, feed.request_id
         clicked = self.model.sample_clicks(feed.items, profile, now, self.hist, self.rng)
         self.hist.record_view(feed.items[: self.model.cfg.view_depth])
         for rank in clicked:
@@ -249,7 +261,7 @@ class SimAgent:
             ev.clicked_ranks.append(rank)
             self.hist.record_click(nid)
             try:
-                self.api.click(nid)
+                self.api.click(nid, feed.request_id, rank)
                 ev.clicks_acked += 1
                 if self.fetch_detail:
                     self.api.detail(nid)

@@ -302,6 +302,15 @@ def test_driver_reads_the_source_header_of_the_request_time_api_in_realtime_mode
     pairs = after_click_pairs(log)
     assert pairs and all(set(a.clicked_ids).isdisjoint(b.item_ids) for a, b in pairs)
     assert m["reactivity"]["after_click_jaccard_mean"] < 1.0
+    # Logging v2 (ADR 0025): the real click route stores the id of the answer and the rank the driver sent
+    sent = sorted((v.request_id, v.clicked_ids[i], v.clicked_ranks[i])
+                  for v in log.views for i in range(len(v.clicked_ids)))
+    with Session(engine) as s:
+        rows = s.exec(select(UserNewsLetterCTRLog)).all()
+        stored = sorted((str(r.request_id), r.news_letter_id, r.position) for r in rows)
+        events = {r.event for r in rows}
+    assert all(v.request_id for v in log.views if v.ok)  # the request-time API names every answer
+    assert stored == sent and events == {"click"}
 
 
 # --- sim.seed: the load-test seed goes through the same backend models --------
