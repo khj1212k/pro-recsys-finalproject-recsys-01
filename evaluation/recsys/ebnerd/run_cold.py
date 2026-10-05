@@ -105,6 +105,15 @@ class ConfigMismatch(RuntimeError):
 
 # --- 체크포인트 저장소 -------------------------------------------------------------------------
 
+def environment(threads: Optional[int] = None) -> dict:
+    """계산이 돈 환경. 재개가 다른 환경에서 이뤄지면 progress.json에 둘 다 남는다."""
+    import pyarrow
+
+    return {"python": platform.python_version(), "machine": platform.machine(), "system": platform.system(),
+            "numpy": np.__version__, "pandas": pd.__version__, "pyarrow": pyarrow.__version__,
+            "lightgbm": lgb.__version__, "threads": threads}
+
+
 def config_hash(config: dict) -> str:
     return hashlib.sha256(json.dumps(config, sort_keys=True, default=_json_default).encode()).hexdigest()
 
@@ -113,7 +122,8 @@ class Store:
     """<out-dir>의 단위별 산출물과 progress.json. 파일은 임시 이름으로 쓴 뒤 바꿔 넣어, 중간에 죽어도 반쯤 쓴 단위가
     "완료"로 남지 않는다."""
 
-    def __init__(self, out_dir: Path, config: dict, resume: bool, bench_info: Optional[dict] = None):
+    def __init__(self, out_dir: Path, config: dict, resume: bool, bench_info: Optional[dict] = None,
+                 env: Optional[dict] = None):
         self.dir = Path(out_dir)
         self.path = self.dir / "progress.json"
         config = json.loads(json.dumps(config, default=_json_default))
@@ -128,7 +138,10 @@ class Store:
                 raise ConfigMismatch("이 out-dir에 이전 실행의 체크포인트가 있습니다. --resume으로 이어서 돌리거나 새 디렉터리를 쓰세요.")
             self.progress = prev
         else:
-            self.progress = {"config_hash": digest, "config": config, "bench_info": bench_info, "units": {}}
+            self.progress = {"config_hash": digest, "config": config, "bench_info": bench_info, "environments": [],
+                             "units": {}}
+        if env and env not in self.progress.setdefault("environments", []):
+            self.progress["environments"].append(env)
         for sub in ("units", "models", "heuristic"):
             (self.dir / sub).mkdir(parents=True, exist_ok=True)
         self._flush()
@@ -853,9 +866,7 @@ def stage_assemble(store: Store, prereg: dict, args, config: dict, bench_info: O
         "code_sha": config["code_sha"], "dataset": config["dataset"], "seeds": config["seeds"],
         "n_boot": args.n_boot, "p2_sample": config["p2_sample"], "sub_cap": config["sub_cap"],
         "fake_dim": config["fake_dim"], "max_fit": config["max_fit"], "max_test": config["max_test"],
-        "threads": args.threads, "python": platform.python_version(),
-        "machine": f"{platform.machine()} {platform.system()}",
-        "versions": {"numpy": np.__version__, "pandas": pd.__version__, "lightgbm": lgb.__version__},
+        "environments": store.progress.get("environments", []), "assembled_on": environment(),
         "data_files": config["data_files"], "embeddings_sha256": config["embeddings_sha256"],
         "articles_original_sha256": prereg["data"]["articles_original_sha256"], "compute": compute,
         "config_hash": store.progress["config_hash"],
@@ -945,7 +956,7 @@ def main(argv=None) -> int:
     info["impressions"] = {k: int(len(v)) for k, v in idx.items()}
     info["catalog"] = bench.catalog_info
     try:
-        store = Store(Path(args.out_dir), config, resume=args.resume, bench_info=info)
+        store = Store(Path(args.out_dir), config, resume=args.resume, bench_info=info, env=environment(args.threads))
     except ConfigMismatch as e:
         log.error("%s", e)
         return EXIT_CONFIG_MISMATCH

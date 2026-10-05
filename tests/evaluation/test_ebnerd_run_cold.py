@@ -107,6 +107,26 @@ def test_report_is_labelled_demo_and_not_judgeable(full_run):
     assert render(d) == md      # 표는 JSON에서 다시 만들 수 있다
 
 
+def test_report_records_the_environment_that_computed_the_numbers(full_run, tmp_path):
+    """리포트의 환경 기록은 조립한 곳이 아니라 계산한 곳의 것이어야 한다(조립은 다른 기계에서 다시 할 수 있다)."""
+    import lightgbm
+    import numpy
+
+    out, d = full_run
+    envs = d["meta"]["environments"]
+    assert len(envs) == 1 and envs[0]["lightgbm"] == lightgbm.__version__ and envs[0]["numpy"] == numpy.__version__
+    assert envs[0]["threads"] == 2 and "python" in envs[0] and "assembled_on" in d["meta"]
+    # 다른 환경에서 이어 돌리면 둘 다 남는다
+    store = run_cold.Store.open_existing(out)
+    cfg = store.progress["config"]
+    other = {**envs[0], "lightgbm": "0.0.0-other"}
+    again = run_cold.Store(tmp_path / "copy", cfg, resume=False, env=envs[0])
+    assert again.progress["environments"] == [envs[0]]
+    resumed = run_cold.Store(tmp_path / "copy", cfg, resume=True, env=other)
+    assert resumed.progress["environments"] == [envs[0], other]
+    assert run_cold.Store(tmp_path / "copy", cfg, resume=True, env=other).progress["environments"] == [envs[0], other]
+
+
 def test_report_has_no_per_user_or_article_content(full_run):
     out, d = full_run
     text = (out / run_cold.REPORT_JSON).read_text()

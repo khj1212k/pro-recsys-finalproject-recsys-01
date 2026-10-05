@@ -257,6 +257,10 @@ def models_section(d: dict) -> str:
     if stages:
         parts.append(table(["단계", "완료 단위", "전체 단위", "초"],
                            [[k, s["units_done"], s["units_total"], s["seconds"]] for k, s in stages.items()]))
+    envs = d["meta"].get("environments")
+    if envs:
+        parts.append("계산 환경(재개가 다른 환경에서 이뤄졌으면 여러 줄): "
+                     + " / ".join(json.dumps(e, ensure_ascii=False) for e in envs))
     comp = d["meta"].get("compute")
     if comp:
         parts.append("계산 자원: " + json.dumps(comp, ensure_ascii=False))
