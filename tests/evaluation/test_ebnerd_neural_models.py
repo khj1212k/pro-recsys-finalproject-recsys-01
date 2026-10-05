@@ -10,6 +10,8 @@ import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
+if getattr(torch, "__file__", None) is None:      # 다른 테스트가 sys.modules에 넣어 둔 가짜 torch
+    pytest.skip("진짜 torch가 없다", allow_module_level=True)
 
 from evaluation.recsys.ebnerd.models import ALL_GROUPS, V2_FEATURES, feature_matrix  # noqa: E402
 from evaluation.recsys.ebnerd.neural import datasets as D  # noqa: E402

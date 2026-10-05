@@ -24,11 +24,12 @@ SMALL = ["--seeds", "0", "--n-boot", "30", "--p2-sample", "150", "--p2-cold-samp
 
 
 def _has_torch() -> bool:
+    """진짜 torch가 설치돼 있는가. 다른 테스트가 sys.modules에 넣어 둔 가짜 모듈(파일이 없다)은 치지 않는다."""
     try:
-        import torch  # noqa: F401
-        return True
+        import torch
     except ImportError:
         return False
+    return getattr(torch, "__file__", None) is not None
 
 
 torch_only = pytest.mark.skipif(not _has_torch(), reason="torch가 없다(신경망 단계는 torch가 있는 CI job과 로컬에서 돈다)")

@@ -385,16 +385,18 @@ def test_dry_run_session_end_to_end_in_real_subprocesses_then_resume_and_bundle(
 
     torch가 있는 환경에서만 돈다(합성 데이터, CPU, 1~2분). EB-NeRD는 쓰지 않는다.
     """
-    pytest.importorskip("torch")
     import sys
 
+    # 단계는 새 인터프리터에서 돌므로, 이 프로세스의 sys.modules(다른 테스트가 가짜 torch를 넣어 둘 수 있다)가 아니라
+    # 그 인터프리터에 torch가 있는지를 본다.
+    local = drv.probe_torch(sys.executable)
+    if "torch" not in local:
+        pytest.skip("torch가 없다(이 테스트는 torch가 있는 CI job과 로컬에서 돈다)")
     tarball = _code_tarball(tmp_path / "e15_code.tar.gz")
     work = tmp_path / "work"
     argv = ["run", "--workdir", str(work), "--code-tarball", str(tarball), "--session", "s0", "--skip-install",
             "--python", sys.executable]
     # 로컬 torch가 핀과 다른 버전이어도 경로 확인은 하게 한다(원격에서는 실제 probe가 핀을 강제한다)
-    local = drv.probe_torch(sys.executable)
-    assert "torch" in local
     hooks = {"torch_probe": lambda p: {**local, "torch": drv.pinned_torch(REPO) + "+local"}, "heartbeat_seconds": 0}
     assert drv.main(argv, **hooks) == 0
     state = json.loads((work / "out" / "driver_state.json").read_text())
