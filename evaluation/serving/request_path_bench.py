@@ -12,6 +12,11 @@ ADR 0015(요청 시점 추천 구조)와 0017(단기 상태 저장소)의 증거
   사용자 2만 명, 클릭 로그 100만 건(90일)이다.
 - --redis-url 을 주면 Redis 리스트(LPUSH/LTRIM/EXPIRE)를 단기 상태 저장소로 쓰는 대안도
   같은 사용자/같은 아이템 캐시 조건으로 잰다(redis 파이썬 패키지 필요, 프로젝트 의존성 아님).
+- service_level 절은 HTTP 측정이 아니다. 요청마다 앱 풀 세션 하나를 쥐고(인증 조회 흉내)
+  service.recommend를 직접 부른다 - HTTP 파싱, JWT 검증, 표시 단계(hydrate), JSON 직렬화,
+  노출 로그 쓰기는 들어 있지 않다. 부하를 만드는 스레드와 Postgres가 같은 머신에서 돌고,
+  결과 캐시는 끈다(cache_ttl_s=0). 이름을 바꾸기 전의 결과 파일(reports/serving)에서는 이 절의
+  키가 end_to_end였다.
 
     .venv/bin/python -m evaluation.serving.request_path_bench \\
         --server-url postgresql://postgres:postgres@127.0.0.1:55433/postgres \\
@@ -348,8 +353,10 @@ def _measure(args, rng, now, url) -> dict:
     since72, since24 = now - timedelta(hours=72), now - timedelta(hours=24)
     pick = lambda pool, k=R: [int(x) for x in rng.choice(pool, size=k)]  # noqa: E731
     result = {"seed": info, "env": {
-        "machine": platform.machine(), "system": platform.system(),
+        "machine": platform.machine(), "system": platform.system(), "cpu_count": os.cpu_count(),
         "loadavg1_start": round(os.getloadavg()[0], 2), "reps": R,
+        # GitHub Actions에서 돌 때 어느 커밋·어느 실행의 수치인지 결과 파일에 남긴다.
+        "commit": os.environ.get("GITHUB_SHA"), "ci_run_id": os.environ.get("GITHUB_RUN_ID"),
     }}
 
     # 1) 쿼리 단위(한 커넥션, 순차)
@@ -378,9 +385,10 @@ def _measure(args, rng, now, url) -> dict:
     result["query"] = q
     result["explain"] = explain(engine, now, heavy[0], profile)
 
-    # 2) 전체 경로(service.recommend). API처럼 요청마다 앱 풀 세션 하나를 먼저 쥐고
-    #    (인증 조회) 추천을 기다린다. dedicated_pool = 운영 배선(build_sql_service, 실시간
-    #    경로 전용 풀), shared_pool = 실시간 경로도 앱 풀을 쓰던 이전 배선.
+    # 2) 서비스 수준(service.recommend 직접 호출 - HTTP·JWT·표시·JSON·노출 로그 쓰기 제외).
+    #    API처럼 요청마다 앱 풀 세션 하나를 먼저 쥐고(인증 조회) 추천을 기다린다.
+    #    dedicated_pool = 운영 배선(build_sql_service, 실시간 경로 전용 풀),
+    #    shared_pool = 실시간 경로도 앱 풀을 쓰던 이전 배선.
     def one_request(service, app_engine, uid):
         with Session(app_engine) as s:
             s.execute(text('SELECT user_id FROM "user" WHERE user_id = :u'), {"u": uid})
@@ -414,8 +422,8 @@ def _measure(args, rng, now, url) -> dict:
 
     cfg = RecsysConfig(cache_ttl_s=0)  # 운영 기본 예산(300ms), 결과 캐시만 끈다
     levels = (1, 4, 8, 16, 32)  # FastAPI 동기 엔드포인트 스레드풀 기본값은 40
-    e2e = {"time_budget_ms": cfg.time_budget_ms, "rounds": []}
-    for rnd in range(args.e2e_rounds):
+    svc = {"time_budget_ms": cfg.time_budget_ms, "app_pool": "5+10, pool_timeout 10s", "rounds": []}
+    for rnd in range(args.service_rounds):
         # 순서 효과(캐시 온도, 러너 상태)를 줄이려고 라운드마다 배선 순서를 바꾼다.
         order = ("dedicated_pool", "shared_pool") if rnd % 2 == 0 else ("shared_pool", "dedicated_pool")
         round_rows = {}
@@ -441,8 +449,8 @@ def _measure(args, rng, now, url) -> dict:
             service.shutdown()
             app_engine.dispose()
             round_rows[wiring] = row
-        e2e["rounds"].append(round_rows)
-    result["end_to_end"] = e2e
+        svc["rounds"].append(round_rows)
+    result["service_level"] = svc
 
     # 3) 단기 상태 저장소 비교: 같은 사용자, 같은(워밍된) 아이템 임베딩 캐시 조건.
     #    Redis/프로세스 내는 "최근 클릭 ID 목록"만 들고, 벡터는 아이템 캐시에서 평균낸다.
@@ -545,9 +553,9 @@ def print_report(res: dict) -> None:
     print("\n## explain")
     for name, e in res["explain"].items():
         print(f"{name:<18} exec={e['execution_ms']:.3f}ms plan={' > '.join(e['nodes'])}")
-    e2e = res["end_to_end"]
-    print("\n## end_to_end (budget %sms)" % e2e["time_budget_ms"])
-    for i, rnd in enumerate(e2e["rounds"]):
+    svc = res["service_level"]
+    print("\n## service_level (service.recommend 직접 호출, budget %sms)" % svc["time_budget_ms"])
+    for i, rnd in enumerate(svc["rounds"]):
         for wiring in ("dedicated_pool", "shared_pool"):
             e = rnd[wiring]
             print(f"[round {i} {wiring}] cold_first={e['cold_first_request_ms']}ms ({e['cold_first_source']})")
@@ -570,7 +578,7 @@ def main(argv=None):
     ap.add_argument("--click-days", type=int, default=90)
     ap.add_argument("--heavy-users", type=int, default=500)
     ap.add_argument("--reps", type=int, default=400)
-    ap.add_argument("--e2e-rounds", type=int, default=3)
+    ap.add_argument("--service-rounds", type=int, default=3, help="서비스 수준 측정 반복 횟수(배선 순서를 번갈아 바꾼다)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--keep", action="store_true", help="측정 후 벤치 DB를 지우지 않는다")
     ap.add_argument("--out", help="결과 JSON 경로")
