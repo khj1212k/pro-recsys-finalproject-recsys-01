@@ -1,0 +1,464 @@
+# ADR 0019: 합성 사용자 시뮬레이터 설계와 주장 범위
+
+> 이 ADR과 `reports/sim/`의 모든 시뮬레이터 수치는 **[SIM] 시스템 반응 지표만, 정확도 무주장**이다.
+> 부하 테스트 수치는 **[LOAD]**로 표시하며 측정한 하드웨어·대상 앱을 함께 적는다.
+
+## 상태
+채택됨 (2026-09-26, 2026-10-06 보완 — 맨 아래 "개정 이력"). 아래 "사전 등록" 절은 지표 타당성 격자를
+돌리기 **전에** 커밋했고(어느 커밋인지는 "증거"의 "커밋 찾기"), 격자 v1 결과를 "증거"에 채웠다: 사전 등록
+판정 50건(P 20, H 30) 중 위반 2건(둘 다 H5)이고, X 8건은 판정 없이 보고만 한다. 그에 따라 **drift 적응
+지표(`adapted_rate`, `requests_to_adapt_median`)는 "타당성 미확인"**이고, 나머지 지표는 장난감 정책 수준에서
+검증됐다. 부하 [LOAD] 수치는 아직 없다 — "재실행 대기(클라우드)".
+
+요청 시점 추천 브랜치 위에 다시 쌓으면서(2026-10-06) 결정과 수치는 바꾸지 않았다. 그때 달라진 커밋 해시,
+대상 API, 테스트 수는 맨 아래 "통합 기록"에 있다.
+
+## 컨텍스트
+- 실사용자가 없다. 추천 시스템이 "동작하는지"(신규 사용자에게 무엇을 보여주는지, 클릭에
+  반응하는지, 관심이 바뀌면 따라가는지, 실패 시 무엇을 내보내는지, 클릭이 로그 테이블까지
+  흘러가는지)를 볼 수단이 필요하다. 부하 테스트에도 가입·온보딩·조회·클릭을 하는 가상
+  사용자가 필요하다.
+- 팀이 남긴 합성 데이터(`data/team_archive/synthetic_dataset`, gitignore)는 이 용도로 쓸 수 없다.
+  - LLM 페르소나 100명(`S{n}_{나이}_{Scanner|Regular|Deep}_{성별}`)이 뉴스레터 195개 전부를
+    한 번씩 보고, 클릭 여부를 LLM이 페르소나 정보(선호 카테고리 포함)로 추론했다. 추천
+    모델이 쓰는 카테고리 피처와 정답 라벨이 같은 정보에서 나와 **순환적**이다.
+  - 클릭률이 비현실적이다: 19,500노출 중 9,281클릭 = **47.6%**, 사용자별 4.6%~97.4%
+    (`python -m sim.calibration --team-ctr-csv ...`, 아래 "증거").
+- `/newsletters/today`에는 두 세대가 있고, 시뮬레이터는 둘 다 같은 계약으로 몰아야 한다.
+  어느 쪽이 main인지는 병합 순서에 달려 있으므로 아래에서는 이름으로 부른다.
+  - **배치 전용 API** (이 ADR을 처음 쓴 2026-09-26의 main): 전날 밤 배치(`news_letter_today_batch`)를
+    읽기만 한다. 배치 행이 없는 사용자는 빈 목록을 받고, 응답 출처를 알리는 헤더가 없다.
+  - **요청 시점 API** (브랜치 `feat/realtime-recommendation`, `backend/app/recsys`): `RECSYS_MODE=realtime`이면
+    요청마다 계산하고, `RECSYS_MODE=batch`면 배치 행을 읽되 없으면 인기·최신 목록으로 채운다. 두 모드 모두
+    응답 출처를 `X-Rec-Source` 헤더(realtime·cold_start_*·batch·popular·recent·empty)로 알린다.
+
+## 검토한 대안
+
+### 1. 클릭을 무엇으로 만들 것인가
+1. 팀의 LLM 페르소나·클릭 로그 재사용 — 순환성·47.6% 클릭률 때문에 기각.
+2. 노출마다 LLM이 "이 사용자라면 클릭할까"를 판단하는 에이전트형 사용자 — 수천~수만
+   노출에 호출 비용이 들고(Gemini 선불 잔액이 작다) 재현성이 없으며, LLM이 카테고리·제목을
+   읽고 판단하므로 순환성도 그대로 남는다. 기각.
+3. 공개 로그(EB-NeRD) 재생 — 덴마크어 기사라 한국어 API를 처음부터 끝까지 몰 수 없고,
+   라이선스상 이 Mac 밖으로 못 나간다. **기저 클릭률 대조에만** 사용.
+4. BGE-M3 코사인 유사도를 클릭 확률 피처로 쓰는 파라미터 모델 — 추천기가 같은 임베딩으로
+   순위를 매기므로 추천기를 자기 정답지로 채점하게 된다. 기각.
+5. **손으로 쓴 아키타입 + 위치 기반(position-based) 파라미터 클릭 모델 (채택)** — 시드로 완전
+   재현되고, 비용이 0이며, 피처 가중치를 바꾼 민감도 설정을 둘 수 있다. 대신 정확도 주장이
+   불가능하다는 점을 이 ADR의 주장 범위로 못박는다.
+
+### 2. 부하 도구
+1. k6 — 가상 사용자 로직을 JS로 다시 써야 해 행동 시뮬레이터와 로직이 갈라진다.
+2. wrk/hey — 가입→로그인→온보딩→조회→클릭 같은 상태 있는 흐름을 표현하기 어렵다.
+3. **Locust (채택)** — 파이썬이라 `SimUser`·`ClickModel`·`ApiClient`를 그대로 재사용한다.
+   gevent 기반이라 동기 코드에서 CPU를 오래 쓰면 지연이 부풀려지는 함정이 있어, Kiwi 모델
+   로딩을 import 시점에 끝낸다(`sim/locustfile.py`).
+
+## 결정
+
+### 페르소나 (`sim/personas.py`)
+- 아키타입 10종: 정치 고관여층, 재테크 투자자, 테크 얼리어답터, 스포츠 팬, 부동산·생활경제,
+  국제 뉴스 관심층, 생활·문화 소비자, 사회 이슈 관심층, 가벼운 훑어보기, 시사 심층 독자.
+  각각 7개 카테고리(100 정치 … 700 세계) 혼합 비율, 키워드 시드(예: 반도체·부동산·야구),
+  선호 언론사, 하루 세션 수 λ ∈ {1, 3, 6}, 위치 인내심 η, 신선도 선호, 반복 피로도,
+  drift 대상 아키타입을 가진다. **로그에 맞춘 값이 아니라 손으로 쓴 값**이다(맞출 실로그가 없다).
+- 사용자는 아키타입에 디리클레 잡음을 얹어 만든다(카테고리 집중도 30, 언론사 10, 키워드는
+  시드에서 4개 이상 부분집합 + 30% 확률로 다른 아키타입 키워드 1개, η·피로도 로그정규 잡음).
+  모든 아키타입이 소표본에서도 나오게 층화 후 섞는다.
+- 전체의 10%는 시뮬레이션 도중 가입한다(콜드 스타트). 또 전체의 10%(300명이면 30명)를 첫날부터
+  있던 사용자 중에서 뽑아, 3일차에 핵심 카테고리가 겹치지 않는 아키타입으로 바꾼다(drift).
+  10개 drift 쌍 모두 핵심 카테고리가 서로소다.
+- 합성 계정 표시: 이메일 `<run_tag>-<seed>-<index>@sim.invalid`(RFC 2606 예약 도메인),
+  닉네임 `sim_<archetype>_<index>`, 코드상 `SimUser.is_synthetic=True`. DB `user` 테이블에는
+  별도 플래그 컬럼이 없으므로 **`@sim.invalid` 도메인이 DB에서의 합성 표시**다.
+
+### 클릭 모델 (`sim/click_model.py`)
+- P(click | 아이템, 순위 r, 사용자 u) = (1/(r+1))^η_u · σ(w_u·φ + b)
+- φ = [카테고리 선호, 뉴스레터 제목·요약·키워드의 Kiwi 명사와 페르소나 키워드의 Jaccard,
+  언론사 선호, exp(−나이/τ) (τ=24h), log1p(raw_news_count), log1p(노출 수 + 3·과거 클릭 수)].
+  w = (4, 8, 1, 1, 0.3, −1), 사용자별로 신선도 가중치 × 2·novelty_u, 반복 가중치 × fatigue_u.
+- **BGE-M3 코사인은 φ에 넣지 않는다.** 그래도 키워드·카테고리 겹침은 임베딩 유사도와
+  상관이 있으므로, 이 시뮬레이터는 **콘텐츠 기반 추천기를 구조적으로 유리하게 평가한다**.
+  이를 드러내는 민감도 설정으로 프리셋 `category_only`(키워드 가중치 0)를 함께 둔다.
+  - 보완(2026-10-06): 위 문장은 φ의 **직접** 피처에 대한 것이다. 팀 뉴스레터 카탈로그(G2)에서는
+    카테고리 라벨의 76%가 BGE-M3 코사인 kNN으로 만든 값이라, 임베딩 유사도가 카테고리 피처를 거쳐
+    **간접적으로** 들어온다. 자세한 내용과 귀결은 "사전 등록" 절 끝의 "등록 후 보완".
+- 한 번의 `/today` 응답에서 상위 20개(view_depth)를 순위별 독립 베르누이로 클릭한다.
+  세션은 클릭이 있을 때만 이어진다(읽고 돌아와 다시 목록을 봄, 세션당 최대 4회 조회).
+  온보딩 선택과 부하 테스트의 클릭 태스크는 위치를 무시한 Gumbel-top-k(Plackett-Luce) 선택이다.
+- 모든 난수는 `numpy.random.default_rng([seed, 용도, 사용자, …])`로 분리해, 같은 시드는 같은
+  조회·클릭 시퀀스를 재현한다(테스트로 고정).
+
+### 기저 클릭률 보정 (`sim/calibration.py`)
+- 편향 b는 **무작위 순위의 top-10 기대 CTR = 2%**가 되도록 이분법으로 푼다. 무작위 정책에
+  맞추는 이유: 나중에 어떤 추천기를 붙이든 기준점이 그 추천기와 독립이어야 한다.
+- 오라클(시뮬레이터 자신의 매력도로 정렬)의 top-10 CTR이 6~12% 범위에 드는지 확인한다.
+- 근거로 삼은 공개 수치:
+  - MIND(MSN 뉴스 노출 로그): 노출 아이템 중 클릭 비율 약 4% — MIND 대회 기술 보고서
+    (Sogou, 2020, msnews.github.io/assets/doc/1.pdf)가 "only about 4% positive ratio"로 보고.
+  - EB-NeRD small(Ekstra Bladet, 로컬 계산): in-view 기사당 클릭 비율 train 9.06%,
+    validation 8.41%. 단, 이 데이터셋은 클릭이 1개 이상 있는 노출만 공개하므로
+    **무조건부 CTR의 상한**이다(노출당 in-view 중앙값 8·9개).
+  - 두 수치 모두 실서비스 추천기가 고른 목록의 CTR이다. 무작위 목록은 그보다 낮아야 하고
+    (2%), 정답을 아는 오라클은 그 범위 근처(6~12%)여야 한다는 것이 목표 설정의 논리다.
+  - 팀 합성 데이터의 47.6%는 이 범위의 5~10배다.
+- 보정 결과는 프리셋에 고정 값으로 싣고(default b=−5.018, category_only b=−4.624),
+  `tests/simulator/test_sim_calibration.py`가 기준 설정(`sim/reference.py`: 300명, 합성
+  카탈로그, 2026-01-05 12:00 UTC)에서 다시 풀어 어긋나면 실패한다.
+
+### 드라이버와 대상 (`sim/driver.py`, `sim/fake_app.py`)
+- API 계약만 쓰는 블랙박스 HTTP 드라이버: `POST /auth/signup`, `POST /auth/login`,
+  `GET /onboarding/news?category=&limit=6`, `PUT /users/me/newsletters`,
+  `PUT /users/me/categories`, `GET /newsletters/today`, `POST /logs/newsletter/click`,
+  `GET /newsletters/{id}`. 프런트엔드의 온보딩 순서(뉴스레터 → 카테고리)를 따른다.
+- 같은 드라이버가 세 대상에 붙는다: (1) 프로세스 내 가짜 FastAPI 앱(장난감 정책 5종,
+  가상 시계), (2) 실제 `backend/app` 라우터 + SQLite(계약 테스트
+  `tests/simulator/test_sim_backend_contract.py`), (3) 실행 중인 스택의 URL.
+  계약 테스트는 배치 전용 API, 그리고 요청 시점 API의 두 모드(`RECSYS_MODE=batch`·`realtime`)를 각각
+  확인하며, 체크아웃된 backend에 있는 세대의 테스트만 돈다. 요청 시점 API의 저장소 계층은 Postgres·pgvector
+  전용 SQL이라 SQLite에서는 같은 테이블을 읽는 대역으로 바꿔 끼운다(라우터·추천 서비스·헤더 배선은 실제 코드).
+- 가짜 앱의 장난감 정책은 **지표가 알려진 설계 차이를 구분하는지** 보려는 테스트 더블이다:
+  `static_batch`(배치 전용 API의 설계: 밤 배치, 배치 없으면 빈 목록), `static_batch_fallback`(배치 없으면
+  인기 목록 — 요청 시점 API의 `RECSYS_MODE=batch`와 같은 모양), `reactive`(요청마다 온보딩·클릭으로 재정렬),
+  `reactive_explore`(reactive + top-10 중 3칸을 상위 2개 관심 밖 카테고리로 탐색), `random`. 운영 추천기가 아니다.
+
+### 행동 지표 (`sim/metrics.py`, k=10)
+- 콜드 스타트: 도중 가입자의 첫 `/today`가 비어 있지 않은 비율(`first_view_coverage`), 첫
+  응답 top-10 중 온보딩에서 고른 카테고리 비율.
+- 클릭 반응성: 같은 세션에서 클릭 직후 다음 응답과의 top-10 Jaccard, 클릭한 아이템과 비슷한
+  아이템(같은 카테고리 또는 명사 Jaccard ≥ 0.2) 비율의 클릭 전후 차이(`similar_share_lift`).
+- drift 적응: drift 후 top-10의 50% 이상이 새 아키타입 핵심 카테고리가 될 때까지의 요청 수
+  (중앙값·p90), 적응 비율, 관측 기간 내 미적응(censored) 수.
+- 서빙: 빈 응답 비율, `X-Rec-Source` 기준 폴백률(fallback·popular·recent·empty; 헤더가 없는
+  배치 전용 API에서는 측정 불가로 `None`), 엔드포인트별 오류율·p50/p95.
+- 참여: top-10 실현 CTR(보정 상태 점검용이지 품질 점수가 아니다), 클릭 ACK 비율(클릭이
+  로그 API까지 도달한 비율).
+- 모집단(2026-10-06 추가): 가입·로그인·온보딩까지 마친 사용자 수와 실패 수(`onboarding.n_users_onboarded`,
+  `n_onboarding_failures`). 가입·로그인에 실패한 사용자는 조회가 아예 없고 온보딩 호출에 실패한 사용자는
+  온보딩 기록 없이 조회한다. 어느 쪽이든 다른 지표가 줄어들거나 치우친 모집단을 말없이 기술하게 되므로 함께 본다. 격자 v1의 60회 실행에는 이 항목이 없었다. 다만 P3(모든 호출 오류 0)가 통과했고
+  가짜 앱의 로그인 응답에는 항상 토큰이 있으므로 그 실행들에서 온보딩 실패는 없었다. 합성·reactive·default·
+  시드 0 한 칸을 다시 돌려 300명 모두 온보딩됨과 지표가 커밋된 값과 끝자리까지 같음을 확인했다. 다음 격자
+  버전에서는 `n_onboarding_failures = 0`을 P 항목으로 등록한다.
+
+### 부하 테스트 (`sim/load.py`, `sim/locustfile.py`, `sim/loadtest.py`)
+- ActiveReader: 기존 계정으로 `/newsletters/today`(가중치 9)와 직전 목록 중 클릭 모델이 고른
+  1건 클릭(가중치 1). `constant_throughput(1)`이라 사용자 수 ≈ 목표 RPS.
+- Newcomer(1명 고정): 5초마다 새 `@sim.invalid` 계정으로 가입→로그인→온보딩→첫 `/today`
+  (`today_first_view`로 따로 집계).
+- `python -m sim.loadtest`가 5/20/50 RPS 단계를 각각 헤드리스 Locust로 돌리고 엔드포인트별 요청 수·
+  달성 RPS·p50/p95/p99·오류율 표를 만든다.
+  Locust는 2xx가 아니면 실패로 세므로, 계약상 기대 상태코드(재실행 시 signup 400)는 성공으로
+  판정하도록 `ApiClient`가 `catch_response`를 쓴다.
+- 측정 구간(2026-10-06 수정): 처음에는 계정 준비 구간을 `--reset-stats`로 뺀다고 적었으나, Locust는
+  사용자를 띄운 시점에 통계를 지우므로 그때 진행 중인 리더의 가입·로그인(bcrypt)·온보딩 요청이 집계에
+  남고 첫 `/today` 요청과 경합한다. 지금은 모든 리더가 준비를 마친 시점에 통계와 출처 집계를 지우고
+  그때부터 태스크를 시작한다(`sim.load.ReadyGate`). 측정 구간은 `--duration`에서 준비 시간을 뺀
+  값이며 단계마다 표에 남긴다. 이 수정 전에 잰 부하 수치는 없다.
+- 읽는 법: Newcomer 흐름(요청 6~8개/5초)이 목표 RPS 위에 약 1.2~1.6 RPS를 더한다(5 RPS에서 약 +30%).
+  `constant_throughput`은 닫힌 루프라 대상이 포화되면 보내는 속도가 줄고 지연 백분위수가 낮게 나온다
+  (coordinated omission). 백분위수는 달성 RPS와 함께 읽는다.
+- Locust CSV는 어느 경로가 응답했는지 모른다. `/today` 응답의 `X-Rec-Source`와 빈 목록 여부를 단계마다
+  따로 세어(`SourceTally`, 위 측정 구간과 같은 구간) 지연 표 옆에 출처 분포·빈 응답률·폴백률 표를 붙인다.
+  폴백 정의는 행동 지표와 같고, 헤더가 없는 API에서는 0이 아니라 측정 불가로 적는다.
+- 실스택 부하는 **일회용 DB**에서만 돈다. `sim/seed.py`가 backend의 SQLModel 테이블로 합성 뉴스레터·
+  카테고리·온보딩 랭킹 행을 넣고, `@sim.invalid` 사용자마다 오늘 배치 행을 쓴다(밤 추천 잡 대역).
+  `news_raw`에 행이 있거나 합성이 아닌 사용자가 있으면 거부한다. 절차는 `sim/README.md` 3.3.
+- 실행 위치: 개발 Mac(응답성 유지를 위해 로컬 부하 금지)과 Tier 0 E2.1.Micro(1 GB, 지금 유일한
+  수집기)에서는 돌리지 않는다. Tier 1 A1을 확보하면 수집 compose 프로젝트와 분리된 일회용 프로젝트에서
+  측정한다. CI는 가짜 앱 대상 6초 헤드리스 스모크만 돌린다(하네스 검증이지 성능 수치가 아니다).
+  Tier 0·Tier 1은 호스팅 계층 결정에서 쓰는 이름이며, 그 결정 문서는 브랜치 `ops/hosting-tiers`에 있다
+  (이 브랜치에는 없으므로 번호로 가리키지 않는다).
+
+## 사전 등록: 지표 타당성 격자
+
+목적: 위 지표가 **행동이 알려진** 장난감 정책들을 기대한 방향으로 구분하는지 확인한다. 이
+격자는 운영 추천기에 대해 아무것도 말하지 않는다.
+
+### 설계
+- G1(주): 합성 카탈로그, 정책 5종 × 클릭 모델 프리셋 2종(default, category_only) × 시드 {0, 1, 2},
+  사용자 300명, 7일, drift 3일차, 도중 가입 10%, drift 10%, k=10.
+  `python -m sim.experiments --out-dir <dir> --workers 4`
+- G2(강건성): 팀이 생성한 실제 뉴스레터 195개(로컬, gitignore) 카탈로그, 같은 정책·프리셋·시드,
+  편향은 실행마다 이 카탈로그에서 다시 보정(`--calibrate`). 카테고리 라벨 일부는 kNN 추정값.
+  `python -m sim.experiments --catalog team_archive --team-archive-dir data/team_archive ...`
+- 결과: `reports/sim/grid_v1.{json,md}` (요약만; 실행별 JSON과 기사 텍스트는 커밋하지 않음).
+
+### P: 구성상 반드시 성립해야 하는 것 (모든 시드·두 프리셋에서)
+위반은 드라이버·지표·가짜 앱의 **버그**로 보고, 원인과 수정을 기록한 뒤 다시 돌린다.
+- P1 `first_view_coverage`: static_batch = 0, 나머지 4개 정책 = 1.
+- P2 서빙: static_batch는 `empty_rate` > 0이고 `fallback_rate` = `empty_rate`;
+  static_batch_fallback은 `fallback_rate` > 0, `empty_rate` = 0;
+  reactive·reactive_explore·random은 `empty_rate` = 0, `fallback_rate` = 0.
+- P3 모든 실행에서 `error_rate` = 0, `click_ack_rate` = 1.
+- P4 static_batch: `after_click_jaccard_mean` = 1, `similar_share_lift` = 0.
+- P5 reactive: `after_click_jaccard_mean` < 1, `similar_share_lift` > 0.
+
+### H: 지표 민감도에 대한 방향 가설 (프리셋별 3시드 평균으로 판정, 시드별 최소·최대 병기)
+위반은 **지표의 약점**으로 기록하고, 사후에 정의를 바꿔 통과시키지 않는다. 가설이 깨진
+지표는 이 ADR에 "타당성 미확인"으로 표시하고 운영 시스템에 대한 근거로 쓰지 않는다.
+- H1 첫 응답의 온보딩 카테고리 비율: reactive > static_batch_fallback, reactive > random.
+- H2 클릭 직후 Jaccard: random < reactive_explore < reactive.
+- H3 클릭 후 유사 아이템 비율(`similar_share_after_click`): reactive > reactive_explore.
+- H4 `similar_share_lift`: reactive > random.
+- H5 drift: reactive의 `adapted_rate` ≥ static_batch, `requests_to_adapt_median` ≤ static_batch.
+- H6 `ctr_top_k`: reactive > random (3시드 각각에서도).
+- H7 random의 `ctr_top_k`가 [1%, 3%] 안 — 정적 보정(2%)이 반복 노출·시간 흐름이 있는 동적
+  시뮬레이션에서도 크게 어긋나지 않는지.
+- H8 구조적 편향의 크기: `ctr_top_k(reactive) / ctr_top_k(random)`이 default > category_only.
+  (키워드 피처가 콘텐츠 기반 정책을 얼마나 더 유리하게 만드는지)
+
+### X: 방향을 등록하지 않는 탐색 항목 (있는 그대로 보고)
+- X1 random의 `adapted_rate`·`requests_to_adapt_median` — 무작위 top-10이 2/7 카테고리에서 5개
+  이상을 우연히 채울 확률(이항 근사 약 12%/요청) 때문에 drift 지표의 우연 수준이 얼마인지.
+- X2 static_batch 대비 reactive의 `ctr_top_k`.
+- X3 G2에서 P·H가 G1과 같게 나오는지.
+
+### 등록 시점의 사정 (투명성)
+- 이 절을 쓰기 직전에 reactive/default/시드 0 한 번을 **실행 시간 측정용**으로 돌렸고(약 14초),
+  그 지표는 열어보지 않았다.
+- 격자 실행기(`sim/experiments.py`)는 사전 등록보다 먼저 커밋됐다(2026-09-26 02:05, 사전 등록은 16:57).
+  그 사이에 격자를 탐색적으로 돌린 기록이나 산출물은 남아 있지 않아, 돌리지 않았다고 단정하지 못한다.
+  즉 이 등록은 실행기가 이미 있는 상태에서 쓴 것이다.
+- P1·P4·P5와 비슷한 단언 일부는 이미 소규모(40명, 4일) 단위 테스트
+  (`tests/simulator/test_sim_driver_fake_app.py`)에 있다. P는 새 발견이 아니라 규모를 키웠을 때도
+  깨지지 않는지 보는 회귀 점검이다.
+
+### 등록 후 보완: G2 카탈로그의 카테고리 라벨 출처 (2026-10-06 추가)
+위 설계·P·H·X 본문은 고치지 않았다. 설계의 G2 항목이 "카테고리 라벨 일부는 kNN 추정값"이라고만 적어
+빠뜨린 내용을 여기에 적는다.
+- G2의 뉴스레터 195개 중 **148개(76%)**의 카테고리 라벨은 직접 라벨이 아니라 **BGE-M3 임베딩 코사인
+  k-NN(k=5)**으로 채운 값이다. 직접 라벨은 47개(온보딩 노출 로그 42, JSON 제목 일치 5)뿐이다.
+  그 kNN의 leave-one-out 정확도는 직접 라벨 47건 기준 **29.8%**다(카테고리 7개, 무작위 추측 약 14.3%).
+  kNN 라벨 148개 중 109개는 이웃 5개 가운데 최다 득표 카테고리가 2표 이하였다(confidence ≤ 0.4).
+  - 출처: 로컬 전용 `data/team_archive/derived/newsletter_categories.csv`의 `source`·`confidence` 열을 센 값.
+    라벨 생성 코드와 LOO 수치는 브랜치 `eval/team-baseline-repro-v1`의
+    `evaluation/recsys/team_repro/categories.py`, `reports/recsys/team_repro_v1.md`.
+- 따라서 **G2에서는 BGE-M3 코사인이 카테고리 라벨을 거쳐 클릭 모델과 지표에 간접적으로 들어온다.**
+  이 라벨을 쓰는 곳: φ의 카테고리 선호 피처(가중치 4), 온보딩 카테고리 비율과 drift 지표의
+  `core_match_share`, 유사 아이템 판정 `is_similar`(같은 카테고리).
+- 귀결:
+  1. **G2로 임베딩 기반 추천기를 평가하면 안 된다.** 추천기의 임베딩 유사도와 클릭 모델의 카테고리가
+     같은 임베딩에서 나와, "검토한 대안" 1절의 4번에서 기각한 순환(추천기를 자기 정답지로 채점)이 생긴다.
+  2. G2의 P·H 결과는 **내부 일관성**만 보인다. 장난감 정책과 클릭 모델이 같은 라벨을 읽으므로 라벨이
+     틀려도 둘은 서로 맞는다. 격자 v1의 판정은 이 때문에 달라지지 않지만, X3("G2에서도 G1과 같게
+     나왔다")를 실제 카테고리 구조에서도 지표가 통한다는 근거로 읽으면 안 된다.
+  3. G2는 "겹침이 구성상 참이 아닌 강건성 카탈로그"가 아니라 "문장은 실제이고 라벨은 잡음이 큰
+     카탈로그"다. kNN 구간의 라벨은 다수가 틀렸다고 봐야 한다.
+
+## 증거
+
+### 지표 타당성 격자 v1 (2026-09-26 로컬, [SIM])
+- 산출물: [`reports/sim/grid_v1.md`](../../reports/sim/grid_v1.md)·`.json` (항목 58건 전체 — 판정 50건(P 20·H 30)과
+  보고만 하는 X 8건 — 과 정책별 지표 3시드 평균·최소·최대). 실행별 JSON은 커밋하지 않았다.
+- 실행: 사전 등록 그대로 G1(합성 카탈로그)·G2(팀 뉴스레터 195개, 실행마다 편향 재보정) 각 30회, 총 60회.
+  사전 등록 커밋 이후 격자를 돌린 시점의 커밋까지 `sim/`에서 바뀐 것은 판정기(`sim/prereg.py`)
+  추가뿐이고 시뮬레이션 코드는 같다. 개발 Mac(M2)에서 `nice -n 19`, 워커 2개, G1 5분 19초·G2 4분 25초.
+- **커밋 찾기 (2026-10-06 정정).** 초판은 두 커밋을 해시(`b3b20e4`, `cea8e90`)로 적었다. 그 뒤 이 브랜치를
+  main 위로 다시 쌓으면서 해시가 바뀌었고, 앞 브랜치 위로 옮기면 또 바뀐다. 옛 해시는 원격 저장소에 남지
+  않는다. 그래서 다시 쌓아도 바뀌지 않는 **제목과 작성 시각**으로 가리킨다.
+
+  | 역할 | 커밋 제목 | 작성 시각 (KST) | 초판에 적은 해시 | 2026-10-06 기준 해시 |
+  |---|---|---|---|---|
+  | 사전 등록 | `docs(adr): ADR 0019 시뮬레이터 설계·주장 범위 초안과 지표 타당성 격자 사전 등록` | 2026-09-26 16:57 | `b3b20e4` | `4be42a3` |
+  | 격자를 돌린 시점의 HEAD | `test(sim): 통합 CI 잡 수집 실패 수정, Locust 스모크는 CI 전용으로` | 2026-09-26 22:30 | `cea8e90` | `390f66a` |
+
+  표의 "2026-10-06 기준 해시"는 main 바로 위로 옮겼을 때의 값이다. 앞 브랜치 위에 쌓은 지금 이력에서는
+  `a55d6cb`, `15777b4`다(맨 아래 "통합 기록" 1번).
+
+  - 찾는 법: `git log --format='%h %ad %s' --date=format:'%Y-%m-%d %H:%M' -- docs/adr/0019-user-simulator-design-and-claim-scope.md sim/prereg.py reports/sim/grid_v1.json`
+    — 사전 등록(16:57) → 판정기(17:18) → 결과(22:42) 순서가 보인다. 두 커밋 사이의 `sim/` 변경은
+    `git diff <사전 등록> <격자를 돌린 시점> -- sim/`로 확인한다(`sim/prereg.py` 추가뿐).
+  - `reports/sim/grid_v1.md`·`.json`에 찍힌 `cea8e90`은 생성 당시 값 그대로 뒀다(생성된 리포트를 손으로
+    고치지 않는다). 위 표의 둘째 행과 같은 커밋이다. 다시 쌓기 전후로 `sim/`, `tests/simulator/`,
+    `reports/sim/`, 이 ADR의 내용은 같았다(`git diff`로 확인, 차이 없음).
+  각 격자의 첫 1회(G1 random/default/시드 0, G2 reactive/default/시드 0)는 실행 시간을 재려고 먼저 따로 돌렸고
+  같은 출력 파일을 격자가 그대로 썼다. 그때 본 것은 실행 시간과 G2의 보정 결과뿐이다.
+  ```
+  python -m sim.experiments --out-dir <g1> --workers 2
+  python -m sim.experiments --out-dir <g2> --workers 2 --catalog team_archive --team-archive-dir data/team_archive --presets default
+  python -m sim.experiments --out-dir <g2> --workers 2 --catalog team_archive --team-archive-dir data/team_archive --presets category_only
+  python -m sim.prereg --runs-dir <g1> <g2> --out reports/sim/grid_v1 --git-sha cea8e90
+  ```
+- G2 보정: 시드별 편향 default −4.764 ~ −4.782, category_only −4.677 ~ −4.695, 무작위 top-10 2.00%,
+  오라클 6.2~6.7%(범위 안), 보정 시점 후보 54개.
+
+| 판정 | 합성·default | 합성·category_only | 팀·default | 팀·category_only |
+|---|---|---|---|---|
+| P1~P5 (시드별 전부) | 통과 | 통과 | 통과 | 통과 |
+| H1~H4, H6, H7 | 통과 | 통과 | 통과 | 통과 |
+| H5 drift | **위반** | 통과 | **위반** | 통과 |
+| H8 구조적 편향 (카탈로그별) | 통과: 2.58 > 1.98 | (같은 판정) | 통과: 1.90 > 1.87 | (같은 판정) |
+
+**H8의 시드별 값 (2026-10-06 추가).** 사전 등록은 H 판정에 시드별 최소·최대를 함께 적기로 했는데, H8에는
+평균의 비만 적혀 있었다. 판정(3시드 평균 CTR의 비, default > category_only)은 그대로 두고 값을 보탠다.
+시드별 `ctr_top_k(reactive) / ctr_top_k(random)`, 시드 0·1·2 순:
+
+| 카탈로그 | default | category_only | 시드별로 default > category_only |
+|---|---|---|---|
+| 합성 | 2.68, 2.48, 2.57 | 1.98, 1.96, 1.99 | 3/3, 범위가 겹치지 않음 |
+| 팀 | 1.86, 1.97, 1.87 | 1.84, 1.81, 1.98 | 2/3 (시드 2에서 반대), 범위가 겹침 |
+
+팀 카탈로그의 H8 "통과"(1.90 > 1.87)는 **시드 잡음과 구분되지 않는다.** 사전 등록한 기준으로는 통과지만,
+"팀 카탈로그에서도 키워드 피처가 콘텐츠 기반 정책을 더 유리하게 만든다"는 근거로 쓰지 않는다. 합성
+카탈로그에서는 세 시드 모두 같은 방향이다. (값은 `grid_v1.json`의 H6 항목에 있는 시드별 CTR로 계산.)
+
+정책별 핵심 값(합성·default, 3시드 평균):
+
+| 정책 | 첫 응답 커버리지 | 첫 응답 온보딩 카테고리 비율 | 클릭 직후 Jaccard | similar_share_lift | 폴백률 | top-10 CTR |
+|---|---|---|---|---|---|---|
+| static_batch | 0 | - | 1 | 0 | 1.27% (= 빈 응답률) | 3.08% |
+| static_batch_fallback | 1 | 0.34 | 1 | 0.0000 | 1.54% | 3.06% |
+| reactive | 1 | 1.00 | 0.70 | 0.026 | 0 | 3.79% |
+| reactive_explore | 1 | 0.72 | 0.39 | 0.035 | 0 | 3.49% |
+| random | 1 | 0.35 | 0.05 | 0.004 | 0 | 1.47% |
+
+**H5 위반의 내용.** 합성·default: `adapted_rate` reactive 0.123 < static_batch 0.135(요청 수 중앙값은 3.83로 같음).
+팀·default: `adapted_rate`는 reactive 0.304 > 0.180이지만 `requests_to_adapt_median`이 2.33 > 1.67.
+사전 등록대로 정의를 바꾸지 않고 **지표의 약점**으로 기록한다. 원인으로 보이는 것(사후 해석, 검증하지 않음):
+1. 표본이 작다. 실행마다 drift 사용자 30명 중 drift 후 조회가 있는 사용자가 29~30명이라 1명이 약 3.4%p다.
+   합성·default의 차이(3시드 평균 1.2%p)는 1명 미만이다.
+2. `requests_to_adapt_median`은 적응한 사용자만의 중앙값이라, 적응률이 다른 정책끼리 비교하면 선택 편향이 있다.
+3. X1: 무작위 정책의 `adapted_rate`가 0.66~0.82로 어떤 정책보다 높다. "top-10의 50% 이상이 새 관심사가 된
+   **첫** 요청"이라는 정의는 목록의 요동을 재지 적응을 재지 않는다.
+4. 장난감 reactive 정책은 온보딩 카테고리에 감쇠 없는 가중치를 주고, drift 사용자는 온보딩을 다시 하지 않는다.
+   옛 관심사 목록만 보여 새 관심사 클릭이 드물어지는 착취 고리다 — 지표가 아니라 정책 쪽 원인일 수 있다.
+
+**판정 결과:** `drift.adapted_rate`, `drift.requests_to_adapt_median`은 **타당성 미확인** — 운영 시스템의 drift
+적응 근거로 쓰지 않는다. 다음 버전 후보(적용하지 않았고, 쓰려면 새 버전으로 먼저 사전 등록한다): drift 후
+요청 전체의 새 관심사 비율 평균에서 drift 전 값을 뺀 지속 지표, 무작위 정책을 우연 수준 기준선으로 둔 판정,
+drift 사용자 수 확대(예: 1,000명 또는 drift 30%).
+
+**X 항목과 등록하지 않은 관찰(있는 그대로, 주장 없음).**
+- X2: reactive / static_batch의 top-10 CTR — 합성 default 3.79% / 3.08%, 합성 category_only 2.90% / 2.09%,
+  팀 default 2.33% / 1.74%, 팀 category_only 2.26% / 1.72%.
+- X3: G2의 P·H 판정은 G1과 같다(H5가 default에서만 위반인 것까지 같음).
+- H7의 random CTR은 동적 시뮬레이션에서 합성 1.47%, 팀 1.2~1.23%로 정적 보정값 2%보다 낮다(반복 노출
+  피로·시간 경과). 사전 등록 범위 [1%, 3%] 안이다.
+- H8의 크기: 키워드 피처가 reactive를 random 대비 유리하게 만드는 정도가 합성 카탈로그(2.58 vs 1.98)에서
+  팀 카탈로그(1.90 vs 1.87)보다 훨씬 크다. 합성 카탈로그는 페르소나 키워드와 주제어를 같은 풀에서 뽑아
+  겹침이 구성상 참이기 때문으로 보인다 — 콘텐츠 기반 편향의 크기는 카탈로그에 크게 좌우된다.
+  팀 카탈로그의 차이는 위 시드별 값에서 보듯 잡음 범위 안이다.
+- (2026-10-06 추가) `similar_share_after_click`의 **수준**은 정책을 구분하지 못한다. 합성·default에서
+  static_batch 0.915, reactive 0.912다 — 클릭에 전혀 반응하지 않는 정책이 더 높다. 한 카테고리에 몰린
+  목록은 클릭 전부터 "비슷한 아이템" 비율이 높기 때문이다. 구분하는 것은 클릭 전후의 **차이**
+  (`similar_share_lift`: static_batch 0, reactive 0.026)다. H3(수준으로 reactive > reactive_explore)은
+  통과했지만, 이 지표의 수준을 반응성의 근거로 읽지 않는다.
+- reactive_explore의 `adapted_rate`는 합성에서 reactive보다 높고(default 0.236 vs 0.123), 팀에서는 낮다
+  (0.247 vs 0.304). drift 지표가 미확인이므로 결론을 내지 않는다.
+
+### 부하 테스트 [LOAD]
+수치 없음. 개발 Mac에서는 부하를 걸지 않기로 했고(2026-09-26), Tier 0은 대상이 될 수 없으며, A1은 아직
+확보하지 못했다(브랜치 `ops/hosting-tiers`의 호스팅 계층 결정). CI의 헤드리스 스모크는 가짜 앱을 대상으로 한
+하네스 동작 확인이다.
+
+> **재실행 대기(클라우드)** — A1 확보 후 `sim/README.md` 3.3 절차 그대로:
+> `docker compose -p newsletter-load --env-file .env.load.local up -d --build api` →
+> `python -m sim.seed --database-url "$LOAD_DB_URL" catalog --days 2` →
+> `python -m sim.loadtest --host http://127.0.0.1:8100 --rps 50 --duration 30s --out-dir out/load_warmup` →
+> `python -m sim.seed --database-url "$LOAD_DB_URL" batches` →
+> `python -m sim.loadtest --host http://127.0.0.1:8100 --rps 5 20 50 --duration 120s --out-dir out/load_v1` →
+> `docker compose -p newsletter-load --env-file .env.load.local down -v`. 결과는 `reports/serving/load_v1.md`에
+> VM 셰이프·부하 생성기 위치·대상 커밋과 함께 싣는다.
+
+### 테스트
+`tests/simulator/`(클릭 모델 수식, 시드 결정성, 페르소나 생성, 가짜 앱 대상 드라이버·지표, 실제 backend 라우터
+대상 계약 테스트와 `sim.seed`, 보정 회귀, 부하 사용자·출처 집계, 판정기)와
+`tests/integration/test_sim_seed_alembic_schema.py`(Alembic 스키마의 Postgres에서 시드, CI 통합 잡).
+- 2026-09-26 로컬: 56 passed, 1 skipped(Locust 헤드리스 스모크).
+- 2026-10-06 로컬(`nice -n 19`, 스레드 2): `tests/simulator` 73 passed, 3 skipped. 건너뛴 것은 요청 시점 API
+  계약 테스트 2건(이 브랜치의 backend는 배치 전용 API다)과 Locust 헤드리스 스모크(GitHub Actions 또는
+  `SIM_LOAD_SMOKE=1`에서만)다. 저장소 전체 단위 테스트는 592 passed, 4 skipped.
+- 요청 시점 API 위에 올렸을 때: `feat/realtime-recommendation`의 트리를 임시 디렉터리에 풀고 `sim/`·
+  `tests/simulator/`를 덮어 돌려 74 passed, 2 skipped(배치 전용 계약 테스트 1건과 Locust 스모크).
+- 재실행 대기(CI): 통합 테스트(`pytest -q -m integration tests/`)와 Locust 스모크는 GitHub Actions에서만 돈다.
+  이 브랜치를 다시 쌓은 뒤의 HEAD는 아직 push하지 않아 CI를 거치지 않았다.
+
+### 기저 클릭률 (2026-09-26 로컬 실행, `python -m sim.calibration --ebnerd-dir ... --team-ctr-csv ...`, 출력 [`reports/sim/base_rates_v1.json`](../../reports/sim/base_rates_v1.json))
+| 출처 | 값 | 비고 |
+|---|---|---|
+| 시뮬레이터 default, 무작위 top-10 | 2.00% (b = −5.0177) | 보정 목표 |
+| 시뮬레이터 default, 오라클 top-10 | 11.76% | 6~12% 범위 안 |
+| 시뮬레이터 category_only, 무작위 / 오라클 | 2.00% / 8.04% (b = −4.6237) | |
+| MIND (MSN) | 약 4% | 대회 기술 보고서 인용 |
+| EB-NeRD small train / validation | 9.06% / 8.41% | 클릭 있는 노출만 공개 → 상한 |
+| 팀 합성 데이터 | 47.6% (사용자별 4.6~97.4%) | LLM 추론 클릭 |
+
+## 결과와 한계
+
+### 이 시뮬레이터로 보일 수 있는 것
+- API 계약 수준의 **데이터 흐름**: 가입·온보딩·조회·클릭이 오류 없이 돌고, 클릭이 로그
+  테이블까지 도달하는지(계약 테스트에서 클릭 ACK 수 = 로그 행 수).
+- 설계 차이에서 오는 **정성적 행동**: 신규 사용자가 빈 목록을 받는지(`first_view_coverage`), 클릭 후 목록이
+  바뀌는지(클릭 직후 Jaccard, `similar_share_lift`), 폴백·빈 응답이 얼마나 나가는지. 이 지표들은 격자 v1에서
+  장난감 정책들을 기대한 방향으로 구분했다(P1~P5, H1~H4 통과).
+  **관심이 바뀐 사용자를 따라가는지(drift 적응)는 격자 v1에서 H5가 깨져 타당성 미확인**이다 — 새 정의를
+  사전 등록해 다시 검증하기 전까지 근거로 쓰지 않는다.
+- 부하 [LOAD]: 주어진 하드웨어·대상에서 목표 RPS별 지연 분포와 오류율.
+- (예정) 오프폴리시 평가 파이프라인의 검증: 한 정책의 노출·propensity 로그로 다른 정책의 CTR을
+  추정한 값이 시뮬레이터 안에서의 실측과 맞는지. 정답을 아는 환경이 필요할 때 쓰는 용도다.
+
+### 보일 수 없는 것
+- **정확도·CTR 주장 불가.** 클릭 모델은 손으로 쓴 가정이며 실사용자에 맞춘 적이 없다.
+  "시뮬레이터에서 CTR x%"나 "정책 A가 B보다 y% 낫다"는 운영 성능 주장으로 쓰지 않는다.
+- **콘텐츠 기반 편향.** 키워드·카테고리 겹침이 클릭 확률을 올리므로, 같은 정보를 쓰는
+  추천기가 유리하다. 합성 카탈로그에서는 페르소나 키워드와 뉴스레터 주제어를 같은 풀에서
+  뽑아 겹침이 부분적으로 구성상 참이다(`sim/catalog.py` TOPIC_POOLS). `category_only` 프리셋과
+  팀 뉴스레터 카탈로그(G2)는 이 편향의 크기를 가늠하는 도구이지 제거 수단이 아니다.
+- **G2의 카테고리는 임베딩에서 나온 값이다 (2026-10-06 추가).** 팀 카탈로그의 카테고리 라벨 195개 중
+  148개는 BGE-M3 코사인 kNN 추정값(LOO 정확도 29.8%)이라, G2에서는 임베딩 유사도가 카테고리를 거쳐 클릭
+  모델에 간접적으로 들어온다. G2로 임베딩 기반 추천기를 평가하지 않으며, G2의 P·H 결과는 내부 일관성으로만
+  읽는다("사전 등록" 절 끝의 "등록 후 보완").
+- **협업 신호 부재.** 사용자 간 취향 상관은 아키타입 공유로만 생긴다. 협업 필터링의 이점은
+  과소평가될 수 있다.
+- **스토리 중복.** 실제 파이프라인은 같은 사건을 날마다 새 뉴스레터 ID로 다시 만든다.
+  합성 카탈로그에는 이런 중복이 없다. 실스택에 붙이면 `similar_share`가 "어제 클릭한 사건의 오늘
+  재생성본"을 반응성으로 셀 수 있으므로, 스토리 식별자가 생기기 전까지 실스택의 반응성 수치는
+  이 위험을 적어 두고 해석한다.
+- **시간 모델 단순화.** 세션 시각은 하루 안에서 균등, 조회 간격 90초 고정, 요일·시간대 효과 없음.
+- 부하 수치는 측정한 대상에만 해당한다. 가짜 앱 대상 수치는 하네스 자체의 처리 능력이고, 실제 API 수치도
+  측정한 VM·단일 uvicorn 워커·합성 시드 조건의 값이다. 합성 시드에는 임베딩이 없어 요청 시점 KNN 경로는
+  부하 테스트에서 타지 않는다(임베딩이 있는 콘텐츠 덤프를 복원해야 한다).
+- 격자는 장난감 정책을 구분하는지만 본다. "지표가 검증됐다"는 말은 "알려진 설계 차이를 구분한다"는
+  뜻이지, 운영 추천기의 품질을 잰다는 뜻이 아니다.
+
+## 개정 이력
+- 2026-09-26: 사전 등록(설계, P·H·X) 커밋 → 격자 v1 실행 → 결과와 판정을 "증거"에 채우고 채택.
+- 2026-10-06: 리뷰 반영. **사전 등록한 설계·P·H·X 항목과 판정은 고치지 않았다.**
+  - 커밋을 해시 대신 제목·작성 시각으로 가리키게 했다(브랜치를 다시 쌓으면서 초판의 해시가 사라졌다).
+  - G2 카테고리 라벨의 출처(195개 중 148개가 BGE-M3 코사인 kNN)와 그 귀결을 "등록 후 보완"으로 추가했다.
+  - 판정 건수 표기를 바로잡았다: "58건 중 위반 2건" → 판정 50건(P 20, H 30) 중 위반 2건, X 8건은 보고만.
+  - H8에 시드별 값을 보탰다. 팀 카탈로그의 H8 통과는 시드 잡음과 구분되지 않는다.
+  - "등록 시점의 사정"의 두 문장을 사실관계는 그대로 두고 다시 썼다. 격자 실행기가 사전 등록보다 먼저
+    커밋된 시각을 적었다.
+  - 등록하지 않은 관찰 1건(`similar_share_after_click`의 수준은 정책을 구분하지 못한다)을 추가했다.
+  - 결정 절: drift 대상 비율 문장 정정(전체의 10%), 온보딩 모집단 지표 추가, 부하 측정 구간 정의 수정
+    (모든 리더의 계정 준비가 끝난 뒤부터), `/newsletters/today`의 두 세대를 "배치 전용 API"·"요청 시점 API"로
+    구분, 호스팅 결정 참조를 브랜치 이름으로 바꿈, 부하 절차의 env 파일 이름 변경.
+- 2026-10-06: 요청 시점 추천 브랜치 위에 다시 쌓음. 결정·수치는 그대로이고 달라진 점은 아래 "통합 기록".
+
+## 통합 기록 (2026-10-06, 결정·수치 변경 없음)
+이 브랜치의 커밋 32개를 요청 시점 추천 브랜치(`feat/realtime-recommendation`, 그 아래에 ADR 0007·0013 브랜치) 위에
+순서대로 다시 쌓았다. 격자와 보정은 다시 돌리지 않았다.
+
+1. **커밋 해시 대응.** 한 번 더 옮기면서 해시가 또 바뀌었다. 사전 등록 `4be42a3` -> `a55d6cb`, 격자를 돌린 시점의
+   HEAD `390f66a` -> `15777b4`. 제목과 작성 시각(16:57, 22:30)은 그대로다. 두 쌍과 브랜치 끝(`98ce0d2` 대
+   `d6ae49a`)에서 `sim/`, `tests/simulator/`, `reports/sim/`, 이 ADR, `tests/integration/test_sim_seed_alembic_schema.py`의
+   git 객체 해시가 같다(`git rev-parse <커밋>:<경로>`). 사전 등록과 격자 시점 사이의 `sim/` 변경은 지금 이력에서도
+   `sim/prereg.py` 추가뿐이다. `reports/sim/grid_v1.{md,json}`에 찍힌 `cea8e90`은 생성 당시 값 그대로다.
+2. **체크아웃된 backend가 요청 시점 API가 됐다.** "증거"의 "테스트"에 적은 "이 브랜치의 backend는 배치 전용 API다"는
+   main 바로 위에 있던 때의 설명이다. 지금 계약 테스트는 요청 시점 API의 두 모드(`RECSYS_MODE=batch`·`realtime`)를
+   돌고 배치 전용 1건을 건너뛴다. 가짜 앱 격자의 대상과 정책은 그대로라 "증거"의 수치와는 무관하다.
+3. **테스트 수.** 로컬(macOS, Python 3.11, CI unit 잡과 같은 설치 순서, `nice -n 19`, 스레드 2)에서
+   `tests/simulator`는 74 passed, 2 skipped(배치 전용 계약 테스트 1, Locust 스모크 1)다. "요청 시점 API 위에 올렸을
+   때"로 미리 적어 둔 값과 같다. 저장소 전체 단위 테스트는 873 passed, 18 skipped(EB-NeRD demo 데이터 없음 15,
+   Linux 전용 1, 앞의 2건)다.
+   - 재실행 대기(CI): `pytest -q -m integration tests/`(새 리비전 `8b7f830013b7`까지 올린 스키마에서 도는
+     `test_sim_seed_alembic_schema.py` 포함)와 Locust 헤드리스 스모크. 로컬에서는 돌리지 않았고, 이 기록을 쓰는
+     시점에는 push 전이라 CI 결과가 없다.
+4. **ADR 색인과 CI 설치 목록.** `docs/adr/README.md`는 앞 브랜치의 행(0013, 0015, 0017)과 이 ADR의 행을 번호순으로
+   합쳤다. unit 잡은 앞 브랜치의 두 단계 설치(평가 고정 버전, backend 고정 버전)를 그대로 두고 kiwipiepy 고정과
+   시뮬레이터 설치 단계를 더했다. backend 고정 단계가 이미 넣는 python-jose·passlib·bcrypt는 시뮬레이터 단계에서
+   뺐고 locust, uvicorn만 남겼다. 설치 순서를 로컬에서 그대로 실행했을 때 시뮬레이터 단계는 이미 있던 패키지의
+   버전을 바꾸지 않았다. 잡 3개(test, integration-test, docker-build)는 그대로다.
+5. **Alembic.** 이 브랜치는 리비전을 더하지 않는다. head는 앞 브랜치의 `8b7f830013b7` 하나다(`alembic heads`
+   오프라인 확인).

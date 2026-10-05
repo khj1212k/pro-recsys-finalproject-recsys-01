@@ -23,6 +23,8 @@ jobs:
 
       # evaluation/requirements.txt의 고정 버전(pandas·lightgbm·numpy·pyarrow 등)을 함께 넣어, 추천 평가 테스트가
       # 리포트를 만든 버전과 같은 버전에서 돈다(고정이 없으면 새 릴리스가 조용히 섞인다).
+      # kiwipiepy is pinned in this job: the simulator's click-model calibration and feature
+      # tests depend on its tokenization (same version as sim/requirements.txt).
       - name: Install test dependencies
         run: |
           uv pip install --python .venv/bin/python \
@@ -51,7 +53,7 @@ jobs:
             pyyaml \
             lxml_html_clean \
             pydantic \
-            kiwipiepy \
+            "kiwipiepy==0.23.2" \
             hdbscan \
             rapidfuzz
 
@@ -74,6 +76,17 @@ jobs:
 
       - name: Install recommend_engine package (no deps, editable)
         run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace/recommend_engine
+
+      # sim/: the contract test runs the driver against the real backend routers. Its API and auth
+      # dependencies (fastapi, httpx, python-jose, passlib, and bcrypt pinned because passlib 1.7.4
+      # raises ValueError on bcrypt 5) are installed by the backend-pinned step above. This step
+      # adds what the headless Locust smoke test needs: locust + uvicorn (uvicorn is already
+      # pinned through evaluation/requirements.txt, so only locust is new here).
+      - name: Install simulator test dependencies
+        run: |
+          uv pip install --python .venv/bin/python \
+            locust \
+            uvicorn
 
       - name: Run tests (excluding integration)
         run: .venv/bin/python -m pytest -q -m "not integration and not benchmark" tests/

@@ -152,6 +152,8 @@ ai_workspace/docs/
 /data/
 # 리포트 내 원본(raw) 산출물 - 정제된 리포트 본문만 추적
 reports/**/raw/
+# sim/ 실행 산출물(실행별 JSON, 부하 테스트 CSV·요약) - 요약만 reports/로 옮겨 커밋한다
+/out/
 # MLflow 실험 추적 로컬 저장소
 mlruns/
 # 학습 체크포인트
