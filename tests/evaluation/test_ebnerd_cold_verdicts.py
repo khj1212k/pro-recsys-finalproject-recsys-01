@@ -39,6 +39,26 @@ def test_prereg_constants_are_read_from_the_registered_file():
     assert len(prereg_sha256()) == 64
 
 
+def test_registered_yaml_is_byte_identical_to_the_commit_that_registered_it():
+    """사전 등록 값은 등록 커밋 뒤에 바뀌면 안 된다. 그 커밋의 yaml과 지금 파일을 바이트로 비교한다.
+    얕은 체크아웃(CI)처럼 그 커밋이 없는 곳에서는 건너뛴다."""
+    import subprocess
+
+    from evaluation.recsys.ebnerd.cold_verdicts import PREREG_PATH, prereg_commit
+
+    sha = prereg_commit()
+    assert sha and len(sha) == 40
+    repo = PREREG_PATH.parents[4]
+    rel = PREREG_PATH.relative_to(repo).as_posix()
+    have = subprocess.run(["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=repo, capture_output=True)
+    if have.returncode != 0:
+        pytest.skip("사전 등록 커밋이 이 체크아웃에 없음(얕은 클론)")
+    registered = subprocess.run(["git", "show", f"{sha}:{rel}"], cwd=repo, capture_output=True, check=True).stdout
+    assert registered == PREREG_PATH.read_bytes()
+    parent = subprocess.run(["git", "cat-file", "-e", f"{sha}^:{rel}"], cwd=repo, capture_output=True)
+    assert parent.returncode != 0          # 그 커밋이 yaml을 처음 담은 커밋이다(부모에는 없다)
+
+
 # --- 재현 게이트 -------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("mean,status", [(0.2686, "pass"), (0.2640, "pass"), (0.2728, "pass"), (0.2639, "fail"),

@@ -32,6 +32,7 @@ import json
 import logging
 import os
 import platform
+import re
 import sys
 import time
 from pathlib import Path
@@ -44,7 +45,7 @@ import pandas as pd
 from recsys_core import compute_features
 
 from ..metrics import group_ids, ranking_metrics
-from .candidate_config import config_from_prereg, union_mask
+from .candidate_config import HARNESS, SERVING, union_mask
 from .cold_transforms import (
     SHRUNK_COLUMN,
     add_shrunk_ctr,
@@ -59,7 +60,7 @@ from .cold_transforms import (
     subsample_request_indices,
     subsample_users,
 )
-from .cold_verdicts import DEMO_GRADE, EVIDENCE_GRADE, cold_verdicts, load_prereg, prereg_sha256
+from .cold_verdicts import DEMO_GRADE, EVIDENCE_GRADE, cold_verdicts, load_prereg, prereg_commit, prereg_sha256
 from .heuristic_fit import fit_pairwise_logistic, fitted_scores, heuristic_terms, prior_scores
 from .loaders import ebnerd_root
 from .models import (
@@ -267,7 +268,7 @@ class Run:
             return dataclasses.replace(base, name=arm)
         feats = list(V2_FEATURES) + ([SHRUNK_COLUMN] if "shrunk_alpha" in cfg else [])
         return ModelSpec(arm, "pool_neg", "lambdarank", "request", feats,
-                         f"48h 풀 네거티브 변형: {json.dumps(cfg, ensure_ascii=False, default=str)}")
+                         f"풀 네거티브 arm(사전 등록): {json.dumps(cfg, ensure_ascii=False, default=str)}")
 
     def heuristic_weights(self) -> dict:
         return self.prereg["heuristics"]["prior_weights"]
@@ -597,11 +598,10 @@ def stage_e4(run: Run):
 # --- E8 ----------------------------------------------------------------------------------------
 
 def stage_e8(run: Run):
-    r = run.prereg["e8"]
     ctx = run.bench.ctx["validation"]
 
-    def evaluate(name: str, descriptive_models: tuple = ()):
-        cfg = config_from_prereg(name, r[name])
+    def evaluate(cfg, descriptive_models: tuple = ()):
+        name = cfg.name
         capped = cfg.cap is not None
         # 서빙은 cap을 적용한 뒤에 이미 읽은 것을 뺀다. 하네스 v1은 읽은 것을 뺀 풀에서 출처 순위를 매겼다.
         task = p2_task(run.bench, "validation", run.p2_idx(), window_h=cfg.window_h, exclude_seen=not capped)
@@ -627,8 +627,8 @@ def stage_e8(run: Run):
         return arrays, {"config": dataclasses.asdict(cfg), "union": info, "judged_model": cfg.model,
                         "descriptive_models": list(descriptive_models), **_task_meta(task)}
 
-    _unit(run, "e8_serving", lambda: evaluate("serving", descriptive_models=("poolneg",)))
-    _unit(run, "e8_harness", lambda: evaluate("harness"))
+    _unit(run, "e8_serving", lambda: evaluate(SERVING, descriptive_models=("poolneg",)))
+    _unit(run, "e8_harness", lambda: evaluate(HARNESS))
 
 
 # --- assemble ----------------------------------------------------------------------------------
@@ -682,7 +682,7 @@ def evidence_grade(config: dict, n_boot: int, prereg: dict) -> dict:
     if config.get("embeddings_sha256") != prereg["data"]["embeddings_sha256"]:
         reasons.append("임베딩 sha256이 등록값과 다름")
     sha = str(config.get("code_sha") or "unknown")
-    if sha == "unknown" or sha.endswith("-dirty"):
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):   # unknown, <sha>-dirty, 커밋 id 없는 tarball 모두 여기 걸린다
         reasons.append(f"코드 SHA 확인 불가({sha})")
     if config.get("prereg_sha256") != prereg_sha256():
         reasons.append("사전 등록 yaml의 sha256이 실행 당시와 다름")
@@ -849,7 +849,7 @@ def stage_assemble(store: Store, prereg: dict, args, config: dict, bench_info: O
     meta = {
         "label": prereg["evidence_label"], "evidence": evidence_grade(config, args.n_boot, prereg),
         "preregistration": {"id": prereg["id"], "sha256": config["prereg_sha256"], "adr": prereg["adr"],
-                            "commit": os.getenv("M4_PREREG_COMMIT")},
+                            "commit": os.getenv("M4_PREREG_COMMIT") or prereg_commit()},
         "code_sha": config["code_sha"], "dataset": config["dataset"], "seeds": config["seeds"],
         "n_boot": args.n_boot, "p2_sample": config["p2_sample"], "sub_cap": config["sub_cap"],
         "fake_dim": config["fake_dim"], "max_fit": config["max_fit"], "max_test": config["max_test"],

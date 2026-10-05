@@ -29,6 +29,16 @@ def prereg_sha256(path: Optional[Path] = None) -> str:
     return hashlib.sha256(Path(path or PREREG_PATH).read_bytes()).hexdigest()
 
 
+def prereg_commit(path: Optional[Path] = None) -> Optional[str]:
+    """사전 등록 yaml을 처음 담은 커밋의 SHA. yaml과 같은 커밋에 넣을 수 없어 옆 파일(.commit)에 따로 적어 둔다.
+    리포트 머리말에 찍히고, 테스트가 그 커밋의 yaml이 지금 파일과 바이트 단위로 같은지 본다."""
+    f = Path(path or PREREG_PATH).with_suffix(".commit")
+    if not f.exists():
+        return None
+    tokens = f.read_text(encoding="utf-8").split()
+    return tokens[0] if tokens else None
+
+
 def cell_key(traffic: str, pool: Any) -> str:
     return f"{traffic}|{pool}"
 

@@ -271,7 +271,8 @@ def test_only_the_registered_arguments_and_inputs_earn_the_evidence_grade():
     assert ok == {"grade": EVIDENCE_GRADE, "reasons": []}
     deviations = [("dataset", "ebnerd_demo"), ("seeds", [0]), ("p2_sample", 300), ("sub_cap", 100), ("fake_dim", 8),
                   ("max_fit", 1000), ("max_test", 1000), ("embeddings_sha256", "x"), ("code_sha", "unknown"),
-                  ("code_sha", "a" * 40 + "-dirty"), ("prereg_sha256", "0" * 64)]
+                  ("code_sha", "a" * 40 + "-dirty"), ("code_sha", "tarball-0123456789abcdef"),
+                  ("prereg_sha256", "0" * 64)]
     for key, value in deviations:
         cfg = _registered_config()
         cfg[key] = value
