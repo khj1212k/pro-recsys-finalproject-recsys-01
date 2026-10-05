@@ -1,10 +1,16 @@
 # syntax=docker/dockerfile:1
-# FastAPI 서버 전용 슬림 이미지 - torch/Airflow/pandas/lightgbm 없음 (docs/adr/0006).
+# FastAPI 서버 전용 슬림 이미지 - torch/Airflow/pandas 없음 (docs/adr/0006).
 # ai_workspace에서는 요청 시점 추천(docs/adr/0015)이 재사용하는 MMR 패키지(numpy만 임포트) 하나만 가져온다.
+# lightgbm은 있다: 레지스트리에 등록된 랭커를 요청 시점에 채점한다(docs/adr/0033).
 FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
+
+# lightgbm 휠이 임포트 때 여는 OpenMP 런타임. slim 이미지에는 없다(없으면 모델을 올릴 때에야 OSError가 난다).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.9.17 /uv /usr/local/bin/uv
 

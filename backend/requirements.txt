@@ -13,6 +13,7 @@ fastapi==0.117.1
 greenlet==3.3.1
 h11==0.16.0
 idna==3.11
+lightgbm==4.7.0
 Mako==1.3.10
 MarkupSafe==3.0.3
 numpy==2.2.6
@@ -27,6 +28,7 @@ python-jose==3.5.0
 python-multipart==0.0.22
 requests==2.32.5
 rsa==4.9.1
+scipy==1.15.3
 six==1.17.0
 SQLAlchemy==2.0.46
 sqlmodel==0.0.31
@@ -36,6 +38,8 @@ typing-inspection==0.4.2
 typing_extensions==4.15.0
 urllib3==2.6.3
 uvicorn==0.40.0
+# lightgbm(+scipy): 레지스트리에 등록된 랭커를 요청 시점에 채점한다(ADR 0033). 버전은 모델을 학습하는 쪽
+# (evaluation/requirements.txt)과 같다. 이미지에는 libgomp1이 필요하다(docker/api.Dockerfile).
 # 요청 시점 추천(app/recsys)은 recommend_engine의 MMR(src.core.reranker, numpy만 사용)을 재사용한다.
 # API 이미지는 그 디렉터리만 복사하므로(docker/api.Dockerfile) 여기에 -e 줄을 두지 않는다 - 두면 이미지
 # 빌드가 깨지고 pandas/scikit-learn/lightgbm이 딸려 온다. 저장소에서 직접 띄울 때는 backend/README.md의

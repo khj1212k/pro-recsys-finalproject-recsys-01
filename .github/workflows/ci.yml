@@ -266,6 +266,15 @@ jobs:
             newsletter-recsys/api:ci python - <<'PY'
           import asyncio
 
+          # 랭커를 채점하는 경로(ADR 0033)는 모델이 등록된 뒤에야 임포트된다: 이미지에 lightgbm과 그
+          # OpenMP 런타임, 피처 어댑터가 실제로 있는지 여기서 미리 확인한다.
+          import lightgbm
+          from app.recsys.config import RecsysConfig
+          from app.recsys.lgbm_scorer import resolve_feature_fn
+
+          assert resolve_feature_fn(RecsysConfig().feature_fn) is not None, "serving feature adapter not importable"
+          print(f"api image: lightgbm {lightgbm.__version__} and the serving feature adapter import")
+
           from app.main import app
 
 
