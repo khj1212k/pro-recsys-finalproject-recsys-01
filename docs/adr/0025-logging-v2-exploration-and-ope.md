@@ -299,9 +299,9 @@ E9·E13의 결과는 없다. 임계값·표본 수는 설계 문서(`96737f2`, 2
 
 ### 5. 서빙 배선 (메모리 저장소, 로컬)
 단위 테스트 전체(`pytest -m "not integration and not benchmark" tests/`)는 요청 경로 커밋 `d20260a`에서
-1043 passed, 18 skipped, 이 문서를 고친 시점(시뮬레이터·프런트·캐시 항목 축소 커밋 뒤)에 1046 passed,
-18 skipped였다. 그중 이 ADR의 것:
-- `tests/recsys/test_service_exploration_and_logs.py` 22건
+1043 passed, 18 skipped, 브랜치 끝(`d384ad6`)에서 1054 passed, 18 skipped였다(CI 러너에서는 로컬 전용 데이터가
+없어 건너뛰는 것이 더 많다: 1029 passed, 43 skipped). 그중 이 ADR의 것:
+- `tests/recsys/test_service_exploration_and_logs.py` 23건
   - 같은 캐시 항목에 40번 요청: 후보 계산은 1번, 결정론 부분은 40번 모두 같고, 탐색 위치 조합이 20가지 넘게,
     탐색으로 나온 아이템이 6종 넘게 나온다.
   - 프로필이 있는 사용자 2칸, 신호가 없는 사용자 4칸. 탐색을 끄면(플래그 또는 칸 수 0) 결정론 목록 그대로이고
@@ -313,6 +313,7 @@ E9·E13의 결과는 없다. 임계값·표본 수는 설계 문서(`96737f2`, 2
     계산하면 기록된 점수와 같다(1e-6). 화면에서 한 칸이 빠지면 그 요청의 propensity는 전부 NULL.
     폴백 응답은 사유와 함께 요청 행이 남고 propensity가 없다. 빈 응답도 요청 행 하나.
     로그로 나가는 값은 전부 파이썬 기본 타입이다(numpy 정수가 섞이면 DB 드라이버가 쓰기를 거부한다).
+    shadow 점수가 없는 칸은 JSON null이 아니라 SQL NULL로 바인딩된다.
   - shadow: 활성 점수의 부호를 뒤집은 shadow를 붙여도 응답(순서·점수)이 shadow 없는 서비스와 같고, 모든 칸에
     shadow 점수가 남으며, 캐시 적중 때 shadow를 다시 돌리지 않는다. shadow가 예외를 내도 응답이 같다.
     유한하지 않은 shadow 점수는 null로 남는다.
