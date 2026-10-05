@@ -53,7 +53,7 @@ python -m sim.calibration --ebnerd-dir data/benchmarks/ebnerd/ebnerd_small \
 ## 2. 행동 시뮬레이션 — 실제 스택
 
 같은 드라이버가 실행 중인 API에 붙는다. 사용자·클릭 로그를 만들므로 **일회용 DB에서만** 돌린다
-(아래 3.2의 일회용 compose 프로젝트). 가상 하루가 끝날 때마다 밤 배치 대역을 돌린다.
+(아래 3.3의 일회용 compose 프로젝트). 가상 하루가 끝날 때마다 밤 배치 대역을 돌린다.
 
 ```bash
 python -m sim.run --target http://127.0.0.1:8100 --users 50 --days 3 \
