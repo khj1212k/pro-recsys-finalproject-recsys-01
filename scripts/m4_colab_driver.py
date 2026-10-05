@@ -9,7 +9,9 @@
         --code-sha256 <sha256> --manifest /content/m4_manifest.json \
         --url ebnerd_small/train/behaviors.parquet=<서명 URL> [--url ...] --cu-rate <CU/h> --cu-cap 6
     python m4_colab_driver.py run --workdir /content/m4 --code-tarball ... --synthetic     # 데이터 없이 경로만 확인
+    python m4_colab_driver.py run ... --detach        # 분리해서 띄우고 바로 돌아온다(긴 실행용)
     python m4_colab_driver.py status --workdir /content/m4
+    python m4_colab_driver.py stop --workdir /content/m4
     python m4_colab_driver.py cleanup --workdir /content/m4
     python m4_colab_driver.py manifest --root <EBNERD_ROOT> --dataset ebnerd_small \
         --articles-meta <메타 전용 parquet> --out m4_manifest.json                        # 로컬에서, 올리기 전에
@@ -25,6 +27,10 @@
 - 단계를 시작하기 전에 `rate x 누적 벽시계 시간`으로 CU를 추정한다. 경고선 이상이면 서술용 단계를 건너뛰고, 상한
   이상이면 남은 단계를 돌리지 않는다. 건너뛴 단계는 리포트에 "미측정"으로 남는다. assemble은 항상 돈다.
 - argv를 넘길 수 없는 실행기에서는 환경변수 M4_DRIVER_ARGS_JSON(인자 목록의 JSON)으로 같은 인자를 준다.
+- --detach는 tarball을 푼 뒤 그 안의 이 스크립트를 새 세션의 자식 프로세스로 띄우고 pid만 남긴 채 돌아온다. URL은
+  자식에게 환경변수로 넘긴다(명령줄에 남기지 않는다). 계산 내용은 분리하지 않은 실행과 같다. stop은 그 프로세스
+  묶음을 끝낼 뿐 FAILED 마커를 남기지 않으므로 같은 명령으로 이어서 돌 수 있다. 원격 런타임에서 분리한 프로세스가
+  얼마나 살아남는지는 드라이 런(--synthetic)에서 먼저 확인한다.
 """
 from __future__ import annotations
 
@@ -34,6 +40,7 @@ import json
 import os
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -353,8 +360,92 @@ def run_stages(workdir: Path, state: dict, state_path: Path, run_args: dict, *, 
 
 # --- 하위 명령 ---------------------------------------------------------------------------------
 
+def _child_argv(raw: list[str]) -> list[str]:
+    """분리 실행의 자식에게 넘길 인자: --detach와 --url 쌍을 뺀다(URL은 환경변수로 간다)."""
+    out, skip = [], False
+    for tok in raw:
+        if skip:
+            skip = False
+        elif tok == "--url":
+            skip = True
+        elif tok == "--detach" or tok.startswith("--url="):
+            continue
+        else:
+            out.append(tok)
+    return out
+
+
+def _pid_alive(pid: int) -> bool:
+    """pid가 살아 있는가. 끝났지만 아직 거두지 않은 자식(좀비)은 여기서 거두고 죽은 것으로 본다 — 분리 실행을 띄운
+    프로세스가 계속 살아 있는 경우(테스트, 노트북 커널)에 끝난 실행이 "실행 중"으로 보이지 않게 한다."""
+    try:
+        done, _ = os.waitpid(pid, os.WNOHANG)
+        if done == pid:
+            return False
+    except ChildProcessError:
+        pass            # 우리 자식이 아니다(띄운 프로세스가 이미 끝난 보통의 경우)
+    except OSError:
+        return False
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
+def cmd_detach(args) -> int:
+    workdir = Path(args.workdir)
+    out_dir = workdir / "out"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    log = Log(out_dir / "run.log")
+    try:
+        prev = read_json(out_dir / "driver.pid")
+        if prev and _pid_alive(prev["pid"]):
+            raise DriverError(f"이미 실행 중입니다(pid {prev['pid']}). status로 보거나 stop으로 끝내세요.", EXIT_USAGE)
+        urls = parse_urls(args.url, os.environ)
+        extract_tarball(Path(args.code_tarball), workdir / "repo", args.code_sha256)
+        script = workdir / "repo" / "scripts" / "m4_colab_driver.py"
+        if not script.exists():
+            raise DriverError("tarball 안에 scripts/m4_colab_driver.py가 없습니다", EXIT_USAGE)
+        env = dict(os.environ)
+        env.pop("M4_DRIVER_ARGS_JSON", None)
+        if urls:
+            env["M4_URLS_JSON"] = json.dumps(urls)
+        with open(out_dir / "driver_stdout.log", "ab") as sink:
+            proc = subprocess.Popen([args.python or sys.executable, str(script), *_child_argv(args.raw_argv)],
+                                    env=env, stdin=subprocess.DEVNULL, stdout=sink, stderr=subprocess.STDOUT,
+                                    start_new_session=True, cwd=str(workdir))
+        write_json(out_dir / "driver.pid", {"pid": proc.pid, "started": time.time()})
+        log(f"detach: pid {proc.pid}로 분리 실행")
+        print(json.dumps({"detached": True, "pid": proc.pid}))
+        return EXIT_OK
+    except DriverError as e:
+        log(f"중단: {redact(str(e), list(parse_urls(args.url, os.environ).values()))}")
+        return e.code
+
+
+def cmd_stop(args) -> int:
+    out_dir = Path(args.workdir) / "out"
+    info = read_json(out_dir / "driver.pid")
+    if not info or not _pid_alive(info["pid"]):
+        print(json.dumps({"stopped": False, "reason": "실행 중인 분리 프로세스가 없습니다"}, ensure_ascii=False))
+        return EXIT_OK
+    try:
+        os.killpg(info["pid"], signal.SIGTERM)   # 분리할 때 새 세션을 만들었으므로 pid가 프로세스 묶음 id다
+    except (ProcessLookupError, PermissionError):
+        pass
+    deadline = time.time() + args.wait
+    while _pid_alive(info["pid"]) and time.time() < deadline:
+        time.sleep(0.2)
+    Log(out_dir / "run.log")(f"stop: pid {info['pid']} 종료 요청(FAILED 마커 없음 — 같은 명령으로 이어서 돌 수 있다)")
+    print(json.dumps({"stopped": not _pid_alive(info["pid"]), "pid": info["pid"]}))
+    return EXIT_OK
+
+
 def cmd_run(args, *, runner: Callable = subprocess_runner, opener: Callable = urllib.request.urlopen,
             clock: Callable[[], float] = time.time, installer: Optional[Callable] = None) -> int:
+    if getattr(args, "detach", False):
+        return cmd_detach(args)
     workdir = Path(args.workdir)
     out_dir, repo, data = workdir / "out", workdir / "repo", workdir / "data"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -440,9 +531,11 @@ def cmd_status(args) -> int:
         print("상태 파일이 없습니다(아직 실행하지 않았습니다).")
         return EXIT_OK
     progress = read_json(out_dir / "progress.json", {"units": {}})
+    pid = read_json(out_dir / "driver.pid")
     summary = {"stages": {s: v.get("status") for s, v in state["stages"].items()},
                "units_done": len(progress.get("units", {})), "wall_hours": round(wall_seconds(state) / 3600, 2),
-               "failed": (out_dir / "FAILED").exists(), "code_commit": state["code"]["commit"]}
+               "failed": (out_dir / "FAILED").exists(), "code_commit": state["code"]["commit"],
+               "detached_running": bool(pid and _pid_alive(pid["pid"]))}
     print(json.dumps(summary, ensure_ascii=False))
     log_path = out_dir / "run.log"
     if log_path.exists():
@@ -489,6 +582,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--python", default=None)
     run.add_argument("--skip-install", action="store_true")
     run.add_argument("--fresh", action="store_true", help="이전 산출물·데이터를 지우고 처음부터")
+    run.add_argument("--detach", action="store_true", help="새 세션의 자식 프로세스로 띄우고 바로 돌아온다")
+    sp = sub.add_parser("stop", help="분리 실행을 끝낸다(FAILED 마커 없음)")
+    sp.add_argument("--workdir", required=True)
+    sp.add_argument("--wait", type=float, default=10.0)
     st = sub.add_parser("status", help="단계 상태와 로그 끝부분")
     st.add_argument("--workdir", required=True)
     st.add_argument("--tail", type=int, default=20)
@@ -508,9 +605,10 @@ def main(argv=None, **hooks) -> int:
         raw = os.environ.get("M4_DRIVER_ARGS_JSON")
         argv = json.loads(raw) if raw else sys.argv[1:]
     args = build_parser().parse_args(argv)
+    args.raw_argv = list(argv)
     if args.command == "run":
         return cmd_run(args, **hooks)
-    return {"status": cmd_status, "cleanup": cmd_cleanup, "manifest": cmd_manifest}[args.command](args)
+    return {"status": cmd_status, "cleanup": cmd_cleanup, "manifest": cmd_manifest, "stop": cmd_stop}[args.command](args)
 
 
 if __name__ == "__main__":

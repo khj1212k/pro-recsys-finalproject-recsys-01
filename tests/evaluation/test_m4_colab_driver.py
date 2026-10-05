@@ -399,3 +399,47 @@ def test_synthetic_dry_run_goes_through_real_subprocesses_and_resumes(tmp_path):
     assert "demo, not evidence" in (work / "out" / "ebnerd_v1_2_cold.md").read_text()
     state = json.loads((work / "out" / "driver_state.json").read_text())
     assert len(state["invocations"]) == 2 and all(v["status"] == "done" for v in state["stages"].values())
+
+
+def test_detached_run_can_be_stopped_and_then_resumed_to_completion(tmp_path, capsys):
+    """--detach는 바로 돌아오고, stop은 마커 없이 끝내며, 같은 명령을 다시 주면 이어서 끝난다. URL은 자식의 명령줄에 없다."""
+    import time
+
+    tarball = tmp_path / "code.tar.gz"
+    with tarfile.open(tarball, "w:gz", format=tarfile.PAX_FORMAT, pax_headers={"comment": "f" * 40}) as tf:
+        for rel in ("recsys_core", "evaluation/__init__.py", "evaluation/recsys", "scripts/m4_colab_driver.py",
+                    "requirements-colab.txt"):
+            tf.add(REPO / rel, arcname=rel, filter=lambda ti: None if "__pycache__" in ti.name else ti)
+    work = tmp_path / "work"
+    argv = ["run", "--workdir", str(work), "--code-tarball", str(tarball), "--synthetic", "--skip-install",
+            "--python", sys.executable, "--threads", "2"]
+    assert drv._child_argv(argv + ["--detach", "--url", f"a={_url('a')}", f"--url=b={_url('b')}"]) == argv
+    try:
+        t0 = time.time()
+        assert drv.main(argv + ["--detach"]) == drv.EXIT_OK
+        assert time.time() - t0 < 10                                  # 사슬이 끝나기를 기다리지 않는다
+        pid = json.loads((work / "out" / "driver.pid").read_text())["pid"]
+        assert drv._pid_alive(pid)
+        assert drv.main(argv + ["--detach"]) == drv.EXIT_USAGE          # 이미 도는 중이면 또 띄우지 않는다
+        state_path = work / "out" / "driver_state.json"
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            if state_path.exists() and json.loads(state_path.read_text())["stages"].get("fit", {}).get("status") == "done":
+                break
+            time.sleep(0.5)
+        else:
+            pytest.fail("분리 실행이 fit 단계를 끝내지 못했다")
+        capsys.readouterr()
+        assert drv.main(["status", "--workdir", str(work)]) == drv.EXIT_OK
+        assert json.loads(capsys.readouterr().out.splitlines()[0])["detached_running"] is True
+        assert drv.main(["stop", "--workdir", str(work)]) == drv.EXIT_OK
+        assert not drv._pid_alive(pid) and not (work / "out" / "FAILED").exists()
+    finally:
+        drv.main(["stop", "--workdir", str(work), "--wait", "5"])
+    assert drv.main(argv) == drv.EXIT_OK                                # 이어서 끝까지
+    state = json.loads((work / "out" / "driver_state.json").read_text())
+    assert all(v["status"] == "done" for v in state["stages"].values()) and len(state["invocations"]) >= 2
+    assert (work / "out" / "ebnerd_v1_2_cold.json").exists()
+    capsys.readouterr()
+    assert drv.main(["stop", "--workdir", str(work)]) == drv.EXIT_OK
+    assert json.loads(capsys.readouterr().out)["stopped"] is False
