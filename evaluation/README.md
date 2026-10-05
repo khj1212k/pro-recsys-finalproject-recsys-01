@@ -149,6 +149,22 @@ python -m evaluation.llm.gate_probe --newsletters 'data/team_archive/newsletters
     `python -m evaluation.recsys.ebnerd.synthetic --out /tmp/synth` 뒤
     `python -m evaluation.recsys.ebnerd.run_cold --dataset ebnerd_synth --root /tmp/synth --out-dir /tmp/cold --seeds 0
     --n-boot 20 --p2-sample 150 --sub-cap 100 --stage all`(약 10초).
+- **신경망 사용자 모델 비교(E15, 결과 대기)**: NRMS-lite·SASRec-lite·GBDT 스태킹을 같은 예산으로 튠한 LightGBM과 같은
+  과제·네거티브·스칼라 행렬 위에서 비교하는 실험이다. 규칙은 [ADR 0013 "A3 사전 등록"](../docs/adr/0013-ranker-v2-design.md)과
+  `ebnerd/preregistration/neural-e15.yaml`에 결과 전에 고정했다. 아직 판정용 실행은 한 번도 하지 않았다.
+  - `ebnerd/neural/`: `sequences.py`(마지막 N 클릭, 시퀀스 스칼라, 스칼라 블록, 콜드 증강), `datasets.py`(길이별 배치·패딩),
+    `tune.py`(같은 예산의 무작위 탐색, 튠한 LambdaRank 학습), `stack.py`(시간 전진 OOF 규칙), `report.py`(기계 판정
+    `neural_verdict`와 표) — 여기까지는 torch 없이 돈다. `models.py`·`train.py`(두 family, 후기 융합, 결정론적 학습과
+    결정론 게이트)는 torch가 필요하다. `run_neural.py`가 과제(p1|p2)와 단계를 하나씩 받아 체크포인트를 남기며 돈다.
+  - 판정용 실행은 원격 런타임에서 `scripts/e15_colab_driver.py`로 세션(s0 드라이 런 → s1 파일럿 → s2 GBDT → s3·s4 GPU)
+    단위로 한다(명령은 ADR 0013 A3.11, 핀은 `requirements-colab-gpu.txt`). 개발용 Mac에서는 돌리지 않는다.
+  - 로컬에서는 배선 확인만 한다(합성 데이터, CPU, 과제당 약 20초, 결과는 "demo, not evidence"):
+    `python -m evaluation.recsys.ebnerd.run_neural --dataset ebnerd_synth --root /tmp/synth --out-dir /tmp/e15 --task p1
+    --stage all --seeds 0 --n-boot 30 --p2-sample 150 --p2-cold-sample 200 --p2-select-sample 80 --neural-trials 1
+    --gbdt-trials 2 --tune-max-epochs 1 --final-max-epochs 2 --device cpu --resume`.
+    macOS에서는 LightGBM과 torch가 각자 OpenMP 런타임을 실어 오므로 torch를 1스레드로 두고 LightGBM을 먼저 임포트한다
+    (`neural/train.py`의 주석). torch가 없는 환경에서는 신경망 테스트가 skip되고, torch가 필요한 테스트는 E15 경로가
+    바뀔 때만 도는 별도 CI job(`.github/workflows/ebnerd-neural.yml`, CPU torch)이 돈다.
 - **라이선스**: EB-NeRD는 연구/비상업 전용이다. 데이터·임베딩은 gitignore된 `data/benchmarks/ebnerd/`(또는
   `EBNERD_ROOT`)에만 두고 저장소에는 집계 수치만 커밋한다. 저장소 커밋·공개 데이터셋·영구 사본은 금지이고, 무거운 재실행은
   비공개 클라우드 런타임에 실행마다 올려서 돌린 뒤 지운다(ADR 0013 "사후 변경 기록"의 통합 기록).
