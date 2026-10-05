@@ -4,6 +4,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -19,8 +20,8 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sim.catalog import synthetic_catalog
 from sim.driver import ApiClient, ApiError
 from sim.fake_app import FakeBackend, create_fake_app
-from sim.load import LoadUser, SourceTally, UserPool, swallow_api_errors
-from sim.loadtest import markdown_table, source_table, summarize_locust_csv
+from sim.load import LoadUser, ReadyGate, SourceTally, UserPool, setup_reader, swallow_api_errors
+from sim.loadtest import markdown_table, read_stage_report, source_table, summarize_locust_csv, window_table
 
 REPO = Path(__file__).resolve().parents[2]
 MIDNIGHT = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -84,6 +85,147 @@ def test_source_tally_rates_and_missing_header():
     assert "| 20 | today | 5 | 20.00% | 60.00% |" in table and "| 20 | legacy | 1 | 0.00% | - |" in table
     tally.reset()
     assert tally.summary() == {}
+
+
+def test_click_task_with_an_empty_feed_is_tallied_as_skipped_and_sends_nothing():
+    # static_batch answers a user without a batch row with [] (the batch-only API's cold start)
+    backend = FakeBackend(synthetic_catalog(n_days=2, items_per_day=30, seed=0, start=MIDNIGHT), policy="static_batch")
+    api, tally = ApiClient(TestClient(create_fake_app(backend))), SourceTally()
+    reader = LoadUser(UserPool(1, run_tag="t").take(), api, tally=tally)
+    reader.start()
+    assert reader.today() == 0
+    n_calls = len(api.calls)
+
+    assert reader.click() is None
+    assert reader.click() is None
+
+    assert len(api.calls) == n_calls  # not turned into extra /today requests
+    assert tally.skipped_clicks == 2 and backend.clicks == []
+    assert tally.summary()["today"]["responses"] == 1
+
+
+def test_click_task_of_a_reader_that_has_not_read_yet_fetches_a_feed_first(fake):
+    backend, client = fake
+    api, tally = ApiClient(client), SourceTally()
+    reader = LoadUser(UserPool(1, run_tag="t").take(), api, tally=tally)
+    reader.start()
+
+    nid = reader.click()
+
+    assert [c.endpoint for c in api.calls[-2:]] == ["today", "click"]
+    assert [c[1] for c in backend.clicks] == [nid] and tally.skipped_clicks == 0
+
+
+class _Clock:
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self):
+        return self.t
+
+
+def test_ready_gate_opens_only_when_every_expected_reader_has_reported():
+    clock, opened = _Clock(), []
+    gate = ReadyGate(clock=clock)
+    gate.on_open(lambda: opened.append(clock.t))
+    gate.start()
+
+    clock.t = 1.0
+    gate.reader_done(True)
+    gate.reader_done(True)
+    assert not gate.is_open  # spawning is not complete: the number of readers is still unknown
+    gate.expect(3)
+    assert not gate.is_open and opened == []
+    clock.t = 4.0
+    gate.reader_done(False)  # a failed setup still counts as "done", or the gate would never open
+
+    assert gate.is_open and opened == [4.0]
+    assert gate.wait(timeout=0) is True
+    gate.reader_done(True)  # a late report does not reopen the window
+    assert opened == [4.0]
+    clock.t = 64.0
+    assert gate.summary() == {"readers_expected": 3, "readers_done": 4, "readers_failed_setup": 1,
+                              "ready_timeout": False, "setup_s": 4.0, "measured_s": 60.0}
+
+
+def test_ready_gate_is_forced_open_and_flagged_when_a_reader_never_finishes_setup():
+    opened = []
+    gate = ReadyGate()
+    gate.on_open(lambda: opened.append(True))
+    gate.expect(2)
+    gate.reader_done(True)
+
+    assert gate.wait(timeout=0.01) is False
+    assert gate.is_open and opened == [True]
+    assert gate.summary()["ready_timeout"] is True and gate.summary()["readers_done"] == 1
+
+
+def test_ready_gate_releases_no_reader_before_the_reset_callback_has_run():
+    gate, order, lock = ReadyGate(), [], threading.Lock()
+    gate.on_open(lambda: order.append("reset"))
+    last_may_finish = threading.Event()
+
+    def reader(i):
+        if i == 2:
+            last_may_finish.wait(5)  # the slow reader: still in account setup
+        gate.reader_done(True)
+        gate.wait(5)
+        with lock:
+            order.append(f"task-{i}")
+
+    threads = [threading.Thread(target=reader, args=(i,)) for i in range(3)]
+    for t in threads:
+        t.start()
+    gate.expect(3)
+    time.sleep(0.05)
+    assert order == []  # two readers are ready, but nobody runs a task while one is still in setup
+    last_may_finish.set()
+    for t in threads:
+        t.join(5)
+
+    assert order[0] == "reset" and sorted(order[1:]) == ["task-0", "task-1", "task-2"]
+
+
+def test_setup_reader_reports_to_the_gate_whether_setup_worked_or_not(fake):
+    _, client = fake
+    gate, results = ReadyGate(), {}
+    gate.expect(2)
+
+    def first_reader():  # sets up fine, then blocks until the other reader has reported
+        results["ok"] = setup_reader(LoadUser(UserPool(1, run_tag="ok").take(), ApiClient(client)), gate, timeout_s=5)
+
+    t = threading.Thread(target=first_reader)
+    t.start()
+    for _ in range(200):
+        if gate.done == 1:
+            break
+        time.sleep(0.01)
+    assert gate.done == 1 and not gate.is_open
+
+    broken = ApiClient(_LocustLikeSession(500), locust=True)
+    results["bad"] = setup_reader(LoadUser(UserPool(1, run_tag="bad").take(), broken), gate, timeout_s=5)
+    t.join(5)
+
+    assert results == {"ok": True, "bad": False}
+    assert gate.is_open and (gate.done, gate.failed, gate.timed_out) == (2, 1, False)
+
+
+def test_stage_report_carries_the_window_and_skipped_clicks_next_to_the_source_tally(tmp_path):
+    tally = SourceTally()
+    tally.record("today", "batch", 20)
+    tally.record_skipped_click()
+    window = {"readers_expected": 5, "readers_done": 5, "readers_failed_setup": 1, "ready_timeout": False,
+              "setup_s": 7.25, "measured_s": 112.75}
+    tally.write(tmp_path / "rps5_sources.json", window=window)
+
+    endpoints, win = read_stage_report(tmp_path / "rps5_sources.json")
+
+    assert endpoints == tally.summary()
+    assert win == {**window, "skipped_clicks": 1}
+    assert "| 5 | 112.8 | 7.2 | 1/5 | 아니오 | 1 |" in window_table({"5": win})
+    assert read_stage_report(tmp_path / "missing.json") == ({}, {})
+    tally.reset()
+    assert tally.skipped_clicks == 0
 
 
 def test_user_pool_hands_out_distinct_users_then_wraps():
@@ -185,10 +327,11 @@ def _free_port():
 
 
 def test_locustfile_runs_headless_against_the_fake_server(tmp_path):
-    # Starts a uvicorn server and a 6 s Locust run: CI (GitHub Actions sets CI=true) or
-    # an explicit opt-in only, so a plain local `pytest` never generates load on a dev machine.
-    if not (os.environ.get("CI") or os.environ.get("SIM_LOAD_SMOKE") == "1"):
-        pytest.skip("load smoke runs in CI only (set SIM_LOAD_SMOKE=1 to opt in locally)")
+    # Starts a uvicorn server and a 6 s Locust run: GitHub Actions or an explicit opt-in only, so
+    # a plain local `pytest` never generates load on a dev machine. GITHUB_ACTIONS, not CI: other
+    # local tools also export CI=true.
+    if not (os.environ.get("GITHUB_ACTIONS") == "true" or os.environ.get("SIM_LOAD_SMOKE") == "1"):
+        pytest.skip("load smoke runs in GitHub Actions only (set SIM_LOAD_SMOKE=1 to opt in locally)")
     # find_spec, not importorskip: importing locust monkey-patches this pytest process (gevent)
     if importlib.util.find_spec("locust") is None or importlib.util.find_spec("uvicorn") is None:
         pytest.skip("locust/uvicorn not installed")
@@ -207,12 +350,12 @@ def test_locustfile_runs_headless_against_the_fake_server(tmp_path):
         sources = tmp_path / "smoke_sources.json"
         subprocess.run([sys.executable, "-m", "locust", "-f", "sim/locustfile.py", "--headless",
                         "--host", f"http://127.0.0.1:{port}", "-u", "4", "-r", "4", "-t", "6s",
-                        "--only-summary", "--csv", str(prefix)],
+                        "--reset-stats", "--only-summary", "--csv", str(prefix)],
                        cwd=REPO, check=True, timeout=120,
                        env={**os.environ, "SIM_LOAD_USERS": "20", "SIM_NEWCOMERS_PER_SEC": "1",
                             "SIM_SOURCES_OUT": str(sources)})
         s = summarize_locust_csv(Path(f"{prefix}_stats.csv"))
-        tallied = json.loads(sources.read_text(encoding="utf-8"))
+        tallied, window = read_stage_report(sources)
     finally:
         server.terminate()
         server.wait(timeout=10)
@@ -221,3 +364,7 @@ def test_locustfile_runs_headless_against_the_fake_server(tmp_path):
     assert s["today_first_view"]["requests"] > 0
     assert {"signup", "login", "onboarding_news", "put_newsletters", "put_categories"} <= set(s)
     assert tallied["today"]["responses"] > 0 and tallied["today"]["fallback_rate"] is not None
+    # the measured window opened after all 3 readers finished setup, and the CSV covers that window only
+    assert (window["readers_expected"], window["readers_done"], window["readers_failed_setup"]) == (3, 3, 0)
+    assert window["ready_timeout"] is False and 0 < window["measured_s"] < 6
+    assert s["today"]["requests"] == tallied["today"]["responses"]

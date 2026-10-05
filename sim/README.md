@@ -69,12 +69,32 @@ python -m sim.run --target http://127.0.0.1:8100 --users 50 --days 3 \
 ### 3.1 시나리오
 
 - **ActiveReader** (목표 RPS만큼): 기존 계정으로 `/newsletters/today`(가중치 9)와 직전 목록에서 클릭
-  모델이 고른 1건 클릭(가중치 1). `constant_throughput(1)`이라 사용자 수 ≈ RPS.
+  모델이 고른 1건 클릭(가중치 1). `constant_throughput(1)`이라 사용자 수 ≈ RPS. 직전 목록이 비어 있으면
+  클릭할 것이 없으므로 요청을 보내지 않고 "건너뛴 클릭"으로 센다.
 - **Newcomer** (1명): 5초마다 새 `@sim.invalid` 계정으로 가입 → 로그인 → 온보딩 → 첫 `/today`
   (`today_first_view`로 따로 집계).
-- `python -m sim.loadtest`는 5/20/50 RPS를 각각 별도 헤드리스 Locust로 돌리고(`--reset-stats`로 계정
-  준비 구간 제외) 두 표를 만든다: 엔드포인트별 요청 수·달성 RPS·p50/p95/p99·오류율, 그리고 `/today`의
-  `X-Rec-Source` 분포·빈 응답률·폴백률. Locust는 단일 프로세스로 돌린다(출처 집계가 프로세스 안에 있다).
+- `python -m sim.loadtest`는 5/20/50 RPS를 각각 별도 헤드리스 Locust로 돌리고 세 표를 만든다:
+  엔드포인트별 요청 수·달성 RPS·p50/p95/p99·오류율, `/today`의 `X-Rec-Source` 분포·빈 응답률·폴백률,
+  단계별 측정 구간(초)·리더 준비 시간·준비에 실패한 리더 수·건너뛴 클릭 수.
+  Locust는 단일 프로세스로 돌린다(준비 게이트와 출처 집계가 프로세스 안에 있다).
+
+**측정 구간.** Locust의 `--reset-stats`는 사용자를 **띄운 시점**에 통계를 지운다. `-u N -r N`이면 그때 리더
+N명의 가입·로그인(bcrypt)·온보딩 요청이 아직 진행 중이라, 그 요청들이 집계에 들어가고 첫 `/today`
+요청들과 경합해 p95/p99를 부풀린다(50 RPS 단계에서 가장 크다). 그래서 리더는 계정 준비를 마치면
+게이트(`sim.load.ReadyGate`)에 알리고 기다린다. 모든 리더가 준비를 마친(또는 준비에 실패한) 순간에 Locust
+통계와 출처 집계를 지우고 태스크를 시작한다. Newcomer도 그때까지 기다리므로 구간이 시작될 때 진행 중인
+요청이 없다. `-t`는 실행 시작부터 재므로 **측정 구간 = `--duration` − 리더 준비 시간**이고, 단계마다 표에
+적힌다. 준비가 `SIM_READY_TIMEOUT_S`(기본 120초)를 넘기면 게이트를 강제로 열고 표에 표시한다.
+
+**숫자를 읽을 때.**
+- Newcomer 흐름은 한 번에 6~8개 요청(가입 1, 로그인 1, 온보딩 조회 1~3, PUT 2, `/today` 1)이라
+  **목표 RPS 위에 약 1.2~1.6 RPS가 더 얹힌다**(5 RPS 단계에서는 약 +30%). 단계 이름의 RPS는 리더의 목표치다.
+- `constant_throughput`은 **닫힌 루프**다. 사용자는 앞 요청이 끝나야 다음 요청을 보낸다. 대상이 포화되면
+  요청이 쌓이는 대신 보내는 속도가 줄어, 지연 백분위수가 열린 도착 과정에서 볼 값보다 낮게 나온다
+  (coordinated omission). 단계의 백분위수는 반드시 달성 RPS와 함께 읽고, 달성 RPS가 목표에 못 미친
+  단계의 p95/p99는 하한으로만 쓴다.
+- 토큰 만료로 401을 받고 재로그인해 다시 보낸 요청은 실패가 아니며, `<엔드포인트>_token_expired`
+  이름으로 따로 집계된다.
 
 ### 3.2 어디서 돌리는가
 
@@ -120,9 +140,10 @@ env 파일에 `COMPOSE_PROJECT_NAME=newsletter-load`. env 파일의 값이 compo
 (`docker compose --env-file <파일> config`로 프로젝트·볼륨 이름을 띄우기 전에 확인할 수 있다).
 `out/`은 gitignore 대상이다.
 
-결과 보고: `out/load_v1/summary.md`를 `reports/serving/load_v1.md`로 옮기고 머리말에 `[LOAD]`, VM
+결과 보고: `out/load_v1/summary.md`(세 표 모두)를 `reports/serving/load_v1.md`로 옮기고 머리말에 `[LOAD]`, VM
 셰이프(OCPU·메모리), 부하 생성기 위치, 대상 커밋, uvicorn 워커 수, 시드 조건을 적는다. 20 RPS는
-p50/p95/p99 표로, 5·50 RPS는 오류율과 빈 응답률·폴백률 위주로 읽는다.
+p50/p95/p99 표로, 5·50 RPS는 오류율과 빈 응답률·폴백률 위주로 읽는다. 준비에 실패한 리더가 있거나
+게이트가 시간 초과로 열린 단계는 다시 돌린다.
 
 ### 3.4 이 부하 테스트가 재는 것과 못 재는 것
 

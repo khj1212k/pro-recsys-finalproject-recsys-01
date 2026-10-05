@@ -3,12 +3,24 @@
     python -m sim.loadtest --host http://localhost:8000 --rps 5 20 50 --duration 60s --out-dir out/load
 
 Each stage is a separate headless Locust run with N = rps ActiveReaders (1 task/s
-each) plus one Newcomer, `--reset-stats` so the account setup of readers during
-ramp-up is excluded. Reported per endpoint: requests, failures, error rate,
-achieved RPS, p50/p95/p99 (ms), from Locust's `<prefix>_stats.csv`; and per
-/today endpoint the X-Rec-Source distribution with empty and fallback rates,
-from the locustfile's `<prefix>_sources.json` (fallback rate is "-" when the API
-sends no X-Rec-Source header, as on current main).
+each) plus one Newcomer. The locustfile holds all tasks until every reader has
+finished its account setup and resets the statistics at that moment
+(sim.load.ReadyGate; `--reset-stats` alone resets at spawn time, with the setup
+requests still in flight). The measured window is therefore `--duration` minus
+the setup time, and is reported per stage.
+
+Reported per endpoint: requests, failures, error rate, achieved RPS, p50/p95/p99
+(ms), from Locust's `<prefix>_stats.csv`; per /today endpoint the X-Rec-Source
+distribution with empty and fallback rates (fallback rate is "-" when the API
+sends no X-Rec-Source header, as the batch-only /today does); and per stage the
+measured window, readers that failed setup and skipped clicks - the last two
+tables from the locustfile's `<prefix>_sources.json`.
+
+Reading the numbers: the Newcomer flow (6-8 requests every 5 s) adds about
+1.2-1.6 requests/s on top of the target, roughly +30% at 5 RPS; and the readers
+are a closed loop (constant_throughput), so under saturation the achieved RPS
+falls below the target and the percentiles understate the latency an open
+arrival process would see (coordinated omission).
 """
 
 import argparse
@@ -74,6 +86,26 @@ def source_table(stages: Dict[str, Dict[str, dict]]) -> str:
     return "\n".join(lines)
 
 
+def window_table(windows: Dict[str, dict]) -> str:
+    lines = ["| 목표 RPS | 측정 구간 s | 리더 준비 s | 준비 실패 리더 | 준비 대기 시간 초과 | 건너뛴 클릭 |",
+             "|---|---|---|---|---|---|"]
+    sec = lambda v: "-" if v is None else f"{v:.1f}"  # noqa: E731
+    for stage, w in windows.items():
+        failed = "-" if w.get("readers_failed_setup") is None else f"{w['readers_failed_setup']}/{w.get('readers_done')}"
+        skipped = "-" if w.get("skipped_clicks") is None else str(w["skipped_clicks"])
+        lines.append(f"| {stage} | {sec(w.get('measured_s'))} | {sec(w.get('setup_s'))} | {failed} | "
+                     f"{'예' if w.get('ready_timeout') else '아니오'} | {skipped} |")
+    return "\n".join(lines)
+
+
+def read_stage_report(path: Path) -> Tuple[Dict[str, dict], dict]:
+    """(per-endpoint source tally, measured window incl. skipped clicks) from `<prefix>_sources.json`."""
+    if not path.exists():
+        return {}, {}
+    stage = json.loads(path.read_text(encoding="utf-8"))
+    return stage.get("endpoints", {}), {**stage.get("window", {}), "skipped_clicks": stage.get("skipped_clicks")}
+
+
 def run_stage(host: str, rps: int, duration: str, prefix: Path, env: dict) -> Tuple[Path, Path]:
     users = rps + 1  # rps readers + the fixed_count=1 newcomer
     cmd = [sys.executable, "-m", "locust", "-f", str(LOCUSTFILE), "--headless", "--host", host,
@@ -95,15 +127,16 @@ def main(argv=None) -> int:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     env = {**os.environ, "SIM_RUN_TAG": args.run_tag}
-    stages, sources = {}, {}
+    stages, sources, windows = {}, {}, {}
     for rps in args.rps:
         stats, src = run_stage(args.host, rps, args.duration, args.out_dir / f"rps{rps}", env)
         stages[str(rps)] = summarize_locust_csv(stats)
-        sources[str(rps)] = json.loads(src.read_text(encoding="utf-8")) if src.exists() else {}
-    report = {"host": args.host, "duration": args.duration, "stages": stages, "rec_sources": sources}
+        sources[str(rps)], windows[str(rps)] = read_stage_report(src)
+    report = {"host": args.host, "duration": args.duration, "stages": stages, "rec_sources": sources,
+              "windows": windows}
     (args.out_dir / "summary.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     table = markdown_table(stages, ["today", "click", "today_first_view", "signup", "onboarding_news", "Aggregated"])
-    text = table + "\n\n" + source_table(sources) + "\n"
+    text = table + "\n\n" + source_table(sources) + "\n\n" + window_table(windows) + "\n"
     (args.out_dir / "summary.md").write_text(text, encoding="utf-8")
     print(text)
     return 0

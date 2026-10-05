@@ -125,12 +125,20 @@
   1건 클릭(가중치 1). `constant_throughput(1)`이라 사용자 수 ≈ 목표 RPS.
 - Newcomer(1명 고정): 5초마다 새 `@sim.invalid` 계정으로 가입→로그인→온보딩→첫 `/today`
   (`today_first_view`로 따로 집계).
-- `python -m sim.loadtest`가 5/20/50 RPS 단계를 각각 헤드리스 Locust로 돌리고(계정 준비 구간은
-  `--reset-stats`로 제외) 엔드포인트별 요청 수·달성 RPS·p50/p95/p99·오류율 표를 만든다.
+- `python -m sim.loadtest`가 5/20/50 RPS 단계를 각각 헤드리스 Locust로 돌리고 엔드포인트별 요청 수·
+  달성 RPS·p50/p95/p99·오류율 표를 만든다.
   Locust는 2xx가 아니면 실패로 세므로, 계약상 기대 상태코드(재실행 시 signup 400)는 성공으로
   판정하도록 `ApiClient`가 `catch_response`를 쓴다.
+- 측정 구간(2026-10-06 수정): 처음에는 계정 준비 구간을 `--reset-stats`로 뺀다고 적었으나, Locust는
+  사용자를 띄운 시점에 통계를 지우므로 그때 진행 중인 리더의 가입·로그인(bcrypt)·온보딩 요청이 집계에
+  남고 첫 `/today` 요청과 경합한다. 지금은 모든 리더가 준비를 마친 시점에 통계와 출처 집계를 지우고
+  그때부터 태스크를 시작한다(`sim.load.ReadyGate`). 측정 구간은 `--duration`에서 준비 시간을 뺀
+  값이며 단계마다 표에 남긴다. 이 수정 전에 잰 부하 수치는 없다.
+- 읽는 법: Newcomer 흐름(요청 6~8개/5초)이 목표 RPS 위에 약 1.2~1.6 RPS를 더한다(5 RPS에서 약 +30%).
+  `constant_throughput`은 닫힌 루프라 대상이 포화되면 보내는 속도가 줄고 지연 백분위수가 낮게 나온다
+  (coordinated omission). 백분위수는 달성 RPS와 함께 읽는다.
 - Locust CSV는 어느 경로가 응답했는지 모른다. `/today` 응답의 `X-Rec-Source`와 빈 목록 여부를 단계마다
-  따로 세어(`SourceTally`, `--reset-stats`와 같은 구간) 지연 표 옆에 출처 분포·빈 응답률·폴백률 표를 붙인다.
+  따로 세어(`SourceTally`, 위 측정 구간과 같은 구간) 지연 표 옆에 출처 분포·빈 응답률·폴백률 표를 붙인다.
   폴백 정의는 행동 지표와 같고, 헤더가 없는 API에서는 0이 아니라 측정 불가로 적는다.
 - 실스택 부하는 **일회용 DB**에서만 돈다. `sim/seed.py`가 backend의 SQLModel 테이블로 합성 뉴스레터·
   카테고리·온보딩 랭킹 행을 넣고, `@sim.invalid` 사용자마다 오늘 배치 행을 쓴다(밤 추천 잡 대역).
