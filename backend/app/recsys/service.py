@@ -5,14 +5,13 @@
 - RECSYS_MODE=batch: 폴백 체인만 쓴다(36h 내 배치 행 -> 인기 -> 최신. 기존 배치 동작 + 빈 목록 방지).
 """
 import logging
-import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from contextlib import AbstractContextManager
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence
 
 import numpy as np
 
