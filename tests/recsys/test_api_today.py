@@ -98,6 +98,12 @@ def test_fallback_is_visible_in_headers(wired):
     assert resp.headers["X-Model-Version"] == "popularity-v1"
 
 
+def test_stats_endpoint_requires_a_logged_in_user(wired):
+    del app.dependency_overrides[get_current_user]
+
+    assert wired.client.get("/recsys/stats").status_code == 401
+
+
 def test_stats_endpoint_reports_counters(wired):
     wired.client.get("/newsletters/today")
     wired.client.get("/newsletters/today")
