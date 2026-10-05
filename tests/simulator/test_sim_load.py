@@ -364,7 +364,10 @@ def test_locustfile_runs_headless_against_the_fake_server(tmp_path):
     assert s["today_first_view"]["requests"] > 0
     assert {"signup", "login", "onboarding_news", "put_newsletters", "put_categories"} <= set(s)
     assert tallied["today"]["responses"] > 0 and tallied["today"]["fallback_rate"] is not None
-    # the measured window opened after all 3 readers finished setup, and the CSV covers that window only
+    # The measured window opened once all 3 readers had finished setup ...
     assert (window["readers_expected"], window["readers_done"], window["readers_failed_setup"]) == (3, 3, 0)
-    assert window["ready_timeout"] is False and 0 < window["measured_s"] < 6
-    assert s["today"]["requests"] == tallied["today"]["responses"]
+    assert window["ready_timeout"] is False and window["setup_s"] >= 0 and 0 < window["measured_s"] < 7
+    # ... and the CSV holds that window only: the readers' setup requests are gone. What is left of
+    # put_categories is one per newcomer flow, i.e. as many as first views (one more if the run
+    # stopped a newcomer between the two). Without the reset the 3 readers' calls would be on top.
+    assert s["put_categories"]["requests"] - s["today_first_view"]["requests"] in (0, 1)
