@@ -154,6 +154,14 @@ def test_request_slot_and_click_logs_join_one_to_one_over_200_requests(api_clien
         )
         assert sorted(cur.fetchall()) == sorted(linked)
 
+        # --- shadow 모델이 없는 운영 기본 배선: shadow 점수는 JSON null이 아니라 SQL NULL이다
+        cur.execute(
+            "SELECT count(*) FROM recommendation_impression_log "
+            "WHERE user_id = ANY(%s) AND scores_shadow IS NOT NULL",
+            (users,),
+        )
+        assert cur.fetchone() == (0,)
+
         # --- 연결키 없는 클릭(기존 프런트)도 그대로 저장된다
         cur.execute(
             "SELECT user_id, news_letter_id FROM user_newsletter_ctr_log "

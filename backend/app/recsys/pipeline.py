@@ -226,6 +226,8 @@ class RealtimeRecommender:
                 raise
             logger.warning("fatigue lookup failed in log mode; continuing without it", exc_info=True)
             self.counters.inc("fatigue.lookup_error")
+            # PostgreSQL은 실패한 문장 뒤의 문장을 전부 거부하므로 되돌려야 다음 조회가 된다. 되돌리면
+            # 트랜잭션 로컬로 건 statement_timeout도 풀린다: 이 요청의 남은 조회는 요청 쪽 시간 예산만 지킨다.
             repo.rollback()
             return ids, None
         if fatigued:

@@ -276,6 +276,19 @@ def test_logged_values_are_plain_python_types_the_database_driver_accepts():
                 assert type(value) in plain, (key, type(value))
 
 
+def test_a_slot_without_shadow_scores_is_stored_as_sql_null_not_json_null():
+    """JSON 컬럼의 기본 동작은 파이썬 None을 JSON null('null'::jsonb)로 넣는 것이다. 그러면 shadow가 없는 칸을
+    "scores_shadow IS NULL"로 고를 수 없다. 칸 로그의 컬럼은 None을 SQL NULL로 바인딩해야 한다."""
+    from sqlalchemy.dialects import postgresql
+
+    from app.models.recsys import RecommendationImpressionLog
+
+    bind = RecommendationImpressionLog.__table__.c.scores_shadow.type.bind_processor(postgresql.dialect())
+
+    assert bind(None) is None
+    assert bind({"lgbm:ranker@v1": 0.5}) == '{"lgbm:ranker@v1": 0.5}'
+
+
 def test_a_cache_hit_is_recorded_on_the_request_row_with_its_own_exploration():
     repo = _repo()
     log = LogRecorder()

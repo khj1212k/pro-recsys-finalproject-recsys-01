@@ -77,7 +77,11 @@ class RecommendationImpressionLog(SQLModel, table=True):
         sa_column=Column(Boolean, nullable=False, server_default=false()),
     )
     det_rank: Optional[int] = Field(default=None, sa_column=Column(SmallInteger, nullable=True))
-    scores_shadow: Optional[dict] = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    # none_as_null: shadow 점수가 없는 칸은 JSON null이 아니라 SQL NULL로 남긴다(기본값이면 None이 'null'::jsonb로
+    # 들어가 "scores_shadow IS NULL"로 걸러지지 않는다).
+    scores_shadow: Optional[dict] = Field(
+        default=None, sa_column=Column(JSONB(none_as_null=True), nullable=True)
+    )
     features: Optional[bytes] = Field(default=None, sa_column=Column(LargeBinary, nullable=True))
     created_at: Optional[datetime] = Field(
         default=None,
