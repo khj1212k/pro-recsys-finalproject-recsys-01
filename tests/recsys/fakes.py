@@ -24,6 +24,22 @@ def axis_vec(dim: int, i: int, noise: float = 0.0, rng=None) -> np.ndarray:
     return unit(v)
 
 
+class LogRecorder:
+    """서비스가 쓰는 로그 기록기(sql_repository.SqlImpressionWriter) 자리에 넣는 fake."""
+
+    def __init__(self):
+        self.slots: List[dict] = []
+        self.requests: List[dict] = []
+
+    def __call__(self, rows, request_row=None):
+        self.slots.extend(rows)
+        if request_row is not None:
+            self.requests.append(request_row)
+
+    def slots_of(self, request_id) -> List[dict]:
+        return sorted((r for r in self.slots if r["request_id"] == request_id), key=lambda r: r["position"])
+
+
 @dataclass
 class FakeNewsletter:
     id: int
@@ -46,6 +62,7 @@ class FakeRepo:
         self.newsletters: Dict[int, FakeNewsletter] = {n.id: n for n in newsletters}
         self.users: Dict[int, FakeUser] = {u.id: u for u in users}
         self.clicks: List[Tuple[int, int, int, datetime]] = []  # (log_id, user_id, nl_id, at)
+        self.impressions: List[Tuple[int, int, datetime]] = []  # (user_id, nl_id, at)
         self.batches: Dict[int, Tuple[datetime, List[int]]] = dict(batches or {})
         self.calls: List[str] = []
         self.item_fetches: List[List[int]] = []
@@ -67,6 +84,9 @@ class FakeRepo:
         log_id = len(self.clicks) + 1
         self.clicks.append((log_id, user_id, nl_id, at))
         return log_id
+
+    def impress(self, user_id: int, nl_ids, at: datetime) -> None:
+        self.impressions.extend((user_id, i, at) for i in nl_ids)
 
     # --- RecsysRepository ---
     def last_click_id(self, user_id):
@@ -142,6 +162,15 @@ class FakeRepo:
         self._call("clicked_among")
         wanted = set(news_letter_ids)
         return {c[2] for c in self.clicks if c[1] == user_id and c[2] in wanted}
+
+    def fatigued_among(self, user_id, news_letter_ids, since, min_impressions):
+        self._call("fatigued_among")
+        wanted = set(news_letter_ids)
+        seen: Dict[int, int] = {}
+        for uid, nid, at in self.impressions:
+            if uid == user_id and nid in wanted and at >= since:
+                seen[nid] = seen.get(nid, 0) + 1
+        return {nid for nid, n in seen.items() if n >= min_impressions}
 
     def items(self, news_letter_ids):
         self._call("items")

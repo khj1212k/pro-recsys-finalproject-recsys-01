@@ -10,6 +10,11 @@
 lightgbm 임포트·모델 파싱을 데몬 스레드가 하고, 요청을 처리하는 작업 스레드는 그동안 현재
 모델(없으면 휴리스틱)로 점수를 낸다. 요청 시간 예산 안에서 DB 풀이나 모델 로드를 기다리지
 않는다.
+
+역할(ADR 0025): role="active"는 레지스트리의 활성 행을 읽어 목록을 만드는 점수를 낸다. role="shadow"는
+같은 이름의 shadow 행 중 최신에서 slot번째를 읽고, 폴백을 두지 않는다(fallback=None) - 모델이 없거나
+피처가 맞지 않으면 휴리스틱 점수를 대신 내는 것이 아니라 ScorerUnavailable로 "이번에는 점수 없음"을 알린다.
+shadow가 휴리스틱 점수를 자기 이름으로 남기면 로그가 거짓이 된다.
 """
 import importlib
 import logging
@@ -24,7 +29,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from app.recsys.metrics import RecsysCounters
-from app.recsys.scoring import Scorer
+from app.recsys.scoring import Scorer, ScorerUnavailable
 from app.recsys.types import Item, ScoreResult, UserState
 
 logger = logging.getLogger(__name__)
@@ -45,6 +50,10 @@ class ModelSource(Protocol):
 
     def load(self, name: str, version: str) -> Optional[RegisteredModel]: ...
 
+    def shadow_versions(self, name: str, limit: int) -> List[str]:
+        """role='shadow'인 버전을 최신 등록순으로 최대 limit개."""
+        ...
+
 
 class SqlModelSource:
     def __init__(self, engine: Engine):
@@ -59,6 +68,18 @@ class SqlModelSource:
                 ),
                 {"n": name},
             ).scalar()
+
+    def shadow_versions(self, name: str, limit: int) -> List[str]:
+        with self.engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT model_version FROM model_registry "
+                    "WHERE model_name = :n AND role = 'shadow' AND model_format = 'lightgbm_text' "
+                    "ORDER BY created_at DESC, model_id DESC LIMIT :k"
+                ),
+                {"n": name, "k": limit},
+            ).fetchall()
+        return [r[0] for r in rows]
 
     def load(self, name: str, version: str) -> Optional[RegisteredModel]:
         with self.engine.connect() as conn:
@@ -97,16 +118,22 @@ class LightGBMScorer:
     def __init__(
         self,
         source: ModelSource,
-        fallback: Scorer,
+        fallback: Optional[Scorer],
         feature_fn: Optional[FeatureFn] = None,
         model_name: str = "ranker",
         reload_interval_s: float = 60.0,
         clock: Callable[[], float] = time.monotonic,
         counters: Optional[RecsysCounters] = None,
         reload_in_background: bool = False,
+        role: str = "active",
+        slot: int = 0,
     ):
+        if role not in ("active", "shadow"):
+            raise ValueError(f"role must be 'active' or 'shadow', got {role!r}")
         self.source = source
         self.fallback = fallback
+        self.role = role
+        self.slot = slot
         self.feature_fn = feature_fn
         self.model_name = model_name
         self.reload_interval_s = reload_interval_s
@@ -139,12 +166,23 @@ class LightGBMScorer:
             logger.exception("could not start the model reload thread; keeping current model")
             self.counters.inc("scorer.reload_error")
 
+    def _wanted_version(self) -> Optional[str]:
+        if self.role == "active":
+            return self.source.active_version(self.model_name)
+        versions = self.source.shadow_versions(self.model_name, self.slot + 1)
+        return versions[self.slot] if len(versions) > self.slot else None
+
+    def _without_model(self, state: UserState, items: Sequence[Item], now: datetime, why: str) -> ScoreResult:
+        if self.fallback is None:
+            raise ScorerUnavailable(why)
+        return self.fallback.score(state, items, now)
+
     def _reload_and_release(self) -> None:
         try:
-            version = self.source.active_version(self.model_name)
+            version = self._wanted_version()
             if version is None:
                 if self._current is not None:
-                    logger.info("model %s deactivated; using heuristic", self.model_name)
+                    logger.info("model %s (%s) is no longer registered", self.model_name, self.role)
                 self._current = None
                 return
             if self._current is not None and self._current.version == version:
@@ -166,16 +204,16 @@ class LightGBMScorer:
     def score(self, state: UserState, items: Sequence[Item], now: datetime) -> ScoreResult:
         # 피처 함수가 주입되지 않았으면 모델이 있어도 쓸 수 없으니 레지스트리 조회도 생략한다.
         if self.feature_fn is None:
-            return self.fallback.score(state, items, now)
+            return self._without_model(state, items, now, "no feature function")
         self.maybe_reload()
         model = self._current
         if model is None:
-            return self.fallback.score(state, items, now)
+            return self._without_model(state, items, now, "no registered model")
 
         fn_names = getattr(self.feature_fn, "feature_names", None)
         if model.feature_names and fn_names and list(fn_names) != list(model.feature_names):
             self.counters.inc("scorer.feature_mismatch")
-            return self.fallback.score(state, items, now)
+            return self._without_model(state, items, now, "feature names differ from the model's")
         try:
             X = np.asarray(self.feature_fn(state, items, now), dtype=np.float64)
             if X.shape != (len(items), model.num_features):
@@ -184,7 +222,9 @@ class LightGBMScorer:
                 )
             scores = np.asarray(model.booster.predict(X), dtype=np.float64)
         except Exception:
-            logger.exception("lightgbm scoring failed; using heuristic for this request")
             self.counters.inc("scorer.lgbm_error")
+            if self.fallback is None:
+                raise  # shadow: 묶음(ScorerStack)이 삼키고 센다
+            logger.exception("lightgbm scoring failed; using heuristic for this request")
             return self.fallback.score(state, items, now)
         return ScoreResult(scores=scores, model_version=f"lgbm:{self.model_name}@{model.version}")

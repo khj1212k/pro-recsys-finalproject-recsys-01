@@ -33,6 +33,13 @@ class RecsysRepository(Protocol):
 
     def clicked_among(self, user_id: int, news_letter_ids: Sequence[int]) -> Set[int]: ...
 
+    def fatigued_among(
+        self, user_id: int, news_letter_ids: Sequence[int], since: datetime, min_impressions: int
+    ) -> Set[int]:
+        """news_letter_ids 중 since 이후 이 사용자에게 min_impressions번 이상 노출된 것(ADR 0025).
+        이미 클릭한 항목을 뺀 목록을 넘기므로 "노출됐지만 클릭되지 않은 것"이 된다."""
+        ...
+
     def displayable_among(self, news_letter_ids: Sequence[int]) -> Set[int]: ...
 
     def items(self, news_letter_ids: Sequence[int]) -> Dict[int, Item]: ...

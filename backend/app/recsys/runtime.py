@@ -5,7 +5,7 @@ from typing import Optional
 
 from app.recsys.config import RecsysConfig
 from app.recsys.metrics import RecsysCounters
-from app.recsys.scoring import HeuristicScorer
+from app.recsys.scoring import HeuristicScorer, ScorerStack
 from app.recsys.service import RecommendationService, build_service
 
 _service: Optional[RecommendationService] = None
@@ -17,9 +17,9 @@ def build_sql_service(cfg: RecsysConfig, database_url: str) -> RecommendationSer
     여기서 만드는 것은 전부 자기 풀을 쓴다 - 요청 하나가 앱 풀 커넥션을 1개만 쓰도록.
 
     - 실시간 계산: 작업 스레드 수만큼의 전용 풀(create_recsys_engine)
-    - 모델 레지스트리 확인(백그라운드 스레드)과 노출 로그 쓰기(응답 뒤): 보조 풀(create_aux_engine)
+    - 모델 레지스트리 확인(백그라운드 스레드)과 요청·칸 로그 쓰기(응답 뒤): 보조 풀(create_aux_engine)
     """
-    from app.recsys.lgbm_scorer import LightGBMScorer, SqlModelSource, resolve_feature_fn
+    from app.recsys.lgbm_scorer import SqlModelSource, resolve_feature_fn
     from app.recsys.sql_repository import (
         SqlImpressionWriter,
         create_aux_engine,
@@ -29,15 +29,7 @@ def build_sql_service(cfg: RecsysConfig, database_url: str) -> RecommendationSer
 
     counters = RecsysCounters()
     aux_engine = create_aux_engine(database_url)
-    scorer = LightGBMScorer(
-        SqlModelSource(aux_engine),
-        fallback=HeuristicScorer(),
-        feature_fn=resolve_feature_fn(cfg.feature_fn),
-        model_name=cfg.model_name,
-        reload_interval_s=cfg.model_reload_s,
-        counters=counters,
-        reload_in_background=True,
-    )
+    scorer = build_scorer_stack(cfg, SqlModelSource(aux_engine), resolve_feature_fn(cfg.feature_fn), counters)
     recsys_engine = create_recsys_engine(database_url, cfg.workers, cfg.time_budget_ms)
     service = build_service(
         cfg,
@@ -48,10 +40,41 @@ def build_sql_service(cfg: RecsysConfig, database_url: str) -> RecommendationSer
     )
     service.add_shutdown_hook(recsys_engine.dispose)
     service.add_shutdown_hook(aux_engine.dispose)
-    if scorer.feature_fn is not None:
-        # 첫 요청이 오기 전에 활성 모델을 읽기 시작한다(백그라운드라 기동을 막지 않는다).
-        scorer.maybe_reload()
+    # 첫 요청이 오기 전에 레지스트리의 모델을 읽기 시작한다(백그라운드라 기동을 막지 않는다).
+    # 피처 함수가 없으면 모델이 있어도 쓸 수 없으므로 조회하지 않는다.
+    for model_scorer in (scorer.active, *scorer.shadows):
+        if model_scorer.feature_fn is not None:
+            model_scorer.maybe_reload()
     return service
+
+
+def build_scorer_stack(cfg: RecsysConfig, source, feature_fn, counters: RecsysCounters) -> ScorerStack:
+    """활성 스코어러 하나 + shadow 스코어러들 (ADR 0025).
+
+    - 활성: 레지스트리에 role='active' 모델이 있고 피처 함수가 있으면 그 모델, 아니면 4항 휴리스틱.
+    - shadow: 레지스트리의 role='shadow' 모델 중 최신 shadow_max개. 같은 후보에 점수만 매겨 칸 로그에
+      남긴다. 피처 함수가 없으면 어떤 모델도 점수를 낼 수 없으므로 만들지 않는다.
+    """
+    from app.recsys.lgbm_scorer import LightGBMScorer
+
+    def model_scorer(**kwargs) -> "LightGBMScorer":
+        return LightGBMScorer(
+            source,
+            feature_fn=feature_fn,
+            model_name=cfg.model_name,
+            reload_interval_s=cfg.model_reload_s,
+            counters=counters,
+            reload_in_background=True,
+            **kwargs,
+        )
+
+    active = model_scorer(fallback=HeuristicScorer())
+    shadows = []
+    if feature_fn is not None:
+        shadows = [model_scorer(fallback=None, role="shadow", slot=i) for i in range(cfg.shadow_max)]
+    return ScorerStack(
+        active, shadows, deadline_fraction=cfg.shadow_deadline_fraction, counters=counters
+    )
 
 
 def _build_default_service() -> RecommendationService:

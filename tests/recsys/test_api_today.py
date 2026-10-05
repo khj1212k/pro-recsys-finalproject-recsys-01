@@ -12,7 +12,7 @@ from app.main import app
 from app.recsys.config import RecsysConfig
 from app.recsys.runtime import get_recommendation_service
 from app.recsys.service import build_service
-from tests.recsys.fakes import NOW, FakeRepo, FakeUser, axis_vec, two_topic_corpus
+from tests.recsys.fakes import NOW, FakeRepo, FakeUser, LogRecorder, axis_vec, two_topic_corpus
 
 DIM = 16
 FRONTEND_TODAY_FIELDS = {
@@ -46,21 +46,21 @@ def _fake_hydrate(ids):
 @pytest.fixture
 def wired():
     repo = FakeRepo(two_topic_corpus(dim=DIM, per_topic=15), [FakeUser(1, long_term=axis_vec(DIM, 0))])
-    written = []
+    log = LogRecorder()
 
     @contextmanager
     def factory():
         yield repo
 
     service = build_service(
-        RecsysConfig(), repo_factory=factory, impression_writer=written.extend, now_fn=lambda: NOW
+        RecsysConfig(), repo_factory=factory, impression_writer=log, now_fn=lambda: NOW
     )
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(user_id=1)
     app.dependency_overrides[get_recommendation_service] = lambda: service
     app.dependency_overrides[get_request_repo] = lambda: repo
     app.dependency_overrides[get_today_hydrator] = lambda: _fake_hydrate
     try:
-        yield SimpleNamespace(client=TestClient(app), repo=repo, service=service, written=written)
+        yield SimpleNamespace(client=TestClient(app), repo=repo, service=service, log=log)
     finally:
         app.dependency_overrides.clear()
         service.shutdown()
@@ -82,9 +82,23 @@ def test_impressions_are_logged_in_background_in_response_order(wired):
     resp = wired.client.get("/newsletters/today")
 
     shown = [item["news_letter_id"] for item in resp.json()]
-    assert [r["news_letter_id"] for r in wired.written] == shown
-    assert [r["position"] for r in wired.written] == list(range(len(shown)))
-    assert {r["request_id"] for r in wired.written} == {resp.headers["X-Request-Id"]}
+    assert [r["news_letter_id"] for r in wired.log.slots] == shown
+    assert [r["position"] for r in wired.log.slots] == list(range(len(shown)))
+    assert {r["request_id"] for r in wired.log.slots} == {resp.headers["X-Request-Id"]}
+    # 요청 로그 한 행이 같은 request_id로 남고, 화면은 계획대로 나갔다(propensity가 유효하다)
+    (request,) = wired.log.requests
+    assert request["request_id"] == resp.headers["X-Request-Id"]
+    assert request["slate_size"] == request["shown_count"] == len(shown)
+    assert request["policy_version"] == "eps-uniform-v1"
+    assert all(r["propensity"] is not None for r in wired.log.slots)
+    assert sum(r["explored"] for r in wired.log.slots) == 2
+
+
+def test_the_response_does_not_reveal_which_slots_are_exploration(wired):
+    resp = wired.client.get("/newsletters/today")
+
+    assert set(resp.json()[0]) == FRONTEND_TODAY_FIELDS
+    assert not [h for h in resp.headers if "explor" in h.lower() or "propens" in h.lower()]
 
 
 def test_fallback_is_visible_in_headers(wired):

@@ -14,7 +14,7 @@ from app.recsys.types import (
     SOURCE_REALTIME,
     SOURCE_RECENT,
 )
-from tests.recsys.fakes import NOW, FakeRepo, FakeUser, axis_vec, two_topic_corpus
+from tests.recsys.fakes import NOW, FakeRepo, FakeUser, LogRecorder, axis_vec, two_topic_corpus
 
 DIM = 16
 
@@ -52,7 +52,8 @@ def _repo(batches=None, repo_cls=FakeRepo, **kw):
     )
 
 
-def test_realtime_timeout_falls_back_to_fresh_batch_within_budget():
+def test_realtime_timeout_falls_back_to_popular_within_budget_without_reading_the_batch_row():
+    """realtime 모드의 폴백은 인기 -> 최신이다. 신선한 배치 행이 있어도 읽지 않는다(ADR 0015 "폴백 체인")."""
     repo = _repo(batches={1: (NOW - timedelta(hours=5), [3, 2, 1])}, repo_cls=SlowRepo, delay_s=1.0)
     service = _service(repo, RecsysConfig(time_budget_ms=100))
 
@@ -60,11 +61,13 @@ def test_realtime_timeout_falls_back_to_fresh_batch_within_budget():
     rec = service.recommend(1, fallback_repo=repo)
     elapsed = time.perf_counter() - started
 
-    assert rec.source == SOURCE_BATCH
-    assert rec.news_letter_ids == [3, 2, 1]
+    assert rec.source == SOURCE_POPULAR
+    assert len(rec.news_letter_ids) >= 20
     assert rec.fallback_reason == "timeout"
     assert elapsed < 0.5
     assert service.counters.get("fallback.timeout") == 1
+    assert "latest_batch" not in repo.calls
+    assert rec.latency_ms is not None and 100 <= rec.latency_ms < 500
 
 
 def test_realtime_exception_falls_back_and_is_counted():
@@ -84,12 +87,12 @@ def test_realtime_exception_falls_back_and_is_counted():
 
 def test_stale_batch_row_is_skipped_in_favour_of_popular():
     repo = _repo(batches={1: (NOW - timedelta(hours=37), [3, 2, 1])})
-    repo.fail_on.add("knn_ids")
-    service = _service(repo)
+    service = _service(repo, RecsysConfig(mode="batch"))
 
     rec = service.recommend(1, fallback_repo=repo)
 
     assert rec.source == SOURCE_POPULAR
+    assert service.counters.get("fallback.batch_stale") == 1
 
 
 def test_fallback_chain_reaches_recent_when_popular_fails_and_never_raises():
@@ -144,8 +147,10 @@ def test_a_failed_fallback_step_is_rolled_back_so_the_next_step_can_still_query(
 
 
 def test_cache_hit_until_a_click_changes_the_key():
+    # 캐시가 들고 있는 것은 결정론 목록이다. 탐색을 끄면 캐시 적중 응답이 첫 응답과 같다
+    # (탐색을 켠 경우는 test_service_exploration_and_logs.py).
     repo = _repo()
-    service = _service(repo)
+    service = _service(repo, RecsysConfig(explore_enabled=False))
 
     first = service.recommend(1, fallback_repo=repo)
     knn_calls_after_first = repo.calls.count("knn_ids")
@@ -210,13 +215,14 @@ def test_invalid_mode_is_rejected():
 
 def test_impressions_are_built_from_what_was_shown():
     repo = _repo()
-    written = []
-    service = _service(repo, impression_writer=written.extend)
+    log = LogRecorder()
+    service = _service(repo, impression_writer=log)
     rec = service.recommend(1, fallback_repo=repo)
     shown = rec.news_letter_ids[:3]
 
     service.log_impressions(user_id=1, rec=rec, shown_ids=shown)
 
+    written = log.slots
     assert [r["news_letter_id"] for r in written] == shown
     assert [r["position"] for r in written] == [0, 1, 2]
     assert {r["request_id"] for r in written} == {rec.request_id}
@@ -228,7 +234,7 @@ def test_impressions_are_built_from_what_was_shown():
 def test_impression_write_failure_is_swallowed_and_counted():
     repo = _repo()
 
-    def boom(rows):
+    def boom(rows, request_row=None):
         raise RuntimeError("db down")
 
     service = _service(repo, impression_writer=boom)
@@ -237,6 +243,9 @@ def test_impression_write_failure_is_swallowed_and_counted():
     service.log_impressions(user_id=1, rec=rec, shown_ids=rec.news_letter_ids)
 
     assert service.counters.get("impressions.failed") == 1
+    # 응답 단위 유실률 = requests.log_failed / (requests.logged + requests.log_failed)
+    assert service.counters.get("requests.log_failed") == 1
+    assert service.counters.get("requests.logged") == 0
 
 
 def test_a_persistent_realtime_failure_logs_one_traceback_per_minute_not_one_per_request(caplog):

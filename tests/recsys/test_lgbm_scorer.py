@@ -8,7 +8,7 @@ import pytest
 
 from app.recsys.lgbm_scorer import LightGBMScorer, RegisteredModel, resolve_feature_fn
 from app.recsys.metrics import RecsysCounters
-from app.recsys.scoring import HeuristicScorer
+from app.recsys.scoring import HeuristicScorer, ScorerStack, ScorerUnavailable
 from app.recsys.types import Item, UserState
 from tests.recsys.fakes import NOW, axis_vec
 
@@ -32,6 +32,7 @@ class FakeSource:
     def __init__(self):
         self.models = {}
         self.active = None
+        self.shadows = []  # 최신 등록순
         self.version_calls = 0
         self.fail = False
 
@@ -39,6 +40,16 @@ class FakeSource:
         self.models[version] = RegisteredModel("ranker", version, text, feature_names)
         if activate:
             self.active = version
+
+    def publish_shadow(self, version, text, feature_names=None):
+        self.models[version] = RegisteredModel("ranker", version, text, feature_names)
+        self.shadows.insert(0, version)
+
+    def shadow_versions(self, name, limit):
+        self.version_calls += 1
+        if self.fail:
+            raise RuntimeError("registry down")
+        return self.shadows[:limit]
 
     def active_version(self, name):
         self.version_calls += 1
@@ -265,7 +276,99 @@ def test_default_runtime_wires_the_lgbm_adapter_with_env_config(monkeypatch):
     try:
         assert service.cfg.mode == "batch"
         assert service.cfg.time_budget_ms == 250
-        assert isinstance(service.recommender.scorer, LightGBMScorer)
-        assert service.recommender.scorer.counters is service.counters
+        stack = service.recommender.stack
+        assert isinstance(stack, ScorerStack)
+        assert isinstance(stack.active, LightGBMScorer) and stack.active.role == "active"
+        assert stack.active.counters is service.counters and stack.counters is service.counters
+        # 피처 함수가 없으면 어떤 등록 모델도 점수를 낼 수 없다: shadow를 만들지 않는다
+        assert stack.shadows == []
     finally:
         service.shutdown()
+
+
+# ----------------------------------------------------------------------------- shadow 역할 (ADR 0025)
+
+
+def _shadow(source, slot=0, feature_fn=feature0_is_axis0_cosine, counters=None):
+    return LightGBMScorer(
+        source, fallback=None, feature_fn=feature_fn, clock=lambda: 0.0, counters=counters,
+        role="shadow", slot=slot,
+    )
+
+
+def test_a_shadow_scorer_never_substitutes_the_heuristic_for_a_missing_model():
+    """shadow가 모델 없이 휴리스틱 점수를 자기 이름으로 내면 로그가 거짓이 된다."""
+    source = FakeSource()
+    source.publish("active-v1", _train_text(+1))  # 활성 모델이 있어도 shadow 행이 없으면 점수 없음
+
+    with pytest.raises(ScorerUnavailable):
+        _shadow(source).score(_state(), _items(), NOW)
+    with pytest.raises(ScorerUnavailable):
+        _shadow(FakeSource(), feature_fn=None).score(_state(), _items(), NOW)
+
+
+def test_shadow_slots_read_the_newest_shadow_models_in_registration_order():
+    source = FakeSource()
+    source.publish_shadow("s-old", _train_text(+1), ["cos_axis0", "zero"])
+    source.publish_shadow("s-new", _train_text(-1, seed=1), ["cos_axis0", "zero"])
+
+    newest = _shadow(source, slot=0).score(_state(), _items(), NOW)
+    second = _shadow(source, slot=1).score(_state(), _items(), NOW)
+
+    assert newest.model_version == "lgbm:ranker@s-new"
+    assert second.model_version == "lgbm:ranker@s-old"
+    assert newest.scores[0] < newest.scores[1] and second.scores[0] > second.scores[1]
+    with pytest.raises(ScorerUnavailable):  # 세 번째 shadow는 등록돼 있지 않다
+        _shadow(source, slot=2).score(_state(), _items(), NOW)
+
+
+def test_a_shadow_with_mismatched_features_or_a_failing_feature_function_gives_no_score():
+    counters = RecsysCounters()
+    source = FakeSource()
+    source.publish_shadow("s1", _train_text(+1), ["other", "names"])
+    with pytest.raises(ScorerUnavailable):
+        _shadow(source, counters=counters).score(_state(), _items(), NOW)
+    assert counters.get("scorer.feature_mismatch") == 1
+
+    def broken(state, items, now):
+        raise RuntimeError("feature store down")
+
+    source = FakeSource()
+    source.publish_shadow("s1", _train_text(+1))
+    with pytest.raises(RuntimeError, match="feature store down"):
+        _shadow(source, feature_fn=broken, counters=counters).score(_state(), _items(), NOW)
+    assert counters.get("scorer.lgbm_error") == 1
+
+
+def test_the_stack_logs_registered_shadow_models_next_to_the_active_heuristic():
+    source = FakeSource()
+    source.publish_shadow("s1", _train_text(+1), ["cos_axis0", "zero"])
+    counters = RecsysCounters()
+    stack = ScorerStack(
+        HeuristicScorer(), [_shadow(source, 0, counters=counters), _shadow(source, 1, counters=counters)],
+        counters=counters,
+    )
+
+    result = stack.score(_state(), _items(), NOW)
+
+    assert result.model_version == "heuristic-v1"
+    assert list(result.extra_scores) == ["lgbm:ranker@s1"]
+    # 활성 점수는 프로필(축 1)과 같은 항목 2를, shadow 모델은 축 0인 항목 1을 선호한다
+    assert result.scores[1] > result.scores[0]
+    assert result.extra_scores["lgbm:ranker@s1"][0] > result.extra_scores["lgbm:ranker@s1"][1]
+    assert counters.get("shadow.scored") == 1 and counters.get("shadow.unavailable") == 1
+
+
+def test_runtime_stack_has_one_shadow_slot_per_shadow_max_when_a_feature_function_is_configured():
+    from app.recsys.config import RecsysConfig
+    from app.recsys.runtime import build_scorer_stack
+
+    counters = RecsysCounters()
+    stack = build_scorer_stack(RecsysConfig(shadow_max=3), FakeSource(), feature0_is_axis0_cosine, counters)
+
+    assert [(s.role, s.slot, s.fallback) for s in stack.shadows] == [
+        ("shadow", 0, None), ("shadow", 1, None), ("shadow", 2, None)
+    ]
+    assert stack.active.role == "active" and isinstance(stack.active.fallback, HeuristicScorer)
+    assert stack.deadline_fraction == 0.5
+    assert build_scorer_stack(RecsysConfig(shadow_max=0), FakeSource(), feature0_is_axis0_cosine, counters).shadows == []

@@ -220,6 +220,9 @@ class SqliteRecsysRepo:
                                     .where(UserNewsLetterCTRLog.user_id == user_id)).all()
         return set(clicked) & set(news_letter_ids)
 
+    def fatigued_among(self, user_id, news_letter_ids, since, min_impressions):
+        return set()  # no impression log in this SQLite stand-in (the writer is not installed here)
+
     def displayable_among(self, news_letter_ids):
         return {nid for nid, _, _ in self._displayable()} & set(news_letter_ids)
 
