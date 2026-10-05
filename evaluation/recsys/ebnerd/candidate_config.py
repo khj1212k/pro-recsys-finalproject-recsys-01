@@ -18,6 +18,8 @@ import pandas as pd
 
 from recsys_core import rank_within_groups, source_flags
 
+from .cold_verdicts import load_prereg
+
 
 @dataclass(frozen=True)
 class CandidateConfig:
@@ -36,6 +38,11 @@ def config_from_prereg(name: str, d: Mapping) -> CandidateConfig:
     return CandidateConfig(name=name, window_h=float(d["window_h"]),
                            sources=tuple((s, int(d["sources"][s])) for s in order),
                            cap=d.get("cap"), model=d.get("model"))
+
+
+# 사전 등록(preregistration/cold-v1.2.yaml e8)의 두 구성. 값은 yaml이 기준이고 여기서는 읽기만 한다.
+SERVING = config_from_prereg("serving", load_prereg()["e8"]["serving"])
+HARNESS = config_from_prereg("harness", load_prereg()["e8"]["harness"])
 
 
 def source_scores(feats: pd.DataFrame, names: Sequence[str]) -> dict[str, tuple[np.ndarray, np.ndarray]]:

@@ -9,6 +9,8 @@ import pytest
 import yaml
 
 from evaluation.recsys.ebnerd.candidate_config import (
+    HARNESS,
+    SERVING,
     CandidateConfig,
     config_from_prereg,
     round_robin_union,
@@ -53,6 +55,12 @@ def test_registered_serving_config_equals_the_serving_defaults():
                                  "popular": rc.popular_n, "category": rc.category_n}
     # 라운드로빈 순서 = generate_candidates가 출처를 넣는 순서
     assert [s for s, _ in cfg.sources] == ["knn_profile", "knn_short", "recent", "popular", "category"]
+
+
+def test_module_constants_are_the_registered_configs():
+    assert SERVING == config_from_prereg("serving", PREREG["e8"]["serving"])
+    assert HARNESS == config_from_prereg("harness", PREREG["e8"]["harness"])
+    assert SERVING.model == "poolneg72" and SERVING.cap == 300 and SERVING.window_h == 72
 
 
 def test_registered_harness_config_is_the_v1_union_of_top_50():

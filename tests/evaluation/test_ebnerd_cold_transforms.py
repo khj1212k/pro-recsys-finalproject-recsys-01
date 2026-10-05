@@ -23,7 +23,7 @@ from evaluation.recsys.ebnerd.cold_transforms import (
 )
 from evaluation.recsys.ebnerd.neural.cold import POP_RAW_COLUMNS
 from evaluation.recsys.ebnerd.prepare import impressions_in, p2_task, protocol_windows
-from recsys_core import DAY, HOUR, EventIndex, FeatureConfig, FeatureContext, Requests, compute_features, expand_ranges
+from recsys_core import DAY, HOUR, EventIndex, Requests, compute_features, expand_ranges
 
 GROUPS = ("recency", "history", "team_category", "category", "popularity", "short_term")
 POP = list(POP_RAW_COLUMNS)
