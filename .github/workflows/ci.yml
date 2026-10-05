@@ -195,6 +195,14 @@ jobs:
           ../.venv/bin/python -m alembic downgrade -1
           ../.venv/bin/python -m alembic upgrade head
 
+      # tests/integration/test_merge_tier0_news_raw_sql.py는 런북과 같은 경로(psql -1 -f ... < CSV)로
+      # scripts/oci/merge_tier0_news_raw.sql을 돌린다. psql이 없으면 그 테스트는 건너뛰므로, 건너뛴 채
+      # 초록이 되지 않게 여기서 있는지 확인하고 없으면 설치한다.
+      - name: Ensure psql client
+        run: |
+          command -v psql || (sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends postgresql-client)
+          psql --version
+
       - name: Run integration tests
         run: .venv/bin/python -m pytest -q -m integration tests/
 
