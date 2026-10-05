@@ -86,7 +86,8 @@ const HomePage: React.FC = () => {
   }, [activeSlot]);
 
   const handleCardClick = async (article: NewsArticle) => {
-    sendNewsletterClickLog(parseInt(article.id)).catch(err => {
+    // 오늘의 뉴스레터 목록에서 난 클릭: 그 응답의 요청 ID와 순위를 같이 보낸다(lib/api.ts).
+    sendNewsletterClickLog(parseInt(article.id), true).catch(err => {
       console.error("Failed to log click:", err);
     });
 

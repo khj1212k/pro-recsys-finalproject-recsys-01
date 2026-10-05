@@ -31,6 +31,11 @@ const getHeaders = (token?: string) => {
 
 // --- API ---
 
+// 마지막 "오늘의 뉴스레터" 응답: 서버가 붙인 요청 ID(X-Request-Id)와 화면에 나간 순서.
+// 그 목록에서 난 클릭을 보낼 때 같이 실어, 서버가 클릭을 그 응답의 몇 번째 칸인지와 잇게 한다.
+// 헤더가 없으면(예전 서버) null로 두고 클릭은 전처럼 news_letter_id만 보낸다.
+let lastTodayFeed: { requestId: string; ids: number[] } | null = null;
+
 // 1. 오늘의 뉴스레터
 export async function fetchTodayNews(): Promise<TodayNewsResponse[]> {
   const response = await fetch(`${BASE_URL}/newsletters/today`, {
@@ -42,7 +47,10 @@ export async function fetchTodayNews(): Promise<TodayNewsResponse[]> {
     throw new Error(`Failed to fetch today's news: ${response.status}`);
   }
 
-  return response.json();
+  const data: TodayNewsResponse[] = await response.json();
+  const requestId = response.headers.get("X-Request-Id");
+  lastTodayFeed = requestId ? { requestId, ids: data.map((item) => item.news_letter_id) } : null;
+  return data;
 }
 
 // 2. 뉴스레터 상세
@@ -167,17 +175,33 @@ export async function updateUserNewsletters(newsLetterIds: number[], token: stri
 }
 
 // 9. 뉴스레터 클릭 로그 전송
-export async function sendNewsletterClickLog(newsLetterId: number): Promise<LogResponse> {
+// fromTodayFeed: "오늘의 뉴스레터" 목록에서 난 클릭이면 true. 그 목록의 요청 ID와 순위(0부터)를 같이 보낸다.
+// 다른 화면(카테고리 등)의 클릭은 그 목록의 노출이 아니므로 붙이지 않는다.
+export async function sendNewsletterClickLog(
+  newsLetterId: number,
+  fromTodayFeed: boolean = false,
+): Promise<LogResponse> {
   const token = getToken();
   // 로그인은 필수지만, 토큰이 없으면 전송하지 않음 (Silent Fail)
   if (!token) {
     return { status: "fail", log_id: -1 };
   }
 
+  const payload: { news_letter_id: number; request_id?: string; position?: number } = {
+    news_letter_id: newsLetterId,
+  };
+  if (fromTodayFeed && lastTodayFeed) {
+    const position = lastTodayFeed.ids.indexOf(newsLetterId);
+    if (position >= 0) {
+      payload.request_id = lastTodayFeed.requestId;
+      payload.position = position;
+    }
+  }
+
   const response = await fetch(`${BASE_URL}/logs/newsletter/click`, {
     method: "POST",
     headers: getHeaders(token),
-    body: JSON.stringify({ news_letter_id: newsLetterId }),
+    body: JSON.stringify(payload),
   });
 
   if (!response.ok) {
