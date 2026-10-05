@@ -24,6 +24,21 @@ major 4 / minor 다수)를 반영한다:
     기본 워커 1개, `--max-new-runs N`으로 새 실행 수를 끊어 여러 번에 나눠 돌릴 수
     있다(완료된 실행은 캐시에서 이어받음).
 
+v2.2는 v2.1 재검토(major 2)를 반영한다:
+
+  - v2.1이 '퇴화'라고 부른 lambdarank 조기 종료의 1라운드 종료는 조기 종료 지표의
+    아티팩트였다(LightGBM NDCG가 동점을 행 순서로 깨고, 엔진의 학습 데이터 생성이
+    positive를 먼저 쌓는다). 모든 arm이 조기 종료용 inner-valid를 고정 시드로 섞어
+    쓰고(pipeline.py --es-valid-order shuffled), 엔진 순서 그대로 조기 종료한 v2.1
+    동작은 `current_es_engine_order` 진단 arm으로만 남긴다. 실행마다 기록되는
+    es_tie_diagnostic을 `early_stopping_tie_artefact`로 모은다.
+  - 버전 비교(team-final - current)는 objective에 따라 조기 종료 동작이 달라 교란돼
+    있었다. 같은 조건끼리 세 가지로 비교한다: 각 버전 config 그대로(섞은 조기 종료),
+    둘 다 binary·AUC 조기 종료, 둘 다 조기 종료 없는 100라운드(`team_final_fixed100`
+    arm 추가). v2.1의 비교(엔진 순서 조기 종료)는 재현해 표시만 한다.
+  - 재현 대조 기준을 v2.1 원자료로 바꿨다: AUC·고정 라운드 arm은 섞기와 무관하게
+    같아야 하고, NDCG 조기 종료 arm은 달라지는 게 정상이다.
+
 결과: reports/recsys/team_repro_v2.json(요약) + team_repro_v2_raw.json(실행별 원자료).
 make_report_v2.py가 요약 JSON만 읽어 한국어 리포트(team_repro_v2.md)를 만든다.
 """
@@ -80,6 +95,8 @@ TOP_K = 20
 TIE_DRAWS = 30  # 1차/2차 추론 동점 무작위 추첨 횟수
 RANDOM_DRAWS = 100  # random 베이스라인 기대값 근사용 추첨 횟수
 FIXED_ROUNDS = 100  # 고정 라운드 민감도 arm (사전 선언값 - 정답 구간으로 고르지 않았다)
+ES_VALID_ORDER_DEFAULT = "shuffled"  # 조기 종료용 inner-valid 행 순서(pipeline.py --es-valid-order)
+LOW_BEST_ITERATION_MAX = 5  # pipeline.LOW_BEST_ITERATION_MAX와 같은 값(테스트로 고정)
 BOOT_METRICS = ["mrr", "precision@5", "ndcg@5", "coverage@5"]
 MAX_WORKERS = int(os.environ.get("TEAM_REPRO_WORKERS", "1"))
 
@@ -201,6 +218,7 @@ def run_pipeline(*, out_tag: str, answer_start: Optional[str] = None, **kw) -> d
         "--top-k", str(kw.get("top_k", TOP_K)),
         "--tie-draws", str(kw.get("tie_draws", 0)),
         "--fixed-rounds", str(kw.get("fixed_rounds", 0)),
+        "--es-valid-order", kw.get("es_valid_order", ES_VALID_ORDER_DEFAULT),
         "--out", str(out_path),
     ]
     if answer_start:
@@ -218,20 +236,22 @@ def run_pipeline(*, out_tag: str, answer_start: Optional[str] = None, **kw) -> d
 
 def cache_tag(seed: int, harness_sha: str, code_sha: str, cfg_hash: str, key_extras: Optional[dict], **kw) -> str:
     """캐시 태그 = 사람이 읽을 수 있는 설정 필드 + (작업 트리 diff 해시, 데이터 해시,
-    answer_start, top_k, 추첨 횟수, 라운드 정책)의 요약 해시."""
+    answer_start, top_k, 추첨 횟수, 라운드 정책, 조기 종료용 inner-valid 행 순서)의 요약 해시."""
+    es_order = kw.get("es_valid_order", ES_VALID_ORDER_DEFAULT)
     extras = dict(key_extras or {})
     extras.update({
         "answer_start": kw.get("answer_start"),
         "top_k": kw.get("top_k", TOP_K),
         "tie_draws": kw.get("tie_draws", 0),
         "fixed_rounds": kw.get("fixed_rounds", 0),
+        "es_valid_order": es_order,
     })
     digest = hashlib.sha256(json.dumps(extras, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:12]
     return "__".join([
         kw["version"], kw["protocol"], kw["label_mode"], kw["leakage_mode"],
         kw["candidate_pool"], kw["negative_source"], kw["objective_override"],
-        f"fr{kw.get('fixed_rounds', 0)}", f"seed{seed}", f"h{harness_sha[:10]}", f"c{code_sha[:10]}",
-        f"cfg{cfg_hash}", f"k{digest}", "v2_1",
+        f"fr{kw.get('fixed_rounds', 0)}", f"es{es_order}", f"seed{seed}", f"h{harness_sha[:10]}", f"c{code_sha[:10]}",
+        f"cfg{cfg_hash}", f"k{digest}", "v2_2",
     ])
 
 
@@ -304,8 +324,12 @@ def summarize_field(results: List[dict], field: str) -> dict:
     out["best_iteration"] = [r.get("best_iteration") for r in results]
     out["n_trees"] = [r.get("n_trees") for r in results]
     out["rounds_policy"] = results[0].get("rounds_policy")
+    out["es_valid_order"] = results[0].get("es_valid_order")
     out["degenerate_single_tree"] = [bool(r.get("degenerate_single_tree")) for r in results]
     out["n_degenerate_seeds"] = int(sum(bool(r.get("degenerate_single_tree")) for r in results))
+    out["n_low_iteration_seeds"] = int(sum(
+        1 for r in results if r.get("best_iteration") is not None and r["best_iteration"] <= LOW_BEST_ITERATION_MAX
+    ))
     out["n_distinct_scores_primary"] = [r.get("n_distinct_scores_primary") for r in results]
     out["top_tie_size_eval_users_median"] = [r.get("top_tie_size_eval_users_median") for r in results]
     if blocks and isinstance(blocks[0], dict) and "aggregate_min" in blocks[0]:
@@ -384,6 +408,13 @@ def evaluate_baseline_variants(evaluator, recs_list, ground_truth, category_map,
     if shown is not None:
         pu_shown = _pu(lambda r: PR.filter_seen(r, shown))
         entry["unshown_filtered"] = {"aggregate": M.aggregate(pu_shown), "per_user": pu_shown}
+        # top-K 리스트에서 사후 제거하므로 5건 미만으로 줄 수 있다(P@5는 그래도 5로 나눈다).
+        eval_users = [u for u in ground_truth if ground_truth[u]]
+        lens = [len(PR.filter_seen(r, shown).get(u, [])) for r in recs_list for u in eval_users if u in r]
+        entry["unshown_filtered"]["list_len_stats"] = {
+            "mean_len": float(np.mean(lens)) if lens else None,
+            "share_len_lt_5": float(np.mean([n < 5 for n in lens])) if lens else None,
+        }
     return entry
 
 
@@ -473,49 +504,251 @@ def team_final_written_random_reference(bundle, random_draws: int = RANDOM_DRAWS
     return out
 
 
-# ------------------------------------------------------------------ v2 재현 대조
-
-V2_RAW_COMMIT = "1585ce6"  # v2 리포트 원자료를 생성·커밋한 커밋
+# ------------------------------------------------------------------ 조기 종료 동점 아티팩트 요약
 
 
-def reproduction_check_vs_v2(runs: Dict[str, List[dict]], gen_runs: Dict[str, List[dict]]) -> dict:
-    """v2.1 실행과 v2 원자료(git에 커밋된 team_repro_v2_raw.json)를 같은 시드끼리 대조한다.
-    기본 경로(학습/추론)를 바꾸지 않았으므로 같은 시드는 소수 4자리까지 같아야 한다.
-    impression arm은 v2.1에서 inner 분할(그룹 소속 검사)을 고쳤으므로 달라지는 게 정상이다."""
+def _diag_cell(run: dict, frame: str, iteration, metric: str = "ndcg@5") -> dict:
+    diag = run.get("es_tie_diagnostic") or {}
+    return ((((diag.get("frames") or {}).get(frame) or {}).get("by_iteration") or {}).get(str(iteration)) or {}).get(metric) or {}
+
+
+def tie_diag_rows(results: List[dict]) -> List[dict]:
+    """실행별 es_tie_diagnostic을 리포트용 한 줄로 편다. NDCG로 조기 종료한 실행만 값이 있다."""
+    rows = []
+    for r in results:
+        diag = r.get("es_tie_diagnostic")
+        bi = r.get("best_iteration")
+        row = {
+            "seed": r.get("seed"), "es_valid_order": r.get("es_valid_order"), "best_iteration": bi,
+            "recorded_ndcg5_at_best": ((r.get("best_score_inner_valid") or {}).get("valid_0") or {}).get("ndcg@5"),
+            "has_diagnostic": bool(diag),
+        }
+        if diag:
+            frames = diag.get("frames") or {}
+            it1_engine = _diag_cell(r, "engine_row_order", 1)
+            best_engine = _diag_cell(r, "engine_row_order", bi)
+            row.update({
+                "positive_first_share_engine_order": (frames.get("engine_row_order") or {}).get("positive_first_share"),
+                "positive_first_share_as_evaluated": (frames.get("as_evaluated") or {}).get("positive_first_share"),
+                "n_groups": it1_engine.get("n_groups"),
+                "iter1_engine_order_ndcg5": it1_engine.get("data_order"),
+                "iter1_reversed_order_ndcg5": it1_engine.get("reversed_order"),
+                "iter1_tie_expected_ndcg5": it1_engine.get("tie_expected"),
+                "iter1_tied_positive_group_share": it1_engine.get("tied_positive_group_share"),
+                "best_engine_order_ndcg5": best_engine.get("data_order"),
+                "best_tie_expected_ndcg5": best_engine.get("tie_expected"),
+                "best_tied_positive_group_share": best_engine.get("tied_positive_group_share"),
+            })
+        rows.append(row)
+    return rows
+
+
+def early_stopping_tie_artefact(runs: Dict[str, List[dict]], gen_runs: Dict[str, List[dict]]) -> dict:
+    """조기 종료 지표의 동점 순서 아티팩트를 한곳에 모은다.
+
+    paired: 같은 시드의 '엔진 순서 조기 종료'(current_es_engine_order)와 '섞은 조기 종료'(current)를
+    나란히 놓는다. 두 실행은 학습 데이터·시드가 같아 같은 트리 열을 만들고, 몇 번째 트리에서
+    멈추는지만 다르다 - 그래서 섞은 쪽 실행에서 '엔진 순서로 계산한 NDCG'를 1라운드와 선택된
+    라운드 두 지점에서 비교할 수 있다. 1라운드 값이 더 크면 LightGBM은 1라운드를 고를 수밖에 없다."""
+    eng = {r["seed"]: r for r in runs.get("current_es_engine_order", [])}
+    paired = []
+    for r in runs.get("current", []):
+        e = eng.get(r["seed"])
+        if e is None:
+            continue
+        shuf_row = tie_diag_rows([r])[0]
+        eng_row = tie_diag_rows([e])[0]
+        it1_engine = shuf_row.get("iter1_engine_order_ndcg5")
+        best_engine = shuf_row.get("best_engine_order_ndcg5")
+        paired.append({
+            "seed": r["seed"],
+            "engine_order_best_iteration": e.get("best_iteration"),
+            "shuffled_best_iteration": r.get("best_iteration"),
+            "engine_order_recorded_ndcg5": eng_row.get("recorded_ndcg5_at_best"),
+            "shuffled_recorded_ndcg5": shuf_row.get("recorded_ndcg5_at_best"),
+            "iter1_engine_order_ndcg5": it1_engine,
+            "iter1_tie_expected_ndcg5": shuf_row.get("iter1_tie_expected_ndcg5"),
+            "iter1_reversed_order_ndcg5": shuf_row.get("iter1_reversed_order_ndcg5"),
+            "iter1_tied_positive_group_share": shuf_row.get("iter1_tied_positive_group_share"),
+            "shuffled_best_engine_order_ndcg5": best_engine,
+            "shuffled_best_tie_expected_ndcg5": shuf_row.get("best_tie_expected_ndcg5"),
+            "iter1_inflation": (it1_engine - shuf_row["iter1_tie_expected_ndcg5"])
+            if it1_engine is not None and shuf_row.get("iter1_tie_expected_ndcg5") is not None else None,
+            "engine_order_iter1_beats_tie_fair_best": (it1_engine > best_engine)
+            if it1_engine is not None and best_engine is not None else None,
+            "tie_expected_improves_after_iter1": (shuf_row["best_tie_expected_ndcg5"] > shuf_row["iter1_tie_expected_ndcg5"])
+            if shuf_row.get("best_tie_expected_ndcg5") is not None and shuf_row.get("iter1_tie_expected_ndcg5") is not None else None,
+            "positive_first_share_engine_order": shuf_row.get("positive_first_share_engine_order"),
+            "positive_first_share_shuffled": shuf_row.get("positive_first_share_as_evaluated"),
+            "primary_mrr_engine_order": ((e.get("primary") or {}).get("aggregate_metrics") or {}).get("mrr"),
+            "primary_mrr_shuffled": ((r.get("primary") or {}).get("aggregate_metrics") or {}).get("mrr"),
+        })
+
+    def _count(rows, key, pred):
+        return int(sum(1 for x in rows if x.get(key) is not None and pred(x[key])))
+
+    infl = [x["iter1_inflation"] for x in paired if x.get("iter1_inflation") is not None]
+    summary = {
+        "n_seeds": len(paired),
+        "n_engine_order_stops_at_1": _count(paired, "engine_order_best_iteration", lambda b: b <= 1),
+        "n_shuffled_stops_at_1": _count(paired, "shuffled_best_iteration", lambda b: b <= 1),
+        "n_engine_order_low_iteration": _count(paired, "engine_order_best_iteration", lambda b: b <= LOW_BEST_ITERATION_MAX),
+        "n_shuffled_low_iteration": _count(paired, "shuffled_best_iteration", lambda b: b <= LOW_BEST_ITERATION_MAX),
+        "iter1_inflation_mean": float(np.mean(infl)) if infl else None,
+        "iter1_inflation_min": float(np.min(infl)) if infl else None,
+        "iter1_inflation_max": float(np.max(infl)) if infl else None,
+        "n_engine_order_iter1_beats_tie_fair_best": _count(paired, "engine_order_iter1_beats_tie_fair_best", bool),
+        "n_tie_expected_improves_after_iter1": _count(paired, "tie_expected_improves_after_iter1", bool),
+        # 엔진 순서에서 1라운드 종료한 시드가 '엔진 순서 1라운드 NDCG > 엔진 순서 선택 라운드 NDCG'인 시드와 같은가
+        "collapse_seeds_engine_order": [x["seed"] for x in paired if (x.get("engine_order_best_iteration") or 0) <= 1],
+        "iter1_beats_best_seeds": [x["seed"] for x in paired if x.get("engine_order_iter1_beats_tie_fair_best")],
+    }
+
+    by_arm = {}
+    arm_sources = {**{k: v for k, v in runs.items()}, **{f"generator_split {k}": v for k, v in gen_runs.items()}}
+    for name, rs in arm_sources.items():
+        rows = tie_diag_rows(rs)
+        if not any(x["has_diagnostic"] for x in rows):
+            continue
+        by_arm[name] = {
+            "es_valid_order": rows[0].get("es_valid_order"),
+            "best_iteration": [x.get("best_iteration") for x in rows],
+            "n_stops_at_1": _count(rows, "best_iteration", lambda b: b <= 1),
+            "n_low_iteration": _count(rows, "best_iteration", lambda b: b <= LOW_BEST_ITERATION_MAX),
+            "positive_first_share_engine_order": [x.get("positive_first_share_engine_order") for x in rows],
+            "positive_first_share_as_evaluated": [x.get("positive_first_share_as_evaluated") for x in rows],
+            "iter1_engine_order_ndcg5": [x.get("iter1_engine_order_ndcg5") for x in rows],
+            "iter1_tie_expected_ndcg5": [x.get("iter1_tie_expected_ndcg5") for x in rows],
+            "best_tie_expected_ndcg5": [x.get("best_tie_expected_ndcg5") for x in rows],
+            "recorded_ndcg5_at_best": [x.get("recorded_ndcg5_at_best") for x in rows],
+        }
+    return {
+        "note": (
+            "LightGBM NDCG는 동점을 행 순서로 깬다. engine_order = 엔진이 만든 inner-valid 순서(positive가 그룹 첫 행), "
+            "tie_expected = 동점 블록 안 순서가 무작위일 때의 기대값(행 순서와 무관). ndcg5는 inner-valid NDCG@5."
+        ),
+        "paired_current": paired,
+        "summary": summary,
+        "by_arm": by_arm,
+    }
+
+
+# ------------------------------------------------------------------ 버전 비교 (같은 조건끼리)
+
+# (키, team-final 쪽 arm, current 쪽 arm, 조건, 두 arm 사이에 남는 차이, 같은 조건 비교인가)
+VERSION_PAIRS = [
+    (
+        "as_configured", "team-final", "current",
+        "각 버전의 config 그대로: team-final은 binary·AUC 조기 종료, current는 lambdarank·NDCG 조기 종료(섞은 inner-valid)",
+        "코드 + objective + 조기 종료 지표", False,
+    ),
+    (
+        "same_objective_binary_es", "team-final", "binary",
+        "둘 다 binary objective·AUC 조기 종료(current에 objective만 덮어씀)",
+        "코드", True,
+    ),
+    (
+        "fixed100_rounds", "team_final_fixed100", "fixed100",
+        "둘 다 조기 종료 없이 100라운드(objective는 각 버전 config 그대로)",
+        "코드 + objective", True,
+    ),
+    (
+        "v2_1_engine_order_es", "team-final", "current_es_engine_order",
+        "v2.1이 한 비교의 재현: current를 엔진 행 순서 그대로 조기 종료(동점 아티팩트로 1라운드 종료 시드 포함)",
+        "코드 + objective + 조기 종료 지표 + 동점 아티팩트", False,
+    ),
+]
+
+
+def version_comparison_pairs(runs: Dict[str, List[dict]]) -> dict:
+    """team-final - current를 여러 조건으로 비교한다. effect = team-final 쪽 - current 쪽.
+    1차/2차 격차는 서로 다른 모델이라 시드 독립 재표본, 누출 효과(2차-1차)는 같은 모델이라
+    arm 안에서 시드 쌍, 누출 효과의 차이(DiD)는 arm 사이 시드 독립이다."""
+    out = {"order": [p[0] for p in VERSION_PAIRS], "pairs": {}}
+    for key, tf_arm, cur_arm, condition, differs, like_with_like in VERSION_PAIRS:
+        tf, cur = runs[tf_arm], runs[cur_arm]
+        leak_cur = diff_per_user_by_seed(per_user_by_seed(cur, "primary"), per_user_by_seed(cur, "as_written"))
+        leak_tf = diff_per_user_by_seed(per_user_by_seed(tf, "primary"), per_user_by_seed(tf, "as_written"))
+        out["pairs"][key] = {
+            "team_final_arm": tf_arm, "current_arm": cur_arm,
+            "condition": condition, "remaining_differences": differs, "like_with_like": like_with_like,
+            "team_final_n_trees": [r.get("n_trees") for r in tf],
+            "current_n_trees": [r.get("n_trees") for r in cur],
+            "team_final_objective": tf[0].get("objective_used"), "current_objective": cur[0].get("objective_used"),
+            "team_final_rounds_policy": tf[0].get("rounds_policy"), "current_rounds_policy": cur[0].get("rounds_policy"),
+            "primary": boot_pair(cur, "primary", tf, "primary", metrics=["mrr", "precision@5"]),
+            "as_written": boot_pair(cur, "as_written", tf, "as_written", metrics=["mrr", "precision@5"]),
+            "leak_effect_team_final": boot_pair(tf, "primary", tf, "as_written", paired_seeds=True, metrics=["mrr", "precision@5"]),
+            "leak_effect_current": boot_pair(cur, "primary", cur, "as_written", paired_seeds=True, metrics=["mrr", "precision@5"]),
+            "leak_effect_did": {
+                mk: M.nested_bootstrap_paired_diff(leak_cur, leak_tf, mk, n_boot=1000, seed=0) for mk in ["mrr", "precision@5"]
+            },
+        }
+    return out
+
+
+# ------------------------------------------------------------------ v2.1 재현 대조
+
+V21_RAW_COMMIT = "67a5db2"  # v2.1 리포트 원자료를 생성·커밋한 커밋
+
+
+def reproduction_check_vs_v21(runs: Dict[str, List[dict]], gen_runs: Dict[str, List[dict]]) -> dict:
+    """v2.2 실행과 v2.1 원자료(git에 커밋된 team_repro_v2_raw.json)를 같은 시드끼리 대조한다.
+
+    v2.2에서 바뀐 것은 조기 종료용 inner-valid 행 순서뿐이다. 그래서
+      - AUC로 조기 종료하는 arm(team-final, binary, leaky_binary)과 조기 종료가 없는 arm
+        (fixed100, leaky_fixed100)은 v2.1과 소수 4자리까지 같아야 하고,
+      - 엔진 순서 그대로 조기 종료하는 진단 arm(current_es_engine_order)은 v2.1의 current와 같아야 하며,
+      - NDCG로 조기 종료하는 나머지 arm은 달라질 수 있다(선택되는 라운드가 바뀌면 달라지고,
+        안 바뀌면 같다 - 어느 쪽이든 기대에 어긋나지 않는다)."""
     try:
         raw = json.loads(subprocess.run(
-            ["git", "-C", str(WORKTREE_ROOT), "show", f"{V2_RAW_COMMIT}:reports/recsys/team_repro_v2_raw.json"],
+            ["git", "-C", str(WORKTREE_ROOT), "show", f"{V21_RAW_COMMIT}:reports/recsys/team_repro_v2_raw.json"],
             capture_output=True, text=True, check=True,
         ).stdout)
     except Exception as e:  # noqa: BLE001 - 대조는 부가 정보라 실패해도 본 실행은 계속
         return {"error": str(e)}
-    pairs = {
-        "current": (raw["headline"]["current"]["runs"], runs["current"], ["primary", "as_written"]),
-        "team-final": (raw["headline"]["team-final"]["runs"], runs["team-final"], ["primary", "as_written"]),
-        "fix-snapshot": (raw["headline"]["fix-snapshot"]["runs"], runs["fix-snapshot"], ["primary", "as_written"]),
-        "leaky": (raw["decomposition"]["leakage"]["leaky"], runs["leaky"], ["primary"]),
-        "binary": (raw["decomposition"]["objective"]["binary"], runs["binary"], ["primary"]),
-        "small_recent_15": (raw["decomposition"]["candidate_pool"]["small_recent_15"], runs["small_recent_15"], ["primary"]),
-        "impression (v2.1에서 inner 분할 수정 - 달라지는 게 정상)": (raw["decomposition"]["negatives"]["impression"], runs["impression"], ["primary"]),
-        "generator_split current": (raw["generator_split"]["current"]["runs"], gen_runs["current"], ["primary"]),
-        "generator_split team-final": (raw["generator_split"]["team-final"]["runs"], gen_runs["team-final"], ["primary"]),
-    }
-    out = {"v2_raw_commit": V2_RAW_COMMIT, "arms": {}}
-    for name, (old_runs, new_runs, fields) in pairs.items():
+    old = raw["runs"]
+    old_gen = raw["generator_split_runs"]
+    # (이름, v2.1 실행, v2.2 실행, 비교 필드, 같아야 하는가)
+    pairs = [
+        ("team-final (AUC 조기 종료)", old["team-final"], runs["team-final"], ["primary", "as_written"], True),
+        ("binary (AUC 조기 종료)", old["binary"], runs["binary"], ["primary", "as_written"], True),
+        ("leaky_binary (AUC 조기 종료)", old["leaky_binary"], runs["leaky_binary"], ["primary", "as_written"], True),
+        ("fixed100 (조기 종료 없음)", old["fixed100"], runs["fixed100"], ["primary", "as_written"], True),
+        ("leaky_fixed100 (조기 종료 없음)", old["leaky_fixed100"], runs["leaky_fixed100"], ["primary", "as_written"], True),
+        ("current_es_engine_order vs v2.1 current (엔진 순서 조기 종료)", old["current"], runs["current_es_engine_order"], ["primary", "as_written"], True),
+        ("current (NDCG 조기 종료, 섞음)", old["current"], runs["current"], ["primary", "as_written"], False),
+        ("leaky (NDCG 조기 종료, 섞음)", old["leaky"], runs["leaky"], ["primary"], False),
+        ("small_recent_15 (NDCG 조기 종료, 섞음)", old["small_recent_15"], runs["small_recent_15"], ["primary"], False),
+        ("impression (NDCG 조기 종료, 섞음)", old["impression"], runs["impression"], ["primary"], False),
+        ("fix-snapshot (NDCG 조기 종료, 섞음)", old["fix-snapshot"], runs["fix-snapshot"], ["primary", "as_written"], False),
+        ("generator_split current (NDCG 조기 종료, 섞음)", old_gen["current"], gen_runs["current"], ["primary"], False),
+        ("generator_split team-final (AUC 조기 종료)", old_gen["team-final"], gen_runs["team-final"], ["primary"], True),
+    ]
+    out = {"v21_raw_commit": V21_RAW_COMMIT, "arms": {}}
+    for name, old_runs, new_runs, fields, expect_same in pairs:
         new_by_seed = {r["seed"]: r for r in new_runs}
-        diffs, seeds = [], []
-        for old in old_runs:
-            new = new_by_seed.get(old["seed"])
+        diffs, seeds, bi_old, bi_new = [], [], [], []
+        for o in old_runs:
+            new = new_by_seed.get(o["seed"])
             if new is None:
                 continue
-            seeds.append(old["seed"])
+            seeds.append(o["seed"])
+            bi_old.append(o.get("best_iteration"))
+            bi_new.append(new.get("best_iteration"))
             for f in fields:
                 for mk in ("mrr", "precision@5"):
-                    diffs.append(abs(new[f]["aggregate_metrics"][mk] - old[f]["aggregate_metrics"][mk]))
+                    diffs.append(abs(new[f]["aggregate_metrics"][mk] - o[f]["aggregate_metrics"][mk]))
+        identical = bool(diffs) and max(diffs) < 5e-5
         out["arms"][name] = {
             "shared_seeds": seeds,
             "max_abs_diff_mrr_p5": float(max(diffs)) if diffs else None,
-            "identical_to_4dp": bool(diffs) and max(diffs) < 5e-5,
+            "identical_to_4dp": identical,
+            "expected_identical": expect_same,
+            "violates_expectation": bool(diffs) and expect_same and not identical,
+            "best_iteration_v21": bi_old,
+            "best_iteration_v22": bi_new,
         }
     return out
 
@@ -586,6 +819,15 @@ def data_structure_diagnostics(bundle, answer_start_ts, answer_start: str) -> di
 
 
 SEEDS_MAIN = [42, 43, 44, 45, 46]
+# 분해/민감도 요약에 넣는 arm (runs의 키). 헤드라인 3버전은 따로 요약한다.
+DECOMP_ARMS = [
+    "leaky", "binary", "leaky_binary", "fixed100", "leaky_fixed100", "impression", "small_recent_15",
+    "current_es_engine_order", "team_final_fixed100",
+]
+# 추론 시점 누출 효과(2차 - 1차)를 설정별로 보는 arm
+LEAK_EFFECT_ARMS = [
+    "team-final", "team_final_fixed100", "fix-snapshot", "current", "binary", "fixed100", "current_es_engine_order",
+]
 SEEDS_FIXSNAP = [42, 43, 44]  # fix-snapshot은 point-in-time cutoff 메모이즈가 없어 실행당 약 2분
 
 
@@ -650,7 +892,7 @@ def _main(args) -> int:
         harness_sha=input_hashes["harness_pipeline_inputs"], code_shas=key_code_shas, config_hashes=config_hashes,
         answer_start=answer_start, key_extras=key_extras,
         provenance_shas={"harness": harness_sha, **code_shas},
-        top_k=TOP_K, tie_draws=TIE_DRAWS, fixed_rounds=0,
+        top_k=TOP_K, tie_draws=TIE_DRAWS, fixed_rounds=0, es_valid_order=ES_VALID_ORDER_DEFAULT,
     )
 
     def arm(seeds, **over):
@@ -675,6 +917,14 @@ def _main(args) -> int:
     runs["leaky_fixed100"] = arm(seeds_main, version="current", fixed_rounds=FIXED_ROUNDS, leakage_mode="leaky")
     runs["impression"] = arm(seeds_main, version="current", negative_source="impression")
     runs["small_recent_15"] = arm(seeds_main, version="current", candidate_pool="small_recent_15")
+
+    print("=" * 70)
+    print("2b) 조기 종료 아티팩트 진단 arm / 버전 비교용 고정 라운드 arm")
+    print("=" * 70)
+    # v2.1의 기준 arm과 같은 동작(엔진 행 순서 그대로 조기 종료) - 아티팩트를 수치로 보이는 용도로만 쓴다.
+    runs["current_es_engine_order"] = arm(seeds_main, version="current", es_valid_order="engine")
+    # team-final도 조기 종료 없이 같은 라운드 수로 학습 - 버전 비교를 같은 학습 길이끼리 하기 위해.
+    runs["team_final_fixed100"] = arm(seeds_main, version="team-final", fixed_rounds=FIXED_ROUNDS)
 
     print("=" * 70)
     print("3) generator_split (학습을 ctr_logs_train.csv로 제한)")
@@ -717,6 +967,7 @@ def _main(args) -> int:
             "primary_warm": _mean_of(rs, "primary.warm"),
             "primary_seen_filtered_summary": summarize_field(rs, "primary.seen_filtered"),
             "primary_unshown_filtered_summary": summarize_field(rs, "primary.unshown_filtered"),
+            "primary_unshown_list_len": _unshown_len_summary(rs),
         }
         headline_ci[v] = {
             "primary": {mk: M.nested_bootstrap_ci(per_user_by_seed(rs, "primary"), mk, n_boot=1000, seed=0) for mk in BOOT_METRICS},
@@ -726,27 +977,36 @@ def _main(args) -> int:
             "leak_effect_tie_random": boot_pair(rs, "primary.tie_random", rs, "as_written.tie_random", paired_seeds=True, metrics=["mrr", "precision@5"]),
         }
 
-    version_comparison = {
-        # 서로 다른 모델 -> 시드 독립 재표본
-        "team_final_minus_current_primary": boot_pair(runs["current"], "primary", runs["team-final"], "primary", metrics=["mrr", "precision@5"]),
-        "team_final_minus_current_as_written": boot_pair(runs["current"], "as_written", runs["team-final"], "as_written", metrics=["mrr", "precision@5"]),
-    }
-    leak_cur = diff_per_user_by_seed(per_user_by_seed(runs["current"], "primary"), per_user_by_seed(runs["current"], "as_written"))
-    leak_tf = diff_per_user_by_seed(per_user_by_seed(runs["team-final"], "primary"), per_user_by_seed(runs["team-final"], "as_written"))
-    version_comparison["leak_effect_did_team_final_minus_current"] = {
-        mk: M.nested_bootstrap_paired_diff(leak_cur, leak_tf, mk, n_boot=1000, seed=0) for mk in ["mrr", "precision@5"]
-    }
+    # 버전 비교: 같은 조건끼리 여러 쌍으로(서로 다른 모델 -> 시드 독립 재표본).
+    version_comparison = version_comparison_pairs(runs)
+
+    # 모델 설정별 추론 시점 누출 효과(2차 - 1차, 같은 모델이라 시드 쌍 재표본).
+    model_leak_effects = {}
+    for name in LEAK_EFFECT_ARMS:
+        rs = runs[name]
+        model_leak_effects[name] = {
+            "primary_mrr_mean": float(np.mean([r["primary"]["aggregate_metrics"]["mrr"] for r in rs])),
+            "as_written_mrr_mean": float(np.mean([r["as_written"]["aggregate_metrics"]["mrr"] for r in rs])),
+            "n_trees": [r.get("n_trees") for r in rs],
+            "best_iteration": [r.get("best_iteration") for r in rs],
+            "objective": rs[0].get("objective_used"),
+            "rounds_policy": rs[0].get("rounds_policy"),
+            "es_valid_order": rs[0].get("es_valid_order"),
+            "leak_effect": boot_pair(rs, "primary", rs, "as_written", paired_seeds=True, metrics=["mrr", "precision@5"]),
+        }
 
     decomposition_summary = {
         name: {
             "primary": summarize_field(runs[name], "primary"),
             "primary_tie_random": summarize_field(runs[name], "primary.tie_random"),
+            "as_written": summarize_field(runs[name], "as_written"),
             "primary_seen_filtered": summarize_field(runs[name], "primary.seen_filtered"),
             "primary_unshown_filtered": summarize_field(runs[name], "primary.unshown_filtered"),
             "primary_cold": _mean_of(runs[name], "primary.cold"),
             "primary_warm": _mean_of(runs[name], "primary.warm"),
+            "primary_unshown_list_len": _unshown_len_summary(runs[name]),
         }
-        for name in ["leaky", "binary", "leaky_binary", "fixed100", "leaky_fixed100", "impression", "small_recent_15"]
+        for name in DECOMP_ARMS
     }
     decomposition_summary["impression"]["inner_split_groups_on_both_sides"] = [r.get("inner_split_groups_on_both_sides") for r in runs["impression"]]
     decomposition_summary["impression"]["n_train"] = [r.get("n_train") for r in runs["impression"]]
@@ -763,6 +1023,15 @@ def _main(args) -> int:
         "rounds_es_vs_fixed100": boot_pair(runs["current"], "primary", runs["fixed100"], "primary"),
         "rounds_es_vs_fixed100_tie_random": boot_pair(runs["current"], "primary.tie_random", runs["fixed100"], "primary.tie_random", metrics=["mrr", "precision@5"]),
         "negatives_random_vs_impression": boot_pair(runs["current"], "primary", runs["impression"], "primary"),
+        # 조기 종료용 inner-valid 행 순서만 다르다(엔진 순서 A -> 섞음 B). 같은 시드는 학습 데이터와
+        # 트리 열을 공유하고 멈추는 지점만 달라 시드를 쌍으로 재표본한다.
+        "es_valid_order_engine_vs_shuffled": boot_pair(
+            runs["current_es_engine_order"], "primary", runs["current"], "primary", paired_seeds=True
+        ),
+        "es_valid_order_engine_vs_shuffled_tie_random": boot_pair(
+            runs["current_es_engine_order"], "primary.tie_random", runs["current"], "primary.tie_random",
+            paired_seeds=True, metrics=["mrr", "precision@5"],
+        ),
     }
 
     # 모델 - 베이스라인 (같은 정답/후보/answer_start). 모델 변형 3개 x 베이스라인 전부.
@@ -822,8 +1091,10 @@ def _main(args) -> int:
 
     meta = {
         "generated_at": datetime.now().isoformat(),
-        "report_version": "v2.1",
+        "report_version": "v2.2",
         "superseded_report": "team_repro_v1 (BLOCKER 다수로 unsound 판정, 상단 배너 참고)",
+        "es_valid_order_default": ES_VALID_ORDER_DEFAULT,
+        "low_best_iteration_max": LOW_BEST_ITERATION_MAX,
         "git": {
             "harness_sha": harness_sha,
             "harness_dirty": tree_state["dirty"],
@@ -856,7 +1127,7 @@ def _main(args) -> int:
             "objective_override", "fixed_rounds", "seed",
             "harness pipeline-input content hash (pipeline/file_loader/config_loader/metrics/protocol .py, 커밋 여부 무관)",
             "engine code (current: src/*.py+config.yaml 내용 해시, team-final/fix-snapshot: 아카이브 ref SHA)",
-            "config hash", "data sha256", "answer_start", "top_k", "tie_draws",
+            "config hash", "data sha256", "answer_start", "top_k", "tie_draws", "es_valid_order",
         ],
     }
 
@@ -866,6 +1137,8 @@ def _main(args) -> int:
         "headline": headline,
         "headline_ci": headline_ci,
         "version_comparison": version_comparison,
+        "model_leak_effects": model_leak_effects,
+        "early_stopping_tie_artefact": early_stopping_tie_artefact(runs, gen_runs),
         "team_final_written": tfw,
         "generator_split": {v: {"summary": summarize_field(rs, "primary")} for v, rs in gen_runs.items()},
         "baselines": {
@@ -877,7 +1150,7 @@ def _main(args) -> int:
         "small_pool_model_vs_baseline": small_vs_baseline,
         "decomposition_summary": decomposition_summary,
         "decomposition_bootstrap": decomposition_bootstrap,
-        "reproduction_check_vs_v2": reproduction_check_vs_v2(runs, gen_runs),
+        "reproduction_check_vs_v21": reproduction_check_vs_v21(runs, gen_runs),
     }
     (REPORT_DIR / "team_repro_v2.json").write_text(
         json.dumps(final, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
@@ -904,6 +1177,22 @@ def _mean_of(results: List[dict], field: str) -> dict:
     out["num_users"] = blocks[0].get("num_users")
     out["n_seeds"] = len(blocks)
     return out
+
+
+def _unshown_len_summary(results: List[dict]) -> dict:
+    """unshown 필터 뒤 추천 리스트 길이(평가 유저, 시드 평균). top-K에서 사후 제거라 5건 미만이 될 수 있다."""
+    stats = [(_field(r, "primary.unshown_filtered") or {}).get("list_len_stats") for r in results]
+    stats = [st for st in stats if st and st.get("mean_len") is not None]
+    if not stats:
+        return {}
+    n_users = [st["n_users"] for st in stats]
+    lt5 = [st.get("n_users_len_lt_5", 0) for st in stats]
+    return {
+        "mean_len": float(np.mean([st["mean_len"] for st in stats])),
+        "min_len": int(min(st["min_len"] for st in stats)),
+        "share_len_lt_5": float(sum(lt5) / sum(n_users)) if sum(n_users) else None,
+        "n_users": n_users[0],
+    }
 
 
 def _strip_per_user(base: dict) -> dict:
