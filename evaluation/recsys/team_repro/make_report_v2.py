@@ -1047,8 +1047,8 @@ def main() -> None:
     if by_arm:
         A(f"NDCG로 조기 종료한 모든 arm의 상태(1라운드 종료 / {low_max}라운드 이하 시드 수):")
         A("")
-        A("| arm | inner-valid 순서 | best_iteration | 1라운드 종료 | 5 이하 | 첫 행이 positive인 그룹 비율(엔진 순서 → 실제 평가) | 1라운드 NDCG@5 엔진 순서 − 동점 기대값(시드 평균) |")
-        A("|---|---|---|---|---|---|---|")
+        A("| arm | inner-valid 순서 | 그룹 키 / inner-valid 그룹 수(시드별) | best_iteration | 1라운드 종료 | 5 이하 | 첫 행이 positive인 그룹 비율(엔진 순서 → 실제 평가) | 1라운드 NDCG@5 엔진 순서 − 동점 기대값(시드 평균) |")
+        A("|---|---|---|---|---|---|---|---|")
         for name, v in by_arm.items():
             n = len(v.get("best_iteration") or [])
             infl = mean_of([
@@ -1056,7 +1056,8 @@ def main() -> None:
                 if a is not None and b is not None
             ])
             A(
-                f"| {name} | {v.get('es_valid_order')} | {list_str(v.get('best_iteration'))} | {v.get('n_stops_at_1')}/{n} "
+                f"| {name} | {v.get('es_valid_order')} | {v.get('rank_group_key', '-')} / {list_str(v.get('n_inner_valid_groups'))} "
+                f"| {list_str(v.get('best_iteration'))} | {v.get('n_stops_at_1')}/{n} "
                 f"| {v.get('n_low_iteration')}/{n} | {pct(mean_of(v.get('positive_first_share_engine_order')), 3)} → "
                 f"{pct(mean_of(v.get('positive_first_share_as_evaluated')), 3)} | {pct(infl, 4)} |"
             )
@@ -1066,9 +1067,9 @@ def main() -> None:
             A(
                 f"섞은 뒤에도 {low_max}라운드 이하에서 멈춘 시드가 있는 arm: "
                 + ", ".join(f"{name} {list_str(v.get('best_iteration'))}" for name, v in still_low.items())
-                + ". 이 시드들은 동점 순서로 설명되지 않는다(섞은 inner-valid에서도 초기 라운드가 최선으로 기록됐다). inner-valid가 "
-                "정답 구간과 다른 분포이거나 일찍부터 과적합하는 설정일 수 있다 - 원인을 확인하지 않았고, 해당 arm의 효과는 이 "
-                "표시와 함께만 읽는다."
+                + ". 이 시드들은 동점 순서로 설명되지 않는다(섞은 inner-valid에서도 초기 라운드가 최선으로 기록됐다). **원인은 "
+                "확인하지 않았다.** 표의 inner-valid 그룹 수가 수십 개 이하인 arm은 NDCG@5 자체의 잡음이 커서 초기 라운드가 "
+                "우연히 최선으로 기록될 수 있다는 것은 가설이다. 해당 arm의 효과는 이 표시와 함께만 읽는다."
             )
         else:
             A(f"섞은 조기 종료 arm 가운데 {low_max}라운드 이하에서 멈춘 시드는 없다.")
@@ -1142,6 +1143,14 @@ def main() -> None:
         f"- inner 분할에서 양쪽에 걸친 그룹 수(그룹 소속으로 검사): {list_str(imp.get('inner_split_groups_on_both_sides'))}. "
         "v2는 인접 행만 검사해 85명 중 32명이 양쪽에 걸쳤다."
     )
+    imp_p = imp.get("primary") or {}
+    if (imp_p.get("n_low_iteration_seeds") or 0) > 0:
+        A(
+            f"- impression arm은 섞은 inner-valid에서도 조기 종료가 {low_max}라운드 이하에서 멈춘 시드가 "
+            f"{imp_p.get('n_low_iteration_seeds')}/{imp_p.get('n_seeds', '?')}개다(best_iteration {list_str(imp_p.get('best_iteration'))}; "
+            "4-1절 - 동점 순서로 설명되지 않고 원인은 확인하지 않았다). 거의 학습되지 않은 모델이 섞여 있으므로 위 효과 크기를 "
+            "negative 출처의 효과로 읽지 않는다."
+        )
     A(
         "- 페르소나 전원이 195건 전부를 노출받았으므로 '클릭 안 한 나머지'와 '노출됐지만 클릭 안 함'은 사실상 같은 모집단이다. "
         "이 비교로 노출 로그 negative의 우열을 말하지 않는다."

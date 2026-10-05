@@ -612,6 +612,8 @@ def early_stopping_tie_artefact(runs: Dict[str, List[dict]], gen_runs: Dict[str,
             continue
         by_arm[name] = {
             "es_valid_order": rows[0].get("es_valid_order"),
+            "rank_group_key": (rs[0].get("es_tie_diagnostic") or {}).get("rank_group_key"),
+            "n_inner_valid_groups": [x.get("n_groups") for x in rows],
             "best_iteration": [x.get("best_iteration") for x in rows],
             "n_stops_at_1": _count(rows, "best_iteration", lambda b: b <= 1),
             "n_low_iteration": _count(rows, "best_iteration", lambda b: b <= LOW_BEST_ITERATION_MAX),

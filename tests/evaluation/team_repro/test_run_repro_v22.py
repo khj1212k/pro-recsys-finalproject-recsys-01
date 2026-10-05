@@ -137,6 +137,8 @@ def test_early_stopping_tie_artefact_counts_come_from_recorded_diagnostics():
     assert set(art["by_arm"]) == {"current", "current_es_engine_order"}
     assert art["by_arm"]["current_es_engine_order"]["n_stops_at_1"] == 1
     assert art["by_arm"]["current"]["n_low_iteration"] == 0
+    assert art["by_arm"]["current"]["n_inner_valid_groups"] == [100, 100, 100]
+    assert art["by_arm"]["current"]["rank_group_key"] == "user_timestamp"
 
 
 def test_version_comparison_pairs_use_declared_arms_and_flag_like_with_like(monkeypatch):

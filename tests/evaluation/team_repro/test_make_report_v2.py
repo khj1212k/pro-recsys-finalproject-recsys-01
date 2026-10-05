@@ -131,7 +131,8 @@ def _artefact(engine_bi=(35, 1, 1, 90, 1), shuffled_bi=(35, 72, 49, 90, 28)):
         },
         "by_arm": {
             "current": {
-                "es_valid_order": "shuffled", "best_iteration": list(shuffled_bi), "n_stops_at_1": n_s1,
+                "es_valid_order": "shuffled", "rank_group_key": "user_timestamp", "n_inner_valid_groups": [1432] * 5,
+                "best_iteration": list(shuffled_bi), "n_stops_at_1": n_s1,
                 "n_low_iteration": sum(1 for b in shuffled_bi if b <= 5),
                 "positive_first_share_engine_order": [1.0] * 5, "positive_first_share_as_evaluated": [0.167] * 5,
                 "iter1_engine_order_ndcg5": [0.775] * 5, "iter1_tie_expected_ndcg5": [0.725] * 5,
@@ -434,6 +435,8 @@ def test_seeds_still_stopping_early_after_shuffle_are_flagged(tmp_path, monkeypa
     assert "섞은 뒤에도 1개 시드가 1라운드에서 멈췄다" in summary
     sec = _section(text, "### 4-1.", "### 4-2.")
     assert "동점 순서로 설명되지 않는다" in sec
+    assert "원인은 확인하지 않았다" in sec and "가설이다" in sec  # 추정을 원인으로 쓰지 않는다
+    assert "user_timestamp / [1432, 1432, 1432, 1432, 1432]" in sec
 
 
 def test_resume_artefact_sentence_only_when_shuffle_reduces_first_round_stops(tmp_path, monkeypatch):
@@ -525,3 +528,14 @@ def test_reproduction_check_flags_arm_that_should_match_but_does_not(tmp_path, m
     arm.update({"identical_to_4dp": False, "max_abs_diff_mrr_p5": 0.01, "violates_expectation": True})
     bad = _render(tmp_path / "b", monkeypatch, data)
     assert "기대와 다른 arm: team-final (AUC 조기 종료)" in bad
+
+
+def test_impression_arm_low_iteration_seeds_are_stated_next_to_its_effect(tmp_path, monkeypatch):
+    base = _render(tmp_path / "a", monkeypatch, _base_data())
+    assert "impression arm은 섞은 inner-valid에서도" not in base
+    data = _base_data()
+    data["decomposition_summary"]["impression"]["primary"] = _summary(0.55, best_iteration=[6, 2, 73, 3, 4], degenerate=0)
+    data["decomposition_summary"]["impression"]["primary"]["n_low_iteration_seeds"] = 3
+    text = _render(tmp_path / "b", monkeypatch, data)
+    sec = _section(text, "### 4-4.", "### 4-5.")
+    assert "5라운드 이하에서 멈춘 시드가 3/5개다" in sec and "[6, 2, 73, 3, 4]" in sec
