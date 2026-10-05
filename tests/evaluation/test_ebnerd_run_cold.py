@@ -303,3 +303,60 @@ def test_chain_runs_on_ebnerd_demo_schema_and_stays_demo_grade(tmp_path):
     d = json.loads((out / run_cold.REPORT_JSON).read_text())
     assert d["meta"]["evidence"]["grade"] == DEMO_GRADE and d["verdicts"]["judgeable"] is False
     assert d["unmeasured"]["stages"] == [] and "orig|full" in d["e1"]["cells"]
+
+
+# --- v1과 같은 표본·네거티브를 쓰는지(재현 게이트의 전제) --------------------------------------
+
+def test_p2_sample_and_pool_negatives_are_drawn_exactly_like_v1(synth_bench):
+    """재현 게이트는 poolneg가 v1 ranker_v2_poolneg와 같은 표본·네거티브에서 나왔다는 전제 위에 선다."""
+    import argparse
+
+    from evaluation.recsys.ebnerd.models import NEGATIVE_VARIANTS, V2_FEATURES
+    from evaluation.recsys.ebnerd.prepare import impressions_in, pool_negative_task, protocol_windows
+    from evaluation.recsys.ebnerd.run_ebnerd import SPLIT_SEED
+
+    assert PREREG["statistics"]["split_seed"] == SPLIT_SEED
+    W = protocol_windows(synth_bench)
+    idx = {"fit": impressions_in(synth_bench.imps["train"], W["fit"]),
+           "es": impressions_in(synth_bench.imps["train"], W["es"]),
+           "test": impressions_in(synth_bench.imps["validation"], W["test"])}
+    run = run_cold.Run(args=argparse.Namespace(p2_sample=100, sub_cap=50, threads=2), prereg=PREREG, bench=synth_bench,
+                       windows=W, idx=idx, store=None, seeds=[0])
+    # v1 run_p2: default_rng(SPLIT_SEED + 2).choice(test, size, replace=False) 후 정렬
+    want = np.sort(np.random.default_rng(SPLIT_SEED + 2).choice(idx["test"], size=100, replace=False))
+    assert np.array_equal(run.p2_idx(), want)
+    # v1 run_p1: default_rng(1000 + seed)에서 fit -> es 순
+    assert PREREG["seed_offsets"]["pool_negatives"] == 1000
+    r = np.random.default_rng(1000 + 0)
+    tf = pool_negative_task(synth_bench, "train", idx["fit"], r)
+    te = pool_negative_task(synth_bench, "train", idx["es"], r)
+    r2 = np.random.default_rng(PREREG["seed_offsets"]["pool_negatives"] + 0)
+    tf2 = pool_negative_task(synth_bench, "train", idx["fit"], r2, window_h=48)
+    te2 = pool_negative_task(synth_bench, "train", idx["es"], r2, window_h=48)
+    assert np.array_equal(tf.req.cand_item, tf2.req.cand_item) and np.array_equal(te.req.cand_item, te2.req.cand_item)
+    # arm 정의: 기준 arm은 v1 ranker_v2_poolneg와 같은 피처·목적함수·쿼리 단위
+    spec, v1 = run.arm_spec("poolneg"), NEGATIVE_VARIANTS[0]
+    assert (spec.features, spec.objective, spec.group, spec.data) == (v1.features, v1.objective, v1.group, v1.data)
+    assert run.arm_spec("poolneg_shrunk_a5").features == V2_FEATURES + [SHRUNK_COLUMN]
+    assert run.arm_spec("ranker_v2").data == "inview" and run.arm_spec("ranker_v2").features == V2_FEATURES
+
+
+def test_subsample_definitions_are_shared_between_fit_and_evaluation(synth_bench):
+    import argparse
+
+    from evaluation.recsys.ebnerd.cold_transforms import behaviour_users, subsample_users
+    from evaluation.recsys.ebnerd.prepare import impressions_in, protocol_windows
+    from evaluation.recsys.ebnerd.run_ebnerd import SPLIT_SEED
+
+    W = protocol_windows(synth_bench)
+    idx = {"test": impressions_in(synth_bench.imps["validation"], W["test"])}
+    run = run_cold.Run(args=argparse.Namespace(p2_sample=100, sub_cap=30, threads=2), prereg=PREREG, bench=synth_bench,
+                       windows=W, idx=idx, store=None, seeds=[0])
+    s1, s5, s20 = (run.subsample(t) for t in ("sub1", "sub5", "sub20"))
+    assert set(s1["users"]) <= set(s5["users"]) <= set(s20["users"])
+    assert np.array_equal(s20["users"], subsample_users(behaviour_users(synth_bench), 0.20, SPLIT_SEED + 11))
+    va = synth_bench.imps["validation"]
+    assert len(s20["idx"]) == 30 and np.isin(va.user_id[s20["idx"]], s20["users"]).all()   # 상한 적용
+    assert run.subsample("sub20") is s20                                                  # 한 번 만든 것을 다시 쓴다
+    ctx = run.sub_ctx("validation", "sub20")
+    assert ctx.item_clicks is s20["clicks"] and ctx.user_log is synth_bench.ctx["validation"].user_log
