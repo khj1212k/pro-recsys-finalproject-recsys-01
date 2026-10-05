@@ -7,6 +7,9 @@
 - 휴리스틱 가중치(장기 0.45 : 단기 0.35): 합성 코퍼스에서 고른 사전값이다. 튜닝한 값이 아니다.
 - 배포 대상(Oracle A1, arm64 2 OCPU)과 HTTP 수준의 지연: 재지 않았다(재실행 대기).
 
+ADR 0007·0013 브랜치 위에 다시 쌓으면서(2026-10-06) 결정과 수치는 바꾸지 않았다. 이 문서와 `reports/serving/`에
+적힌 커밋 SHA는 실행 당시의 것이고, 지금 이력과의 대응은 맨 아래 "통합 기록"에 있다.
+
 ## 컨텍스트
 - `GET /newsletters/today`는 하루 한 번 배치가 써 둔 `news_letter_today_batch` 행만 읽었다. 그래서
   (1) 배치 이후 가입한 사용자는 빈 목록을 받았고, (2) 클릭이 다음 배치 전까지 추천에 반영되지 않았다.
@@ -344,3 +347,22 @@ docker-build 잡이 이미지를 빌드해 같은 스모크를 돌린다(실행 
 - 실제 임베딩·클릭으로 가중치 재도출, 클릭 기반 인기도.
 - 앱 풀 크기와 요청 스레드 수의 관계 정리, 요청 세션의 문장 타임아웃.
 - 대상 장비·HTTP 수준 측정(위 재실행 대기).
+
+## 통합 기록 (2026-10-06, 결정·수치 변경 없음)
+이 브랜치의 커밋을 ADR 0007·0013이 들어 있는 브랜치 위에 순서대로 다시 쌓았다. 측정은 다시 하지 않았다.
+
+1. **커밋 SHA 대응.** 다시 쌓으면서 SHA가 바뀌었다. 이 문서와 `reports/serving/`(R3 결과 JSON의 `commit` 값 포함)에
+   적힌 SHA는 실행 기록이라 고치지 않았다. 대응: R2의 `66657a6` -> `264be0d`, R3과 CI 실행 37350694153(증거 1·2·6)의
+   `b66dd99` -> `d925af0`. 두 쌍 모두 `backend/app/recsys`, `evaluation/serving/request_path_bench.py`,
+   `ai_workspace/recommend_engine/src/core`, 리비전 `8b7f830013b7` 파일, `tests/recsys`,
+   `tests/integration/test_realtime_recsys_seeded_db.py`의 git 객체 해시가 같다. 옮기기 전 브랜치 끝(`21e9fb7`)의
+   CI 실행은 37352279039(통과)다.
+2. **테스트 수.** 증거 1·2의 "단위 593 passed", "integration 49 passed"는 옮기기 전 실행의 값이다. 다시 쌓은 뒤에는
+   앞선 브랜치의 테스트가 더해져, 로컬(macOS, Python 3.11, CI와 같은 설치 목록)에서 단위 799 passed, 16 skipped
+   (EB-NeRD demo 데이터 없음 15, Linux 전용 1)였다. `tests/recsys/` 54건과 MMR 동치 15건은 그대로다.
+   integration은 로컬에서 돌리지 않았고 push 뒤 CI가 돌린다.
+3. **CI 설치 목록.** 앞선 브랜치가 unit 잡에 넣은 `-r evaluation/requirements.txt`(라벨링 UI용 `fastapi==0.141.1`)와
+   이 브랜치의 `fastapi==0.117.1`이 한 명령에 모이면 해석이 실패한다. 백엔드 고정 버전 설치를 별도 스텝으로 나눴다.
+   라우터 테스트는 전과 같이 0.117.1에서 돌고, 라벨링 UI 테스트도 CI에서는 0.117.1에서 돈다.
+4. **Alembic.** 바꾼 것이 없다. `8b7f830013b7`의 부모는 `d48994e9d26e`이고 앞선 브랜치는 리비전을 더하지 않아 head는
+   하나다(`alembic heads` 오프라인 확인).
