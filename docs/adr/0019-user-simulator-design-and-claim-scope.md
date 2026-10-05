@@ -10,6 +10,9 @@
 지표(`adapted_rate`, `requests_to_adapt_median`)는 "타당성 미확인"**이고, 나머지 지표는 장난감 정책 수준에서
 검증됐다. 부하 [LOAD] 수치는 아직 없다 — "재실행 대기(클라우드)".
 
+요청 시점 추천 브랜치 위에 다시 쌓으면서(2026-10-06) 결정과 수치는 바꾸지 않았다. 그때 달라진 커밋 해시,
+대상 API, 테스트 수는 맨 아래 "통합 기록"에 있다.
+
 ## 컨텍스트
 - 실사용자가 없다. 추천 시스템이 "동작하는지"(신규 사용자에게 무엇을 보여주는지, 클릭에
   반응하는지, 관심이 바뀌면 따라가는지, 실패 시 무엇을 내보내는지, 클릭이 로그 테이블까지
@@ -259,6 +262,9 @@
   | 사전 등록 | `docs(adr): ADR 0019 시뮬레이터 설계·주장 범위 초안과 지표 타당성 격자 사전 등록` | 2026-09-26 16:57 | `b3b20e4` | `4be42a3` |
   | 격자를 돌린 시점의 HEAD | `test(sim): 통합 CI 잡 수집 실패 수정, Locust 스모크는 CI 전용으로` | 2026-09-26 22:30 | `cea8e90` | `390f66a` |
 
+  표의 "2026-10-06 기준 해시"는 main 바로 위로 옮겼을 때의 값이다. 앞 브랜치 위에 쌓은 지금 이력에서는
+  `a55d6cb`, `15777b4`다(맨 아래 "통합 기록" 1번).
+
   - 찾는 법: `git log --format='%h %ad %s' --date=format:'%Y-%m-%d %H:%M' -- docs/adr/0019-user-simulator-design-and-claim-scope.md sim/prereg.py reports/sim/grid_v1.json`
     — 사전 등록(16:57) → 판정기(17:18) → 결과(22:42) 순서가 보인다. 두 커밋 사이의 `sim/` 변경은
     `git diff <사전 등록> <격자를 돌린 시점> -- sim/`로 확인한다(`sim/prereg.py` 추가뿐).
@@ -428,3 +434,31 @@ drift 사용자 수 확대(예: 1,000명 또는 drift 30%).
   - 결정 절: drift 대상 비율 문장 정정(전체의 10%), 온보딩 모집단 지표 추가, 부하 측정 구간 정의 수정
     (모든 리더의 계정 준비가 끝난 뒤부터), `/newsletters/today`의 두 세대를 "배치 전용 API"·"요청 시점 API"로
     구분, 호스팅 결정 참조를 브랜치 이름으로 바꿈, 부하 절차의 env 파일 이름 변경.
+- 2026-10-06: 요청 시점 추천 브랜치 위에 다시 쌓음. 결정·수치는 그대로이고 달라진 점은 아래 "통합 기록".
+
+## 통합 기록 (2026-10-06, 결정·수치 변경 없음)
+이 브랜치의 커밋 32개를 요청 시점 추천 브랜치(`feat/realtime-recommendation`, 그 아래에 ADR 0007·0013 브랜치) 위에
+순서대로 다시 쌓았다. 격자와 보정은 다시 돌리지 않았다.
+
+1. **커밋 해시 대응.** 한 번 더 옮기면서 해시가 또 바뀌었다. 사전 등록 `4be42a3` -> `a55d6cb`, 격자를 돌린 시점의
+   HEAD `390f66a` -> `15777b4`. 제목과 작성 시각(16:57, 22:30)은 그대로다. 두 쌍과 브랜치 끝(`98ce0d2` 대
+   `d6ae49a`)에서 `sim/`, `tests/simulator/`, `reports/sim/`, 이 ADR, `tests/integration/test_sim_seed_alembic_schema.py`의
+   git 객체 해시가 같다(`git rev-parse <커밋>:<경로>`). 사전 등록과 격자 시점 사이의 `sim/` 변경은 지금 이력에서도
+   `sim/prereg.py` 추가뿐이다. `reports/sim/grid_v1.{md,json}`에 찍힌 `cea8e90`은 생성 당시 값 그대로다.
+2. **체크아웃된 backend가 요청 시점 API가 됐다.** "증거"의 "테스트"에 적은 "이 브랜치의 backend는 배치 전용 API다"는
+   main 바로 위에 있던 때의 설명이다. 지금 계약 테스트는 요청 시점 API의 두 모드(`RECSYS_MODE=batch`·`realtime`)를
+   돌고 배치 전용 1건을 건너뛴다. 가짜 앱 격자의 대상과 정책은 그대로라 "증거"의 수치와는 무관하다.
+3. **테스트 수.** 로컬(macOS, Python 3.11, CI unit 잡과 같은 설치 순서, `nice -n 19`, 스레드 2)에서
+   `tests/simulator`는 74 passed, 2 skipped(배치 전용 계약 테스트 1, Locust 스모크 1)다. "요청 시점 API 위에 올렸을
+   때"로 미리 적어 둔 값과 같다. 저장소 전체 단위 테스트는 873 passed, 18 skipped(EB-NeRD demo 데이터 없음 15,
+   Linux 전용 1, 앞의 2건)다.
+   - 재실행 대기(CI): `pytest -q -m integration tests/`(새 리비전 `8b7f830013b7`까지 올린 스키마에서 도는
+     `test_sim_seed_alembic_schema.py` 포함)와 Locust 헤드리스 스모크. 로컬에서는 돌리지 않았고, 이 기록을 쓰는
+     시점에는 push 전이라 CI 결과가 없다.
+4. **ADR 색인과 CI 설치 목록.** `docs/adr/README.md`는 앞 브랜치의 행(0013, 0015, 0017)과 이 ADR의 행을 번호순으로
+   합쳤다. unit 잡은 앞 브랜치의 두 단계 설치(평가 고정 버전, backend 고정 버전)를 그대로 두고 kiwipiepy 고정과
+   시뮬레이터 설치 단계를 더했다. backend 고정 단계가 이미 넣는 python-jose·passlib·bcrypt는 시뮬레이터 단계에서
+   뺐고 locust, uvicorn만 남겼다. 설치 순서를 로컬에서 그대로 실행했을 때 시뮬레이터 단계는 이미 있던 패키지의
+   버전을 바꾸지 않았다. 잡 3개(test, integration-test, docker-build)는 그대로다.
+5. **Alembic.** 이 브랜치는 리비전을 더하지 않는다. head는 앞 브랜치의 `8b7f830013b7` 하나다(`alembic heads`
+   오프라인 확인).
