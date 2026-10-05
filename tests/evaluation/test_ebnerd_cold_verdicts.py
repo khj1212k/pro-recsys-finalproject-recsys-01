@@ -39,6 +39,26 @@ def test_prereg_constants_are_read_from_the_registered_file():
     assert len(prereg_sha256()) == 64
 
 
+def test_code_constants_that_duplicate_the_registration_have_not_drifted():
+    """콜드 정의(neural/cold.py)는 다른 실험과 공유하느라 yaml을 읽지 않고 상수를 따로 갖는다. 두 곳이 같아야 한다."""
+    from evaluation.recsys.ebnerd import models
+    from evaluation.recsys.ebnerd.cold_transforms import SHRUNK_COLUMN
+    from evaluation.recsys.ebnerd.heuristic_fit import TERMS
+    from evaluation.recsys.ebnerd.neural.cold import COLD_TRUNCATE_KS, POP_RAW_COLUMNS
+
+    assert P["features"]["pop_raw_columns"] == list(POP_RAW_COLUMNS)
+    assert P["features"]["shrunk_column"] == SHRUNK_COLUMN
+    assert set(COLD_TRUNCATE_KS) <= set(P["conditions"]["truncate_ks"])       # E15 게이트의 k는 E2 격자의 부분집합
+    assert set(P["features"]["rank_columns"]) <= set(models.V2_FEATURES)
+    assert (P["lightgbm"]["num_boost_round"], P["lightgbm"]["early_stopping"]) == (models.NUM_BOOST_ROUND,
+                                                                                 models.EARLY_STOPPING)
+    assert not set(P["lightgbm"]["extra_params"]) & set(models.TEAM_PARAMS)   # 실행 옵션일 뿐 하이퍼파라미터가 아니다
+    assert len(P["heuristics"]["fit_terms"]) == len(TERMS) == 4
+    assert set(P["e6"]["alphas"]) == {c["shrunk_alpha"] for c in P["arms"].values() if "shrunk_alpha" in c}
+    assert {P["e1"]["a"]["compare"][0], P["e3"]["compare"][0], P["e8"]["serving"]["model"],
+            P["e2"]["p1_descriptive"]["model"], P["reproduction_gate"]["arm"]} <= set(P["arms"])
+
+
 def test_registered_yaml_is_byte_identical_to_the_commit_that_registered_it():
     """사전 등록 값은 등록 커밋 뒤에 바뀌면 안 된다. 그 커밋의 yaml과 지금 파일을 바이트로 비교한다.
     얕은 체크아웃(CI)처럼 그 커밋이 없는 곳에서는 건너뛴다."""
