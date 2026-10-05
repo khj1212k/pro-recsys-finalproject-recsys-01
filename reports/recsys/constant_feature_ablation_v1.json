@@ -1,0 +1,285 @@
+{
+  "experiment": "constant_feature_ablation_v1",
+  "run_at_utc": "2026-09-26T13:05:06Z",
+  "environment": {
+    "python": "3.11.14",
+    "lightgbm": "4.7.0",
+    "numpy": "2.4.6",
+    "num_threads": 2
+  },
+  "data": {
+    "source": "synthetic (numpy RandomState(seed)), no real logs",
+    "n_features": 8,
+    "constant_columns": [
+      "user_age_band",
+      "user_gender"
+    ],
+    "items_per_group": 6,
+    "groups": {
+      "train": 400,
+      "valid": 100,
+      "test": 100
+    }
+  },
+  "training": {
+    "params_from": "ai_workspace/recommend_engine/config/config.yaml lightgbm.params (random_state overridden per seed)",
+    "params": {
+      "objective": "lambdarank",
+      "metric": "ndcg",
+      "ndcg_eval_at": [
+        5,
+        10
+      ],
+      "label_gain": [
+        0,
+        1
+      ],
+      "boosting_type": "gbdt",
+      "num_leaves": 31,
+      "learning_rate": 0.05,
+      "feature_fraction": 0.9,
+      "bagging_fraction": 0.8,
+      "bagging_freq": 5,
+      "verbose": -1,
+      "random_state": 42
+    },
+    "early_stopping": {
+      "num_boost_round": 1000,
+      "early_stopping_rounds": 50
+    },
+    "fixed_rounds": {
+      "num_boost_round": 300
+    }
+  },
+  "modes": [
+    "early_stopping",
+    "fixed_rounds"
+  ],
+  "seeds": [
+    42,
+    7,
+    2026
+  ],
+  "positions": [
+    "front",
+    "middle",
+    "back"
+  ],
+  "runs": [
+    {
+      "mode": "early_stopping",
+      "seed": 42,
+      "position": "front",
+      "trees_without": 10,
+      "trees_with": 10,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "early_stopping",
+      "seed": 42,
+      "position": "middle",
+      "trees_without": 10,
+      "trees_with": 10,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "early_stopping",
+      "seed": 42,
+      "position": "back",
+      "trees_without": 10,
+      "trees_with": 10,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "fixed_rounds",
+      "seed": 42,
+      "position": "front",
+      "trees_without": 300,
+      "trees_with": 300,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "fixed_rounds",
+      "seed": 42,
+      "position": "middle",
+      "trees_without": 300,
+      "trees_with": 300,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "fixed_rounds",
+      "seed": 42,
+      "position": "back",
+      "trees_without": 300,
+      "trees_with": 300,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "early_stopping",
+      "seed": 7,
+      "position": "front",
+      "trees_without": 8,
+      "trees_with": 8,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "early_stopping",
+      "seed": 7,
+      "position": "middle",
+      "trees_without": 8,
+      "trees_with": 8,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "early_stopping",
+      "seed": 7,
+      "position": "back",
+      "trees_without": 8,
+      "trees_with": 8,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "fixed_rounds",
+      "seed": 7,
+      "position": "front",
+      "trees_without": 300,
+      "trees_with": 300,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "fixed_rounds",
+      "seed": 7,
+      "position": "middle",
+      "trees_without": 300,
+      "trees_with": 300,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "fixed_rounds",
+      "seed": 7,
+      "position": "back",
+      "trees_without": 300,
+      "trees_with": 300,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "early_stopping",
+      "seed": 2026,
+      "position": "front",
+      "trees_without": 1,
+      "trees_with": 1,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "early_stopping",
+      "seed": 2026,
+      "position": "middle",
+      "trees_without": 1,
+      "trees_with": 1,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "early_stopping",
+      "seed": 2026,
+      "position": "back",
+      "trees_without": 1,
+      "trees_with": 1,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "fixed_rounds",
+      "seed": 2026,
+      "position": "front",
+      "trees_without": 300,
+      "trees_with": 300,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "fixed_rounds",
+      "seed": 2026,
+      "position": "middle",
+      "trees_without": 300,
+      "trees_with": 300,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    },
+    {
+      "mode": "fixed_rounds",
+      "seed": 2026,
+      "position": "back",
+      "trees_without": 300,
+      "trees_with": 300,
+      "max_abs_diff": 0.0,
+      "array_equal": true,
+      "constant_columns_split_count": 0,
+      "n_test_rows": 600
+    }
+  ],
+  "summary": {
+    "n_runs": 18,
+    "all_array_equal": true,
+    "max_abs_diff_over_runs": 0.0,
+    "all_tree_counts_equal": true,
+    "trees_range_by_mode": {
+      "early_stopping": [
+        1,
+        10
+      ],
+      "fixed_rounds": [
+        300,
+        300
+      ]
+    },
+    "constant_columns_ever_split": false
+  }
+}

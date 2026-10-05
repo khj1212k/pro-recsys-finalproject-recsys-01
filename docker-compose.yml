@@ -38,6 +38,9 @@ x-worker: &worker
     HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-0}
     OMP_NUM_THREADS: ${EMBED_THREADS:-4}
     SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
+    # 정책브리핑(공공데이터포털) 인증키. 비어 있으면 ingest의 rss 단계가 이 출처만 건너뛴다(ADR 0023).
+    # LLM 키와 달리 수집에 필요해서 AI_ENV_FILE이 아니라 .env에서 이 값만 넘긴다.
+    DATA_GO_KR_SERVICE_KEY: ${DATA_GO_KR_SERVICE_KEY:-}
   env_file:
     # LLM API 키는 opt-in: generate 잡을 켤 때만 .env에 AI_ENV_FILE=<키 파일>을 넣는다(runbook 9절).
     # 기본값을 ai_workspace/.env로 두면 메인 체크아웃에서 띄울 때 키가 필요 없는 migrate/scheduler에도

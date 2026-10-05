@@ -10,7 +10,7 @@
 - 기존 코드(`core/llm_client.py`, `workflow/evaluators.py`, `core/reconstruction/generator.py`, `core/tone_converter.py`)는 LangGraph 노드가 호출될 때마다 새 클라이언트를 만들고, 프로바이더별로 다른 메서드 시그니처(`chat_completion` vs 없음)를 썼으며, 구조화 출력은 전부 "JSON을 프롬프트로 요구 + `extract_json_from_response`로 복구 + 수동 파싱"에 의존했다.
 - 이 PR의 범위는 클라이언트 추상화 계층 자체이며, 최종적으로 어떤 프로바이더/모델 조합을 운영에 쓸지(bake-off)는 다루지 않는다 - 아래 "결과와 한계"에서 후속 ADR로 명시적으로 미룬다.
 
-### 검증한 사실 (WebFetch/브라우저로 공식 문서 확인, 접근일 2026-09-25)
+### 검증한 사실 (공식 문서 조회, 접근일 2026-09-25)
 | 프로바이더 | OpenAI 호환 Chat Completions | `response_format: json_schema` 구조화 출력 | base_url | 출처 |
 |---|---|---|---|---|
 | OpenAI | 네이티브 | 지원 (`gpt-4o-mini`, `gpt-4o-mini-2024-07-18`, `gpt-4o-2024-08-06` 이상부터; Chat Completions/Responses/Assistants/Fine-tuning/Batch API 전체) | (OpenAI SDK 기본값) | https://developers.openai.com/api/docs/guides/structured-outputs (platform.openai.com/docs/guides/structured-outputs가 301로 리다이렉트되는 현재 정규 URL) |
@@ -20,7 +20,7 @@
 - 부가 확인: Upstage 모델 목록(https://console.upstage.ai/docs/models, 접근일 2026-09-25)에는 `Solar Pro 4`가 현재 flagship으로 소개되고 있지만 `Solar Pro 3`("Powerful MoE model with 102B parameters")도 여전히 사용 가능한 모델로 나열되어 있다 - 과제에서 지정한 `solar-pro3`는 여전히 유효한 선택지다.
 - 로컬 환경 확인: 설치된 `openai` 파이썬 SDK(3.19.2)는 내부적으로 `httpx2`(pydantic/httpx 팀이 배포하는 httpx의 차세대 메이저 버전, PyPI 공개 패키지)를 쓴다(`openai/_base_client.py`에서 `import httpx2`). 이 SDK 버전에서는 `client.chat.completions.parse(...)`가 `beta` 네임스페이스 없이도 존재한다(둘 다 있음, 로컬에서 `hasattr`로 확인). 어댑터와 테스트 페이크는 이 사실에 맞춰 `openai.APIStatusError`/`RateLimitError`/`InternalServerError`/`APITimeoutError`/`APIConnectionError`와 `httpx2.Request`/`Response`를 사용한다.
 - Claude Haiku 4.5는 이번 조사에서 "OpenAI 호환 Chat Completions 엔드포인트 지원 여부"를 검증하지 않았다 - 과제 범위가 "Gemini/Upstage/OpenAI 셋 다 OpenAI 호환"이라는 전제를 확인하는 것이었고, Claude는 그 전제에 포함되지 않았기 때문이다. 이 PR은 challenger로 OpenAI 소형 모델(`gpt-4o-mini`)을 선택했다 - 세 프로바이더 모두 동일한 어댑터로 통합 가능함이 확인됐기 때문에 어댑터 종류를 하나 더 늘리지 않아도 됐다. Claude Haiku 4.5를 나중에 후보에 넣으려면 별도 어댑터(또는 Anthropic의 OpenAI 호환성 확인)가 먼저 필요하다.
-- **role 기본 모델을 Gemini 하나로 좁히며 모델 id 재확인** (WebFetch `https://ai.google.dev/gemini-api/docs/models`, 접근일 2026-09-25, 문서 자체 "Last updated 2026-09-24 UTC"): 사용자가 지금 보유한 키가 Gemini(Google Cloud 크레딧)뿐이라 GEN/JUDGE/TONE 세 role 모두 gemini를 기본 프로바이더로 바꿨다(아래 "결정" 참고). 이 ADR을 처음 채택했을 때 기본값으로 골랐던 `gemini-2.5-flash`는 이제 문서상 "Limited Access - 신규 프로젝트는 3.5 Flash-Lite 또는 3.8 Flash 사용 권장" 상태로 바뀌어 있어, 현재 유효한 id로 갱신했다:
+- **role 기본 모델을 Gemini 하나로 좁히며 모델 id 재확인** (공식 문서 조회 `https://ai.google.dev/gemini-api/docs/models`, 접근일 2026-09-25, 문서 자체 "Last updated 2026-09-24 UTC"): 사용자가 지금 보유한 키가 Gemini(Google Cloud 크레딧)뿐이라 GEN/JUDGE/TONE 세 role 모두 gemini를 기본 프로바이더로 바꿨다(아래 "결정" 참고). 이 ADR을 처음 채택했을 때 기본값으로 골랐던 `gemini-2.5-flash`는 이제 문서상 "Limited Access - 신규 프로젝트는 3.5 Flash-Lite 또는 3.8 Flash 사용 권장" 상태로 바뀌어 있어, 현재 유효한 id로 갱신했다:
   - `gemini-3.5-flash-lite` - "Our fastest, most cost-effective 3.5 model for high-throughput execution." → GEN/TONE 기본값(초안 생성·문체 변환처럼 비용 민감한 작업).
   - `gemini-3.5-flash` - "Our legacy Flash model, providing baseline speed and foundational performance for routine, high-throughput workloads." → 처음 JUDGE 기본값으로 골랐으나, 아래 "부록: 2026-09-25 실제 호출 확인"의 결과로 `gemini-3.1-flash-lite`로 교체했다.
   - 둘 다 같은 "3.5" 세대의 Gemini 모델이므로, 크기(Flash vs Flash-Lite)는 다르지만 벤더/학습 lineage는 같다 - self-preference bias 관점에서는 여전히 "같은 모델 계열"로 취급해야 한다(아래 "결정"의 경고 로직 참고). 최종 프로바이더/모델 조합(특히 judge를 정말 다른 벤더로 분리할지)은 여전히 후속 bake-off ADR의 몫이다.

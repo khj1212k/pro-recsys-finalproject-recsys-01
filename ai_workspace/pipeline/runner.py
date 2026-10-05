@@ -24,7 +24,6 @@ class PipelineRunner:
     
     def run_full_pipeline(
         self,
-        reset_db: bool = True,
         num_workers: int = 8,
         force_cpu: bool = False,
         limit: Optional[int] = None,
@@ -40,7 +39,6 @@ class PipelineRunner:
         전체 파이프라인을 처음부터 끝까지 실행
 
         Args:
-            reset_db: 데이터베이스 초기화 여부 (test_db 전용)
             num_workers: 병렬 처리를 위한 작업자(Process) 수
             force_cpu: 강제로 CPU를 사용할지 여부 (GPU 미사용 시)
             limit: 처리할 클러스터 최대 개수 제한 (디버깅용)
@@ -52,6 +50,9 @@ class PipelineRunner:
 
         Returns:
             Dict: 각 단계별 실행 결과 요약 정보
+
+        DB 초기화(--reset)는 main.py가 러너를 만들기 전에 test_db 안전장치와 함께 처리한다.
+        (이전의 reset_db 인자는 어디에서도 읽지 않았고 기본값이 True라 오해를 불렀다.)
         """
         results = {}
         

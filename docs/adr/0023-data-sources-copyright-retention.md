@@ -1,0 +1,241 @@
+# ADR 0023: 수집 출처와 라이선스, 저장·노출·공개 범위, 본문 보존 기한
+
+## 상태
+채택됨 (2026-09-26). 출처 표·정책브리핑 수집기·노출 규칙은 이 ADR과 함께 들어갔다. 30일 본문 보존 잡은 설계만 확정했고 구현은 아직이다. 선행 조건이던 수집 스키마(본문 추출 상태·본문 해시 컬럼, ADR 0006)는 2026-09-26 `main`에 병합됐다(PR #8). 설계와 남은 일은 "결과와 한계"의 TODO 절에 있다.
+
+추천 평가·요청 시점 추천·시뮬레이터 브랜치 위에 다시 쌓으면서(2026-10-06) 결정은 바꾸지 않았다. 그때 달라진 Alembic head, 옮기지 않은 커밋, 테스트 수는 맨 아래 "통합 기록"에 있다.
+
+이 문서는 공학적 운영 규칙이다. 법률 자문이 아니며, 법이 요구하는 최소한보다 보수적으로 정했다.
+
+## 컨텍스트
+- 수집기는 상업 언론사 8곳(동아일보, 경향신문, 매일경제, 한국경제, 국민일보, 세계일보, 전자신문, AI타임스)의 RSS로 URL을 받는다. 본문은 trafilatura로 추출해 `news_raw.raw_news_content`에 저장한다. 본문을 지우는 코드는 없어서 기한 없이 쌓인다.
+- 각 RSS 채널의 저작권 표시(2026-09-26 확인, `feedparser`로 채널 `copyright` 요소 읽음):
+  - 동아일보 "Copyright donga.com"
+  - 경향신문 "Copyright (C)1996 Kyunghyang Shinmun, All right reserved."
+  - 매일경제 "Copyright 2026 MK"
+  - 한국경제 "Copyright (c) 2005 hankyung.com All rights reserved"
+  - 세계일보 "COPYRIGHT (c) SEGYE.com All rights reserved"
+  - AI타임스 "Copyright (c) https://www.aitimes.com All rights reserved"
+  - 국민일보·전자신문은 표시 없음
+  - 여덟 곳 모두 재배포를 허락하는 표시는 없다.
+- 저장소는 공개 GitHub fork다. 커밋한 것은 그대로 재배포된다. 반면 한국어 LLM·클러스터링 평가를 재현하려면 원문이 필요하다. 원문이 없으면 평가셋의 생성·판정을 다시 돌릴 수 없다.
+- 로컬 수집 DB 실측(2026-09-26 02:45 UTC 무렵, compose DB `newsletter`, 읽기 전용 트랜잭션의 SELECT만 사용):
+
+  | 항목 | 값 |
+  |---|---|
+  | `news_raw` 행 | 690 |
+  | 본문 있는 행 | 649 |
+  | 본문 합계 | 2,628,194 bytes (UTF-8) |
+  | 본문 평균 | 4,050 bytes / 1,726자 |
+  | 테이블 전체(TOAST·인덱스 포함) | 6.3MB |
+  | 수집 기간(`raw_news_crawled_at`, 타임존 없는 컬럼 값) | 2026-09-25 16:50 ~ 09-26 02:04 |
+
+  첫 실행이 RSS 100시간치를 한꺼번에 받았기 때문에 이 기간의 일일 유입량은 정상 상태 값이 아니다.
+- 재배포 가능한 한국어 출처가 필요하다. 원래 계획은 korea.kr 정책브리핑 RSS(공공누리 제1유형)였다. 공식 페이지를 다시 확인한 결과(접근일 2026-09-26):
+  - korea.kr RSS는 2026-07-01에 전부 중단됐다. 공지의 중단 사유는 "콘텐츠 저작권 등 권리 보호에 따른 제공방식 변경"이다([공지](https://www.korea.kr/etc/noticeView.do?newsId=132038885)). 예전 피드 주소(`/rss/policy.xml`, `/rss/dept_cnc.xml` 등)는 HTTP 404를 돌려주고, RSS 안내 페이지(`/etc/rss.do`)는 메인으로 리다이렉트된다.
+  - 같은 정책뉴스는 공공데이터포털 Open API로 계속 제공된다. 데이터셋은 [문화체육관광부_정책브리핑_정책뉴스_API](https://www.data.go.kr/data/15095335/openapi.do)(등록 2021-12-01, 수정 2026-07-21)다.
+    - 이용허락범위: "공공저작물 : 출처표시 (제 1유형)"
+    - 비용: 무료
+    - 개발계정: 1,000회, 자동승인
+    - 명세(페이지에 포함된 swagger): 엔드포인트 `apis.data.go.kr/1371000/policyNewsService2/policyNewsList2`, 필수 파라미터 `serviceKey`·`startDate`·`endDate`, 에러 코드 98 "날짜범위 3일 초과", 97 "날짜형식 오류"
+    - 기사 필드: `Title`, `ContentsType`(H=HTML, T=텍스트), `DataContents`, `ApproveDate`(MM/DD/YYYY HH24:MI:SS), `EmbargoDate`, `OriginalUrl`, `KoglType`(공공누리유형)
+    - 인증키 없이 호출하면 401 `SERVICE_KEY_IS_NULL`이 온다. 없는 경로는 `NO_OPENAPI_SERVICE_ERROR`를 돌려준다. 따라서 엔드포인트는 살아 있다.
+  - [정책브리핑 저작권정책](https://www.korea.kr/guide/copyRight.do)의 내용:
+    - 자료는 원칙적으로 문화체육관광부 저작물이다. 저작권법 제24조의2(공공저작물의 자유이용)에 따라 자유이용할 수 있다.
+    - 자유이용할 수 있는 것은 공공누리 제1유형 표시가 붙은 저작물의 텍스트다.
+    - 사진은 정부기관·연합뉴스 등, 이미지는 통로이미지(주)의 저작물이라 제외된다.
+    - 출처는 구체적으로 표시해야 한다.
+  - [공공누리 제1유형](https://www.kogl.or.kr/info/licenseType1.do)의 조건:
+    - 출처 표시
+    - 상업적 이용 가능
+    - 변경·2차적 저작물 작성 가능
+    - 공공기관이 후원하거나 특수한 관계에 있는 것처럼 오인하게 하는 표시 금지
+    - 저작인격권 존중
+
+## 검토한 대안
+
+### 1. 재배포 가능한 한국어 출처
+1. **korea.kr RSS**: 2026-07-01 중단(위 공지). 쓸 수 없다.
+2. **korea.kr 웹페이지 스크레이핑**
+   - RSS를 끊은 사유가 권리 보호다.
+   - 기사별 공공누리 표시를 HTML에서 판별해야 한다.
+   - 사진 캡션·제3자 사진 설명이 본문 추출에 섞인다.
+   - 기각.
+3. **공공데이터포털 정책뉴스 API (채택)**
+   - 운영 기관이 정한 공식 채널이다. 데이터셋 전체의 이용허락이 제1유형이고, 기사마다 `KoglType`이 붙어 기사 단위로 거를 수 있다.
+   - 본문을 API가 주므로 스크레이핑이 필요 없다.
+   - 단점: 인증키가 필요하다(사용자가 포털에서 발급). 한 번에 3일까지만 조회된다. 날짜 파라미터 형식은 인증키가 없어 아직 실제 응답으로 확인하지 못했다.
+4. **부처별 보도자료 RSS**: 부처마다 피드 형식과 공공누리 표기를 따로 확인해야 한다. 한 API로 모이는 정책브리핑보다 비용이 크다. 필요해지면 다시 검토한다.
+
+### 2. 상업 언론사 본문 보존 기한
+1. **무기한(현재)**
+   - 재현성은 가장 좋다.
+   - 대신 저작권 노출과 유출 위험이 계속 쌓이고, 저장량이 선형으로 늘어난다.
+2. **7일**
+   - 클러스터링 lookback(24~72시간)에는 충분하다.
+   - 평가셋 추출(5~7일치 필요), 라벨링, 같은 클러스터로 생성·판정을 다시 돌리는 실험 한 사이클을 담기에는 빠듯하다.
+3. **30일 (채택)**: 평가셋 한 번을 뽑고, 라벨링하고, 재생성 실험까지 끝낼 여유가 있다. 그러면서 "본문은 한 달 안에 지운다"는 상한을 둔다.
+4. **본문을 저장하지 않음(처리 직후 폐기)**
+   - 임베딩, 생성, 재시도, 판정기의 원문 발췌가 같은 본문을 여러 번 읽는다.
+   - 매번 다시 내려받아야 해서 언론사 서버 부하와 실패 지점이 늘어난다.
+   - 기각.
+
+### 3. 기한이 지난 본문의 처리
+1. **행 삭제**
+   - `news_letter`와 클릭 로그가 기사를 참조한다.
+   - 중복 판정용 해시도 함께 사라진다.
+   - 기각.
+2. **본문만 NULL, 나머지 유지 (채택)**
+   - 해시·길이·제목·URL·발행시각·임베딩은 남긴다.
+   - 해시가 남으므로 URL만 바뀐 재수집 기사를 계속 중복으로 판정할 수 있다.
+   - 임베딩은 텍스트 표현이 아니라서 남긴다. 다만 한계 절의 역변환 위험을 참고한다.
+3. **본문을 암호화해 따로 보관**
+   - 키 관리 부담이 생긴다.
+   - 보존 기한을 사실상 늘리는 것과 같다.
+   - 기각.
+
+## 결정
+
+### 출처 표 (`ai_workspace/config/sources.py`)
+| 출처 | 태그 | 재배포 | 근거 (확인일) |
+|---|---|---|---|
+| 상업 언론사 8곳 | `all-rights-reserved` | 불가 | RSS 채널 저작권 표시 또는 표시 없음, 이용허락 없음 (2026-09-26) |
+| 정책브리핑 (`KoglType`=1인 기사만) | `kogl-1` | 가능, 출처 표시 조건 | data.go.kr 데이터셋 이용허락범위, korea.kr 저작권정책 (2026-09-26) |
+| 표에 없는 출처 | `unknown` | 불가 (fail closed) | — |
+
+`Settings.RSS_FEEDS`의 `(strategy, url)` 튜플 모양은 바꾸지 않았다. 수집기, 본문 추출기, 진행 중인 다른 브랜치 코드가 이 튜플을 그대로 언패킹한다. 대신 언론사 이름 기준의 별도 표에 태그를 둔다. 설정된 모든 RSS 출처에 명시적 판정이 있는지는 `tests/test_source_licenses.py`가 확인한다.
+
+### 저장·노출·공개 범위
+| 항목 | 상업 언론사 | 정책브리핑(공공누리 제1유형) |
+|---|---|---|
+| DB 본문 | 수집 후 30일까지. 이후 NULL로 비우고 sha256·길이는 남긴다 | 기한 없음 |
+| DB 제목·URL·발행시각·임베딩 | 유지 | 유지 |
+| 저장소·리포트·로그 | 기사 id, URL, 본문 sha256, 건수·길이 같은 집계만. 설명에 꼭 필요하면 한 문장 이내 인용 + 출처 | 출처를 표시하면 본문 인용 가능 |
+| 공개 평가 데이터셋 | 불가. id·URL 목록만 | 가능. 출처 표시 "출처: 대한민국 정책브리핑(www.korea.kr), 공공누리 제1유형"과 원문 URL을 행마다 붙인다. 사진·이미지 제외 |
+| 데모·API 응답 | 기사 제목, 언론사, 원문 링크, 우리가 생성한 뉴스레터까지 | 같음 |
+| 외부 LLM API 입력 | 생성·판정 처리 목적에 한해 보낸다. 호출 메트릭 로그에는 토큰 수·지연만 남기고 본문은 남기지 않는다(`core/llm_metrics.py`) | 같음 |
+
+### 정책브리핑 수집 (`ai_workspace/crawler/policy_briefing.py`)
+- 인증키는 환경변수 `DATA_GO_KR_SERVICE_KEY`로 받는다(포털의 "일반 인증키(Decoding)"). 키가 없으면 수집을 건너뛰고 에러로 취급하지 않는다. 키는 로그와 예외 메시지에 남기지 않는다. 네트워크 예외 메시지에는 키가 든 URL이 들어 있어서 예외 타입 이름만 남기고 `from None`으로 원래 예외를 끊는다.
+- 오늘 포함 최근 N일을 3일 단위 창으로 나눠 호출한다. 네트워크 오류와 5xx만 지수 백오프로 재시도한다. API 에러 코드(인증키, 날짜 범위, 날짜 형식)는 다시 호출해도 같은 결과라 바로 `PolicyBriefingAPIError`로 올린다.
+- 저장 조건: 기사 상태(`ContentsStatus`)가 등록·수정, `KoglType`이 제1유형, 원문 URL 있음, 엠바고 해제, 정제 후 본문이 기존 저품질 필터(`is_drop_article`, 350자 등)를 통과.
+  - `ContentsStatus`는 필드 이름만 명세에서 확인했고 값의 뜻은 실제 응답으로 확인하지 못했다. I(등록)·U(수정)만 저장한다. D(삭제)는 `withdrawn`, 그 밖의 값이나 빈 값은 `unknown_status`로 세고 저장하지 않는다(fail closed).
+  - `KoglType` 표기 형식이 명세에 없다. 그래서 숫자가 정확히 하나 들어 있을 때만 그 유형으로 인정하고, 비었거나 애매하면 제외한다.
+- HTML 본문 정제:
+  - 이미지, figure, figcaption, 스크립트를 지운다. 사진·이미지는 공공누리 대상이 아니다.
+  - 블록 요소 경계에만 공백을 넣는다. 인라인 태그 경계에 공백을 넣으면 "정부는" 같은 어절이 쪼개진다.
+  - 결과는 다른 언론사 본문과 같은 형태(모든 공백을 한 칸으로)다.
+- 본문을 API가 주므로 본문 추출(Stage2)을 거치지 않고 `news_raw`에 바로 넣는다. press 행 `정책브리핑`은 시드에 추가했고, 기존 DB에서는 수집 시 get-or-create로 만든다.
+- INSERT는 스키마를 보고 만든다. 수집 1회마다 `information_schema.columns`를 한 번 조회한다.
+  - 수집 런타임 리비전(`f87f7378672e`·`d48994e9d26e`)이 적용된 스키마: `raw_news_extract_status='ok'`, `raw_news_extracted_at=now()`, `raw_news_content_sha256`을 함께 넣는다. 해시는 본문 추출기와 같은 함수(`content_extractor.extractor.content_sha256`, UTF-8 본문의 sha256 hex, 마이그레이션 `d48994e9d26e`의 SQL 식과 같은 값)로 만든다. 본문 추출기는 상태가 비어 있는 행을 원문 페이지에서 다시 내려받아 본문을 덮어쓰는데, 이렇게 넣은 행은 대상이 아니다. 따라서 API 본문(사진 캡션이 빠진 공공누리 텍스트)이 웹 추출 결과로 바뀌지 않는다.
+  - 이 스키마에는 `'ok'` 행끼리 본문 해시가 유일해야 하는 부분 unique 인덱스가 있다. 대상을 `raw_news_url`로 좁히면 본문이 같은 기사 한 건 때문에 배치 전체가 롤백된다. 그래서 대상 없는 `ON CONFLICT DO NOTHING`을 쓴다. URL이나 본문이 이미 있는 행은 `skipped`로 센다.
+  - 아직 그 리비전으로 올리지 않은 DB(`e725a62ffef1`까지): 기본 6개 컬럼만 넣고 `ON CONFLICT (raw_news_url) DO NOTHING`. 재실행해도 안전하다.
+- 호출 위치
+  - compose 런타임: `jobs.run ingest`의 rss 단계가 RSS 다음에 부른다(`jobs/tasks/ingest.py`). 스케줄러의 `--stages rss,extract`에 그대로 포함된다. 인증키는 compose `.env`의 `DATA_GO_KR_SERVICE_KEY`를 워커 환경으로 넘긴다(LLM 키 파일 `AI_ENV_FILE`과 별개).
+  - `main.py` 경로: `Stage1_RSSCollection`이 RSS 다음에 부른다.
+  - 두 곳 모두 이 출처가 실패해도 RSS 결과는 버리지 않는다. 에러는 stats(`policy_briefing`)에 남기고, ingest 잡은 경고를 하나 남긴다.
+
+### 30일 본문 보존
+상업 언론사 본문은 `raw_news_crawled_at` 기준 30일이 지나면 비운다. 정책브리핑(재배포 가능 출처)은 대상이 아니다. 구현은 아래 TODO 설계대로 한다.
+
+## 증거
+- 공식 페이지 확인(모두 접근일 2026-09-26): 위 컨텍스트의 korea.kr 공지·저작권정책, data.go.kr 데이터셋 페이지(swagger 명세 포함), 공공누리 제1유형 안내.
+- 엔드포인트 생존 확인(인증키 없이 호출해 응답 코드만 확인, 2026-09-26):
+  - `policyNewsService2/policyNewsList2`: 401 `SERVICE_KEY_IS_NULL`
+  - 없는 경로: 400 `NO_OPENAPI_SERVICE_ERROR`
+  - korea.kr `/rss/*.xml` 5개 주소: 전부 404
+- RSS 채널 저작권 표시: 2026-09-26에 `feedparser`로 8개 피드의 채널 `copyright` 요소를 읽었다(값은 컨텍스트 절).
+- 본문 저장량: 컨텍스트 절 표. 로컬 compose DB에서 `default_transaction_read_only=on` 연결의 SELECT로 집계했다. 본문 텍스트는 출력하지 않았다.
+- 테스트:
+  - `tests/test_policy_briefing_source.py` 34건. 파싱, 성공 코드 표기 3가지, 두 종류의 에러 봉투, XML이 아닌 응답, 날짜 창, 공공누리 유형 정규화, HTML 정제, 선별 통계(삭제·상태 불명 기사 제외 포함), 키 비노출, 5xx 재시도, 키 없을 때 no-op, INSERT, 스키마별 INSERT 컬럼(마이그레이션 전 / 현재 head), Stage1 연결을 확인한다. XML은 명세 필드 이름으로 만든 합성 응답이다.
+  - `tests/test_jobs_tasks.py`의 ingest 3건: rss 단계가 정책브리핑 결과를 stats에 남김, 정책브리핑 실패 시 RSS 결과 유지 + 경고 1건, 키가 없을 때 경고 없음.
+  - `tests/test_source_licenses.py` 5건: 설정된 모든 RSS 출처에 판정이 있음, 상업 언론사는 재배포 불가, 모르는 출처는 fail closed, 정책브리핑 수집기의 출처는 재배포 가능, 재배포 가능 출처에는 모두 출처 표시 문구가 있음.
+  - `tests/integration/test_policy_briefing_insert.py`
+    - 1건: 실제 `news_raw`/`press` 스키마에서 본문 저장과 재실행 멱등성을 확인한다. 처음 작성할 때(head `e725a62ffef1`) 이 작업 전용 임시 pgvector 컨테이너에서 `alembic upgrade head` 후 통합 테스트 16건 전부 통과(수집 중인 compose DB는 건드리지 않음).
+    - 1건: 현재 head에 추출 상태·해시 컬럼과 부분 unique 인덱스가 있는지 먼저 확인한다. 그다음 상태 `ok`·추출 시각·해시(SQL 식과 일치)가 채워지는지, 본문이 같은 두 번째 URL이 배치를 롤백시키지 않고 건너뛰어지는지 본다.
+    - `main` 병합 뒤의 두 건은 로컬에서 돌리지 않았다(로컬 DB를 띄우지 않음). CI integration 잡(`alembic upgrade head` 후 실행)에서 확인한다.
+
+## 결과와 한계
+- **정책브리핑은 아직 한 건도 수집하지 않았다.**
+  - 인증키가 필요하다. 사용자가 공공데이터포털에서 데이터셋 15095335를 활용신청(자동승인)하고 `DATA_GO_KR_SERVICE_KEY`에 넣어야 한다.
+  - 첫 실행 전까지 다음 다섯 가지는 추정이다: 날짜 파라미터 형식(YYYYMMDD), 성공 `resultCode` 값(숫자가 모두 0이면 성공으로 처리), `KoglType` 표기, `ContentsStatus` 값(I/U/D), 날짜 창 경계(3일을 양끝 포함으로 해석).
+  - 틀리면 97/98 에러나 "제1유형 0건"·`unknown_status` 통계로 바로 드러난다.
+  - 정책뉴스는 정부 발표 위주다. 상업 언론 기사와 주제·문체 분포가 다르다. 공개 부분집합에서 얻은 수치를 전체 한국어 뉴스 성능으로 일반화하지 않는다. 이 부분집합은 "재현 가능한 공개 평가"용이다.
+- **30일 보존의 영향**
+  - 수집일로부터 30일이 지난 상업 언론 기사로는 생성·판정을 다시 돌릴 수 없다.
+  - 사전 등록 평가는 표본 추출 후 30일 안에 끝내야 한다. 더 오래 재현해야 하는 평가는 정책브리핑 부분집합으로 만든다.
+  - 예외(평가 표본 보존 연장)는 두지 않았다. 필요해지면 기한과 대상을 이 ADR에 추가하는 방식으로만 연다.
+- **저장량 추정**(가정 포함)
+  - 본문 평균 4,050 bytes(실측) × 하루 유입 R건 × 30일 = 30일 보존분.
+  - R=300~600(가정, 정상 상태 일일 유입 미측정)이면 36~73MB다. 무기한 보존이면 연 0.44~0.89GB가 된다(본문만, TOAST 압축 전).
+  - `job_runs`에 7일치가 쌓이면 R을 실측값으로 바꾼다.
+- **남는 위험**
+  - 임베딩을 남긴다. 임베딩에서 원문을 일부 복원하는 역변환 공격이 연구돼 있으므로 임베딩도 공개하지 않는다.
+  - 정책브리핑의 나중 수정·삭제를 이미 저장한 행에 반영하지 않는다. 처음 본 상태로 넣고 이후에는 `ON CONFLICT DO NOTHING`으로 건너뛴다. 새로 받는 삭제(D) 기사만 저장하지 않는다. 저장한 행을 삭제 표시에 맞춰 지우는 동작은 넣지 않았다. 처음 작성할 때의 이유는 "본문을 비우면 본문 추출기가 원문 페이지를 다시 내려받는다"였다. `main` 병합 후 추출기는 추출 상태로 대상을 고르므로 이 이유는 없어졌다. 남은 이유는 두 가지다. 삭제·수정된 기사가 API에서 어떻게 보이는지(같은 `NewsItemId`가 뒤의 날짜 창에 D로 다시 나오는지)를 인증키 없이 확인할 수 없다. 그리고 `raw_news_content`가 아직 NOT NULL이다. 이 DB는 로컬에만 있으므로, 위험이 실제로 생기는 지점은 공개 반출이다. 그래서 공개 평가 부분집합을 반출하는 단계는 반출 직전에 API로 각 기사의 `ContentsStatus`·`KoglType`을 다시 조회하고, 삭제됐거나 제1유형이 아니게 된 기사를 뺀다. 반출 스크립트는 아직 없고, 만들 때 이 조건을 넣는다.
+  - 제목은 기한 없이 남긴다. 표시할 때는 원문 링크를 함께 둔다.
+  - 정책브리핑 기사별 공공누리 유형(`KoglType`)은 수집할 때 거르기만 하고 저장하지 않는다. `news_raw` 행이 제1유형이라는 사실과 이어지는 연결은 press 이름 `정책브리핑`뿐이다. 그래서 수집 당시의 행별 라이선스 상태를 나중에 증명할 수 없다. API에서 어떤 기사의 유형이 바뀌어도 저장된 행은 계속 제1유형으로 취급된다. 보완 계획은 두 가지다. 첫째, 아래 보존 마이그레이션에 `raw_news_kogl_type smallint NULL` 컬럼을 함께 넣는다. 그러면 수집기의 스키마별 INSERT가 같은 방식으로 이 컬럼을 채운다. 둘째, 공개 반출 단계는 행마다 `config.sources`의 출처 표시를 찍고, 반출 직전 API 재조회로 유형을 다시 확인한다.
+  - 생성 뉴스레터가 원문 문장을 얼마나 그대로 옮기는지는 측정하지 않았다. 생성 프롬프트와 게이트에 인용 길이 상한이 아직 없다. 문장별 출처를 다는 생성 방식을 정할 때 다룬다(후속 ADR, 번호 미정).
+  - 백업을 만들면 백업도 30일 보존을 따라야 한다. 지금은 DB 백업 절차가 없다.
+  - 외부 LLM 프로바이더가 입력을 어떻게 쓰는지(보관·학습 여부)는 이 ADR에서 확인하지 않았다.
+
+### TODO: 본문 보존 잡 (구현 대기)
+**처음 작성할 때 넣지 않은 이유** (2026-09-26, 이 ADR의 기준이 `9aa235e`였을 때)
+- 그때 `main`의 `news_raw`에는 본문 추출 상태·본문 해시 컬럼이 없었다. 두 컬럼은 수집 런타임 PR(#8)의 마이그레이션 `f87f7378672e`, `d48994e9d26e`가 추가한다.
+- 그때 `main`의 본문 추출기는 `raw_news_content IS NULL OR = ''`인 행을 다시 내려받았다. 본문을 비우면 30일 지난 기사를 매번 다시 받는 루프가 생긴다.
+- `main`에서 따로 해시 컬럼을 추가하면 같은 컬럼을 두 번 만들게 되고, Alembic head가 여러 개가 된다.
+
+**지금 상태**: PR #8이 2026-09-26 `main`에 병합돼 위 세 가지 선행 조건은 풀렸다. 추출기는 추출 상태로 대상을 고른다(`WHERE raw_news_extract_status IS NULL OR 재시도 여지`). Alembic head는 그때 `d48994e9d26e` 하나였고, 요청 시점 추천 브랜치(ADR 0015) 위에 쌓은 지금은 `8b7f830013b7` 하나다. 그래도 이 브랜치에서는 잡을 넣지 않았다. 켜는 순간 본문을 지우기 시작하는 잡이라서, 켜는 시점(로컬 수집 시작 2026-09-25 기준 첫 삭제는 2026-10-25 무렵)과 평가 표본 일정을 사용자가 정한 다음에 넣는다. 다음 작업으로 아래를 넣는다.
+
+1. 마이그레이션(`down_revision` = 넣을 때의 head. 이 브랜치가 쌓인 순서대로 병합되면 `8b7f830013b7`)
+   - `raw_news_content`의 NOT NULL을 푼다. 실측: 현재 NOT NULL이다.
+   - `raw_news_content_length integer NULL`, `raw_news_content_purged_at timestamptz NULL`을 추가한다.
+   - 정책브리핑 행의 라이선스 상태를 남기려고 `raw_news_kogl_type smallint NULL`도 추가한다("남는 위험" 참고).
+   - 추출 상태 CHECK 제약은 바꾸지 않는다. 비운 행은 상태 `ok`를 유지하고 `purged_at`으로 구분한다. 부분 unique 인덱스 `uq_news_raw_content_sha256_ok`도 그대로 동작한다.
+2. 잡 `jobs/tasks/retention.py` (`python -m jobs.run retention --days 30`, 하루 1회). 5,000행 배치로 반복하며 한 번에 실행하는 문장은 다음과 같다.
+   ```sql
+   UPDATE news_raw n
+   SET raw_news_content_sha256 = COALESCE(
+           n.raw_news_content_sha256,
+           CASE WHEN n.raw_news_content <> ''
+                THEN encode(sha256(convert_to(n.raw_news_content, 'UTF8')), 'hex') END),
+       raw_news_content_length = char_length(n.raw_news_content),
+       raw_news_content = NULL,
+       raw_news_content_purged_at = now()
+   FROM press p
+   WHERE p.press_id = n.press_id
+     AND n.raw_news_content IS NOT NULL
+     AND n.raw_news_crawled_at < now() - make_interval(days => %(days)s)
+     AND p.press_name <> ALL(%(redistributable_presses)s)   -- config.sources에서 재배포 가능 출처
+   ```
+   - 해시는 추출기가 저장한 값(`content_sha256(cleaned)`)을 우선 쓴다. 없을 때만 SQL로 계산하는데, 같은 UTF-8 sha256이라 값이 같다.
+   - 멱등이다. 두 번째 실행은 `raw_news_content IS NOT NULL` 조건에 걸려 0행을 갱신한다.
+   - 갱신 건수와 비운 바이트 수를 `job_runs.stats`에 남긴다.
+3. 본문을 읽는 곳의 확인
+   - 임베딩·클러스터링 쿼리는 이미 `IS NOT NULL AND <> ''`로 거른다.
+   - 평가셋 추출기(`evaluation/llm/evalset.py`)는 지금 NULL 본문을 빈 문자열로 바꿔 그대로 쓴다. 본문이 NULL인 기사는 표본에서 빼고 그 수를 보고하도록 고쳐야 한다.
+   - 요청 시점 추천(`backend/app/recsys`), 시뮬레이터(`sim/`), 배치 잡(`jobs/`)은 `raw_news_content`를 읽지 않는다. 뉴스레터와 임베딩만 쓴다(2026-10-06 `git grep raw_news_content`로 확인. `backend/app`에서는 모델 정의에만 나온다).
+4. 통합 테스트: 다음 행을 두고 잡을 두 번 실행한다.
+   - 상업 언론 31일 전: 비워지고, 해시·길이가 남는다.
+   - 상업 언론 29일 전: 그대로다.
+   - 정책브리핑 31일 전: 그대로다.
+   - `dropped` 상태의 빈 본문: NULL이 되고 해시는 NULL이다.
+   - 두 번째 실행: 0행을 갱신한다.
+
+### 수집 런타임(PR #8) 병합 후 처리한 것
+- 정책브리핑 행의 추출 상태·시각·해시는 위 "스키마를 보고 만드는 INSERT"가 채운다. 통합 테스트는 head에 있는 컬럼·인덱스를 그대로 쓴다.
+- `jobs.run ingest`의 rss 단계에 정책브리핑 수집을 연결하고, compose 워커에 인증키 환경변수를 넘겼다(위 "호출 위치").
+
+## 통합 기록 (2026-10-06, 결정 변경 없음)
+이 브랜치의 커밋을 시뮬레이터 브랜치(`feat/user-simulator-loadtest`) 위에 순서대로 다시 쌓았다. 그 아래에는 ADR 0007·0013·0015·0017·0019 브랜치가 있다.
+
+1. **옮긴 커밋과 옮기지 않은 커밋.** 원래 브랜치는 `9aa235e`에서 갈라져 중간에 `main`(`dad8da2`)을 병합한 이력이었다(병합 커밋 `c561b0b`). 병합 커밋은 옮기지 않고 이 브랜치 고유의 커밋 27개를 순서대로 얹었다. 그중 2개는 얹으면 내용이 비어서 뺐고 25개가 남았다.
+   - `847c8bf`(죽은 설정 `MIN_NEWSLETTER_SCORE` 삭제, `MIN_CLUSTER_CONFIDENCE`에 미사용 표시): `main`의 PR #9(`7267029`)가 같은 삭제와 표시를 이미 했다.
+   - `6c90d87`(`MIN_CLUSTER_CONFIDENCE` 삭제): ADR 0009가 이 설정을 ClusterEvaluator confidence ROC 결과에 따라 게이트로 연결하는 규칙을 사전 등록했다. 사전 등록된 규칙이 가리키는 설정이라 지우지 않는다. 원래 브랜치의 병합 커밋도 같은 이유로 `main` 쪽을 남겼다.
+   - 그래서 `ai_workspace/config/settings.py`는 이 브랜치에서 바뀌지 않는다.
+2. **충돌 해소.** `docs/adr/README.md`는 앞선 브랜치의 행(0007, 0013, 0015, 0017, 0019)과 이 ADR의 행을 번호순으로 합쳤다. ADR 0003의 한계 절은 앞선 브랜치가 더한 두 항목(조기 종료 아티팩트, lambdarank 근거의 한계)을 그대로 두고 상수 피처 항목만 이 브랜치의 문장으로 바꿨다. `.gitignore`와 `tests/test_jobs_tasks.py`는 자동으로 합쳐졌다.
+3. **Alembic.** 이 브랜치는 리비전을 더하지 않는다. head는 앞선 브랜치의 `8b7f830013b7` 하나다(`backend/`에서 오프라인 `alembic heads`). 그 리비전은 `news_raw`를 바꾸지 않으므로, 정책브리핑 INSERT가 보는 컬럼과 부분 unique 인덱스는 `f87f7378672e`·`d48994e9d26e`가 만든 그대로다.
+4. **수집 경로.** 다시 쌓은 뒤에도 `jobs/tasks/ingest.py`의 rss 단계가 RSS 결과를 stats에 넣은 다음 정책브리핑 수집을 예외를 잡는 함수로 부른다. INSERT는 추출 상태 `ok`·추출 시각·본문 해시를 채운다. 앞선 브랜치는 `jobs/tasks/ingest.py`와 본문 추출기(`crawler/content_extractor/`)를 건드리지 않았다.
+5. **테스트.** 로컬(macOS, Python 3.11, CI `test` 잡과 같은 설치 순서, `nice -n 19`, 스레드 2)에서 저장소 전체 단위 테스트는 924 passed, 18 skipped다. 건너뛴 것은 EB-NeRD demo 데이터 없음 15, Linux 전용 1, 배치 전용 계약 테스트 1, Locust 스모크 1이다. 앞선 브랜치 끝의 873건에 이 브랜치의 51건이 더해졌다: `test_policy_briefing_source.py` 34, `test_source_licenses.py` 5, `test_tone_converter_summary_key.py` 7, `test_feature_columns_contract.py` 2, `test_jobs_tasks.py`의 ingest 3.
+   - 재실행 대기(CI): `pytest -q -m integration tests/`. 수집되는 52건 가운데 이 브랜치의 것은 `tests/integration/test_policy_briefing_insert.py` 2건이고, `8b7f830013b7`까지 올린 스키마에서 돈다. 로컬에서는 DB를 띄우지 않아 돌리지 않았다.
+6. **앞선 브랜치의 재현 리포트.** 상수 피처 2개 제거는 팀 베이스라인 재현 하네스가 실행하는 current 엔진 코드를 바꾼다. 그 영향과 표본 대조 결과는 ADR 0007의 증거 "옮긴 뒤의 출처"에 적었다.
+7. **없는 ADR 번호 참조.** "남는 위험"의 문장별 출처 항목이 아직 없는 ADR을 번호로 가리키고 있어 번호를 뺐다. 그 번호의 파일이 없고 번호 배정도 정해지지 않았다.

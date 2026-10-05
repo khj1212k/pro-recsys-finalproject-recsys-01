@@ -25,7 +25,9 @@ def insert_initial_press_data():
         '국민일보',
         '세계일보',
         '전자신문',
-        'AI타임스'
+        'AI타임스',
+        # RSS가 아니라 공공데이터포털 Open API로 수집한다(crawler/policy_briefing.py, ADR 0023)
+        '정책브리핑',
     ]
 
     for press_name in press_list:

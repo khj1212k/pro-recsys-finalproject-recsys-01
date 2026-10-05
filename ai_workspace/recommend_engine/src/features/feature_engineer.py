@@ -151,8 +151,7 @@ class FeatureEngineer:
             # ---------------------------------------------------------
             # 4. User Meta Features
             # ---------------------------------------------------------
-            row['user_age_band'] = user_profile.age_band_idx
-            row['user_gender'] = user_profile.gender_idx
+            # (구) user_age_band/user_gender는 DataLoader가 항상 0으로 채우던 상수 열이라 제거했다.
             row['user_onboarding_cnt'] = len(user_profile.onboarding_categories)
 
             features.append(row)

@@ -87,7 +87,6 @@ def main():
     
     try:
         runner.run_full_pipeline(
-            reset_db=args.reset,
             num_workers=args.workers,
             force_cpu=args.force_cpu,
             limit=args.limit,

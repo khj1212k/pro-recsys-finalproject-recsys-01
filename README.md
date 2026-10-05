@@ -1,207 +1,157 @@
-<p align="center">
-  <img src="https://img.shields.io/badge/🗞️_AI_Personalized-Newsletter-4285F4?style=for-the-badge&logo=google-news&logoColor=white" alt="AI Newsletter"/>
-</p>
+# AI 개인화 뉴스레터 추천 시스템
 
-<h1 align="center">📨 AI 개인화 뉴스레터 추천 시스템</h1>
+한국 언론사 RSS 기사를 모아 같은 사건끼리 묶고, LLM으로 사건별 뉴스레터를 쓰고, 사용자별로 순위를 매겨 보여 주는 파이프라인이다.
 
-<p align="center">
-  <b>LLM + 클러스터링 + 추천시스템이 결합된 End-to-End 뉴스레터 자동 생성 플랫폼</b>
-</p>
+[![CI](https://github.com/khj1212k/pro-recsys-finalproject-recsys-01/actions/workflows/ci.yml/badge.svg)](https://github.com/khj1212k/pro-recsys-finalproject-recsys-01/actions/workflows/ci.yml)
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white"/>
-  <img src="https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=black"/>
-  <img src="https://img.shields.io/badge/FastAPI-0.100+-009688?style=flat-square&logo=fastapi&logoColor=white"/>
-  <img src="https://img.shields.io/badge/PostgreSQL-15+-336791?style=flat-square&logo=postgresql&logoColor=white"/>
-  <img src="https://img.shields.io/badge/LLM-HyperCLOVA_X-00C73C?style=flat-square"/>
-  <img src="https://img.shields.io/badge/Airflow-2.0+-017CEE?style=flat-square&logo=apache-airflow&logoColor=white"/>
-</p>
+이 저장소는 네이버 부스트캠프 AI Tech 8기 RecSys 트랙 5인 팀 프로젝트(2026.01–02)의 fork다. 팀 프로젝트가 끝난 시점은 `team-final` 태그(`ef7c176`, 2026-02-10)이고, 그 뒤 커밋은 김형준([@khj1212k](https://github.com/khj1212k))의 개인 작업이다. 팀 시절 설명과 팀원별 담당은 [아래 절](#팀-프로젝트-시절-202601-02)에 원래 표 그대로 남겼다.
+
+배포된 서비스가 아니다. 실사용자와 실사용 로그는 없다.
 
 ---
 
-## 🎯 프로젝트 개요
+## 현재 상태 (2026-10-06 기준)
 
-매일 쏟아지는 수백 개의 뉴스 기사를 **AI가 자동으로 분류·요약**하여, 사용자의 관심사에 맞춘 **개인화 뉴스레터**로 제공하는 서비스입니다.
-
-### 💡 해결하는 문제
-| 문제 | 솔루션 |
-|------|--------|
-| 📰 **정보 과부하** | 유사 기사를 클러스터링하여 핵심 내용만 요약 |
-| 🔄 **중복 콘텐츠** | 같은 이슈를 다룬 여러 기사를 하나의 뉴스레터로 통합 |
-| 🎯 **개인화 부재** | 클릭 이력 기반 임베딩으로 맞춤형 추천 |
-| ⚖️ **편향 우려** | 다양한 언론사 조합으로 균형 잡힌 시각 제공 |
-
----
-
-## ✨ 주요 기능
-
-### 1. 🤖 LLM 기반 자동 뉴스레터 생성
-- **LangGraph 워크플로우**: 평가-생성-재시도의 반복 루프로 품질 보장
-- **2-Stage 생성**: 본문 생성 → 메타데이터(제목/요약) 생성
-- **문체 변환**: 딱딱한 뉴스 → 친근한 대화체 + 이모지 🎉
-
-### 2. 📊 지능형 클러스터링
-- **HDBSCAN**: 밀도 기반 클러스터링으로 자동 주제 분류
-- **품질 평가**: LLM이 클러스터 일관성 검증 및 아웃라이어 제거
-- **Split 로직**: 혼합 주제 클러스터 자동 분리
-
-### 3. 🎯 개인화 추천 시스템
-- **LightGBM + MMR**: 클릭 확률 예측 + 다양성 확보 Reranking
-- **사용자 임베딩**: 클릭 이력 + 선호 뉴스레터 기반 벡터 (Time Decay 적용)
-- **Cold Start 대응**: 신규 유저를 위한 인기 뉴스레터 제공
-- **평가 지표**: MRR, nDCG 자동 산출
-
----
-
-## 🏗️ 시스템 아키텍처
-
-<p align="center">
-  <img src="assets/architecture.png" alt="System Architecture" width="800"/>
-</p>
-
----
-
-## 🛠️ 기술 스택
-
-### AI Pipeline
-| 기술 | 용도 |
-|------|------|
-| **LangGraph** | 상태 기반 워크플로우 오케스트레이션 |
-| **BGE-M3** | 다국어 임베딩 (1024차원) |
-| **HDBSCAN** | 밀도 기반 클러스터링 |
-| **HyperCLOVA X** | 한국어 뉴스레터 생성 |
-| **LightGBM** | 클릭 확률 예측 (Ranking) |
-| **Trafilatura** | 웹 본문 추출 |
-
-### Backend
-| 기술 | 용도 |
-|------|------|
-| **FastAPI** | RESTful API 서버 |
-| **PostgreSQL** | 관계형 데이터베이스 |
-| **pgvector** | 벡터 유사도 검색 |
-| **Alembic** | DB 마이그레이션 |
-| **Apache Airflow** | DAG 기반 스케줄링 |
-
-### Frontend
-| 기술 | 용도 |
-|------|------|
-| **React** | UI 라이브러리 |
-| **TypeScript** | 타입 안정성 |
-| **Vite** | 빌드 도구 |
-| **Tailwind CSS** | 스타일링 |
-| **shadcn/ui** | 컴포넌트 라이브러리 |
-
----
-
-## 📁 프로젝트 구조
-
-```
-pro-recsys-finalproject-recsys-01/
-├── ai_workspace/              # 🤖 AI 파이프라인
-│   ├── core/                  # 핵심 비즈니스 로직
-│   │   ├── embedder.py        # BGE-M3 임베딩
-│   │   ├── llm_client.py      # LLM API 클라이언트
-│   │   ├── clustering/        # 클러스터링 모듈
-│   │   └── reconstruction/    # 뉴스레터 생성
-│   ├── workflow/              # LangGraph 워크플로우
-│   ├── crawler/               # RSS 수집 & 본문 추출
-│   ├── recommend_engine/      # 추천 시스템
-│   └── pipeline/              # 스테이지 오케스트레이션
-│
-├── backend/                   # 🖥️ FastAPI 서버
-│   ├── app/
-│   │   ├── api/               # API 엔드포인트
-│   │   ├── models/            # SQLAlchemy 모델
-│   │   └── services/          # 비즈니스 로직
-│   ├── airflow/               # DAG 정의
-│   └── alembic/               # DB 마이그레이션
-│
-└── frontend/                  # 🎨 React 웹앱
-    └── src/
-        ├── components/        # UI 컴포넌트
-        ├── pages/             # 페이지 컴포넌트
-        ├── hooks/             # 커스텀 훅
-        └── services/          # API 클라이언트
+```mermaid
+flowchart LR
+    A[RSS 수집<br/>8개 언론사] --> B[본문 추출<br/>trafilatura + 언론사별 정제]
+    B --> C[BGE-M3 임베딩<br/>1024차원, pgvector]
+    C --> D[HDBSCAN<br/>+ 혼합 클러스터 분리]
+    D --> E[LangGraph<br/>클러스터 평가 → 생성 → 사실성 게이트<br/>→ 뉴스레터 평가 → 문체 변환 → 드리프트 게이트]
+    E --> F[(PostgreSQL)]
+    F --> G[LightGBM LambdaRank + MMR<br/>일일 배치]
+    F --> R[요청 시점 추천<br/>후보 합집합 → 휴리스틱 스코어 → MMR]
+    G -. 폴백 .-> R
+    R --> H[FastAPI] --> I[React]
 ```
 
+그림은 코드에 있는 경로다. compose 스케줄러가 지금 돌리는 잡은 수집, 임베딩, 인기도, 클러스터 통계, 일일 리포트다. `generate`, `user_embed`, `train`, `batch_fallback` 잡은 `docker/crontab`에서 꺼져 있다.
+
+| 영역 | 지금 있는 것 | 아직 없는 것 |
+|---|---|---|
+| 수집 | RSS UPSERT, 재시도, 언론사별 본문 정제, docker compose + supercronic 잡 런타임과 실행 기록(`job_runs`), 본문 해시 중복 제거 ([ADR 0006](docs/adr/0006-runtime-compose-and-scheduler.md)), 정책브리핑 Open API 수집기 ([ADR 0023](docs/adr/0023-data-sources-copyright-retention.md)) | 7일 연속 수집 성공률(ADR 0006에서 재확인 예정), 정책브리핑 실제 수집(인증키 발급 전이라 0건) |
+| LLM | OpenAI 호환 어댑터 하나로 Gemini·Upstage·OpenAI 호출, 요청 타임아웃 60초·호출당 deadline 180초, 킬 스위치 ([ADR 0005](docs/adr/0005-llm-provider-abstraction.md)) | 모델 선정 결과(평가 프로토콜과 선정 규칙만 사전 등록, [ADR 0009](docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md)), `main`에서 실데이터로 끝까지 돈 생성 기록 |
+| 생성 품질 | LangGraph 안의 결정론적 사실성 게이트·문체 드리프트 게이트와 judge v2 (`ai_workspace/core/faithfulness.py`, [ADR 0010](docs/adr/0010-faithfulness-gate-and-judge-v2.md), 차단 유형·임계값은 잠정값), 클러스터링 지표 함수(`evaluation/clustering/metrics.py`) | 사람 라벨로 보정한 품질·사실성 수치, 실제 생성물로 잰 게이트 차단율 |
+| 추천(배치) | 팀 시절 LightGBM + MMR에 7월 셀프 리뷰 수정 반영 (시점 누출·그룹 정의·시드 등, [ADR 0003](docs/adr/0003-lightgbm-mmr-for-recommendation.md)·[0004](docs/adr/0004-continue-in-fork-and-port-july-fixes.md)) | 이 서비스의 사람 클릭으로 잰 추천 성능(실사용자가 없다) |
+| 추천(요청 시점) | `GET /newsletters/today`를 API 프로세스 안에서 요청마다 계산한다. 후보 합집합 → 휴리스틱 스코어 → MMR, 시간 예산 300ms, 폴백(배치 행 → 인기 → 최신), 노출 로그 ([ADR 0015](docs/adr/0015-request-time-recommendation.md)). 단기 사용자 상태는 클릭 로그에서 요청마다 계산한다 ([ADR 0017](docs/adr/0017-short-term-state-store.md)) | 추천 품질, 배포 대상 장비와 HTTP 수준의 지연, 실제 임베딩으로 정한 휴리스틱 가중치. LightGBM 스코어러는 API 이미지에서 아직 켤 수 없다 |
+| 추천 평가 | 팀 베이스라인 재현 하네스와 오프라인 평가 프로토콜(point-in-time, 고정 정답 창, 베이스라인, 시드와 부트스트랩 신뢰구간, [ADR 0007](docs/adr/0007-recsys-offline-evaluation-protocol.md)). EB-NeRD 공개 벤치마크 하네스, point-in-time 피처 코어 `recsys_core`, ranker v2 설계와 사전 등록한 승격 규칙 ([ADR 0013](docs/adr/0013-ranker-v2-design.md)) | 한국어 데이터에서의 ranker v2 검증(서빙은 shadow부터), 팀 재현 리포트의 전체 재실행(재실행 대기) |
+| 시뮬레이터·부하 | 합성 사용자 시뮬레이터, Locust 부하 하네스, 사전 등록한 지표 타당성 격자 ([ADR 0019](docs/adr/0019-user-simulator-design-and-claim-scope.md)). 시스템 반응 지표만 보고 추천 정확도는 주장하지 않는다 | 부하 수치(재실행 대기), drift 적응 지표의 타당성 |
+| DB | pgvector 어댑터 등록, `news_raw` URL UNIQUE·timestamptz ([ADR 0008](docs/adr/0008-db-layer-pgvector-schema-and-upsert.md)), 노출 로그·모델 레지스트리 테이블과 요청 경로 인덱스 (ADR 0015) | — |
+| 데이터 정책 | 출처별 라이선스 표와 본문 보존 원칙 ([ADR 0023](docs/adr/0023-data-sources-copyright-retention.md)) | 본문 보존 기한 잡(설계만, 미구현) |
+
+LLM 호출은 HyperCLOVA X가 아니라 위 어댑터를 거친다. 팀 시절에 쓰던 HyperCLOVA X는 더 이상 쓸 수 없어서 교체했다([ADR 0005](docs/adr/0005-llm-provider-abstraction.md)).
+
+## 측정한 것과 아직 측정하지 않은 것
+
+측정했고 근거가 저장소에 있는 것:
+
+- LLM 호출 프로브(2026-09-25, 각 1회): 생성 기본 모델은 정상 응답 1.8초, 판정 기본 모델은 8.1초. 한 후보는 30초 타임아웃과 연속 503이 나서 판정 기본값에서 뺐다 — [ADR 0005 부록](docs/adr/0005-llm-provider-abstraction.md). 표본이 1회씩이라 지연 분포로 읽으면 안 된다.
+- 추론 시 사용자 히스토리 임베딩 메모이즈: 합성 데이터(사용자 300 × 뉴스 200)에서 수정 전 14.5~15.1초 → 수정 후 0.044~0.053초 — [ADR 0004](docs/adr/0004-continue-in-fork-and-port-july-fixes.md).
+- 항상 0이던 사용자 속성 피처 2개 제거 전후 LightGBM 예측이 합성 데이터에서 비트 단위로 같음. 3시드 × 열 위치 3가지 × 학습 방식 2가지(early stopping, 트리 300개 고정) — [reports/recsys/constant_feature_ablation_v1](reports/recsys/constant_feature_ablation_v1.md), [ADR 0003](docs/adr/0003-lightgbm-mmr-for-recommendation.md).
+- 팀 베이스라인 재현(팀이 남긴 합성 클릭 아카이브, 평가 유저 31명, 시드 5개): 같은 모델을 팀 방식 추론 시점과 point-in-time으로 추론하면 팀 최종 코드의 MRR이 0.8485 → 0.5636이 된다(차이 +0.2849, 95% CI [+0.1581, +0.4177]). point-in-time에서 인기도·온보딩 코사인·히스토리 코사인 베이스라인에 대한 모델 우위 신뢰구간은 없다. 절대 수치는 성능이 아니라 코드 결함이 지표를 움직이는 방향을 보는 진단이다 — [reports/recsys/team_repro_v2](reports/recsys/team_repro_v2.md), [ADR 0007](docs/adr/0007-recsys-offline-evaluation-protocol.md).
+- [EB-NeRD] 덴마크어 공개 뉴스 클릭 로그(`ebnerd_small`) 오프라인 평가: 노출 재정렬 nDCG@10이 ranker v2 0.6551 [0.6533, 0.6569], 가장 강한 베이스라인 popularity_24h 0.5992, 팀 방식 재현 0.3952다. 이 서비스의 성능이 아니다 — [reports/recsys/ebnerd_v1](reports/recsys/ebnerd_v1.md), [ADR 0013](docs/adr/0013-ranker-v2-design.md).
+- 요청 시점 추천의 요청 경로 지연: 합성 데이터를 GitHub 호스티드 러너에서 쟀고 HTTP 처리는 들어 있지 않다. 조건과 결과 JSON은 [reports/serving](reports/serving/README.md), 해석은 ADR 0015·0017에 있다.
+- [SIM] 시뮬레이터 지표 타당성 격자 v1: 사전 등록한 판정 50건 중 위반 2건(둘 다 drift 적응 지표), 보고만 하는 항목 8건. 추천 정확도 수치가 아니다 — [reports/sim/grid_v1](reports/sim/grid_v1.md), [ADR 0019](docs/adr/0019-user-simulator-design-and-claim-scope.md).
+- 단위 테스트와 pgvector 통합 테스트는 CI에서 매 푸시마다 돈다.
+
+아직 측정하지 않은 것:
+
+- 뉴스레터 품질·사실성, 클러스터링 품질(사람 라벨 필요), 이 서비스의 사람 클릭으로 잰 추천 성능, 배포 대상 장비와 HTTP 수준의 API 응답 지연, 부하 테스트 수치, 운영 비용.
+- 노트북에서 돌리지 않고 미뤄 둔 재실행은 각 ADR의 한계 절에 "재실행 대기"로 명령과 함께 적혀 있다(ADR 0007, 0013, 0015, 0019).
+- 평가 설계와 결과는 확정되는 대로 [`docs/adr/`](docs/adr/README.md)와 [`reports/`](reports/README.md)에 추가한다. README의 수치는 `reports/`의 파일에서만 옮긴다. 위 목록의 처음 두 항목(LLM 호출 프로브, 메모이즈)만 리포트 파일 없이 ADR을 근거로 둔 예외다.
+
+철회한 것:
+
+- 팀 시절 README의 추천 응답 시간·소스 다양성 수치는 산출 코드가 저장소에 없어 뺐다([fix-log #7](docs/fix-log-2026-07.md)).
+- 팀 시절 추천 엔진 문서의 오프라인 지표는 쓰지 않는다. 클릭 로그가 LLM 페르소나로 만든 합성 데이터이고, 평가 스크립트의 정답 기간이 학습 구간과 겹쳤다(추론 시점 누출). 재현 결과는 [reports/recsys/team_repro_v2](reports/recsys/team_repro_v2.md)에 있고, 팀 보고값은 그 재현으로 설명되지 않았다.
+
 ---
 
-## 🚀 실행 방법
+## 실행
 
-### 1. AI Pipeline 실행
+### 테스트
+
+`ai_workspace`와 `ai_workspace/recommend_engine`은 각각 `pyproject.toml`을 가진 설치 단위다.
+
+설치 순서와 목록은 `.github/workflows/ci.yml`의 `test` 잡이 기준이다. 아래는 그 잡을 옮긴 것이다.
+
+```bash
+uv venv --python 3.11 .venv
+PY=.venv/bin/python
+
+# 1) 평가 고정 버전 + 테스트 공통 의존성
+uv pip install --python $PY -r evaluation/requirements.txt \
+  pytest langgraph langchain-openai openai tiktoken numpy pandas scikit-learn lightgbm optuna \
+  pgvector psycopg2-binary python-dotenv sqlalchemy sqlmodel alembic feedparser requests \
+  python-dateutil trafilatura tqdm pyyaml lxml_html_clean pydantic "kiwipiepy==0.23.2" hdbscan rapidfuzz
+# 2) API 라우터 테스트용 백엔드 고정 버전
+uv pip install --python $PY "fastapi==0.117.1" httpx "python-jose==3.5.0" "passlib==1.7.4" "bcrypt==3.2.2"
+# 3) 두 설치 단위 (의존성은 위에서 넣었으므로 --no-deps)
+uv pip install --python $PY --no-deps -e ai_workspace
+uv pip install --python $PY --no-deps -e ai_workspace/recommend_engine
+# 4) 시뮬레이터 테스트
+uv pip install --python $PY locust uvicorn
+
+# DB·네트워크·벤치마크를 빼고 실행 (CI의 test 잡과 같은 범위)
+$PY -m pytest -q -m "not integration and not benchmark" tests/
+```
+
+`ai_workspace[test]`와 `recommend_engine[test]`만 설치하면 API 라우터 테스트가 fastapi를 찾지 못해 수집 단계에서 멈춘다.
+
+통합 테스트(`-m integration`)는 pgvector가 있는 PostgreSQL이 필요하다. CI는 `pgvector/pgvector` 서비스 컨테이너로 돌린다(`.github/workflows/ci.yml`).
+
+### AI 파이프라인
+
 ```bash
 cd ai_workspace
-
-# 환경 설정
-cp .env.example .env
+cp .env.example .env          # GEMINI_API_KEY, DB 접속 정보 등
 pip install -r requirements.txt
-
-# 파이프라인 실행 (전체)
-python main.py
-
-# 특정 스테이지만 실행
-python main.py --from-stage 3 --to-stage 5
+python main.py --from-stage 1 --to-stage 3   # 수집 → 본문 추출 → 임베딩
+python main.py --from-stage 4 --to-stage 5   # 클러스터링 → 뉴스레터 생성 (LLM 비용 발생)
 ```
 
-### 2. Backend 서버 실행
-```bash
-cd backend
-
-# 환경 설정
-pip install -r requirements.txt
-
-# 서버 시작
-uvicorn app.main:app --reload --port 8000
-```
-
-### 3. Frontend 실행
-```bash
-cd frontend
-
-# 의존성 설치
-npm install
-
-# 개발 서버 시작
-npm run dev
-```
-
-### 4. 테스트 실행
-`ai_workspace`와 `recommend_engine`은 각각 `pyproject.toml`을 가진 독립 설치 단위다. 개발/테스트 환경은 다음과 같이 구성한다.
+### 백엔드 · 프론트엔드
 
 ```bash
-# ai_workspace 파이프라인 설치 (editable, 테스트용)
-pip install -e "ai_workspace[test]"
-
-# BGE-M3 임베딩 모델까지 실제로 돌려야 한다면(torch 등 무거운 의존성 포함)
-pip install -e "ai_workspace[test,embed]"
-
-# 추천 엔진만 따로 설치하고 싶다면
-pip install -e "ai_workspace/recommend_engine[test]"
-
-# 저장소 루트에서 전체 테스트 실행 (pytest.ini가 tests/를 자동 탐색)
-pytest
-
-# DB/네트워크 등 외부 서비스가 필요한 테스트를 제외하고 실행 (CI와 동일)
-pytest -m "not integration"
+cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload --port 8000
+cd frontend && npm install && npm run dev
 ```
-
-각 수정사항의 원인/해결방법/검증 결과는 [`docs/fix-log-2026-07.md`](docs/fix-log-2026-07.md)에 기록되어 있다.
 
 ---
 
-## 📊 성능 지표
+## 데이터와 저작권
 
-| 항목 | 측정값 | 비고 |
-|------|--------|------|
-| 일일 처리 뉴스 | 10개 언론사 RSS 기준 일 수백~1,000건 규모 | 정확한 카운트 스크립트는 추가 예정 |
-| 뉴스레터 생성 | 클러스터 품질 필터 통과 기준 일 수십~100건 규모 | 정확한 카운트 스크립트는 추가 예정 |
-| 추천 품질 (오프라인) | `ai_workspace/recommend_engine/scripts/evaluate_results.py`로 재현 가능 | Precision@K, Recall@K, nDCG@K, MRR, Coverage 산출 (K=5,10,20) |
+- 언론사 기사 본문은 각 언론사의 저작물이다. 본문은 로컬 DB에서 처리에만 쓰고 저장소·리포트·데모에 싣지 않는다. 데모에서 보여 주는 범위는 기사 제목, 언론사, 원문 링크, 생성한 뉴스레터까지다(현재 API는 기사 본문을 내보내지 않는다).
+- 저장소와 리포트에는 기사 id, URL, 해시, 건수 같은 메타데이터만 남긴다.
+- 공개해도 되는 평가용 부분집합은 공공누리 제1유형 출처(정책브리핑)로 만든다. 출처별 조건과 보존 기한은 [ADR 0023](docs/adr/0023-data-sources-copyright-retention.md)에 있다.
 
-> ⚠️ 이전 버전에는 "추천 응답 시간 <100ms", "소스 다양성 56.4%" 수치가 있었으나, 이를 산출하는 코드가 저장소에 없어 재현 불가능함을 확인하고 제거했습니다. 응답시간/소스 다양성 측정 스크립트는 추가 개발 예정입니다.
+## 문서
+
+- [설계 결정 기록(ADR)](docs/adr/README.md) — 컨텍스트, 검토한 대안, 결정, 증거, 한계.
+- [2026-07 셀프 리뷰 수정 로그](docs/fix-log-2026-07.md)
+- [운영 런북](docs/runbook.md) — compose 잡 런타임 띄우기, 상태 확인, 킬 스위치.
+- [평가 리포트](reports/README.md)
+- [평가 모듈](evaluation/README.md)
+- [사용자 시뮬레이터와 부하 하네스](sim/README.md)
 
 ---
 
-## 🤝 팀 소개
+## 팀 프로젝트 시절 (2026.01–02)
+
+부스트캠프 AI Tech 8기 RecSys 트랙 최종 프로젝트. 아래는 팀 시절 설계를 요약한 것이고, 당시 수치 주장은 위 "철회한 것"에 따라 옮기지 않았다.
+
+- LangGraph로 클러스터 평가 → 뉴스레터 생성 → 뉴스레터 평가를 재시도 루프로 묶고, 본문 생성과 메타데이터(제목·한줄 요약·키워드) 생성을 두 번의 호출로 나눴다. 마지막에 친근한 문체로 바꾸는 단계를 뒀다.
+- HDBSCAN으로 기사를 묶고, LLM 평가로 클러스터 일관성을 확인해 이상치를 빼고, 주제가 섞인 클러스터는 둘로 나눴다.
+- 클릭 이력 임베딩(시간 감쇠)과 온보딩 카테고리로 피처를 만들어 LightGBM으로 순위를 매기고 MMR로 다양성을 섞었다. 신규 사용자에게는 인기 뉴스레터를 보여 줬다.
+- Airflow DAG로 수집과 추천 배치를 돌렸다.
+
+팀 시절 아키텍처 (당시 LLM은 HyperCLOVA X — 지금은 쓰지 않는다):
+
+<p align="center">
+  <img src="assets/architecture.png" alt="팀 시절 시스템 아키텍처" width="800"/>
+</p>
+
+### 팀 소개
 
 | 이름 | 담당 영역 | GitHub |
 |------|-----------|--------|
@@ -213,12 +163,6 @@ pytest -m "not integration"
 
 ---
 
-## 📄 라이선스
+## 라이선스
 
-이 프로젝트는 교육 및 포트폴리오 목적으로 제작되었습니다.
-
----
-
-<p align="center">
-  <b>🌟 부스트캠프 AI Tech 8기 RecSys Track - Final Project 🌟</b>
-</p>
+교육 및 포트폴리오 목적의 저장소다. 수집한 기사 본문은 저장소에 포함하지 않는다.
