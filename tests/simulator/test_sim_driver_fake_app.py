@@ -49,6 +49,57 @@ def static():
     return simulate("static_batch")
 
 
+def test_every_click_is_sent_with_the_request_id_and_rank_of_the_feed_it_came_from(reactive):
+    """Logging v2: the click body links the click to the impression. What the backend received must be
+    the id of the /today answer the user was looking at and the rank the driver recorded."""
+    backend, log, m = reactive
+    sent = [(v.request_id, rank) for v in log.views for rank in v.clicked_ranks]
+
+    assert sent and len(sent) == m["engagement"]["clicks_acked"] == len(backend.click_links)
+    assert sorted(backend.click_links) == sorted(sent)
+    assert all(request_id is not None for request_id, _ in sent)
+    for view in log.views:
+        for nid, rank in zip(view.clicked_ids, view.clicked_ranks):
+            assert view.item_ids[rank] == nid
+    # one id per answer
+    ids = [v.request_id for v in log.views if v.ok]
+    assert len(set(ids)) == len(ids)
+
+
+def test_an_api_without_a_request_id_header_gets_the_plain_click_body():
+    """The batch-only API sends no X-Request-Id; the click body must then be {news_letter_id} alone."""
+    bodies = []
+
+    class Resp:
+        status_code = 200
+        headers = {}
+
+        def __init__(self, payload):
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    class Session:
+        def request(self, method, url, headers=None, **kw):
+            if url.endswith("/newsletters/today"):
+                return Resp([CATALOG.items[0].to_api()])
+            bodies.append(kw["json"])
+            return Resp({"status": "success", "log_id": 1})
+
+    api = ApiClient(Session())
+    feed = api.today()
+    api.click(feed.items[0].news_letter_id, feed.request_id, 0)
+    api.click(feed.items[0].news_letter_id, "0d7e0b0e-0000-4000-8000-000000000001", 3)
+
+    assert feed.request_id is None
+    assert bodies == [
+        {"news_letter_id": feed.items[0].news_letter_id},
+        {"news_letter_id": feed.items[0].news_letter_id,
+         "request_id": "0d7e0b0e-0000-4000-8000-000000000001", "position": 3},
+    ]
+
+
 def test_run_exercises_whole_contract_and_data_flows_into_click_log(reactive):
     backend, log, m = reactive
     assert {c.endpoint for c in log.calls} == ALL_ENDPOINTS

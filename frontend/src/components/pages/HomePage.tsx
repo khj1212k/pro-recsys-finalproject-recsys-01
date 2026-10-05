@@ -67,7 +67,8 @@ const HomePage: React.FC = () => {
           sourceUrl: "#",
           publishedAt: new Date(item.news_letter_created_at),
           hookingSentence: item.news_letter_sentence,
-          raw_news_count: item.raw_news_count
+          raw_news_count: item.raw_news_count,
+          impression: item.impression
         }));
         setArticles(mappedArticles);
       } catch (error) {
@@ -86,7 +87,8 @@ const HomePage: React.FC = () => {
   }, [activeSlot]);
 
   const handleCardClick = async (article: NewsArticle) => {
-    sendNewsletterClickLog(parseInt(article.id)).catch(err => {
+    // 카드가 들고 있는 연결키(이 카드를 낸 응답의 요청 ID와 순위)를 같이 보낸다(lib/api.ts).
+    sendNewsletterClickLog(parseInt(article.id), article.impression).catch(err => {
       console.error("Failed to log click:", err);
     });
 

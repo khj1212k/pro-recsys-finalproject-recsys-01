@@ -16,9 +16,9 @@ import numpy as np
 import pytest
 
 from app.recsys.config import RecsysConfig
-from app.recsys.pipeline import Deadline, RealtimeRecommender
+from app.recsys.pipeline import Deadline, RealtimeRecommender, build_recommendation
 from app.recsys.scoring import HeuristicScorer
-from app.recsys.service import build_service
+from app.recsys.service import build_service, rng_for_request
 from app.recsys.types import Item, NewsletterMeta, UserState
 from src.core.reranker import CategoryBasedMMRReranker
 from tests.recsys.fakes import NOW
@@ -74,6 +74,9 @@ class StaticRepo:
     def clicked_among(self, user_id, ids):
         return set()
 
+    def fatigued_among(self, user_id, ids, since, min_impressions):
+        return set()
+
     def displayable_among(self, ids):
         return set(ids)
 
@@ -126,10 +129,16 @@ def test_in_process_latency_breakdown():
         yield repo
 
     service = build_service(cfg, repo_factory=factory, now_fn=lambda: NOW)
+    # 탐색 칸을 넣는 단계만 따로(ADR 0025): 캐시가 적중한 요청이 추가로 치르는 비용이다.
+    det = recommender.rank(repo, 1, NOW, Deadline(10))
+    request_id = "0d7e0b0e-0000-4000-8000-000000000001"
     try:
         results = {
             "heuristic score (300 items)": _measure(lambda: scorer.score(state, items, NOW)),
             "MMR top20 from pool 80": _measure(lambda: mmr.rerank_for_user(scores, embs, 20, 2)),
+            "exploration draw + slate (2 of 20)": _measure(
+                lambda: build_recommendation(det, cfg, request_id, rng_for_request(request_id))
+            ),
             "recommender.recommend (warm)": _measure(lambda: recommender.recommend(repo, 1, NOW, Deadline(10))),
             "service.recommend (+thread hop)": _measure(lambda: service.recommend(1, fallback_repo=repo)),
         }

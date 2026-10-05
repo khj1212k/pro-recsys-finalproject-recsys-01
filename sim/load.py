@@ -208,7 +208,7 @@ class LoadUser:
         feed = self.api.today(endpoint=endpoint)
         if self.tally is not None:
             self.tally.record(endpoint, feed.source, len(feed.items))
-        self.agent.last_feed = feed.items
+        self.agent.last_feed, self.agent.last_request_id = feed.items, feed.request_id
         self._fetched_feed = True
         self.agent.hist.record_view(feed.items[: self.agent.model.cfg.view_depth])
         return len(feed.items)
@@ -227,7 +227,9 @@ class LoadUser:
             if self.tally is not None:
                 self.tally.record_skipped_click()
             return None
-        self.api.click(nid)
+        shown = [it.news_letter_id for it in self.agent.last_feed]
+        position = shown.index(nid) if nid in shown else None
+        self.api.click(nid, self.agent.last_request_id, position)
         return nid
 
     def newcomer_flow(self) -> int:

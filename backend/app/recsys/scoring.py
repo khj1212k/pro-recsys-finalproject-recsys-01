@@ -1,14 +1,40 @@
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Optional, Protocol, Sequence
+from typing import Dict, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
 
+from app.recsys.deadline import Deadline
+from app.recsys.metrics import RecsysCounters
+from app.recsys.throttle import ThrottledExceptionLog
 from app.recsys.types import Item, ScoreResult, UserState
+
+logger = logging.getLogger(__name__)
+
+# 칸 로그의 features(float32 바이트)를 푸는 방법. 요청 로그의 feature_schema_version이 가리킨다.
+# 버전을 바꾸지 않고 순서나 뜻을 바꾸면 예전 로그를 잘못 읽게 되므로, 바뀌면 새 번호를 더한다.
+HEURISTIC_FEATURE_SCHEMA = 1
+FEATURE_SCHEMAS: Dict[int, Tuple[str, ...]] = {
+    # 휴리스틱 4항의 가중치를 곱하기 전 값. 신호가 없는 항(장기·단기 벡터 없음)은 NaN이다.
+    HEURISTIC_FEATURE_SCHEMA: ("cos_long", "cos_short", "recency", "popularity"),
+}
+
+
+def decode_features(payload: bytes) -> np.ndarray:
+    return np.frombuffer(payload, dtype="<f4")
+
+
+def encode_features(row: np.ndarray) -> bytes:
+    return np.asarray(row, dtype="<f4").tobytes()
 
 
 class Scorer(Protocol):
     def score(self, state: UserState, items: Sequence[Item], now: datetime) -> ScoreResult: ...
+
+
+class ScorerUnavailable(Exception):
+    """이 스코어러가 지금은 점수를 낼 수 없다(모델 미등록, 피처 함수 없음 등). 오류가 아니다."""
 
 
 def _normalize_rows(m: np.ndarray) -> np.ndarray:
@@ -86,4 +112,81 @@ class HeuristicScorer:
             scores = scores + w_long * cos_long
         if cos_short is not None:
             scores = scores + w_short * cos_short
-        return ScoreResult(scores=scores.astype(np.float64), model_version=self.version)
+        missing = np.full(len(items), np.nan, dtype=np.float32)
+        features = np.column_stack(
+            [
+                missing if cos_long is None else cos_long,
+                missing if cos_short is None else cos_short,
+                recency,
+                popularity,
+            ]
+        ).astype(np.float32)
+        return ScoreResult(
+            scores=scores.astype(np.float64),
+            model_version=self.version,
+            features=features,
+            feature_schema_version=HEURISTIC_FEATURE_SCHEMA,
+        )
+
+
+class ScorerStack:
+    """활성 스코어러 하나와 shadow 스코어러들 (ADR 0025).
+
+    목록을 만드는 것은 활성 스코어러의 점수뿐이다. shadow는 같은 사용자 상태·같은 아이템에 점수만 매기고,
+    그 점수는 extra_scores로 넘어가 칸 로그에 남는다. shadow가 응답에 영향을 주지 않도록:
+    - 예외는 여기서 삼키고 센다(shadow.error). 점수를 낼 수 없는 상태(ScorerUnavailable)는 오류로 세지 않는다.
+    - 활성 점수를 낸 뒤 남은 시간 예산이 deadline_fraction 미만이면 남은 shadow를 건너뛴다(shadow.skipped).
+    - 점수 배열의 모양이 다르면 버린다.
+    막지 못하는 것: shadow 하나가 예산보다 오래 걸리면 그 요청은 시간 초과 폴백으로 끝난다. 건너뛰기는
+    shadow를 시작하기 전에만 판단한다.
+    """
+
+    def __init__(
+        self,
+        active: Scorer,
+        shadows: Sequence[Scorer] = (),
+        deadline_fraction: float = 0.5,
+        counters: Optional[RecsysCounters] = None,
+    ):
+        self.active = active
+        self.shadows = list(shadows)
+        self.deadline_fraction = deadline_fraction
+        self.counters = counters or RecsysCounters()
+        self._errors = ThrottledExceptionLog(logger=logger)
+
+    def score(
+        self,
+        state: UserState,
+        items: Sequence[Item],
+        now: datetime,
+        deadline: Optional[Deadline] = None,
+    ) -> ScoreResult:
+        result = self.active.score(state, items, now)
+        extra: Dict[str, np.ndarray] = {}
+        for i, shadow in enumerate(self.shadows):
+            if deadline is not None and deadline.remaining_fraction() < self.deadline_fraction:
+                self.counters.inc("shadow.skipped", len(self.shadows) - i)
+                break
+            try:
+                shadow_result = shadow.score(state, items, now)
+                scores = np.asarray(shadow_result.scores, dtype=np.float64)
+                if scores.shape != (len(items),):
+                    raise ValueError(f"shadow scores {scores.shape} != ({len(items)},)")
+            except ScorerUnavailable:
+                self.counters.inc("shadow.unavailable")
+                continue
+            except Exception:
+                # 요청마다 같은 예외가 날 수 있어 traceback은 분당 한 번만 남긴다. 건수는 카운터가 센다.
+                self._errors.exception(
+                    f"shadow.{i}", "shadow scorer #%d failed; the response is unaffected", i
+                )
+                self.counters.inc("shadow.error")
+                continue
+            version = shadow_result.model_version
+            if version == result.model_version or version in extra:
+                # 활성 모델과 같은 버전(또는 같은 shadow 둘)은 같은 점수를 한 번 더 남길 뿐이다.
+                self.counters.inc("shadow.duplicate")
+                continue
+            extra[version] = scores
+            self.counters.inc("shadow.scored")
+        return replace(result, extra_scores=extra)

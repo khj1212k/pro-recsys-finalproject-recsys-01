@@ -72,6 +72,11 @@ python -m sim.run --target http://127.0.0.1:8100 --users 50 --days 3 \
 - **요청 시점 추천 API** (`backend/app/recsys`, 브랜치 `feat/realtime-recommendation`): 모든 응답에 헤더가 있어
   폴백률이 나온다. `RECSYS_MODE=batch`에서는 배치 행이 없는 사용자가 인기 목록을 받고(`popular`, 폴백으로
   센다), `RECSYS_MODE=realtime`에서는 요청마다 계산한다.
+  - 로그 v2(ADR 0025)부터 이 API는 `X-Request-Id`도 보내고, 드라이버는 클릭마다 그 ID와 목록 안의 순위
+    (`request_id`, `position`)를 같이 보낸다. 그래서 시뮬레이터의 클릭은 노출 로그의 칸과 키로 조인된다.
+    기본 설정에서는 20칸 중 2칸(신호 없는 사용자는 4칸)이 탐색 칸이라 **같은 사용자 상태에서도 목록이
+    요청마다 조금 다르다** — 반응성 지표(`after_click_jaccard` 등)를 탐색을 끈 실행과 비교할 때는
+    `RECSYS_EXPLORE_ENABLED=false`를 함께 적는다.
 
 `tests/simulator/test_sim_backend_contract.py`가 실제 라우터에 드라이버를 붙여(SQLite) 배치 전용 API, 그리고
 요청 시점 API의 두 모드를 확인한다. 체크아웃된 backend에 있는 세대의 테스트만 돌고 나머지는 건너뛴다.

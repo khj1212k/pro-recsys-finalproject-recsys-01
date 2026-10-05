@@ -139,6 +139,7 @@ def seeded(pg_conn):
             uids, nids = created["users"], created["news"]
             if uids:
                 cur.execute("DELETE FROM recommendation_impression_log WHERE user_id = ANY(%s)", (uids,))
+                cur.execute("DELETE FROM recommendation_request_log WHERE user_id = ANY(%s)", (uids,))
                 cur.execute("DELETE FROM news_letter_today_batch WHERE user_id = ANY(%s)", (uids,))
                 cur.execute("DELETE FROM user_newsletter_ctr_log WHERE user_id = ANY(%s)", (uids,))
                 cur.execute("DELETE FROM user_preferred_newsletter WHERE user_id = ANY(%s)", (uids,))
@@ -157,7 +158,9 @@ def _service(engine, **cfg_overrides):
 
     # CI 러너의 첫 요청(임베딩 캐시 미적중) 지연에 흔들리지 않도록 기본 예산을 넉넉히 둔다.
     # 예산 자체의 동작은 fault injection 테스트가 따로 검증한다.
-    cfg = RecsysConfig(**{"time_budget_ms": 5000, **cfg_overrides})
+    # 탐색은 기본으로 끈다: 이 파일의 테스트들은 결정론 순위의 성질(주제 비율 등)을 보는데, 무작위 칸이
+    # 섞이면 그 단언이 운에 좌우된다. 탐색을 켠 경로는 api_client(운영 기본 설정)와 test_logs_join.py가 본다.
+    cfg = RecsysConfig(**{"time_budget_ms": 5000, "explore_enabled": False, **cfg_overrides})
     return build_service(
         cfg,
         repo_factory=partial(sql_repo_scope, engine, cfg.time_budget_ms),
@@ -278,12 +281,13 @@ def test_brand_new_users_never_get_an_empty_list(engine, seeded):
     service.shutdown()
 
 
-def test_db_fault_triggers_batch_fallback_within_budget_and_frees_the_connection(engine, seeded, pg_conn):
+def test_db_fault_triggers_popular_fallback_within_budget_and_frees_the_connection(engine, seeded, pg_conn):
     from app.recsys.config import RecsysConfig
     from app.recsys.service import build_service
     from app.recsys.sql_repository import sql_repo_scope
 
     uid = seeded.add_user(long_term=seeded.vec_of[seeded.by_topic[0][0]])
+    # 신선한 배치 행이 있어도 realtime 모드의 폴백은 그것을 읽지 않는다(인기 -> 최신, ADR 0015 "폴백 체인").
     batch_ids = seeded.by_topic[2][:5]
     with pg_conn.cursor() as cur:
         cur.execute(
@@ -307,9 +311,9 @@ def test_db_fault_triggers_batch_fallback_within_budget_and_frees_the_connection
     rec = _recommend(service, engine, uid)
     elapsed = time.perf_counter() - started
 
-    assert rec.source == "batch"
+    assert rec.source == "popular"
     assert rec.fallback_reason == "timeout"
-    assert rec.news_letter_ids == batch_ids
+    assert rec.news_letter_ids and rec.news_letter_ids != batch_ids
     assert elapsed < 1.0
     assert service.counters.get("fallback.timeout") == 1
 
@@ -410,7 +414,8 @@ def test_sql_path_latency_p50_p95(engine, seeded):
     수치는 출력한다 - CI에서는 별도 스텝이 -s로 이 테스트를 돌려 로그에 남긴다."""
     uid = seeded.add_user(long_term=seeded.vec_of[seeded.by_topic[0][0]])
     seeded.click(uid, seeded.by_topic[1][0])
-    service = _service(engine, cache_ttl_s=0)
+    # 운영 기본값대로 잰다: 탐색 켬(요청마다 뽑기), 피로 규칙 log(노출 로그 조회 1번 추가).
+    service = _service(engine, cache_ttl_s=0, explore_enabled=True)
 
     def run(n):
         samples = []

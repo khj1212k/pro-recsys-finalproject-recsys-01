@@ -9,4 +9,4 @@
 | **`newsletter.py`** | `/newsletters/today`, `/newsletters/{id}` |
 | **`onboarding.py`** | `/onboarding/news` |
 | **`user_check.py`** | `get_current_user` (JWT 기반 인증) |
-| **`logs.py`** | `/logs/newsletter/click` |
+| **`log.py`** | `/logs/newsletter/click` — 본문 `{news_letter_id}` + 선택 `request_id`·`position`·`event`·`dwell_ms`(ADR 0025) |

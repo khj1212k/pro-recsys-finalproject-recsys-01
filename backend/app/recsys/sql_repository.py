@@ -12,6 +12,9 @@
 - `timestamp without time zone` 컬럼은 서버 기본 TimeZone 기준 벽시계 값으로
   저장돼 있다(NOW()/aware datetime 모두 세션 TimeZone으로 변환되어 저장됨).
   비교는 tz-aware 파라미터로, 읽기는 ::timestamptz로 해 같은 규칙으로 해석한다.
+
+클릭 로그에는 이벤트 종류가 있다(ADR 0025). 추천 경로가 "클릭"으로 읽는 것은 event = 'click' 행뿐이다 -
+같은 클릭의 체류 보고('detail_view')까지 세면 단기 벡터에서 그 뉴스레터가 두 번 평균된다.
 """
 import uuid
 from contextlib import contextmanager
@@ -23,7 +26,7 @@ from sqlalchemy import create_engine, insert, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
-from app.models.recsys import RecommendationImpressionLog
+from app.models.recsys import RecommendationImpressionLog, RecommendationRequestLog
 from app.recsys.types import Item, NewsletterMeta
 
 
@@ -65,7 +68,7 @@ class SqlRecsysRepository:
 
     def last_click_id(self, user_id: int) -> Optional[int]:
         return self._scalar(
-            "SELECT log_id FROM user_newsletter_ctr_log WHERE user_id = :uid "
+            "SELECT log_id FROM user_newsletter_ctr_log WHERE user_id = :uid AND event = 'click' "
             "ORDER BY created_at DESC, log_id DESC LIMIT 1",
             uid=user_id,
         )
@@ -90,7 +93,7 @@ class SqlRecsysRepository:
                 "  SELECT n.news_letter_embedding AS e"
                 "  FROM user_newsletter_ctr_log l"
                 "  JOIN news_letter n ON n.news_letter_id = l.news_letter_id"
-                "  WHERE l.user_id = :uid AND l.created_at >= :since"
+                "  WHERE l.user_id = :uid AND l.created_at >= :since AND l.event = 'click'"
                 "    AND n.news_letter_embedding IS NOT NULL"
                 "  ORDER BY l.created_at DESC LIMIT :lim) t",
                 uid=user_id,
@@ -164,9 +167,27 @@ class SqlRecsysRepository:
             return set()
         rows = self._rows(
             "SELECT DISTINCT news_letter_id FROM user_newsletter_ctr_log "
-            "WHERE user_id = :uid AND news_letter_id = ANY(:ids)",
+            "WHERE user_id = :uid AND event = 'click' AND news_letter_id = ANY(:ids)",
             uid=user_id,
             ids=list(news_letter_ids),
+        )
+        return {r[0] for r in rows}
+
+    def fatigued_among(
+        self, user_id: int, news_letter_ids: Sequence[int], since: datetime, min_impressions: int
+    ) -> Set[int]:
+        if not news_letter_ids:
+            return set()
+        # ix_recommendation_impression_log_user_id_created_at가 (user_id, created_at DESC)라
+        # 한 사용자의 최근 구간만 읽는다.
+        rows = self._rows(
+            "SELECT news_letter_id FROM recommendation_impression_log "
+            "WHERE user_id = :uid AND created_at >= :since AND news_letter_id = ANY(:ids) "
+            "GROUP BY news_letter_id HAVING COUNT(*) >= :n",
+            uid=user_id,
+            since=since,
+            ids=list(news_letter_ids),
+            n=min_impressions,
         )
         return {r[0] for r in rows}
 
@@ -268,10 +289,20 @@ def sql_repo_scope(engine: Engine, statement_timeout_ms: Optional[int]) -> Itera
 
 
 class SqlImpressionWriter:
+    """칸 로그(와 요청 로그 한 행)를 한 트랜잭션으로 쓴다 - 둘 중 하나만 남는 일이 없다(ADR 0025).
+
+    request_row 없이 칸만 넘기는 호출도 받는다(로그 v2 이전 형태). 빈 응답은 칸 없이 요청 행만 쓴다."""
+
     def __init__(self, engine: Engine):
         self.engine = engine
 
-    def __call__(self, rows: List[dict]) -> None:
+    def __call__(self, rows: List[dict], request_row: Optional[dict] = None) -> None:
         payload = [dict(r, request_id=uuid.UUID(str(r["request_id"]))) for r in rows]
         with self.engine.begin() as conn:
-            conn.execute(insert(RecommendationImpressionLog.__table__), payload)
+            if request_row is not None:
+                conn.execute(
+                    insert(RecommendationRequestLog.__table__),
+                    [dict(request_row, request_id=uuid.UUID(str(request_row["request_id"])))],
+                )
+            if payload:
+                conn.execute(insert(RecommendationImpressionLog.__table__), payload)

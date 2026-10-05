@@ -95,8 +95,9 @@ def get_today_news(
     request_repo: SqlRecsysRepository = Depends(get_request_repo),
     hydrate=Depends(get_today_hydrator),
 ):
-    # RECSYS_MODE=realtime이면 요청 시점에 계산하고, 실패/시간 초과면 배치 행 -> 인기
-    # -> 최신 순으로 폴백한다(app/recsys/service.py, ADR 0015). 응답 본문 형식은 그대로다.
+    # RECSYS_MODE=realtime이면 요청 시점에 계산하고, 실패/시간 초과면 인기 -> 최신 순으로
+    # 폴백한다(RECSYS_MODE=batch에서는 배치 행부터. app/recsys/service.py, ADR 0015). 응답 본문 형식은
+    # 그대로다. 20칸 중 일부는 탐색 칸일 수 있고(ADR 0025), 어느 칸인지는 응답에 드러내지 않는다.
     # 폴백 단계가 SQL 오류를 만나면 요청 세션을 rollback하고 다음 단계로 간다. rollback은 세션에
     # 붙은 ORM 객체(user)를 만료시키므로 필요한 값은 미리 꺼내 둔다.
     user_id = user.user_id
@@ -105,7 +106,9 @@ def get_today_news(
 
     response.headers["X-Rec-Source"] = rec.source
     response.headers["X-Model-Version"] = rec.model_version
+    # 클라이언트는 이 ID와 목록 안의 순위를 클릭 로그(POST /logs/newsletter/click)에 실어 보낸다.
     response.headers["X-Request-Id"] = rec.request_id
+    # 응답을 보낸 뒤 요청 로그 1행 + 화면에 나간 칸마다 1행을 쓴다(실패해도 응답에는 영향이 없다).
     background_tasks.add_task(
         service.log_impressions, user_id, rec, [i.news_letter_id for i in items]
     )

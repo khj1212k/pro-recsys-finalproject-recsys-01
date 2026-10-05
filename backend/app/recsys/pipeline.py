@@ -1,25 +1,38 @@
-"""요청 시점 추천 파이프라인: 사용자 상태 -> 후보 합집합 -> 스코어링 -> MMR (ADR 0015)."""
-import time
+"""요청 시점 추천 파이프라인: 사용자 상태 -> 후보 합집합 -> 스코어링 -> MMR (ADR 0015).
+
+여기서 만드는 것은 결정론 목록(DeterministicList)까지다. 탐색 칸을 넣어 한 요청의 화면으로 만드는 일
+(build_recommendation)은 결과 캐시 뒤에서 요청마다 한다(ADR 0025).
+"""
+import logging
+import math
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
 from app.recsys.cache import TTLCache
 from app.recsys.config import RecsysConfig
+from app.recsys.deadline import BudgetExceeded, Deadline  # noqa: F401 (기존 임포트 경로 유지)
+from app.recsys.exploration import plan_slate
+from app.recsys.metrics import RecsysCounters
 from app.recsys.repository import RecsysRepository
-from app.recsys.scoring import Scorer
+from app.recsys.scoring import Scorer, ScorerStack
+from app.recsys.throttle import ThrottledExceptionLog
 from app.recsys.types import (
     SOURCE_COLD_CATEGORY,
     SOURCE_COLD_ONBOARDING,
     SOURCE_COLD_POPULAR,
     SOURCE_REALTIME,
+    DeterministicList,
     Item,
     Recommendation,
+    SlotInfo,
     UserState,
 )
+
+logger = logging.getLogger(__name__)
 from app.recsys.popularity import compute_scores
 # 성승우님이 recommend_engine(배치 LightGBM 경로)에 구현한 MMR을 그대로 쓴다 -
 # 요청 시점 경로와 배치 경로가 같은 다양성 규칙(선호 카테고리 수별 λ)을 공유하도록.
@@ -31,27 +44,8 @@ from src.core.reranker import CategoryBasedMMRReranker
 POPULARITY_MODEL_VERSION = "popularity-v1"
 
 
-class BudgetExceeded(Exception):
-    def __init__(self, stage: str):
-        super().__init__(f"time budget exhausted before {stage}")
-        self.stage = stage
-
-
 class EmptyRecommendation(Exception):
     pass
-
-
-class Deadline:
-    def __init__(self, budget_s: float, clock: Callable[[], float] = time.monotonic):
-        self._clock = clock
-        self._end = clock() + budget_s
-
-    def remaining(self) -> float:
-        return max(0.0, self._end - self._clock())
-
-    def check(self, stage: str) -> None:
-        if self._clock() >= self._end:
-            raise BudgetExceeded(stage)
 
 
 @dataclass
@@ -135,6 +129,57 @@ def generate_candidates(
     return _round_robin_union(sources, cfg.candidate_cap)
 
 
+def _finite_or_none(value) -> Optional[float]:
+    value = float(value)
+    return value if math.isfinite(value) else None
+
+
+def build_recommendation(
+    det: DeterministicList,
+    cfg: RecsysConfig,
+    request_id: str,
+    rng: Optional[np.random.Generator],
+    cache_hit: bool = False,
+) -> Recommendation:
+    """결정론 목록에 이 요청의 탐색 칸을 넣어 화면을 만든다. rng가 없으면 결정론 목록 그대로다.
+
+    결과 캐시에는 DeterministicList만 들어가므로, 캐시가 적중한 요청도 탐색 칸은 독립적으로 뽑힌다."""
+    eligible: List[int] = det.eligible_ids.tolist()
+    plan = plan_slate(det.ranked_ids, eligible, cfg.top_k, cfg.explore_slots_for(det.cold), rng)
+    index = {nid: i for i, nid in enumerate(eligible)}
+    rows = [index[slot.news_letter_id] for slot in plan.slots]
+    slots = [
+        SlotInfo(
+            explored=slot.explored,
+            propensity=slot.propensity,
+            det_rank=slot.det_rank,
+            # JSON에는 NaN/inf가 없다: 유한하지 않은 shadow 점수는 null로 남긴다.
+            scores_shadow={v: _finite_or_none(arr[i]) for v, arr in det.extra_scores.items()} or None,
+            features=None if det.features is None else det.features[i],
+        )
+        for slot, i in zip(plan.slots, rows)
+    ]
+    return Recommendation(
+        request_id=request_id,
+        news_letter_ids=plan.ids,
+        scores=[float(det.scores[i]) for i in rows],
+        source=det.source,
+        model_version=det.model_version,
+        cache_hit=cache_hit,
+        slots=slots,
+        policy_version=plan.policy,
+        explore_positions=plan.explore_positions,
+        explore_pool_size=plan.pool_size,
+        eligible_ids=eligible,
+        candidate_count=det.candidate_count,
+        profile_source=det.profile_source,
+        shadow_versions=sorted(det.extra_scores),
+        feature_schema_version=det.feature_schema_version,
+        fatigue_mode=det.fatigue_mode,
+        fatigued_count=det.fatigued_count,
+    )
+
+
 class RealtimeRecommender:
     def __init__(
         self,
@@ -142,11 +187,16 @@ class RealtimeRecommender:
         scorer: Scorer,
         reranker: Optional[CategoryBasedMMRReranker] = None,
         item_cache: Optional[TTLCache] = None,
+        counters: Optional[RecsysCounters] = None,
     ):
         self.cfg = cfg
         self.scorer = scorer
+        self.counters = counters or RecsysCounters()
+        # 스코어러 하나만 받으면 shadow 없는 묶음으로 감싼다. 묶음을 받으면 그대로 쓴다.
+        self.stack = scorer if isinstance(scorer, ScorerStack) else ScorerStack(scorer, counters=self.counters)
         self.reranker = reranker or CategoryBasedMMRReranker()
         self.item_cache = item_cache or TTLCache(cfg.item_cache_ttl_s, cfg.item_cache_max_entries)
+        self._errors = ThrottledExceptionLog(logger=logger)
 
     def _items(self, repo: RecsysRepository, ids: Sequence[int]) -> List[Item]:
         # 뉴스레터 임베딩/생성시각/기사 수는 생성 후 바뀌지 않고, 신선도 창 안의 후보는
@@ -160,26 +210,67 @@ class RealtimeRecommender:
             cached.update(fetched)
         return [cached[i] for i in ids if i in cached]
 
-    def _cold_popular(self, repo, user_id, now) -> Recommendation:
+    def _apply_fatigue(
+        self, repo: RecsysRepository, user_id: int, ids: List[int], now: datetime
+    ) -> Tuple[List[int], Optional[int]]:
+        """노출 피로 규칙(ADR 0025). 돌려주는 것은 (남은 후보, 규칙에 걸린 수). off면 조회하지 않는다.
+
+        log 모드는 세기만 하는 모드라 조회가 실패해도 요청을 실패시키지 않는다(센 뒤 rollback하고 진행).
+        enforce 모드에서는 규칙이 정책의 일부이므로 실패가 그대로 올라가 폴백으로 간다."""
+        mode = self.cfg.fatigue_mode
+        if mode == "off" or not ids:
+            return ids, None
+        since = now - timedelta(hours=self.cfg.fatigue_hours)
+        try:
+            fatigued = repo.fatigued_among(user_id, ids, since, self.cfg.fatigue_min_impressions)
+        except Exception:
+            if mode == "enforce":
+                raise
+            # 조회가 계속 실패하면(예: 마이그레이션 전의 DB) 요청마다 같은 예외가 난다: traceback은 분당 한 번만.
+            self._errors.exception("fatigue", "fatigue lookup failed in log mode; continuing without it")
+            self.counters.inc("fatigue.lookup_error")
+            # PostgreSQL은 실패한 문장 뒤의 문장을 전부 거부하므로 되돌려야 다음 조회가 된다. 되돌리면
+            # 트랜잭션 로컬로 건 statement_timeout도 풀린다: 이 요청의 남은 조회는 요청 쪽 시간 예산만 지킨다.
+            repo.rollback()
+            return ids, None
+        if fatigued:
+            self.counters.inc("fatigue.requests_with_fatigued")
+            self.counters.inc("fatigue.items", len(fatigued))
+        if mode == "enforce":
+            return [i for i in ids if i not in fatigued], len(fatigued)
+        return ids, len(fatigued)
+
+    def _cold_popular(self, repo, user_id, now) -> DeterministicList:
         since = now - timedelta(hours=self.cfg.freshness_hours)
         ranked = compute_scores(repo.window_meta(since), now)
         if not ranked:
             raise EmptyRecommendation("no newsletters in the freshness window")
         clicked = repo.clicked_among(user_id, [s["id"] for s in ranked])
-        top = [s for s in ranked if s["id"] not in clicked][: self.cfg.top_k]
-        if not top:
+        # 후보 수 상한은 개인화 경로와 같다. 인기순 상위 candidate_cap개가 E다.
+        eligible = [s for s in ranked if s["id"] not in clicked][: self.cfg.candidate_cap]
+        kept, fatigued_count = self._apply_fatigue(repo, user_id, [s["id"] for s in eligible], now)
+        if len(kept) != len(eligible):
+            kept_set = set(kept)
+            eligible = [s for s in eligible if s["id"] in kept_set]
+        if not eligible:
             raise EmptyRecommendation("every popular newsletter was already clicked")
-        return Recommendation(
-            request_id=str(uuid.uuid4()),
-            news_letter_ids=[s["id"] for s in top],
-            scores=[float(s["score"]) for s in top],
+        ids = [int(s["id"]) for s in eligible]
+        return DeterministicList(
+            ranked_ids=ids[: self.cfg.top_k],
+            eligible_ids=ids,
+            scores=np.asarray([float(s["score"]) for s in eligible], dtype=np.float64),
             source=SOURCE_COLD_POPULAR,
             model_version=POPULARITY_MODEL_VERSION,
+            profile_source="none",
+            candidate_count=len(ranked),
+            cold=True,
+            fatigue_mode=self.cfg.fatigue_mode,
+            fatigued_count=fatigued_count,
         )
 
-    def recommend(
+    def rank(
         self, repo: RecsysRepository, user_id: int, now: datetime, deadline: Deadline
-    ) -> Recommendation:
+    ) -> DeterministicList:
         state = build_user_state(repo, user_id, now, self.cfg)
         deadline.check("candidates")
         if not state.has_personal_signal:
@@ -190,14 +281,17 @@ class RealtimeRecommender:
         clicked = repo.clicked_among(user_id, cands.ids)
         state.clicked_ids = clicked
         ids = [i for i in cands.ids if i not in clicked]
+        ids, fatigued_count = self._apply_fatigue(repo, user_id, ids, now)
         deadline.check("items")
         items = self._items(repo, ids)
         if not items:
             raise EmptyRecommendation("no scorable candidates")
         deadline.check("scoring")
 
-        result = self.scorer.score(state, items, now)
+        result = self.stack.score(state, items, now, deadline)
         embeddings = np.stack([it.embedding for it in items])
+        # MMR은 항상 top_k개를 고른다. 탐색 칸이 있으면 앞쪽 (top_k - 탐색 칸 수)개만 화면에 들어가고,
+        # 탐욕 선택이라 그 앞부분은 탐색을 켜고 꺼도 같다.
         picked = self.reranker.rerank_for_user(
             result.scores, embeddings, self.cfg.top_k, len(state.category_ids)
         )
@@ -208,10 +302,26 @@ class RealtimeRecommender:
             source = SOURCE_COLD_ONBOARDING
         else:
             source = SOURCE_COLD_CATEGORY
-        return Recommendation(
-            request_id=str(uuid.uuid4()),
-            news_letter_ids=[items[idx].news_letter_id for idx, _ in picked],
-            scores=[float(score) for _, score in picked],
+        return DeterministicList(
+            ranked_ids=[int(items[idx].news_letter_id) for idx, _ in picked],
+            eligible_ids=[int(it.news_letter_id) for it in items],
+            scores=np.asarray(result.scores, dtype=np.float64),
             source=source,
             model_version=result.model_version,
+            profile_source=state.profile_source,
+            candidate_count=len(cands.ids),
+            cold=False,
+            extra_scores=result.extra_scores,
+            features=result.features,
+            feature_schema_version=result.feature_schema_version,
+            fatigue_mode=self.cfg.fatigue_mode,
+            fatigued_count=fatigued_count,
         )
+
+    def recommend(
+        self, repo: RecsysRepository, user_id: int, now: datetime, deadline: Deadline
+    ) -> Recommendation:
+        """탐색 없이 결정론 목록을 그대로 낸다(오프라인 점검과 테스트용). 서비스는 rank()를 캐시하고
+        요청마다 build_recommendation으로 탐색 칸을 넣는다."""
+        det = self.rank(repo, user_id, now, deadline)
+        return build_recommendation(det, self.cfg, str(uuid.uuid4()), rng=None)
