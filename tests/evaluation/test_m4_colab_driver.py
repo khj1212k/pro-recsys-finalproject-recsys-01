@@ -330,6 +330,64 @@ def test_stages_skipped_for_budget_can_be_filled_later_and_the_report_is_reassem
     assert json.loads((env.out / "compute.json").read_text())["skipped_for_budget"] == []
 
 
+def test_a_stage_that_dies_mid_way_still_counts_toward_the_budget(env):
+    """세션이 단계 도중에 죽으면 그 단계가 돈 시간도 CU 추정에 들어가야 한다. 단계 경계에서만 시각을 적으면 몇 시간짜리
+    단계가 통째로 빠져, 이어서 돌릴 때 상한을 넘긴 줄 모르고 다음 단계를 시작한다."""
+    import time
+
+    clock = Clock()
+    state_path = env.out / "driver_state.json"
+
+    class DiesInE1(Runner):
+        def __call__(self, cmd, cwd, env_, log_path):
+            if cmd[cmd.index("--stage") + 1] != "e1":
+                return super().__call__(cmd, cwd, env_, log_path)
+            self.calls.append("e1")
+            clock.t += 3 * 3600.0                       # e1이 3시간 돌았을 때
+            deadline = time.time() + 5
+            while time.time() < deadline:               # (주기 기록이 그 시각을 상태 파일에 적을 틈을 준 뒤)
+                if json.loads(state_path.read_text())["invocations"][-1]["last_seen"] >= clock.t:
+                    break
+                time.sleep(0.01)
+            raise KeyboardInterrupt("세션 끊김")        # 세션이 죽는다
+
+    first = DiesInE1(clock=clock, seconds=1800.0)       # fit은 30분
+    with pytest.raises(KeyboardInterrupt):
+        drv.main(env.argv("--cu-rate", "2.0"), runner=first, opener=env.opener, clock=clock, heartbeat_seconds=0.01)
+    assert first.calls == ["fit", "e1"]
+    state = json.loads(state_path.read_text())
+    assert state["stages"]["e1"]["status"] == "running"
+    assert drv.wall_seconds(state) == pytest.approx(3.5 * 3600.0)       # 죽은 단계의 3시간이 들어 있다
+    # 이어서 돌리면 2 CU/h x 3.5 h = 7 CU로 상한(6) 이상이라 남은 단계를 시작하지 않는다
+    second = Runner(clock=clock)
+    assert drv.main(env.argv("--cu-rate", "2.0"), runner=second, opener=env.opener, clock=clock) == drv.EXIT_OK
+    assert second.calls == ["assemble"]
+    compute = json.loads((env.out / "compute.json").read_text())
+    assert compute["skipped_for_budget"] == ["e1", "e2p2", "e8", "e4", "e2p1"]
+    assert compute["cu_estimated"] == pytest.approx(7.0) and compute["heartbeat_seconds"] == drv.HEARTBEAT_SECONDS
+
+
+def test_heartbeat_stops_with_the_stage_and_never_outlives_it():
+    import threading
+    import time
+
+    beats = []
+    before = threading.active_count()
+    with drv.Heartbeat(lambda: beats.append(1), 0.01):
+        time.sleep(0.2)
+    n = len(beats)
+    assert n >= 2 and threading.active_count() == before
+    time.sleep(0.05)
+    assert len(beats) == n                                               # 블록을 나오면 더 적지 않는다
+    with pytest.raises(KeyboardInterrupt):                               # 단계가 예외로 끝나도 스레드를 남기지 않는다
+        with drv.Heartbeat(lambda: beats.append(1), 0.01):
+            raise KeyboardInterrupt
+    assert threading.active_count() == before
+    with drv.Heartbeat(lambda: beats.append(1), 0):                      # 0 이하면 끈다
+        time.sleep(0.03)
+    assert len(beats) == n
+
+
 def test_manifest_is_checked_against_the_registration_before_any_download(env):
     runner = Runner()
     key = "ebnerd_small/train/history.parquet"

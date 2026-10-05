@@ -48,6 +48,7 @@ import signal
 import subprocess
 import sys
 import tarfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -61,6 +62,7 @@ DESCRIPTIVE_STAGES = ("e4", "e2p1")
 REGISTERED = {"dataset": "ebnerd_small", "seeds": [0, 1, 2], "n_boot": 1000, "p2_sample": 20000, "sub_cap": 20000}
 SYNTHETIC = {"dataset": "ebnerd_synth", "seeds": [0], "n_boot": 50, "p2_sample": 150, "sub_cap": 100}
 CU_CAP, CU_WARN = 6.0, 5.0
+HEARTBEAT_SECONDS = 60.0   # 단계가 도는 동안 이 간격으로 "아직 살아 있음"을 상태 파일에 적는다(CU 추정용)
 MODULE = "evaluation.recsys.ebnerd.run_cold"
 REQUIREMENTS = "requirements-colab.txt"
 DATA_FILES = ("train/behaviors.parquet", "train/history.parquet", "validation/behaviors.parquet",
@@ -331,11 +333,43 @@ def wall_seconds(state: dict) -> float:
     return float(sum(max(0.0, i["last_seen"] - i["started"]) for i in state.get("invocations", [])))
 
 
+class Heartbeat:
+    """블록 안에 있는 동안 interval초마다 beat()를 부른다(별도 스레드). 블록을 나오면 멈추고 스레드를 거둔다.
+
+    단계 하나가 몇 시간씩 돌기 때문에, 단계 경계에서만 시각을 적으면 단계 도중에 죽은 세션의 시간이 CU 추정에서
+    통째로 빠진다. 블록 안에서 주 스레드는 단계가 끝나기를 기다리기만 하므로 상태를 건드리는 쪽은 이 스레드뿐이다.
+    """
+
+    def __init__(self, beat: Callable[[], None], interval: float):
+        self.beat, self.interval = beat, interval
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def _loop(self):
+        while not self._stop.wait(self.interval):
+            try:
+                self.beat()
+            except OSError:      # 기록 한 번을 놓쳐도 단계는 계속 돈다(추정이 그만큼 낮아질 뿐이다)
+                pass
+
+    def __enter__(self):
+        if self.interval and self.interval > 0:
+            self._thread = threading.Thread(target=self._loop, name="m4-heartbeat", daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._stop.set()
+        if self._thread:
+            self._thread.join()
+        return False
+
 
 def run_stages(workdir: Path, state: dict, state_path: Path, run_args: dict, *, python: str, threads: int,
                cu_rate: Optional[float], cu_cap: float, cu_warn: float, log: Log,
                runner: Callable = subprocess_runner, clock: Callable[[], float] = time.time,
-               extra_env: Optional[dict] = None, stages: tuple = STAGES) -> int:
+               extra_env: Optional[dict] = None, stages: tuple = STAGES,
+               heartbeat_seconds: float = HEARTBEAT_SECONDS) -> int:
     """남은 단계를 순서대로 돌린다. 끝난 단계는 건너뛰고, 예산 규칙으로 건너뛴 단계는 state에 적는다."""
     out_dir = workdir / "out"
     env = dict(os.environ)
@@ -366,9 +400,10 @@ def run_stages(workdir: Path, state: dict, state_path: Path, run_args: dict, *, 
             "budget_rules_active": budget_active,
             "cu_cap": cu_cap, "cu_warn": cu_warn, "cu_before": state.get("cu_before"),
             "skipped_for_budget": [s for s, v in state["stages"].items() if v.get("status") == "skipped_budget"],
-            "invocations": len(state["invocations"]),
-            "note": "cu_estimated = rate x 벽시계 시간. 죽은 세션의 마지막 단계 시간은 빠지므로 하한이다. "
-                    "정확한 값은 실행 전후의 잔액 차이로 따로 적는다."})
+            "invocations": len(state["invocations"]), "heartbeat_seconds": heartbeat_seconds,
+            "note": "cu_estimated = rate x 벽시계 시간. 단계가 도는 동안 heartbeat_seconds마다 시각을 적으므로 세션이 "
+                    "단계 도중에 죽어도 그때까지의 시간이 들어간다(오차는 그 간격 이내). 설치·내려받기 도중에 죽은 "
+                    "세션의 시간은 빠진다. 정확한 값은 실행 전후의 잔액 차이로 따로 적는다."})
 
     ran_any = False
     for stage in stages:
@@ -394,7 +429,9 @@ def run_stages(workdir: Path, state: dict, state_path: Path, run_args: dict, *, 
         st.update(status="running")
         beat()
         log(f"stage {stage}: 시작")
-        code = runner(stage_command(python, workdir, run_args, threads, stage), workdir / "repo", env, out_dir / "run.log")
+        with Heartbeat(beat, heartbeat_seconds):
+            code = runner(stage_command(python, workdir, run_args, threads, stage), workdir / "repo", env,
+                          out_dir / "run.log")
         st["seconds"] = round(clock() - t0, 1)
         if code != 0:
             st.update(status="failed", returncode=code)
@@ -507,7 +544,8 @@ def cmd_stop(args) -> int:
 
 
 def cmd_run(args, *, runner: Callable = subprocess_runner, opener: Callable = urllib.request.urlopen,
-            clock: Callable[[], float] = time.time, installer: Optional[Callable] = None) -> int:
+            clock: Callable[[], float] = time.time, installer: Optional[Callable] = None,
+            heartbeat_seconds: float = HEARTBEAT_SECONDS) -> int:
     if getattr(args, "detach", False):
         return cmd_detach(args)
     workdir = Path(args.workdir)
@@ -575,7 +613,7 @@ def cmd_run(args, *, runner: Callable = subprocess_runner, opener: Callable = ur
             extra_env["M4_PREREG_COMMIT"] = args.prereg_commit
         rc = run_stages(workdir, state, state_path, run_args, python=python, threads=args.threads,
                         cu_rate=args.cu_rate, cu_cap=args.cu_cap, cu_warn=args.cu_warn, log=log, runner=runner,
-                        clock=clock, extra_env=extra_env)
+                        clock=clock, extra_env=extra_env, heartbeat_seconds=heartbeat_seconds)
         if rc == EXIT_OK:
             log(f"끝. 리포트: {out_dir / 'ebnerd_v1_2_cold.json'} , {out_dir / 'ebnerd_v1_2_cold.md'}")
         return rc
