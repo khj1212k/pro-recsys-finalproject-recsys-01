@@ -6,6 +6,7 @@
 "사후 변경 기록"에만 적는다. ADR 0003의 랭킹 부분(`binary` → 유저 그룹 `lambdarank`)을 대체한다.
 main 위로 옮기면서 (2026-10-06) 결정·사전 등록 절·판정은 바꾸지 않았다. 이 문서와 리포트·JSON에 적힌 커밋 SHA는 옮기기 전
 것이고, 지금 이력과의 대응은 "사후 변경 기록"의 통합 기록에 있다.
+보충 실험 v1.2(콜드 regime)의 사전 등록은 2026-10-06에 결과 없이 커밋했다(맨 아래 "A2 사전 등록" 절, 결과 대기).
 
 ## 컨텍스트
 - 팀 추천기(`ai_workspace/recommend_engine`, ADR 0003)는 LightGBM `binary` 목적함수 + 클릭당 무작위
@@ -243,3 +244,192 @@ EBNERD_ROOT=<repo>/data/benchmarks/ebnerd .venv/bin/python -m evaluation.recsys.
   6. *임베더.* `NewsEmbedder`는 main의 구현(토큰 길이·attention 예산으로 배치를 묶음)에 `use_fp16` 인자만 더한 것이다. 기록된
      임베딩(sha256 `2f096ef8…ebeb`)은 옮기기 전의 고정 크기 배치 구현으로 계산했고 다시 계산하지 않았다. 지금 구현으로 다시
      계산하면 sha256이 같다고 가정하지 않는다. v1·v1.1·민감도 수치는 저장된 임베딩 파일에서 나왔으므로 영향이 없다.
+- **A2 사전 등록 (2026-10-06, 보충 실험 v1.2 콜드 regime — 실행 전 커밋)**: 위 A2의 3번이 예고한 "다음 사전 등록 실험"이다.
+  분량이 커서 아래 별도 절에 둔다. v1·v1.1의 사전 등록 절과 판정은 이 등록으로 바꾸지 않는다.
+
+## A2 사전 등록 — 보충 실험 v1.2 콜드 regime (2026-10-06, 실행 전 커밋)
+
+> 이 절은 결과를 보기 전에 커밋했다. 커밋 뒤에는 고치지 않고, 바꿀 일이 생기면 맨 끝 "A2 사전 등록 이후 변경 기록"에
+> 날짜·사유·결과 열람 여부와 함께 덧붙인다. 임계값·표본·시드·arm 정의의 기계 판독본은
+> `evaluation/recsys/ebnerd/preregistration/cold-v1.2.yaml`이고, 판정 코드는 그 파일의 값만 읽는다. 두 곳이 다르면 yaml이 기준이다.
+> 근거 라벨은 [EB-NeRD](덴마크어 공개 벤치마크)이며 어떤 결과도 한국어 서비스의 성능이 아니다.
+> 결과는 `reports/recsys/ebnerd_v1_2_cold.{json,md}`에 두고, 리포트 머리말에 이 절을 담은 커밋 SHA와 yaml의 sha256을 적는다.
+
+### A2.0 이름과 범위
+- 위 "사후 변경 기록"에는 2026-09-26의 A2(리뷰 반영)가 이미 있다. 그 3번 항목이 "다음 사전 등록 실험"을 예고했고 이 절이 그
+  실험이다. 그래서 같은 A2 아래에 "A2 사전 등록 (v1.2)"로 부른다. A3는 신경망 사용자 모델 비교(E15)에 쓰기로 돼 있어 쓰지 않는다.
+- 다루는 실험: E1(인기도 마스킹 학습 × 평가 조건), E2(히스토리 절단과 k\*), E3(요청 내 랭크 정규화), E4(일일 배치 릴리스
+  양자화, 서술용), E6(축소 CTR), E7(4항 휴리스틱 가중치 적합), E8(서빙 후보 구성). **E5(보도 폭 대리 피처)는 이 등록과 실행에
+  넣지 않는다.** 선택 실험이고, 돌리려면 따로 사전 등록한다.
+- v1·v1.1의 판정(R1–R4, 선택 모델, 권장 λ)은 이 실험 결과로 바꾸지 않는다.
+
+### A2.1 질문
+v1의 서빙형 과제(P2)에서 `ranker_v2_poolneg`는 nDCG@10 0.2686으로 가장 강한 휴리스틱(popularity_6h 0.1168)을 넘었다. 그런데
+그 모델의 gain 절반이 `pop_clicks_6h`이고, 이 서비스는 사용자 0명·클릭 0건에서 시작한다. 후보 풀도 설계상 45~90개(하루 생성
+15~30건 × 신선도 창 72h, 실측 아님)라 EB-NeRD P2의 평균 235개보다 훨씬 작다. 그래서 다음을 잰다.
+1. 인기도 신호가 없거나(0) 유저가 1~20%뿐이거나 풀이 40~90개일 때 이 랭커가 얼마나 무너지는가, 학습 중에 인기도를 가려 본
+   모델은 덜 무너지는가(E1).
+2. 유저 히스토리가 k건뿐일 때 개인화 랭커가 인기도 목록을 이기기 시작하는 최소 k는 얼마인가(E2).
+3. 연속 피처를 요청 안 순위로 바꿔 척도 의존을 없애도 손실이 작은가(E3) — 언어 전이 계약의 한 부분(ADR 0031).
+4. 저트래픽에서 축소 CTR 피처가 이득인가(E6), 휴리스틱 4항의 가중치를 데이터로 맞추면 사전값보다 나은가(E7).
+5. 서빙의 후보 생성 구성(5출처, cap 300, 72h)이 정답을 충분히 담고 2단계 손실이 작은가(E8).
+6. (서술용) 모든 후보가 같은 시각에 릴리스되는 일일 배치에서 릴리스 후 경과 시간에 따라 콘텐츠와 인기도의 순서가 바뀌는가(E4).
+
+### A2.2 공통 프로토콜
+- 데이터·임베딩·창은 v1과 같다: `ebnerd_small`, BGE-M3 `bge_m3_tsb512`(sha256 `2f096ef8…ebeb`, 고정), fit 2023-05-20T07~05-24T07,
+  es 05-24T07~05-25T07, test = validation 창 전체. behaviors·history parquet 4개의 sha256은 v1 리포트 JSON의 값과 같아야 한다.
+  기사 파일은 본문을 뺀 메타 5개 열(`ARTICLE_META_COLUMNS`)만 남긴 파생 parquet을 쓴다. 로더가 그 5개 열만 읽으므로 결과는
+  같고, 리포트에 원본 sha와 파생 sha를 둘 다 적는다.
+- P2 평가 표본: validation 요청 20,000건, `default_rng(SPLIT_SEED + 2)` — v1과 같은 인덱스. 후보 풀 = [t−48h, t] 발행 − t 이전에
+  읽은 기사, 풀 밖 정답은 `n_pos_total`로 벌점(v1과 동일). P1을 쓰는 곳(E2의 서술용 곡선)은 test 노출 전체(244,647건).
+- 학습: 모든 arm이 LightGBM LambdaRank, 쿼리 = 요청, 팀 하이퍼파라미터(`TEAM_PARAMS`) 고정, es 구간 early-stop(50라운드 인내,
+  최대 1,000라운드). v1과 달리 전 arm에 `deterministic=True`·`force_col_wise=True`를 준다(중단 뒤 이어서 돌린 모델이 한 번에
+  돌린 모델과 같게 하려는 것이며 하이퍼파라미터는 그대로다). 풀 네거티브는 `pool_negative_task(n_neg=20)`,
+  `default_rng(1000 + seed)`로 fit → es 순서 — v1 `ranker_v2_poolneg`와 같은 네거티브 표본이다.
+- 통계: seed 0·1·2. 요청별 지표를 seed 평균한 뒤 유저 단위 클러스터 부트스트랩 1,000회로 95% CI(`cluster_bootstrap`, seed 0), 같은
+  요청에서의 쌍체 차이 CI(`paired_bootstrap_diff`, seed 1). 1차 지표는 nDCG@10. 최소 효과 크기 0.005. 다중 비교 보정 없음 —
+  판정에 쓰는 비교는 A2.6에 전부 적었고 나머지는 서술용이다.
+- **재현 게이트**: `poolneg`(원본 조건·전체 풀)의 nDCG@10 seed 평균이 v1 CI [0.2640, 0.2728] 안이어야 실행이 유효하다.
+  밖이면 그 실행의 어떤 수치도 판정에 쓰지 않는다(A2.9).
+- **증거 등급**: 실행 인자가 yaml `run`의 값(데이터셋·seed·부트스트랩 횟수·표본 크기, `--fake-dim`·`--max-fit`·`--max-test` 없음)과
+  같고 입력 파일 sha256이 맞을 때만 리포트가 판정용으로 표기된다. 하나라도 다르면 코드가 머리말에 "demo, not evidence"를 찍는다.
+
+### A2.3 조건 정의
+모델은 학습한 그대로 두고 평가 입력만 바꾼다(학습 마스킹만 예외). 모든 변환은 point-in-time을 지킨다.
+- **pop0 (인기도 0 강제)**: raw 피처 단계에서 `pop_clicks_6h/24h/48h`, `pop_inviews_24h`, `pop_ctr_24h`(E6 arm은
+  `pop_ctr_shrunk_24h`도)를 0으로 둔다. 클릭·노출이 0건인 서비스에서 피처 파이프라인이 내는 값이 0이기 때문이다.
+- **학습 시 인기도 마스킹**: 요청(쿼리) 단위로 확률 0.5로 골라 그 요청의 모든 후보에서 위 5개 열을 한꺼번에 가린다.
+  fit 행과 es 행 모두, `default_rng(3000 + seed)`로 fit → es 순서. 가리는 값이 0이면 `poolneg_mask0`, NaN이면 `poolneg_masknan`.
+  같은 seed의 두 arm은 같은 요청을 가린다.
+- **유저 서브샘플(sub1·sub5·sub20)**: train ∪ validation 행동 로그에 나오는 유저 id를 정렬한 뒤
+  `default_rng(SPLIT_SEED + 11).permutation`의 앞 ⌈f·N⌉명(f = 0.01, 0.05, 0.20; 1% ⊂ 5% ⊂ 20%). 아이템 인기도(클릭·노출 로그)는
+  이 유저들의 train+validation 행동만으로 다시 만든다. 평가 요청은 이 유저들의 validation 요청 전부이고, 20,000건을 넘으면
+  `default_rng(SPLIT_SEED + 12)`로 20,000건을 뽑는다. 유저 상태(히스토리·세션)·풀·seen은 그대로다.
+  모델은 다시 학습하지 않는다(전체 트래픽으로 학습한 모델을 저트래픽에 옮겨 쓰는 상황).
+- **풀 축소(40·60·90)**: seen을 뺀 48h 풀에서 풀 안 정답은 전부 남기고 나머지를 무작위로 골라 요청당 N개로 줄인다
+  (`default_rng(SPLIT_SEED + 13)`의 후보별 난수 순, 그래서 40 ⊂ 60 ⊂ 90). 풀이 N 이하면 그대로다. `n_pos_total`은 바꾸지 않는다.
+- **히스토리 절단 k**: 요청 시각(profile_cutoff) 기준으로 `user_log`와 `session_log`를 각각 최근 k 이벤트로 자른다.
+  `hist_cos`·`hist_len`·`cat_share`·`short_*`·`sess_*`·`hours_since_last_event`를 절단 로그에서 다시 계산한다. 후보·라벨·seen 필터는
+  전체 로그 기준으로 고정하고, 온보딩 대체물(행동 창 이전 상위 3 카테고리, `static_categories`)과 나이·성별은 이벤트로 세지 않아
+  그대로 둔다. 정의의 단일 구현은 `evaluation/recsys/ebnerd/neural/cold.py`이고 E15도 같은 함수를 쓴다.
+- **요청 내 랭크 정규화**: yaml `features.rank_columns`의 10개 열을 요청 안 평균 순위로 바꿔 0~1로 편다
+  (값이 가장 작으면 0, 가장 크면 1, 동점은 평균 순위, 후보가 하나이거나 전부 동점이면 0.5, NaN은 NaN 유지). 학습 행(정답 1 +
+  네거티브 20)과 평가 행(그 조건의 후보 풀) 각각의 요청 안에서 계산한다. 풀 축소 조건에서는 줄인 풀 안에서 다시 계산한다.
+- **축소 CTR**: `pop_ctr_shrunk_24h = (clicks_24h + α·p0) / (inviews_24h + α)`, p0 = 요청 시각 t의 [t−24h, t) 전역 CTR
+  (같은 클릭·노출 로그의 전체 클릭 수 / 전체 노출 수, 노출이 0이면 0). 서브샘플 조건에서는 p0도 서브샘플 로그에서 나온다.
+- **휴리스틱**: `heuristic_cold = 0.45·hist_cos + 0.35·short_cos + 0.15·exp(−hours_since_pub/48)`(서빙 `HeuristicScorer`의
+  사전 가중치에서 인기도 항을 뺀 것). 서빙 코드와 같이 단기 이벤트가 없으면 단기 가중치를 장기로, 장기 이벤트가 없으면 장기
+  가중치를 단기로 넘긴다. `heuristic_prior4 = heuristic_cold + 0.05·min(1, log1p(pop_clicks_6h)/5)` — 서빙 식의 넷째 항
+  (`raw_news_count`)은 EB-NeRD에 대응물이 없어 설계의 4항 정의대로 `pop_clicks_6h`를 넣었다.
+- **일일 배치 릴리스(P3)**: 기사의 릴리스 시각 = 발행 시각 이후 처음 오는 07:00(올림 — 내림하면 아직 발행되지 않은 기사가 후보가
+  된다). 요청 시각 t의 후보 = 가장 최근 릴리스 R(t)와 그 전날 릴리스에 나온 기사 − seen. `hours_since_pub`은 릴리스 시각 기준으로
+  계산하고, 인기도는 릴리스 이후의 클릭·노출만 센다(릴리스 전 클릭을 세면 릴리스 직후에도 인기도가 쌓여 있는 것처럼 보인다).
+- **서빙 후보 구성**: A2.5의 E8 행.
+
+### A2.4 arm
+
+| arm | 학습 데이터 | 피처 | 다른 점 | 쓰이는 곳 |
+|---|---|---|---|---|
+| `poolneg` | 48h 풀 네거티브 20 | V2 22개 | 없음(= v1 `ranker_v2_poolneg`) | 전부(기준) |
+| `poolneg_mask0` | 같음 | 같음 | 학습 시 요청 단위 인기도 마스킹, 값 0 | E1(판정), E2(서술) |
+| `poolneg_masknan` | 같음 | 같음 | 같은 마스크, 값 NaN | E1(서술) |
+| `poolneg_rank` | 같음 | 같음 | 연속 10개 열을 요청 내 랭크로(학습·평가) | E3(판정), E1 격자(서술) |
+| `poolneg_shrunk_a5/a20/a50` | 같음 | V2 + `pop_ctr_shrunk_24h`(α) | 피처 1개 추가 | E6(판정) |
+| `poolneg72` | 72h 풀 네거티브 20 | V2 22개 | 네거티브 풀 창 72h | E8(판정) |
+| `ranker_v2` | 노출 비클릭(P1) | V2 22개 | v1 `ranker_v2` | E2 P1 곡선(서술) |
+
+베이스라인(학습 없음): random, popularity_6h, popularity_24h, recency, cosine_history, heuristic_cold, heuristic_prior4,
+그리고 E7이 적합한 4항 세트 `heuristic_fit_a`, `heuristic_fit_b`.
+
+### A2.5 실험별 가설·방법·판정 규칙
+지표는 모두 P2 nDCG@10의 같은 요청 쌍체 차이와 95% CI다(따로 적은 곳 제외).
+
+| ID | 가설 | 방법 | 판정 규칙(실행 전 고정) |
+|---|---|---|---|
+| E1 | 학습 중 인기도를 가려 본 모델은 인기도 0·저트래픽·작은 풀에서 덜 무너진다 | 트래픽 조건 {orig, pop0, sub20, sub5, sub1} × 풀 {전체, 90, 60, 40}의 20칸에서 모든 arm·베이스라인을 평가한다. 서브샘플 조건의 표본은 그 유저들의 가용 요청(상한 20,000) | **(a)** pop0·전체 풀 칸에서 `poolneg_mask0 − poolneg` CI 하한 > +0.005 → `poolneg_mask0`를 shadow 주모델로. 아니면 `poolneg` 유지. **(b)** sub1·풀 60 칸에서 `poolneg`와 `poolneg_mask0` 중 어느 것도 `heuristic_cold`를 넘지 못하면(넘음 = 쌍체 CI 하한 > 0 이고 점추정 ≥ +0.005) 활성 스코어러는 휴리스틱 유지. 하나라도 넘으면 "E1 충족"으로 기록(활성 전환은 ADR 0013 결정 4의 다른 조건이 남는다) |
+| E2 | 개인화가 인기도를 이기는 최소 히스토리 길이가 있다 | k ∈ {0, 1, 3, 5, 10, all}로 절단해 P2(orig·pop0)와 P1 곡선을 낸다 | k\* = P2·orig·전체 풀에서 `poolneg(k) − popularity_6h` CI 하한 > 0이 **그 k와 그보다 큰 격자 값 전부**에서 성립하는 최소 k → `RECSYS_MIN_PERSONAL_EVENTS`. 성립하는 k가 없으면 "k\* 없음"으로 기록하고 값을 정하지 않는다. P1 곡선(`ranker_v2(k) − popularity_24h`), pop0 곡선(`poolneg(k)`·`poolneg_mask0(k)` vs recency), `k_gain`(`poolneg(k) − poolneg(0)` CI 하한 > 0.005인 최소 k)은 서술용 |
+| E3 | 연속 피처를 요청 내 랭크로 바꿔도 손실이 작다 | `poolneg_rank` 학습·평가 | orig·전체 풀에서 `poolneg_rank − poolneg`: CI 하한 > −0.01 → "계약 충족". CI 하한 ≤ −0.01 이고 점추정 ≤ −0.01 → "불충족". CI 하한 ≤ −0.01 < 점추정 → "보류(검정력 부족)". 나머지 19칸의 같은 차이는 서술용 |
+| E4 | 릴리스 후 경과 시간에 따라 콘텐츠와 인기도의 우열이 바뀐다 | P3 과제(같은 20,000 요청). 요청을 풀 안 정답의 릴리스 후 경과 시간 버킷 {0–2h, 2–6h, 6–12h, 12–24h, 24h+}로 나눠 cosine_history·popularity_6h·`poolneg`·recency·random의 nDCG@10 | **판정 없음.** 버킷별 수치와 n, 풀 재현율 상한만 보고하고 곡선의 형태만 서술한다. 교차 시점을 수치로 주장하지 않는다 |
+| E6 | 저트래픽에서 축소 CTR 피처를 더하면 이득이다 | sub1·sub5(전체 풀)에서 `poolneg_shrunk_aα − poolneg`, α ∈ {5, 20, 50} | 6개 비교 중 하나라도 CI 하한 > +0.005 → 그 α로 `pop_ctr_shrunk_24h` 채택(α는 잠정값으로 표기). 여러 α가 통과하면 두 서브샘플의 점추정 중 작은 쪽이 가장 큰 α. 하나도 없으면 채택하지 않음. orig 칸의 같은 차이는 "전체 트래픽에서의 비용"으로 함께 적는다(서술) |
+| E7 | 데이터로 맞춘 4항 가중치가 사전값(0.45/0.35/0.15/0.05)보다 낫다 | [hist_cos, short_cos, exp(−hours_since_pub/48), log1p(pop_clicks_6h)]에 쌍별 조건부 로지스틱(절편 없음, 요청마다 (정답, 네거티브) 쌍 평균, L2 1e-6, Newton)을 (a) fit 창 poolneg 학습 분포, (b) fit 창의 sub1 유저 요청·sub1 인기도에서 seed마다 적합 | 두 세트의 가중치를 모두 보고한다. 세트별 표기: `fit − heuristic_prior4` CI 하한 > +0.005이면 "사전값보다 나음"((a)는 orig, (b)는 sub1 칸). `fit − popularity_6h` CI 하한 > 0이면 "스코어러", 아니면 "동점 깨기용". 서빙 기본값은 (b) 세트 — 단 (b) − 사전값의 CI 상한 < 0이면 사전값 유지. 일 노출 5,000건 이상에서 (a) 세트로 바꾸는 전환 규칙은 ADR 0014가 이 결과를 받아 정한다 |
+| E8 | 서빙 후보 구성의 2단계 손실은 작다 | 72h 풀(seen 포함)에서 knn_profile 100(hist_cos)·knn_short 100(short_cos)·recent 100·popular 100(pop_clicks_6h)·category 50(온보딩 대체 카테고리의 최신순)을 서빙 코드와 같은 순서의 라운드로빈으로 합쳐 cap 300, 그다음 seen 제외. `poolneg72` 점수로 합집합 밖 후보를 맨 뒤로 보낸 2단계 vs 전체 풀. 하네스 구성(48h, 4출처 상위 50, `poolneg`)도 같은 표로 낸다 | 서빙 구성의 합집합 재현율(요청별 `합집합 안 정답 / n_pos_total`의 평균) ≥ 0.90 이고 `2단계 − 전체 풀` CI 하한 > −0.005 → 서빙 구성 유지. 아니면, 하네스 구성이 같은 두 조건을 만족할 때 서빙을 하네스 구성으로 바꾼다. 둘 다 못 만족하면 "후보 구성 재설계 필요"로 기록 |
+
+### A2.6 판정용 비교와 기계 판정
+- 판정에 쓰는 비교: E1(a) 1개, E1(b) 2개, E2 6개(k별, k\* 하나로 요약), E3 1개, E6 6개, E7 4개(세트 2 × 기준 2), E8 서빙 2조건
+  (+ 미달 시 하네스 2조건). 그 밖의 모든 수치는 서술용이다.
+- 판정은 사람이 표를 읽어 내리지 않고 `evaluation/recsys/ebnerd/cold_verdicts.py`의 함수가 리포트 JSON에서 계산한다:
+  `e1_verdict`, `e2_kstar`, `e3_verdict`, `e6_verdict`, `e7_verdict`, `e8_verdict`, `reproduction_gate`, 그리고 이들을 묶는
+  `cold_verdicts`. 비교에 필요한 수치가 없으면 "실패"가 아니라 **"미측정"**으로 낸다.
+- 검정력 주의: sub1은 유저 약 1%라 CI가 넓다. E1(b)·E6·E7(b)에서 "넘지 못함"은 "차이 없음"이 아니라 "검출하지 못함"이다.
+
+### A2.7 설계 문서가 정하지 않아 여기서 정한 것
+설계 사양(`docs/design/2026-09-26-recommendation-v2.md` §4, `docs/design-recsys-v2` 브랜치)의 규칙을 옮기면서 비어 있던 곳을 이렇게 채웠다.
+1. *마스킹 단위와 판정 arm.* 설계는 "pop_\* 그룹을 p=0.5로 0 처리, 0 vs NaN"까지만 적었다. 단위는 요청으로 했다(콜드 서비스에서는
+   한 요청의 후보가 전부 인기도 0이다). es 행도 같은 규칙으로 가린다. E1(a)의 판정 arm은 값 0 변형이다 — 서빙 피처 파이프라인이
+   트래픽 없을 때 내는 값이 0이고, NaN 계약은 서빙에 "지금은 콜드"를 판별하는 장치가 있어야 성립하기 때문이다. NaN 변형은 pop0
+   칸에서 입력 0과 입력 NaN 두 가지로 평가해 서술용으로만 적는다.
+2. *서브샘플에서 무엇을 다시 계산하는가.* 인기도 로그와 평가 요청만 서브샘플로 바꾸고 모델은 전체 트래픽에서 학습한 것을 쓴다.
+   저트래픽 로그로 랭커를 다시 학습하는 regime은 이 실험에서 재지 않는다. E6의 축소 CTR arm도 전체 트래픽에서 학습한다.
+3. *E1(b)의 "recency+cosine 휴리스틱"과 "넘는다".* `heuristic_cold`로 정했고, "넘는다"는 쌍체 CI 하한 > 0 이고 점추정 ≥ 0.005다.
+4. *E2의 "personalization".* 개인화 경로 = `poolneg`에 절단 로그로 만든 피처를 넣은 것, 비교 상대 = 비개인화 인기 목록
+   popularity_6h로 정했다. 랭커가 인기도 피처도 쓰므로 k\*가 0으로 나올 수 있고, 그 경우 그대로 기록한다. 개인 신호만의 기여는
+   서술용 `k_gain`과 pop0 곡선으로 따로 본다. 잡음으로 한 점만 통과하는 것을 막으려고 "더 큰 k 전부에서도 성립"을 조건에 넣었다.
+5. *절단 구현.* 설계의 `truncate_logs(ctx, cutoff, k)`는 요청마다 cutoff가 달라 전역 인덱스 하나로 표현되지 않는다. 요청 번호를
+   키로 하는 절단 로그를 만들고 요청의 user·session 키를 요청 번호로 바꾼 `(ctx', req')`를 돌려주게 했다. `recsys_core`는 고치지 않는다.
+6. *E3의 대상 열과 판정.* 후보마다 달라지는 연속 10개 열만 바꾼다. 요청 안 상수 열은 순위가 정의되지 않아 원값이다.
+   "≥ −0.01"은 쌍체 CI 하한으로 판정하고 3분류(충족/불충족/보류)로 낸다.
+7. *E4.* "그날 07:00으로 양자화"는 올림으로, 버킷은 풀 안 정답의 릴리스 후 경과 시간으로 정했다(24h+ = 전일 배치의 정답).
+   버킷 nDCG는 풀 안 정답만으로 이상적 DCG를 계산하고, 풀이 놓친 정답 비율은 따로 적는다.
+8. *E6의 사전값과 통과 조건.* p0는 point-in-time 24h 전역 CTR. "어느 α든"은 sub1·sub5의 6개 비교 중 하나로 읽었다.
+9. *E7.* "조건부 로지스틱(pairwise)"는 요청 안 (정답, 네거티브) 쌍의 차이 벡터에 대한 로지스틱으로 구현한다. (b) 세트가 사전값보다
+   CI로 나쁘면 사전값을 유지한다는 안전 조항을 더했다. 전환 임계의 세부(관측 기간 등)는 ADR 0014의 몫이다.
+10. *E8.* 서빙의 `popular`는 지금 기사 수 기반이지만 설계 v2의 `popular_clicks_6h`로 옮겼다. 서빙처럼 cap을 seen 제외보다 먼저
+    적용한다. 72h 풀을 48h 네거티브로 학습한 모델로 채점하면 "48h보다 오래됨"이 정답의 지름길이 되므로 E8의 판정 모델은
+    72h 풀 네거티브로 학습한 `poolneg72`다(`poolneg`를 72h 풀에 넣은 결과는 서술용). 단기 벡터 정의는 서빙(최근 20클릭)과
+    하네스(24h 전부)가 아직 다르다 — parity 작업(ADR 0033 예정) 전의 한계로 적는다.
+11. *실행 형태.* 설계는 `run_ebnerd.py`에 플래그를 더한다고 적었지만, v1·v1.1 실행 경로의 파일을 건드리지 않으려고 단계별
+    체크포인트가 있는 별도 진입점 `run_cold.py`를 둔다. 조건 변환은 모듈 함수이고 이름은 설계의 플래그와 대응한다
+    (`--pop-mask` → `pop_mask_raw`, `--hist-truncate` → `truncate_logs`, `--pop-subsample` → `subsample_item_logs`,
+    `--pool-shrink` → `pool_shrink_keep`, `--rank-normalize` → `rank_normalize`, `--p3-quantize` → `release_times`,
+    `--candidate-config serving` → `candidate_config.SERVING`).
+12. *전 arm `deterministic=True`.* 설계는 E15에서만 요구했다. 재개 가능성 때문에 여기서도 쓰고, 재현 게이트로 v1과의 차이를 확인한다.
+
+### A2.8 실행 명령(고정)
+Colab CPU 런타임에서 돈다(개발용 Mac에서는 돌리지 않는다). 데이터는 실행마다 올리고 실행 뒤 지운다.
+```
+# 1) 코드 tarball (실행 커밋 <sha>, 이 사전 등록 커밋의 후손이어야 한다)
+git archive --format=tar.gz -o m4_code.tar.gz <sha> recsys_core evaluation/__init__.py evaluation/recsys \
+  scripts/m4_colab_driver.py requirements-colab.txt
+
+# 2) VM 안에서: 드라이버가 tarball 풀기 → 서명 URL로 데이터 내려받기 → sha256 검증 → 핀 설치 → 단계 실행
+python m4_colab_driver.py run --workdir /content/m4 --code-tarball /content/m4_code.tar.gz \
+  --code-sha256 <tarball sha256> --manifest /content/m4_manifest.json \
+  --url <manifest 키>=<서명 URL> [--url ...] --cu-rate <드라이 런에서 잰 CU/h> --cu-cap 6 --threads 2
+
+# 드라이버가 단계마다 서브프로세스로 실행하는 명령 (단계 순서: fit e1 e2p2 e8 e4 e2p1 assemble)
+python -m evaluation.recsys.ebnerd.run_cold --dataset ebnerd_small --root /content/m4/data \
+  --out-dir /content/m4/out --seeds 0 1 2 --n-boot 1000 --p2-sample 20000 --sub-cap 20000 \
+  --threads 2 --resume --stage <단계>
+
+# 3) 표 다시 만들기(로컬, 수 초)
+python -m evaluation.recsys.ebnerd.make_cold_report reports/recsys/ebnerd_v1_2_cold.json > reports/recsys/ebnerd_v1_2_cold.md
+```
+- 서명 URL은 인자로만 넘기고 로그·리포트·커밋 어디에도 남기지 않는다. 드라이버는 URL을 출력하지 않는다.
+- EB-NeRD 없이 경로만 확인하는 드라이 런: `python m4_colab_driver.py run --workdir /content/m4 --code-tarball … --synthetic`
+  (합성 데이터, 결과는 "demo, not evidence").
+- `assemble`은 요청별 지표 배열(체크포인트)에서 CI·판정·리포트를 만든다. 배열을 내려받아 로컬에서 같은 단계를 다시 돌려도 같은
+  JSON이 나와야 한다.
+
+### A2.9 예산·중단·무효 규칙
+- 상한 6 CU(Colab CPU 런타임). 드라이버는 단계를 시작하기 전에 `실측 rate × 경과 시간`으로 누적 CU를 추정한다. 5 CU 이상이면
+  서술용 단계(e4, e2p1)를 건너뛰고, 6 CU 이상이면 남은 단계를 돌리지 않는다. `assemble`은 실패 마커가 없는 한 항상 돈다.
+- **끝나지 않은 비교는 "기각"이 아니라 "미측정"**이다. 미측정 항목을 채우려면 같은 SHA·같은 인자로 이어서 돌리거나(체크포인트
+  재개, 설정 해시가 같을 때만) 새 사전 등록을 한다.
+- 세션이 끊기면 같은 명령으로 다시 시작한다. 완료된 단위(arm×seed 모델, 조건별 지표 배열)는 설정 해시가 같을 때만 건너뛴다.
+  해시가 다르면 드라이버가 거부한다.
+- 재현 게이트 실패, 입력 sha256 불일치, 단계 실패 중 하나라도 생기면 그 실행은 무효다. 원인을 고친 뒤 새 SHA로 사슬 전체를
+  다시 돌리고, 버린 실행은 SHA와 사유를 아래 변경 기록에 "폐기"로 적는다(통과할 때까지 조용히 다시 돌리는 길을 막는 규칙).
+- CU는 리포트 JSON `meta.compute`에 단계별 벽시계 시간, rate, 추정 사용량으로 남긴다.
+
+### A2.10 A2 사전 등록 이후 변경 기록
+(없음)
