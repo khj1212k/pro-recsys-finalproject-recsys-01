@@ -1,36 +1,28 @@
-"""train: LightGBM(LambdaRank) 학습 + 추론(recommend_engine/main_lgbm.py --train --inference).
+"""train: 은퇴한 잡 - 팀 시절의 학습·추론 레시피(recommend_engine/main_lgbm.py)를 더 돌리지 않는다 (ADR 0033).
 
-recommend_engine은 `from src...` 임포트와 상대 경로(config/, checkpoints/)를 쓰는 독립
-서브 프로젝트라 같은 프로세스에 섞지 않고 자식 프로세스로 실행한다.
+이 잡은 팀 레시피(binary 목적함수 + 클릭당 무작위 네거티브 5개, 성승우 설계·구현)로 모델을 학습하고 그 추론
+결과를 news_letter_today_batch에 써 왔다. 돌리지 않는 이유:
+- 그 레시피의 평가 수치는 ADR 0007에서 철회했고, 랭킹은 ADR 0013의 ranker v2가 대체했다.
+- 서빙이 읽는 모델은 model_registry의 행이다(scripts/register_model.py). 요청 시점에 채점하는 피처는
+  recsys_core 서빙 어댑터가 만들고, 이 레시피의 피처 코드(recommend_engine의 FeatureEngineer)와 정의가 다르다.
+  이 잡이 만든 모델은 서빙 피처로 채점할 수 없다.
+- realtime 모드는 배치 행을 읽지 않는다(ADR 0015 개정). 이 잡이 쓰던 표는 RECSYS_MODE=batch에서만 읽힌다.
+
+코드는 지우지 않았다: 레시피 자체(ai_workspace/recommend_engine)는 EB-NeRD 하네스의 ablation 시작점
+team_binary(evaluation/recsys/ebnerd/models.py)의 원본으로 남아 있다. 이 잡은 스케줄이나 손으로 불려도
+아무것도 실행하지 않고 건너뛴 것으로 기록된다(job_runs: skipped, team_recipe_retired).
 """
-import json
-import os
-import subprocess
-import sys
 from typing import Any, Dict
 
-from jobs import REPO_ROOT
+from jobs.runtime import JobSkipped
 
-ENGINE_DIR = REPO_ROOT / "ai_workspace" / "recommend_engine"
+RETIRED_REASON = "team_recipe_retired"
 
 
 def add_arguments(parser) -> None:
-    parser.add_argument("--no-inference", action="store_true", help="학습만 하고 추론 결과 저장은 건너뜀")
+    # 예전 명령줄(--no-inference)이 사용법 오류가 되지 않게 받기만 한다.
+    parser.add_argument("--no-inference", action="store_true", help="(무시됨: 이 잡은 은퇴했다)")
 
 
 def run(ctx) -> Dict[str, Any]:
-    cmd = [sys.executable, "main_lgbm.py", "--train"]
-    if not ctx.args.no_inference:
-        cmd.append("--inference")
-    ctx.stats["command"] = " ".join(cmd[1:])
-
-    proc = subprocess.run(cmd, cwd=ENGINE_DIR, env=os.environ.copy())
-    ctx.stats["returncode"] = proc.returncode
-    if proc.returncode != 0:
-        raise RuntimeError(f"main_lgbm.py가 종료 코드 {proc.returncode}로 실패했습니다")
-
-    pointer_path = ENGINE_DIR / "checkpoints" / "latest_model.json"
-    if pointer_path.exists():
-        pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
-        return {"model": {k: pointer.get(k) for k in ("version", "model_file", "metrics")}}
-    return {}
+    raise JobSkipped(RETIRED_REASON, {"replacement": "scripts/register_model.py (ADR 0033)"})

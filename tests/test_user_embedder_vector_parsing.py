@@ -89,9 +89,10 @@ def test_batch_update_all_users_computes_embedding_from_pgvector_wrapper_rows():
 
 
 def test_refresh_recently_active_users_recomputes_users_with_recent_clicks_even_if_embedded():
-    """요청 시점 추천이 읽는 장기 벡터(user.user_embedding)는 NULL일 때만 채워져 한 번
-    만들어지면 다시 갱신되지 않았다. refresh_recently_active_users(since)는 since 이후
-    클릭한 사용자를 대상으로 같은 가중식으로 다시 계산해야 한다."""
+    """user.user_embedding은 NULL일 때만 채워져 한 번 만들어지면 다시 갱신되지 않았다.
+    refresh_recently_active_users(since)는 since 이후 클릭한 사용자를 대상으로 같은 가중식으로 다시 계산해야 한다.
+    (요청 시점 추천은 이제 이 벡터를 읽지 않는다 - 장기 프로필은 user_profile_state다, ADR 0033.
+    UserEmbedder는 팀 시절 배치 경로의 코드로 남아 있다.)"""
     from datetime import datetime, timedelta, timezone
 
     from pgvector import Vector

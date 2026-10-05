@@ -22,9 +22,16 @@
 10 0 * * * python -m jobs.run daily_report
 
 # --- 아직 켜지 않음 ---
-# generate/train은 LLM 평가 프로토콜·사실성 게이트와 랭커 v2 설계가 결정된 뒤에 켠다.
+# generate는 LLM 평가 프로토콜·사실성 게이트가 결정된 뒤에 켠다.
 # 켤 때는 docker/crontab을 고치고 scheduler 이미지를 다시 빌드한다(docs/runbook.md).
 # 0 9 * * * python -m jobs.run generate
-# 0 10 * * * python -m jobs.run user_embed
-# 30 10 * * * python -m jobs.run train
 # 0 11 * * * python -m jobs.run batch_fallback
+#
+# 장기 프로필 상태 점검(쓰지 않음): 저장된 user_profile_state가 클릭 로그와 다른 사용자가 있으면 경고를 낸다.
+# 사용자가 생기면 켠다. 다시 만드는 것은 `python -m jobs.run rebuild_user_state`(ADR 0033).
+# 30 15 * * * python -m jobs.run rebuild_user_state --check
+
+# --- 없어진 줄 (ADR 0033) ---
+# user_embed: 잡을 지웠다. 장기 프로필은 클릭 API가 클릭마다 갱신하는 증분 상태다(하루 한 번 다시 계산하지 않는다).
+# train: 잡은 남아 있지만 아무것도 실행하지 않는다(팀 시절 레시피 은퇴, job_runs에 skipped로 남는다).
+#        모델은 scripts/register_model.py로 model_registry에 올린다.

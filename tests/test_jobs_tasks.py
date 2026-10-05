@@ -287,31 +287,57 @@ def test_embed_job_passes_budget_and_limit_and_fails_when_nothing_could_be_saved
     assert ctx.stats["embed"]["failed_batches"] == 1
 
 
-def test_user_embed_job_fills_missing_vectors_then_refreshes_users_who_clicked_in_the_last_day(monkeypatch):
-    from core import user_embedder
-    from jobs.tasks import user_embed
+def test_train_job_is_retired_and_runs_nothing(monkeypatch):
+    """팀 레시피 학습 잡은 은퇴했다(ADR 0033): 불려도 자식 프로세스를 띄우지 않고 건너뛴 것으로 끝난다."""
+    import subprocess
 
-    calls = []
+    from jobs.tasks import train
 
-    class FakeEmbedder:
-        def batch_update_all_users(self):
-            calls.append(("fill", None))
-            return {"success": 2, "failed": 0, "skipped": 0}
+    def no_subprocess(*args, **kwargs):
+        raise AssertionError("the retired train job must not start a process")
 
-        def refresh_recently_active_users(self, since):
-            calls.append(("refresh", since))
-            return {"success": 5, "failed": 0, "skipped": 1}
+    monkeypatch.setattr(subprocess, "run", no_subprocess)
+    monkeypatch.setattr(subprocess, "Popen", no_subprocess)
+    args = build_parser().parse_args(["train", "--no-inference"])  # 예전 명령줄도 사용법 오류가 아니다
 
-    monkeypatch.setattr(user_embedder, "UserEmbedder", FakeEmbedder)
-    before = datetime.now(timezone.utc)
+    with pytest.raises(JobSkipped) as exc:
+        train.run(JobContext(job="train", args=args))
 
-    result = user_embed.run(JobContext(job="user_embed", args=argparse.Namespace()))
+    assert exc.value.reason == "team_recipe_retired"
+    assert exc.value.stats == {"replacement": "scripts/register_model.py (ADR 0033)"}
 
-    assert [name for name, _ in calls] == ["fill", "refresh"]
-    since = calls[1][1]
-    assert since.tzinfo is not None
-    assert abs((before - since).total_seconds() - 24 * 3600) < 60
-    assert result == {
-        "user_embed": {"success": 2, "failed": 0, "skipped": 0},
-        "user_embed_refresh": {"success": 5, "failed": 0, "skipped": 1},
-    }
+
+def test_user_embed_job_is_gone_and_the_profile_rebuild_job_is_registered():
+    """장기 프로필은 클릭마다 갱신되는 증분 상태다(ADR 0033): 하루 한 번 벡터를 다시 계산하던 잡은 없다."""
+    assert "user_embed" not in JOBS
+    assert JOBS["rebuild_user_state"] == "jobs.tasks.rebuild_user_state"
+    args = build_parser().parse_args(["rebuild_user_state", "--check", "--user-id", "3", "--user-id", "9"])
+    assert args.check is True and args.user_id == [3, 9]
+    assert build_parser().parse_args(["rebuild_user_state"]).user_id is None
+    with pytest.raises(SystemExit) as exc:
+        main(["user_embed"])
+    assert exc.value.code == 2
+
+
+def test_rebuild_job_reports_a_mismatch_found_by_check_as_a_warning(monkeypatch):
+    import sys
+    import types
+
+    from jobs.tasks import rebuild_user_state
+
+    seen = {}
+
+    def fake_rebuild_all(engine, user_ids=None, check=False):
+        seen.update(engine=engine, user_ids=user_ids, check=check)
+        return {"users": 3, "unchanged": 1, "rebuilt": 0, "mismatch": 2, "mode": "check",
+                "changed_user_ids_sample": [4, 7]}
+
+    monkeypatch.setattr(rebuild_user_state, "rebuild_all", fake_rebuild_all)
+    monkeypatch.setitem(sys.modules, "app.database", types.SimpleNamespace(engine="ENGINE"))
+    ctx = JobContext(job="rebuild_user_state", args=build_parser().parse_args(["rebuild_user_state", "--check"]))
+
+    result = rebuild_user_state.run(ctx)
+
+    assert seen == {"engine": "ENGINE", "user_ids": None, "check": True}
+    assert result["user_state"]["mismatch"] == 2
+    assert len(ctx.warnings) == 1 and "2명" in ctx.warnings[0]
