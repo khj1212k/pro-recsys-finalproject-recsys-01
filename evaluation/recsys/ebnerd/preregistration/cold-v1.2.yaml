@@ -1,0 +1,186 @@
+# 사전 등록(pre-registration) — docs/adr/0013-ranker-v2-design.md "A2 사전 등록 (v1.2 콜드 regime)"
+# 결과를 보기 전에 커밋한 값이다. evaluation/recsys/ebnerd/cold_verdicts.py와 run_cold.py는 임계값·표본·시드·
+# arm 정의를 이 파일에서만 읽는다(코드에 같은 숫자를 다시 적지 않는다).
+# 이 파일의 등록 값은 커밋 뒤 고치지 않는다. 바꿔야 하면 아래 amendments에 날짜·사유·결과 열람 여부를 덧붙이고,
+# ADR 0013의 "A2 사전 등록 이후 변경 기록"에 같은 내용을 적는다. 판정용 실행이 한 번이라도 시작된 뒤의 변경은
+# 새 id(ebnerd-cold-v1.3 등)의 파일로 따로 등록한다.
+id: ebnerd-cold-v1.2
+registered_at: "2026-10-06"
+adr: docs/adr/0013-ranker-v2-design.md
+evidence_label: "[EB-NeRD]"
+amendments: []
+
+report:
+  json: reports/recsys/ebnerd_v1_2_cold.json
+  md: reports/recsys/ebnerd_v1_2_cold.md
+
+# 판정용 실행의 고정 인자. 하나라도 다르면 run_cold가 리포트 머리말을 "demo, not evidence"로 찍고 판정 표에
+# "판정 아님"을 붙인다(사람이 고르지 않는다).
+run:
+  dataset: ebnerd_small
+  seeds: [0, 1, 2]
+  n_boot: 1000
+  p2_sample: 20000
+  sub_cap: 20000
+  fake_dim: null
+  max_fit: null
+  max_test: null
+  # 실행 순서. 예산 상한에 걸리면 뒤에서부터 잘린다: 판정에 쓰는 단계가 앞, 서술용 단계가 뒤.
+  stages: [fit, e1, e2p2, e8, e4, e2p1, assemble]
+  judged_stages: [fit, e1, e2p2, e8]
+  descriptive_stages: [e4, e2p1]
+
+statistics:
+  split_seed: 20260925          # v1과 같은 값(run_ebnerd.SPLIT_SEED)
+  metric: "ndcg@10"
+  ci_level: 0.95                # 양측. 유저 단위 클러스터 부트스트랩
+  bootstrap_seed_mean: 0        # metrics.cluster_bootstrap(seed=0)
+  bootstrap_seed_paired: 1      # metrics.paired_bootstrap_diff(seed=1)
+  min_effect: 0.005             # 공통 최소 효과 크기(nDCG@10)
+  multiple_comparison_correction: none
+
+seed_offsets:
+  p2_sample: 2                  # default_rng(split_seed + 2) — v1 P2 20,000 요청과 같은 표본
+  pool_negatives: 1000          # default_rng(1000 + seed), fit → es 순 — v1 ranker_v2_poolneg와 같은 네거티브
+  train_mask: 3000              # default_rng(3000 + seed), fit → es 순
+  user_subsample: 11            # default_rng(split_seed + 11).permutation(유저 수)
+  subsample_requests: 12        # default_rng(split_seed + 12)
+  pool_shrink: 13               # default_rng(split_seed + 13)
+
+lightgbm:
+  params: TEAM_PARAMS           # models.TEAM_PARAMS 그대로(num_leaves 31, lr 0.05, feature_fraction 0.9, bagging 0.8/5)
+  extra_params: {deterministic: true, force_col_wise: true}
+  num_boost_round: 1000
+  early_stopping: 50
+
+# 실행이 유효하려면 poolneg(원본 조건·전체 풀)의 nDCG@10 seed 평균이 v1 CI 안에 있어야 한다.
+reproduction_gate:
+  arm: poolneg
+  cell: {traffic: orig, pool: full}
+  ndcg10_seed_mean_within: [0.2640, 0.2728]   # reports/recsys/ebnerd_v1.json p2.ranker_v2_poolneg ci95
+
+features:
+  pop_raw_columns: [pop_clicks_6h, pop_clicks_24h, pop_clicks_48h, pop_inviews_24h, pop_ctr_24h]
+  shrunk_column: pop_ctr_shrunk_24h
+  # E3에서 요청 내 랭크(0–1)로 바꾸는 열: 후보마다 값이 달라지는 연속 피처. 요청 안에서 상수인 열
+  # (hist_len, short_len, sess_len, hours_since_last_event, user_ncat, user_age, user_gender)과
+  # 이진·범주 열(is_fresh_24h, is_fresh_7d, cat_match_count, is_cat_match, news_category)은 원값 그대로.
+  rank_columns: [hours_since_pub, hist_cos, pop_clicks_6h, pop_clicks_24h, pop_clicks_48h, pop_inviews_24h,
+                 pop_ctr_24h, short_cos, sess_cos, cat_share]
+
+# 모든 arm은 LightGBM LambdaRank, 쿼리 = 요청, V2_FEATURES 22개(+표기된 추가 열), es 구간 early-stop.
+arms:
+  poolneg:            {data: pool_neg, window_h: 48, role: "기준(v1 ranker_v2_poolneg)"}
+  poolneg_mask0:      {data: pool_neg, window_h: 48, train_mask: {p: 0.5, value: 0.0, unit: request}}
+  poolneg_masknan:    {data: pool_neg, window_h: 48, train_mask: {p: 0.5, value: .nan, unit: request}}
+  poolneg_rank:       {data: pool_neg, window_h: 48, rank_normalize: true}
+  poolneg_shrunk_a5:  {data: pool_neg, window_h: 48, shrunk_alpha: 5}
+  poolneg_shrunk_a20: {data: pool_neg, window_h: 48, shrunk_alpha: 20}
+  poolneg_shrunk_a50: {data: pool_neg, window_h: 48, shrunk_alpha: 50}
+  poolneg72:          {data: pool_neg, window_h: 72, role: "E8 서빙 구성(72h 풀)용"}
+  ranker_v2:          {data: inview, role: "E2 P1 곡선(서술용)"}
+
+heuristics:
+  # 서빙 HeuristicScorer(backend/app/recsys/scoring.py)의 사전 가중치. 단기 신호가 없으면 단기 가중치를 장기로,
+  # 장기 신호가 없으면 장기 가중치를 단기로 넘기는 규칙도 그대로 옮긴다.
+  prior_weights: {long_term: 0.45, short_term: 0.35, recency: 0.15, popularity: 0.05}
+  recency_tau_hours: 48.0
+  heuristic_cold: "0.45*hist_cos + 0.35*short_cos + 0.15*exp(-hours_since_pub/48)  (인기도 항 없음)"
+  heuristic_prior4: "heuristic_cold + 0.05*min(1, log1p(pop_clicks_6h)/5)"
+  fit_terms: [hist_cos, short_cos, "exp(-hours_since_pub/48)", "log1p(pop_clicks_6h)"]
+
+conditions:
+  traffic: [orig, pop0, sub20, sub5, sub1]
+  subsample_fractions: {sub20: 0.20, sub5: 0.05, sub1: 0.01}
+  pool_sizes: [90, 60, 40]        # "full"(축소 없음)과 함께 4단계
+  truncate_ks: [0, 1, 3, 5, 10]   # "all"(절단 없음)과 함께 6단계
+
+e1:
+  a:
+    cell: {traffic: pop0, pool: full}
+    compare: [poolneg_mask0, poolneg]         # Δ = 앞 − 뒤
+    pass_if_ci_lo_gt: 0.005
+    on_pass: "poolneg_mask0를 shadow 주모델로"
+    on_fail: "shadow 주모델은 poolneg 유지"
+  b:
+    cell: {traffic: sub1, pool: 60}
+    models: [poolneg, poolneg_mask0]
+    baseline: heuristic_cold
+    beat_if_ci_lo_gt: 0.0
+    beat_if_diff_ge: 0.005
+    on_none_beats: "활성 스코어러는 휴리스틱 유지"
+    on_any_beats: "랭커가 저트래픽·작은 풀 조건에서 휴리스틱을 넘음(활성 후보 조건 중 E1 충족)"
+
+e2:
+  task: p2
+  model: poolneg
+  baseline: popularity_6h
+  traffic: orig
+  pool: full
+  pass_if_ci_lo_gt: 0.0
+  require_all_larger_k: true       # k와 그보다 큰 격자 값 전부에서 통과해야 k*로 인정
+  gain_min_effect: 0.005           # 서술용 k_gain: poolneg(k) − poolneg(0) CI 하한 > 0.005인 최소 k
+  p1_descriptive: {model: ranker_v2, baseline: popularity_24h}
+
+e3:
+  cell: {traffic: orig, pool: full}
+  compare: [poolneg_rank, poolneg]
+  non_inferiority_margin: -0.01    # CI 하한 > −0.01 → 계약 충족
+
+e4:
+  release_hour: 7                  # EB-NeRD 로컬 시각 07:00, 하루 1회
+  batches: 2                       # 당일 + 전일 배치
+  bucket_edges_h: [0, 2, 6, 12, 24]   # 마지막 버킷은 24h 이상(전일 배치)
+  methods: [cosine_history, popularity_6h, poolneg, recency, random]
+  verdict: none
+
+e6:
+  cells: [{traffic: sub1, pool: full}, {traffic: sub5, pool: full}]
+  alphas: [5, 20, 50]
+  baseline: poolneg
+  pass_if_ci_lo_gt: 0.005
+  prior: "요청 시각 t의 [t−24h, t) 전역 CTR = 전체 클릭 수 / 전체 노출 수(같은 로그, 노출 0이면 0)"
+
+e7:
+  sets:
+    a: {fit: "fit 창 poolneg 학습 분포(전체 유저, 전체 트래픽 인기도)", eval_cell: {traffic: orig, pool: full}}
+    b: {fit: "fit 창의 sub1 유저 요청, sub1 인기도", eval_cell: {traffic: sub1, pool: full}}
+  l2: 1.0e-6
+  max_iter: 100
+  tol: 1.0e-10
+  prior: heuristic_prior4
+  beats_prior_if_ci_lo_gt: 0.005
+  scorer_role_baseline: popularity_6h      # 적합 4항 − popularity_6h CI 하한 > 0 이어야 "스코어러", 아니면 "동점 깨기용"
+  keep_prior_if_ci_hi_lt: 0.0              # (b) − 사전값 CI 상한 < 0이면 서빙 기본값은 사전값 유지
+  switch_rule_for_adr_0014: "일 노출 5,000건 이상이면 (b) 세트에서 (a) 세트로 전환(관측 기간 등 세부는 ADR 0014가 정한다)"
+
+e8:
+  serving:
+    window_h: 72
+    sources: {knn_profile: 100, knn_short: 100, recent: 100, popular: 100, category: 50}
+    order: [knn_profile, knn_short, recent, popular, category]
+    cap: 300
+    model: poolneg72
+  harness:
+    window_h: 48
+    sources: {popularity_6h: 50, popularity_24h: 50, recency: 50, cosine_history: 50}
+    model: poolneg
+  min_union_recall: 0.90
+  two_stage_margin: -0.005         # (2단계 − 전체 풀) nDCG@10 쌍체 CI 하한 > −0.005
+
+budget:
+  runtime: "Colab CPU 런타임(Mac 실행 아님)"
+  cu_cap: 6.0       # 단계 시작 전 누적 추정(실측 rate x 경과 시간)이 이 값 이상이면 남은 단계를 돌리지 않는다
+  cu_warn: 5.0      # 이 값 이상이면 서술용 단계(e4, e2p1)를 건너뛴다
+
+# 판정용 실행의 입력 파일. behaviors/history 4개와 임베딩은 v1(reports/recsys/ebnerd_v1.json data.files,
+# data.catalog.embeddings_sha256)과 같아야 한다. articles.parquet은 메타 5개 열만 남긴 파생 파일이라 sha가 다르고,
+# 원본 sha와 파생 sha를 둘 다 리포트에 남긴다.
+data:
+  files_sha256:
+    train/behaviors.parquet: eeedd1b5cb42e952b7688f3199c5eb97da5596e6245a52714083eea3cb8e3736
+    train/history.parquet: 3f5ac2216f5807677c6225909cef80f1a84d08126c21e3cfeedacb54e3dd323c
+    validation/behaviors.parquet: 7a212113f427d218f3f36b3f52de876fb2868844e9657474b4be07872674c61d
+    validation/history.parquet: 4471f22424011192c892fecf3bb4fa3dcf769ebefd8e9fff05b625c3518ac861
+  articles_original_sha256: b1cea52ee4c152086ff6b70962fe543a43de50c684c1ec0735a4f061bded43d2
+  embeddings_sha256: 2f096ef8963ba332c72b1e89e3f0a8f29f48789d4367a5493e76d754d9b2ebeb
