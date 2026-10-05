@@ -1,5 +1,9 @@
 # 상수 피처 제거 전후 LightGBM 예측 비교 (v1)
 
+> 커밋 SHA 안내(2026-10-06): 아래에 적힌 SHA는 브랜치를 다른 브랜치들 위에 다시 쌓기 전의 것이다. 지금 이력에서
+> `73ed24f`(스크립트 추가)는 `35e1979`, `d1bc2d2`(피처 제거)는 `5ce77cd`다. 스크립트와 JSON의 git blob은 그대로이고
+> 수치와 표는 바꾸지 않았다. 다시 쌓은 트리에서 같은 명령을 한 번 더 돌렸을 때 JSON은 실행 시각만 달랐다.
+
 - 실행 명령: `cd ai_workspace/recommend_engine && python scripts/constant_feature_ablation.py --out ../../reports/recsys/constant_feature_ablation_v1.json`
   - 로컬 부하 제한: `nice -n 19 env OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2`, LightGBM `num_threads=2`
 - 코드: `73ed24f` (스크립트를 추가한 커밋)
