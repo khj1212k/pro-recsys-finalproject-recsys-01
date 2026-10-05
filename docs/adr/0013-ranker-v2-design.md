@@ -7,6 +7,8 @@
 main 위로 옮기면서 (2026-10-06) 결정·사전 등록 절·판정은 바꾸지 않았다. 이 문서와 리포트·JSON에 적힌 커밋 SHA는 옮기기 전
 것이고, 지금 이력과의 대응은 "사후 변경 기록"의 통합 기록에 있다.
 보충 실험 v1.2(콜드 regime)의 사전 등록은 2026-10-06에 결과 없이 커밋했다(맨 아래 "A2 사전 등록" 절, 결과 대기).
+신경망 사용자 모델 비교(E15)의 사전 등록도 2026-10-06에 결과 없이 커밋했다(맨 아래 "A3 사전 등록" 절, 결과 대기).
+그 결과가 나올 때까지 "검토한 대안"의 학습형 유저 인코더 항목은 "기각"이 아니라 "측정 대기"로 읽는다.
 
 ## 컨텍스트
 - 팀 추천기(`ai_workspace/recommend_engine`, ADR 0003)는 LightGBM `binary` 목적함수 + 클릭당 무작위
@@ -246,6 +248,9 @@ EBNERD_ROOT=<repo>/data/benchmarks/ebnerd .venv/bin/python -m evaluation.recsys.
      계산하면 sha256이 같다고 가정하지 않는다. v1·v1.1·민감도 수치는 저장된 임베딩 파일에서 나왔으므로 영향이 없다.
 - **A2 사전 등록 (2026-10-06, 보충 실험 v1.2 콜드 regime — 실행 전 커밋)**: 위 A2의 3번이 예고한 "다음 사전 등록 실험"이다.
   분량이 커서 아래 별도 절에 둔다. v1·v1.1의 사전 등록 절과 판정은 이 등록으로 바꾸지 않는다.
+- **A3 사전 등록 (2026-10-06, E15 신경망 사용자 모델 비교 — 실행 전 커밋)**: "검토한 대안"에서 이유만으로 기각했던 학습형
+  유저 인코더(NRMS 계열·세션 시퀀스 모델)와 GBDT 스태킹을 같은 프로토콜에서 재는 실험이다. 문서 맨 아래 별도 절에 둔다.
+  v1·v1.1·v1.2의 사전 등록 절과 판정은 이 등록으로 바꾸지 않는다.
 
 ## A2 사전 등록 — 보충 실험 v1.2 콜드 regime (2026-10-06, 실행 전 커밋)
 
@@ -533,3 +538,342 @@ python -m evaluation.recsys.ebnerd.make_cold_report reports/recsys/ebnerd_v1_2_c
      sha256 불일치와 겹치던 2에서 64로 바꿨다.
   7. *리포트 머리말의 사전 등록 커밋.* 위 "드라이버 운영 기능 추가" 2번은 `cold-v1.2.commit`에서 읽는다고 적었지만 코드는
      `--prereg-commit`으로 넘긴 값을 먼저 썼다. 파일의 값이 기준이고 넘긴 값은 파일이 없을 때만 쓰도록 바로잡았다.
+
+## A3 사전 등록 — E15 신경망 사용자 모델 비교 (2026-10-06, 실행 전 커밋)
+
+> 이 절은 결과를 보기 전에 커밋했다. 커밋 뒤에는 고치지 않고, 바꿀 일이 생기면 맨 끝 "A3 사전 등록 이후 변경 기록"에
+> 날짜·사유·결과 열람 여부와 함께 덧붙인다. 임계값·표본·시드·arm·탐색 공간·세션의 기계 판독본은
+> `evaluation/recsys/ebnerd/preregistration/neural-e15.yaml`이고, 판정 코드는 그 파일의 값만 읽는다. 두 곳이 다르면 yaml이 기준이다.
+> 근거 라벨은 [EB-NeRD](덴마크어 공개 벤치마크)이며 어떤 결과도 한국어 서비스의 성능이 아니다(A3.8).
+> 결과는 `reports/recsys/ebnerd_v1_3_neural.{json,md}`에 두고, 리포트 머리말에 이 절을 담은 커밋 SHA와 yaml의 sha256을 적는다.
+> 이 커밋에는 등록 문안과 yaml만 있다. 코드는 뒤 커밋에서 이 문안을 구현하고, 구현하면서 정한 세부는 변경 기록에 적는다.
+
+### A3.0 이름과 범위
+- 설계 사양(`docs/design/2026-09-26-recommendation-v2.md` §4.1, `docs/design-recsys-v2` 브랜치)의 E15 "최종 사전 등록"을 이 저장소의
+  코드에 맞춰 옮긴 것이다. 설계와 main의 코드가 다른 곳은 코드가 사실이고, 다르게 정한 곳은 A3.10에 모았다.
+- A2 사전 등록(v1.2 콜드 regime)과 독립이다. 콜드 조건의 정의(`evaluation/recsys/ebnerd/neural/cold.py`)만 공유하고, A2의 결과에
+  의존하지 않는다. v1·v1.1·v1.2의 판정은 이 실험 결과로 바꾸지 않는다.
+- 다루는 arm: A(팀 설정 고정 LightGBM), A\*(같은 예산으로 튠한 LightGBM, **판정 기준**), A+(A\* + 시퀀스 스칼라 4개, 정보를 맞춘
+  대조군), B(NRMS-lite), C(SASRec-lite), D(GBDT + 신경망 점수 스태킹). **E(DIN-lite)는 넣지 않는다** — 판정 arm이 아니어서
+  포함 여부가 사후 갈림길이 된다. 돌리려면 따로 사전 등록한다.
+- 이 실험이 통과시킬 수 있는 것은 "shadow 자격의 통계 조건"까지다. 서빙 비용 게이트는 이 등록의 코드가 재지 않으므로(A3.7),
+  이 등록만으로는 어떤 arm도 shadow 자격을 얻지 못한다. 모델 등록·활성화는 이 실험의 산출이 아니다.
+
+### A3.1 질문
+- Q1. **A의 정보 + 원 벡터**를 받는 학습형 시퀀스 유저 인코더가, 같은 예산으로 튠한 LightGBM LambdaRank(A\*)를 이기는가.
+  신경망은 A와 같은 스칼라 피처 22개에 더해 후보·히스토리의 고정 BGE-M3 1024차원 벡터와 순서를 받는다. 같은 정보가 아니라
+  상위 집합이다. 이기면 그 이득이 정보(원 벡터) 덕인지 구조 덕인지는 정보를 맞춘 대조군 A+로 가른다.
+- Q2. 이기지 못해도 GBDT 위에 정보를 더하는가(스태킹, 시간 전진 OOF).
+- Q3. 콜드 조건(인기도 0, 히스토리 5건 이하)에서 무너지지 않는가 — 이 제품의 초기 regime이다.
+- "검토한 대안"의 기각 사유(교차언어 붕괴, GPU 의존, 유저 1.5만 명 과적합, 세션당 조회 4건 이하, 코사인 피처가 같은 정보를 이미
+  담음)는 "GBDT가 이길 이유"라는 가설로 남긴다.
+
+### A3.2 공통 프로토콜
+- **데이터·임베딩·창**: v1과 같다. `ebnerd_small`, BGE-M3 `bge_m3_tsb512`(sha256 `2f096ef8…ebeb`, 1024차원, **고정** — 미세조정 없음,
+  신경망 arm도 같은 파일), fit 2023-05-20T07~05-24T07(129,080 노출), es 05-24T07~05-25T07(32,559), test = validation 창 전체
+  (244,647). `prepare.protocol_windows`·`impressions_in`을 그대로 쓴다. behaviors·history parquet 4개의 sha256은 v1 리포트의 값과
+  같아야 하고, 기사 파일은 A2와 같이 메타 5개 열만 남긴 파생 parquet을 쓴다(원본 sha와 파생 sha를 둘 다 기록).
+- **fit 블록**: fit 창을 시작 시각부터 24h씩 자른 b1..b4. D의 시간 전진 교차 적합(A3.4)과 서술용 `A_star_b234`에만 쓴다.
+- **P2 판정 표본**: validation 요청 20,000건, `default_rng(SPLIT_SEED + 2)` — v1과 같은 인덱스. 풀 = [t−48h, t] 발행 − t 이전에 읽은
+  기사, 풀 밖 정답은 `n_pos_total` 벌점. **P2 콜드 게이트 표본**: 그 20,000건 ∪ 나머지 validation 요청에서
+  `default_rng(SPLIT_SEED + 6)`으로 뽑은 40,000건 = 60,000건(검정력, A3.7).
+- **조기 종료는 es 구간에서만**: LightGBM 50라운드 인내·최대 1,000라운드(v1 그대로), 신경망 epoch 인내 2·최대 20 epoch(튜닝 중에는
+  최대 6). 조기 종료에 쓰는 행은 두 학습기가 같다 — P1 = es in-view 행의 seen 제외판, P2 = poolneg es 행(정답 + 무작위 20).
+  A만 v1 그대로(P1 es에 seen 포함)다. LightGBM은 내장 ndcg@10으로, 신경망은 같은 행의 `ranking_metrics` nDCG@10으로 멈춘다.
+  **모델 선택은 A3.6의 선택 표본**으로 하고 모든 arm에 같은 `ranking_metrics` 코드를 쓴다. test는 선택·튠·조기 종료 어디에도
+  쓰지 않는다.
+- **통계**: seed 0·1·2(모델 초기화·배치 순서·LightGBM seed·네거티브 표집·동점 처리). 노출별 지표를 seed 평균한 뒤 유저 단위
+  클러스터 부트스트랩 1,000회로 95% CI(`cluster_bootstrap`, seed 0), 같은 노출에서의 쌍체 차이 CI(`paired_bootstrap_diff`,
+  seed 1). 판정 Δ는 seed별로도 계산해 A3.7의 seed 규칙에 넣는다. 1차 지표 nDCG@10, 최소 효과 크기 0.005.
+- **seen**: **P1 판정 지표 = seen 제외판**(모든 arm 공통, v1의 `p1_seen_filtered`와 같은 계산). seen 포함판은 서술용이다.
+  이유: v1에서 P1 후보의 4.68%가 이미 읽은 기사인데 클릭의 2.48%만 차지했다. 신경망은 마지막 N 히스토리의 원 벡터를 보므로
+  "후보 = 히스토리 항목"을 거의 정확히 잡아 내릴 수 있고 LightGBM은 7일 감쇠 평균 코사인으로 희석된 신호만 본다. 서빙은 seen을
+  거르므로 이 이득은 제품과 무관하다. P2는 처음부터 seen 제거 풀이다.
+- **재현 게이트**: 같은 실행에서 A를 `models.train`(`TEAM_PARAMS` + `deterministic=True`·`force_col_wise=True`)으로 다시 학습한다.
+  P1 `ranker_v2`의 nDCG@10 seed 평균이 v1 CI [0.6533, 0.6569](seen 포함) **와** [0.6620, 0.6654](seen 제외) 안, P2
+  `ranker_v2_poolneg`가 [0.2640, 0.2728] 안이어야 실행이 유효하다. 게이트는 세션의 첫 단계다. 실패하면 그 실행의 어떤 수치도
+  판정에 쓰지 않고, 원인을 A2.10 "리뷰 반영" 2번의 구분((가) 하네스 결함, (나) 등록 조건 미준수)으로 특정해 고친 뒤 **새 SHA로
+  E15 전체(신경망 포함)를 다시 돌린다**. 버린 실행은 SHA·게이트 값·원인·쓴 CU를 변경 기록에 "폐기"로 적는다. 등록한 조건을 다
+  지켰는데도 구간 밖이면 이 등록으로는 판정하지 않고 새 id로 다시 등록한다.
+- **증거 등급**: 실행 인자가 yaml `run`의 값과 같고(데이터셋, seed, 부트스트랩 횟수, 표본 크기 세 개, trial 수 두 개, epoch 상한
+  두 개, 인내, `--fake-dim`·`--max-fit`·`--max-test` 없음), 입력 sha256이 등록값이고, 코드 SHA가 확인되고(40자리, dirty 아님),
+  yaml의 sha256이 실행 당시와 같고, fit 블록이 4개일 때만 리포트가 판정용으로 표기된다. 하나라도 다르면 코드가 머리말에
+  "demo, not evidence"를 찍는다.
+- **test 창의 한계**(판정 변경 없음): validation 창은 v1·v1.1에서 여러 번 보고됐고 A의 피처 구성은 그 결과와 함께 정해졌다.
+  test가 적응적으로 재사용된 셈이라 A·A\*·A+의 피처 집합에 약간 유리하다. 리포트 한계 절에 적는다.
+- **기사 판본 한계**: `articles.parquet`의 수정 시각은 발행 시각보다 늦어(설계 사양의 로컬 메타데이터 실측: 전 기사, 중앙값
+  약 150일) 임베딩한 본문이 노출 시점 판본이라는 보장이 없다. 두 학습기가 같은 벡터를 쓰지만 신경망은 원 벡터를 직접 받아
+  기사 수준 신호를 더 쉽게 쓴다. 리포트 한계 절에 적는다.
+
+### A3.3 과제·네거티브·콜드 증강 — 두 학습기가 같은 것을 받는다
+
+| 과제 | 쿼리 | 후보 | 학습 네거티브 | 평가 후보 | 하네스 함수 |
+|---|---|---|---|---|---|
+| P1 노출 재정렬 | 노출 | `article_ids_inview` | 같은 노출의 비클릭(v1 `ranker_v2`의 데이터) | in-view 전체(판정은 seen 제외판) | `prepare.p1_task` |
+| P2 48h 풀 | 노출(= 요청) | [t−48h, t] 발행 − seen | 48h 풀 무작위 20개, `pool_negative_task(n_neg=20, window_h=48)`, `default_rng(1000 + seed)`로 fit → es 순 — v1 `ranker_v2_poolneg`와 같은 표본 | 전체 풀 | `pool_negative_task`(fit·es), `p2_task`(선택·test·콜드) |
+
+- 두 학습기는 **같은 `RankTask` 객체**를 받는다. LightGBM은 `compute_features(ctx, task.req, groups=ALL_GROUPS)`의 행렬을, 신경망은
+  같은 행렬(스칼라 블록) + `task.req`의 후보 + `ctx.user_log`의 마지막 N 클릭을 받는다. `labels`·`cand_ptr`·`cand_item`이 두 경로에서
+  같은 배열인지 테스트가 단언한다.
+- 다중 양성 노출: LightGBM `label_gain=[0, 1]`. 신경망은 그룹 전체 softmax에서 양성마다 −log p를 구해 그 노출 안에서 평균한다.
+  양성이 없는 그룹은 손실에서 뺀다.
+- **네거티브는 epoch 간 고정**이다(신경망이 epoch마다 다시 뽑지 않는다 — GBDT와 같은 정보). `pool_negative_task`의 키 배열
+  (user, time, cand_item)의 sha256(fit·es, seed별)을 리포트 `protocol.negative_hash`에 남긴다. numpy 난수 스트림은 버전 간 호환이
+  보장되지 않으므로 "v1과 같은 네거티브"는 재현 게이트(P2)와 이 해시로 확인한다.
+- **양성 필터 없음**: 네거티브는 48h 풀의 미열람 기사에서만 뽑지만 양성에는 필터가 없다(v1과 동일). 48h보다 오래된 기사의 클릭과
+  이미 읽은 기사의 재클릭은 test 풀에 없는 지름길이고 두 학습기가 받는 영향이 다를 수 있다. 판정은 A의 재현성 때문에 원판을
+  유지하고, 리포트 한계 절에 적는다.
+- **콜드 증강**(A를 뺀 모든 학습 arm 공통): fit 노출의 10%를 seed별로 고정해 고르고(`default_rng(2000 + seed)`, 비복원), 고른
+  노출마다 k ∈ {0, 1, 3, 5}를 균등 무작위로 정해 A3.5의 절단 정의대로 바꾼다 — `user_log`·`session_log`를 모두 최근 k건으로
+  자르고 스칼라 블록 전체를 다시 계산하고, 신경망 시퀀스와 A+의 seq_\*도 같은 절단 로그에서 만든다. 라벨·후보·네거티브는
+  그대로다. es 행은 증강하지 않는다. 고르는 단위가 fit 노출이라 같은 seed면 P1과 P2에서 같은 노출이 같은 k로 증강된다.
+  이유: fit 노출 중 히스토리 5건 이하는 0.29%(설계 사양의 로컬 실측)라 증강 없이는 어느 arm도 콜드 행을 학습에서 보지 못한다.
+  트리는 범위 밖에서 상수로 외삽하지만 MLP·attention은 그렇지 않아, 증강이 없으면 콜드 게이트가 "콜드 능력"이 아니라
+  "외삽 형태"를 재게 된다. 그 대가로 A\* − A에는 하이퍼파라미터와 증강 효과가 섞이므로 서술용 `A_star_noaug`를 둔다.
+
+### A3.4 arm
+- **A. LightGBM 팀 설정 고정**(재현 게이트·서술 기준, **판정 기준 아님**): P1 `ranker_v2`, P2 `ranker_v2_poolneg`, `V2_FEATURES` 22개,
+  증강 없음, v1의 es 행. 튜닝 0회 arm과 24개 설정 중 최선을 고른 신경망을 비교하면 이득이 전부 튜닝에서 나와도 "신경망 채택"이
+  된다(Ferrari Dacrema 2019, Rendle 2020). 그래서 A는 v1 재현과 "팀 설정 대비 얼마나 올랐나"의 서술에만 쓴다.
+- **A\*. 같은 예산으로 튠한 LightGBM**(**판정 기준**): A3.6의 GBDT 공간에서 24 trial(trial 0 = 팀 설정), 선택 표본으로 best를 골라
+  seed 0·1·2로 최종. 증강 적용. 목적함수·쿼리·피처·bagging 0.8/5·early stop 50·최대 1,000라운드·`deterministic`은 A와 같다.
+- **A+. 정보를 맞춘 대조군**: A\*와 같은 24개 설정을 따로 평가해 자기 best를 고른다. 피처 = `V2_FEATURES` + 시퀀스 스칼라 4개 —
+  요청 시각 이전 마지막 50 클릭(신경망과 같은 시퀀스, 같은 절단)과 후보의 코사인으로 만든 `seq_cos_max`(최대), `seq_cos_top3`
+  (큰 순서로 최대 3개의 평균), `seq_cos_last`(가장 최근 클릭), `seq_in_recent`(후보가 그 50개 안에 있으면 1). 시퀀스가 비면 네 열
+  모두 0. "신경망 **구조**의 이득"은 신경망 − A+가 seed 규칙으로 양일 때만 말한다. A+ − A\*가 양이면 그 자체를 "시퀀스 스칼라
+  피처 채택 후보"로 기록한다 — 신경망이 지고 A+가 이기는 결과도 이 실험의 산출이다.
+- **B. NRMS-lite**: 입력 = `profile_cutoff` **이전**(같음 제외) 마지막 N 클릭(`ctx.user_log`, hist_cos와 같은 출처; 오른쪽 정렬, 패딩
+  마스크). 아이템 표현 = 고정 벡터 → `Linear(1024→d) + LayerNorm + Dropout`(히스토리와 후보가 공유하는 유일한 아이템 파라미터).
+  유저 인코더 = multi-head self-attention(h) + additive attention(은닉 폭 d). **점수 = 후기 융합**
+  `s = MLP₂([x̃, ⟨u,c⟩/√d, W_p(u⊙c)])`, `W_p = Linear(d→8)`, MLP₂ = `Linear → ReLU → Dropout → Linear`(은닉 128).
+  **빈 시퀀스는 u = 0 고정**(학습되는 빈 시퀀스 벡터 없음, 점수는 x̃만의 함수). 손실 = 노출 단위 masked softmax 교차 엔트로피,
+  AdamW, grad-norm clip 1.0, fp32(AMP·fp16·TF32 금지), label smoothing 없음. 원 NRMS와 다른 점(뉴스 인코더 고정, 스칼라 블록,
+  후기 융합, 그룹 전체 softmax)을 리포트에 적고, 기각할 때의 범위는 "NRMS 유저 인코더 + 뉴스 인코더 고정(BGE-M3 투영)"이다.
+  - **스칼라 블록 x̃**(GBDT는 단조 변환에 불변이라 원값 그대로 받는다): `news_category` → 임베딩 8차원, `user_gender` → 결측
+    토큰 포함 임베딩 4차원, 카운트·시간 열 11개(`hours_since_pub, hist_len, cat_match_count, user_ncat, pop_clicks_6h/24h/48h,
+    pop_inviews_24h, short_len, sess_len, hours_since_last_event`) → log1p 후 표준화, 유계 열 6개(`hist_cos, short_cos, sess_cos,
+    cat_share, pop_ctr_24h, user_age`) → 표준화, 이진 열 3개 → 그대로, **fit 행에서 NaN이 나온 열마다 결측 지표 1개** 뒤 NaN → 0.
+    평균·표준편차는 그 모델이 학습한 fit 행(증강 뒤)에서 계산해 모델과 함께 저장한다.
+- **C. SASRec-lite**: 같은 투영 위에 인과 self-attention L층(pre-LN, FFN 4d) + 학습 위치 임베딩(가장 최근 클릭이 0번인 최근성
+  순번), 가장 최근 위치의 출력 = u. 점수·스칼라 블록·손실은 B와 같다. **보조 next-click 손실**: 히스토리의 각 위치 출력으로 그
+  다음 클릭을, 그 클릭 시각 t′ 기준 [t′−48h, t′] 발행 풀에서 뽑은 무작위 네거티브 4개와 대비하는 softmax 교차 엔트로피.
+  네거티브는 유저 로그 이벤트마다 seed별로 미리 뽑아(`default_rng(4000 + seed)`, 복원 추출, 정답과 같은 기사는 가림) epoch 간
+  고정한다. 총 손실 = L_listwise + λ·L_next, λ ∈ {0, 0.5}는 탐색 공간에 있다. 시퀀스의 이벤트는 전부 요청 시각 이전이므로 보조
+  손실도 요청 시각 이후 정보를 쓰지 않는다. 기각할 때의 범위는 "SASRec 인코더 + 요청 단위 listwise 목적(+보조 next-click
+  λ ∈ {0, 0.5}) + 고정 BGE-M3 투영"이며 SASRec 전체가 아니다.
+- **선택 arm `sel`**: B와 C 중 A3.6의 규칙으로 과제마다 하나. 판정 비교에는 `sel`만 들어가고 나머지 family는 서술용이다.
+- **D. 스태킹**: LightGBM LambdaRank, 파라미터 = A\*의 best(재튠 없음), 피처 = `V2_FEATURES` + `neural_score_rank`(`sel`의 점수를
+  요청 안 평균 순위 0~1로 — A2의 랭크 정규화와 같은 함수). 원점수 변형은 돌리지 않는다.
+  - **누출 방지 = 시간 전진 교차 적합**: 블록 j(j ≥ 2)의 fit 행은 **블록 < j의 행만으로 학습한** 신경망이 채점한다. 블록 모델은
+    `sel`과 같은 설정·같은 증강 행을 쓰고, epoch 수는 같은 seed의 최종 `sel` 모델의 best epoch로 고정한다(es를 다시 쓰지 않는다).
+    b1 행은 점수가 없어 스태커 학습에서 빠진다(학습 행 = b2..b4). es·test·콜드 행은 fit 전체로 학습한 최종 `sel` 모델(같은 seed)이
+    채점한다. 테스트 단언: **모든 fit 행의 신경망 점수는 그 행의 요청 시각보다 이른 요청만으로 학습한 모델에서 나왔다.**
+  - 유저 단위 K-폴드를 쓰지 않는 이유: 이 모델에는 유저 파라미터가 없고 기사는 모든 유저가 공유한다. 유저 폴드는 시간 축을 자르지
+    않아 폴드 모델이 그 행 시각 이후의 기사별 클릭률을 투영에 담을 수 있고, 그러면 fit 행 점수에만 미래 인기도가 들어가 스태커가
+    서빙에서 성립하지 않는 관계를 배운다.
+  - 알려진 한계: 블록 모델은 1~3일치로 학습돼 블록마다 점수 분포가 다르고 스태커 학습 행이 A\*보다 적다. D에 불리한 방향이라
+    판정은 D − A\* 그대로 두고, 서술용 `A_star_b234`(A\*를 b2..b4 행으로만 학습)를 함께 낸다.
+- **서술용 arm**: `sel_no_scalars`(B0: `sel`에서 x̃를 뺀 `s = MLP₂([⟨u,c⟩/√d, W_p(u⊙c)])` — 스칼라 블록의 몫을 본다. P2에서
+  인기도·신선도 없이 싸우는 허수아비라 판정에 쓰지 않는다), 선택되지 않은 family의 최종 3 seed, `A_star_noaug`, `A_star_b234`.
+
+### A3.5 콜드 조건
+모델은 학습한 그대로 두고 평가 입력만 바꾼다. 정의의 단일 구현은 `neural/cold.py`(`cold_conditions`, `pop_mask_raw`,
+`truncate_logs`)이고 A2와 같은 함수다.
+- **pop0**: raw 피처 단계에서 `pop_clicks_6h/24h/48h`, `pop_inviews_24h`, `pop_ctr_24h` = 0. LightGBM은 그대로 받고, 신경망은 그
+  raw 0에 fit 표준화 통계를 적용한다(표준화된 공간에서 0을 넣으면 "평균 인기도"가 되어 다른 조건이다).
+- **절단 k ∈ {0, 1, 3, 5}**: 요청 시각 기준으로 `user_log`와 `session_log`를 모두 최근 k건으로 자른다. 스칼라 블록 전체를 절단
+  로그에서 다시 계산해 **두 학습기가 같은 행렬**을 받고(한 프로세스에서 한 번 계산한 행렬을 모든 arm에 넣는다), 신경망 시퀀스와
+  A+의 seq_\*도 절단 로그에서 읽는다. 후보·라벨·seen 필터는 전체 로그 기준으로 고정한다. 온보딩 대체물과 나이·성별은 그대로다.
+  D는 절단 입력으로 신경망 점수를 다시 계산한 뒤 다시 채점한다. k=0에서 신경망은 u=0 경로를 탄다.
+- 표본: P1 = test 전체(seen 제외판), P2 = 60,000 요청. 조건은 한 번에 하나씩 계산한다(호스트 RAM). 비교 상대는 같은 조건으로
+  다시 평가한 A\*.
+
+### A3.6 튜닝 예산과 선택
+- **신경망 family마다 무작위 탐색 12 trial**(seed 0, 최대 6 epoch, 인내 2). 공간: d ∈ {128, 256}, heads ∈ {2, 4}, dropout ∈ {0.1, 0.3},
+  lr log-U[3e-4, 3e-3], weight_decay ∈ {0, 1e-4, 1e-2}, batch ∈ {256, 512}(노출 수), N ∈ {20, 50}; C만 L ∈ {1, 2}, λ ∈ {0, 0.5}.
+  설정은 `default_rng(SPLIT_SEED + 152)`(B), `+153`(C)에서 yaml의 키 순서대로 뽑는다. **두 과제가 같은 12개 설정을 쓴다.**
+  최종은 best 설정으로 seed 0·1·2, 최대 20 epoch, 인내 2.
+- **A\*·A+는 각각 24 trial** = 과제당 신경망 총 시행 수(12 × 2 family). trial 0 = 팀 설정(num_leaves 31, lr 0.05, min_data_in_leaf 20,
+  feature_fraction 0.9, lambda_l2 0, lambdarank_truncation_level 30 — 공간 안에 있다), 나머지 23개는 `default_rng(SPLIT_SEED + 151)`:
+  num_leaves ∈ {15, 31, 63, 127}, lr log-U[0.02, 0.1], min_data_in_leaf ∈ {20, 50, 100, 200}, feature_fraction ∈ {0.7, 0.9, 1.0},
+  lambda_l2 ∈ {0, 1, 10}, lambdarank_truncation_level ∈ {10, 20, 30}. A\*와 A+, 두 과제가 **같은 24개 설정**을 쓰고 각자 best를
+  고른다. seed 0으로 튠하고 best로 3 seed. 코드는 GBDT trial 수가 신경망 총 시행 수와 다르면 시작하지 않는다.
+- **선택 표본**(trial·family·A\*·A+ 공통, test 미사용): P1 = es in-view 노출 전체의 seen 제외판 nDCG@10. **P2 = es 구간 요청
+  5,000건의 전체 풀 nDCG@10**(`default_rng(SPLIT_SEED + 5)` — v1 `select_p2_model`과 같은 표본, 인덱스 sha256을 리포트에 기록).
+  이유: poolneg es 행(정답 1 + 무작위 20)의 top-10은 전체 풀(평균 235)의 top-10과 다른 것을 재고 모델 순위를 뒤집을 수 있다
+  (Krichene & Rendle 2020; v1에서도 그 표가 달랐다). trial 동률은 번호가 작은 쪽.
+- **B와 C 중 `sel`**: 과제마다, 각 family의 튠 best(seed 0)의 선택 표본 지표가 큰 쪽. 동률이면 B. test를 보지 않는다. 선택 결과와
+  근거 수치를 리포트 `selection`에 남긴다.
+- trial 표(설정, 선택 지표, best epoch·라운드, 시간)는 전부 리포트에 남긴다.
+
+### A3.7 지표·판정 규칙(실행 전 고정)
+- **1차 지표**: 과제별 ΔnDCG@10 = arm − A\*, 같은 노출 쌍체(P1 seen 제외판 test 전체, P2 20,000 요청 전체 풀).
+- **판정용 비교 4개**: (P1) `sel − A*`, `D − A*`; (P2) `sel − A*`, `D − A*`. 고정 A와의 차이는 서술용이다. 다중 비교 보정은
+  판정에는 하지 않고 주장에만 한다(아래).
+- **seed 규칙**(판정 비교 4개와 서술용 A\* − A, A+ − A\*, `sel` − A+에 같은 규칙): CI는 seed 평균한 노출별 지표를 유저 단위로
+  부트스트랩하므로 학습 seed 분산이 빠져 있다. 그래서 둘 다 요구한다. (a) 세 seed 각각의 쌍체 Δ 95% CI 하한 > 0.
+  (b) 결합 하한 `Δ̄ − sqrt(hw_boot² + (4.30·sd_Δ/√3)²) > +0.005` — hw_boot = seed 평균 Δ의 부트스트랩 95% CI 반폭,
+  sd_Δ = seed별 Δ 평균의 표준편차(n−1), 4.30 = t₀.₉₇₅(df=2).
+- **게이트**(채택을 막을 수만 있다. `sel`과 D 각각): 비열등 게이트는 **양측 90% CI 하한(= 단측 95%)**을 쓴다.
+  - 콜드 5개(pop0, k0, k1, k3, k5): 같은 조건의 A\* 대비 Δ 하한 > −0.005.
+  - 정보 대조군: arm − A+ 하한 > −0.005(판정 표본).
+  - 3분류: **통과**(하한 > −0.005) / **실패**(하한 ≤ −0.005 이고 점추정 ≤ −0.005) / **보류**(하한 ≤ −0.005 < 점추정 — 검정력
+    부족이지 "측정 후 기각"이 아니다. shadow 자격은 주지 않는다).
+  - 실행 유효성: 재현 게이트(A3.2), 결정론 게이트(A3.9). 실패하면 실행 무효다.
+  - **서빙 비용 게이트는 미룬다**: 내보낸 모델의 CPU 마이크로벤치 p95 추가 지연 ≤ 30 ms, 모델 파일 ≤ 20 MB(B·C·D 공통).
+    이 등록의 코드는 내보내기와 마이크로벤치를 포함하지 않는다. 재기 전에는 통계 조건을 다 통과한 arm도
+    `pending_serving_cost_gate`로만 적고 shadow 자격을 주지 않는다.
+- **검정력**(v1 수치 기준, 설계 사양의 계산): P1 쌍체 95% 반폭 ≈ ±0.0014라 "하한 > +0.005"는 사실상 점추정 ≥ ≈0.0064,
+  P2 20,000건은 반폭 ≈ ±0.0028~0.0055라 점추정 ≥ ≈0.0078~0.0105. 콜드 P2 60,000건은 반폭 ≈ ±0.0016~0.0032이고, 실제로
+  동등한 모델(Δ = 0)이 −0.005 게이트 하나를 통과할 확률 ≈ 0.92(반폭 0.0032 기준). 통계 게이트 6개를 모두 통과할 확률은 그보다
+  낮고 그 몫은 "보류"로 간다. 검정력 부족으로 나온 결과를 기각으로 적지 않는다.
+- **결정**(과제·arm마다 `neural_verdict`가 낸다 — 사람이 표를 읽어 판정하지 않는다):
+  - 필요한 수치가 없으면 `unmeasured`. **끝나지 않은 비교는 "기각"이 아니라 "미측정"**이고, 채우려면 같은 SHA·같은 인자로
+    이어서 돌리거나 새로 등록한다. 실행 유효성 게이트 실패는 `invalid_run`.
+  - seed 규칙 불통과: seed 평균 Δ의 95% CI가 0을 포함하면 `not_distinguishable`, (a)는 통과했는데 결합 하한이 (0, 0.005]이면
+    `below_min_effect`, 그 밖은 `seed_rule_failed`.
+  - seed 규칙 통과 뒤: 게이트에 실패가 있으면 `gate_failed`, 없고 보류가 있으면 `gate_hold`, 미측정 게이트가 있으면 `unmeasured`,
+    전부 통과면 `pending_serving_cost_gate`(통계 조건 충족, 서빙 비용 게이트 대기).
+  - 통과하지 못한 결과는 이 ADR에 수치와 함께 "측정 후 기각/보류"로 적고 "검토한 대안"의 해당 항목을 그 상태로 갱신한다.
+- **A\* − A**가 seed 규칙으로 양이면 "ADR 0013 하이퍼파라미터(+증강) 갱신 후보"로 따로 기록한다(분리는 서술용 `A_star_noaug`로).
+  **A+ − A\***가 양이면 "시퀀스 스칼라 피처 채택 후보".
+- **주장(claim)**: `none | stacking_gain | neural_arm_both_tasks`. "딥러닝 대비 우위"류의 문장은 금지이고, 조건부 표현
+  ("[EB-NeRD] 같은 프로토콜·같은 예산에서 ΔnDCG@10 +x [CI]")이 풀리는 조건은 `neural_arm_both_tasks` 하나다: **두 과제의 `sel`이
+  같은 family**이고, 두 과제 모두에서 `sel − A*`가 seed 규칙과 Holm(4)을 통과하고, `sel − A+`가 seed 규칙을 통과하고, 게이트가
+  전부 통과. Holm(4)은 판정 비교 4개를 한 묶음으로 한 step-down이다 — 남은 비교가 m개일 때 양측 (1 − 0.05/m) CI 하한 > +0.005인
+  비교를 기각하고 m을 줄여 되풀이한다(미측정 비교는 기각되지 않은 채 묶음에 남는다). D만 통과하면 `stacking_gain`:
+  "GBDT에 신경망 점수를 더하면 +x [CI]"(보완 정보)로만 쓴다. 판정 4개를 비보정으로 두면 귀무가설 Δ = 0.005에서 하나라도
+  통과할 확률이 최대 ≈10%인데, shadow 자격 판정에는 받아들이고 주장에는 받아들이지 않는다. 신경망이 받는 정보를 "같다"고
+  쓰지 않는다("A의 정보 + 원 벡터").
+- **실행 순서 고정**(과제마다): A(재현 게이트) → A\*·A+ 튠 → A\*·A+ 최종 → 결정론 게이트 → B 튠 → C 튠 → 선택 → `sel` 최종 →
+  D(블록 모델 → 스태커) → 콜드 → 서술용. 예산 경고선에서 잘리는 것은 서술용부터다.
+- **서술용(판정 없음)** — 이 등록의 코드가 내는 것: P1 seen 포함판·AUC·MRR·nDCG@5, P2 recall@10·MRR, 고정 A 대비 Δ, 선택되지
+  않은 family, `sel_no_scalars`, `A_star_noaug`, `A_star_b234`, trial 표, best epoch·학습 시간·파라미터 수, 콜드 조건별 Δ 곡선,
+  스태커의 `neural_score_rank` gain 비율. 설계 사양이 서술용으로 든 것 중 **이 코드에 없는 것**: P1↔P2 교차, P2
+  ILD·coverage·novelty, 유저×seed 계층 부트스트랩, 양성 필터 민감도(`pool_unseen`), title+subtitle 임베딩 민감도, ONNX
+  마이크로벤치. 이들은 리포트에 "미측정"으로 남고 판정에 영향이 없다. 넣으려면 판정용 실행 전에 변경 기록에 적는다.
+
+### A3.8 언어 전이 caveat — EB-NeRD에서 이겨도 한국어 전이는 성립하지 않는다
+- 투영층과 유저 인코더는 덴마크어 기사 벡터의 기하 위에서만 학습되고, 클릭 역학(타블로이드 프런트 페이지, 세션당 조회 4건
+  이하)도 이 제품과 다르다. 스칼라 피처는 언어 무관이지만 신경망의 이득이 어느 블록에서 오는지는 `sel_no_scalars`와 `sel − A+`로
+  나눠 본다.
+- 활성 후보로 올리기 전에 필요한 증거(이 실험의 범위 밖, 조건만 고정): **[KR-eval]** (a) 한국어 뉴스레터 500건 이상에서 BGE-M3
+  카테고리 kNN(k=10) LOO 정확도 ≥ 0.6, (b) 스칼라 블록에 랭크 정규화 계약(ADR 0031) 적용, (c) 한국어 로그가 시작 조건(클릭
+  2,000·요청 5,000·탐색 슬롯 노출 10,000 이상)을 채운 뒤 같은 프로토콜로 신경망 − GBDT 비열등(CI 하한 > −0.005).
+  **[KR-online]** (d) shadow 점수 병기 4주 이상 뒤 탐색 슬롯 replay CTR 쌍체 비교에서 신경망 shadow − GBDT shadow CI 하한 > 0,
+  (e) 한국어 로그의 유저 히스토리 길이 중앙값 ≥ 5 클릭.
+- 이 증거가 없으면 E15 결과는 "[EB-NeRD]에서 측정된 오프라인 차이"로만 쓴다. "한국어 서비스에서 신경망이 낫다/못하다"는 어느
+  쪽으로도 쓰지 않는다.
+
+### A3.9 실행 — 원격 런타임, 세션, 드라이버, 재개, 환경, 결정론, 예산
+- **어디서**: 비공개 Colab 런타임. 실행마다 데이터를 올리고 실행 뒤 VM을 해제한다(저장소 커밋·공개 데이터셋·영구 사본 금지,
+  리포트·로그에 기사 텍스트 없음 — 통합 기록 4의 규칙). 개발용 Mac에서는 단위 테스트(합성 데이터)와 판정·리포트 조립만 한다.
+  데이터는 A2와 같이 비공개 버킷의 12시간 이하 서명 URL로 VM에서 내려받고, URL은 인자·환경변수로만 넘기며 어디에도 출력하지
+  않는다. 기사 파일은 메타 전용 파생본이다. 내려받은 체크포인트·점수 배열은 gitignore된
+  `data/benchmarks/ebnerd/derived/e15_ckpt/`에만 두고 리포트를 만든 뒤 지운다.
+- **세션**(순서대로. 뒤 세션은 앞 세션의 체크포인트 묶음을 받아 이어서 돈다):
+
+  | 세션 | 런타임 | 데이터 | 하는 일 | 세션 상한 |
+  |---|---|---|---|---|
+  | S0 드라이 런 | CPU | 합성(`synthetic.py`, EB-NeRD 없음) | 드라이버 → `python -m` → 전 단계 → 재개 경로, 핀 설치, 분리 실행 생존, CU/h 실측. demo 등급 | 0.5 CU |
+  | S1 파일럿 | CPU | 등록 데이터 | 두 과제의 `gate`·`determinism`을 seed 0만. 내려받기 경로, 단계별 피크 RSS, 결정론 게이트 코드 경로. **판정에서 제외**(seed가 등록값과 달라 코드가 demo로 표기). test에서 계산되는 것은 v1에 이미 보고된 A의 지표뿐이다 | 1 CU |
+  | S2 GBDT | CPU | 등록 데이터 | 두 과제의 `gate` → `gbdt_tune` → `gbdt_final` | 8 CU |
+  | S3 P1 | T4 | 등록 데이터 + S2 묶음 | 재현 게이트 재확인(그 VM에서 A 3 seed를 다시 학습해 같은 구간 판정) → `determinism` → `neural_tune` → `select` → `neural_final` → `stack` → `cold` → `narrative` | 9 CU |
+  | S4 P2 | T4 | 등록 데이터 + S3 묶음 | S3와 같은 순서 → `assemble` | 9 CU |
+
+  최종 판정과 리포트는 마지막 묶음을 내려받아 Mac에서 `assemble`로 다시 만든다(데이터 없이 요청별 지표 배열만으로, 같은 JSON).
+- **드라이버**: `scripts/e15_colab_driver.py`. A2의 `scripts/m4_colab_driver.py`와 같은 규칙이고 그 파일의 도구를 그대로 쓴다 —
+  tarball sha256 확인과 안전한 풀기, 서명 URL 내려받기와 URL 비노출, manifest sha256 대조(불일치는 실행 무효), 핀 설치,
+  (과제, 단계)마다 서브프로세스 실행, 60초 heartbeat, FAILED 마커, 분리 실행과 stop, 설정 해시가 같을 때만 재개.
+  E15에서 더한 것: 세션 표, torch 버전 확인(아래), 앞 세션 묶음 받기(sha256 확인), 묶음 만들기, 누적 CU(앞 세션 포함) 기준 예산.
+- **체크포인트·재개**: 단위(trial, seed별 모델, 블록 모델, 콜드 조건, 서술용 arm)가 끝날 때마다 `progress.json`과 산출물(trial 행,
+  모델, 요청별 지표 배열)을 쓴다. 다시 실행하면 설정 해시(등록 yaml sha·데이터 sha·코드 SHA·실행 인자)가 같을 때만 끝난 단위를
+  건너뛴다. **신경망에서 나온 단위는 torch 버전과 장치(GPU 이름)가 같을 때만 건너뛴다** — 다르면 그 과제의 신경망 단위를 전부
+  버리고 처음부터 돈다(한 과제의 seed 3개가 서로 다른 GPU에서 나오지 않게). 요청별 지표 배열의 유저 키는 원 id가 아니라 묶음
+  번호다. 단계가 0이 아닌 코드로 끝나면 실행 무효(FAILED 마커)이고, 내려받기·설치 실패는 무효가 아니라 다시 시도한다.
+- **환경 고정**: `requirements-colab-gpu.txt` = `evaluation/requirements.txt`와 같은 numpy·pandas·pyarrow·lightgbm·pyyaml 핀 +
+  `torch==2.11.0`(런타임 기본 2.11.0+cu128과 같은 버전이라 다시 받지 않는다). 드라이버는 단계 전에 설치된 torch의 버전이 이
+  핀과 같은지 확인하고 다르면 시작하지 않는다(T4 세션은 CUDA 사용 가능 여부도 본다). Python 버전(런타임 3.13, v1은 3.11)은
+  기록하고 재현 게이트로 확인한다. GPU·드라이버·CUDA·cuDNN·torch 버전을 리포트 `meta`에 남긴다.
+- **결정론**: `torch.use_deterministic_algorithms(True)`, `CUBLAS_WORKSPACE_CONFIG=:4096:8`, `cudnn.benchmark=False`, TF32 끔,
+  seed별 생성기로 초기화·배치 순서 고정. LightGBM은 전 arm `deterministic=True`·`force_col_wise=True`.
+  **결정론 게이트**: T4 세션마다 신경망 단계 전에 실제 코드로 family당 1 epoch(seed 0, fit 10% 서브샘플 —
+  `default_rng(SPLIT_SEED + 7)`, yaml의 고정 설정: d 128, heads 2, L 2, λ 0.5)을 두 번 돌려 손실 합과 es 점수 배열의 sha256이
+  같아야 진행한다. 다르면 실행 무효. GPU 종류가 바뀌면 비트 단위 재현을 기대하지 않는다 — 재현 기준은 "seed 평균이 보고된
+  CI 안"이다.
+- **예산**: E15 전체 상한 **30 CU**, 경고선 **24 CU**. 드라이버는 단계를 시작하기 전에 `앞 세션까지 쓴 CU + 실측 rate × 이 세션의
+  경과 시간`을 본다. 경고선 이상이면 서술용 단계(`narrative`)를 건너뛰고, 전체 상한이나 세션 상한 이상이면 남은 단계를 돌리지
+  않는다(끝나지 않은 비교는 미측정). 설계 사양의 추정: T4 합계 ≈ 10.1~13.3 h ≈ 10.8~14.2 CU(1.07 CU/h), 재실행 여유 ≈ 4 CU,
+  S0·S1 ≤ 1.5 CU, S2 ≤ 8 CU — 현실적 총합 ≈ 13~20 CU. 이 추정은 합성 텐서 스모크에서 나온 것이고 실제 코드의 시간은 S0·S1에서
+  먼저 잰다. 세션마다 쓴 CU(잔액 차이와 `rate × 벽시계 시간` 둘 다)를 리포트 `meta.compute`와 변경 기록에 남긴다.
+
+### A3.10 설계 사양과 다르게 정했거나 설계가 비워 둬 여기서 정한 것
+1. *이름.* main의 "사후 변경 기록"에는 A2가 두 번 쓰였고(리뷰 반영, v1.2 사전 등록) A3는 E15 몫으로 비워 뒀다. 이 절이 그 A3다.
+   yaml id는 `ebnerd-neural-e15`, 리포트는 `ebnerd_v1_3_neural`.
+2. *콜드 함수의 모양.* 설계는 `truncate_logs(ctx, cutoff, k) -> ctx'`를 E15가 새로 만든다고 적었다. main에는 이미
+   `truncate_logs(ctx, req, k) -> (ctx', req')`가 있고(A2.7의 5번) 그것을 그대로 쓴다. `cold_conditions()`의 5개 조건도 main의 것이다.
+3. *진입점.* v1·v1.2 실행 경로의 파일(`run_ebnerd.py`, `run_cold.py`, `models.py`)을 고치지 않고 `run_neural.py`를 따로 둔다.
+   튠한 LightGBM은 `models.train`이 팀 파라미터의 덮어쓰기를 막으므로 같은 데이터 구성 코드를 쓰는 별도 학습 함수로 돌리고,
+   trial 0 설정에서 `models.train`과 같은 예측이 나오는지 테스트가 묶는다.
+4. *조기 종료 행.* 설계는 P1 조기 종료를 "es in-view(seen 제외판)을 두 학습기에 똑같이"라고 적었다. A는 v1을 재현해야 하므로
+   v1의 es 행(seen 포함)을 쓰고, 나머지 arm(A\*·A+·D·신경망)이 seen 제외판을 쓴다.
+5. *설정의 공유.* A\*와 A+가 같은 24개 설정을, 두 과제가 같은 설정 목록을 쓴다(각자 best를 고른다). 설계의 "같은 공간, 같은
+   24 trial, 따로 튠"을 이렇게 읽었다.
+6. *seed 규칙의 문턱.* 설계는 서술용 비교에 "seed 규칙으로 양"이라고만 적었다. 판정 비교와 같은 규칙((b)의 +0.005 포함)을 쓴다 —
+   더 엄격한 쪽이다.
+7. *정보 대조군 게이트의 대상.* 설계는 "신경망 − A+"라고 적었다. 게이트는 판정 arm마다 보므로 D에도 같은 규칙(D − A+)을 건다.
+8. *표준화 통계의 출처.* "fit 평균·표준편차"를 그 모델이 실제로 학습한 행(증강 뒤, 블록 모델은 자기 블록)에서 계산한다.
+9. *시퀀스 스칼라의 빈 값과 top3.* 빈 시퀀스는 0, 클릭이 3개 미만이면 있는 만큼의 평균.
+10. *모델의 빈칸.* 후기 융합 MLP의 은닉 폭 128, additive attention 은닉 폭 d, 위치 임베딩은 최근성 순번(패딩 길이가 달라도 같은
+    클릭이 같은 임베딩을 받는다), 양성 없는 그룹은 손실에서 제외.
+11. *보조 손실의 네거티브.* 요청·위치마다가 아니라 유저 로그 이벤트마다 미리 뽑는다(같은 이벤트는 어느 요청의 시퀀스에서든 같은
+    네거티브). 풀이 비면 그 위치의 보조 손실을 뺀다. 설계의 "fit 창 끝 이전 이벤트만"은 시퀀스가 요청 시각 이전 이벤트만 담으므로
+    저절로 성립한다.
+12. *블록 모델.* 최종 `sel`과 같은 증강 행을 쓰고(그 블록에 속한 것만), epoch 수는 같은 seed의 최종 모델 best epoch.
+13. *세션 구조.* 설계는 S3·S4가 독립이고 콜드의 LightGBM 재계산을 S2에 뒀다. 여기서는 S2 → S3 → S4를 체크포인트 묶음으로
+    잇고, 콜드 단계는 신경망 모델이 있는 세션에서 한 번에 돈다 — 조건마다 스칼라 행렬을 한 번 계산해 모든 arm에 넣으므로
+    "두 학습기가 같은 행렬"이 세션 간 해시 대조 없이 성립한다. 그만큼 CPU 계산(설계 추정 ≈ 1.5 h)이 T4 요율로 든다.
+    S3·S4의 "게이트-lite"는 그 VM에서 A를 다시 학습해 같은 구간 판정을 하는 것으로 정했다.
+14. *S1 파일럿.* 설계는 "family당 1 trial × 1 epoch(fit 10%)"였다. 같은 코드 경로를 타는 결정론 게이트(family당 1 epoch × 2,
+    fit 10%)로 대신하고, seed 0만 돌려 등급이 demo가 되게 했다.
+15. *torch 핀.* 설계는 런타임 기본 torch를 쓰고 버전을 기록한다고 적었다. 여기서는 2.11.0으로 고정하고 드라이버가 확인한다.
+16. *서빙 비용 게이트.* 설계는 M4b 안에서 마이크로벤치를 돌린다. 이 등록의 코드에는 없고, 그래서 최상위 결과가
+    `pending_serving_cost_gate`다(A3.7).
+17. *Holm.* p값이 아니라 수준을 조정한 CI 하한의 step-down으로 구현한다(같은 절차다). 부트스트랩 1,000회에서 가장 좁은 수준
+    (1 − 0.05/4)의 하한은 분위 0.00625라 거칠다 — 주장에만 쓰는 값이고 판정에는 쓰지 않는다.
+18. *메타 전용 기사 파일의 동일성 테스트, 서명 URL 경로.* A2에서 이미 main에 있다(`scripts/make_articles_meta.py`, 드라이버).
+19. *드라이버 파일.* 설계는 단일 파일을 요구했다. E15 드라이버는 표준 라이브러리만 쓰는 파일이지만 같은 디렉터리의
+    `m4_colab_driver.py`를 불러 그 도구를 쓴다(두 파일을 함께 올린다). 같은 규칙을 두 벌로 유지하지 않으려는 것이다.
+
+### A3.11 실행 명령(고정)
+```
+# 1) 코드 tarball (실행 커밋 <sha>, 이 사전 등록 커밋의 후손이어야 한다)
+git archive --format=tar.gz -o e15_code.tar.gz <sha> recsys_core evaluation/__init__.py evaluation/recsys \
+  scripts/e15_colab_driver.py scripts/m4_colab_driver.py requirements-colab.txt requirements-colab-gpu.txt
+
+# 2) VM 안에서(드라이버 두 파일을 같은 디렉터리에 올린 뒤). 세션 s1..s4
+python e15_colab_driver.py run --workdir /content/e15 --code-tarball /content/e15_code.tar.gz \
+  --code-sha256 <tarball sha256> --session <s1|s2|s3|s4> --manifest /content/e15_manifest.json \
+  --url <manifest 키>=<서명 URL> [--url ...] --cu-rate <잰 CU/h> --cu-spent-before <앞 세션까지의 CU 합> \
+  [--resume-bundle /content/e15_bundle.tar.gz --resume-bundle-sha256 <sha256>] --threads 2 [--detach]
+python e15_colab_driver.py run --workdir /content/e15 --code-tarball /content/e15_code.tar.gz --session s0   # 드라이 런
+
+# 드라이버가 (과제, 단계)마다 서브프로세스로 실행하는 명령
+python -m evaluation.recsys.ebnerd.run_neural --dataset ebnerd_small --root /content/e15/data \
+  --out-dir /content/e15/out --task <p1|p2> --stage <단계> --seeds 0 1 2 --n-boot 1000 --p2-sample 20000 \
+  --p2-cold-sample 60000 --p2-select-sample 5000 --neural-trials 12 --gbdt-trials 24 --tune-max-epochs 6 \
+  --final-max-epochs 20 --patience 2 --threads 2 --device auto --resume
+
+# 3) 세션이 끝나면 체크포인트 묶음을 만들어 내려받는다(다음 세션의 --resume-bundle, 마지막 것은 판정용)
+python e15_colab_driver.py bundle --workdir /content/e15 --out /content/e15_bundle.tar.gz
+
+# 4) 판정·리포트(로컬, 데이터 없이 체크포인트만으로, 수 분)
+python -m evaluation.recsys.ebnerd.run_neural --stage assemble --out-dir <풀어 둔 out> \
+  --out-json reports/recsys/ebnerd_v1_3_neural.json --out-md reports/recsys/ebnerd_v1_3_neural.md
+```
+- S3·S4에서 드라이버는 첫 단계 앞에 `--stage gate --recheck-gate <세션>`을 한 번 더 넣는다(그 VM에서의 재현 게이트 재확인).
+- S1은 `--seeds 0`으로, S0은 합성 데이터와 작은 인자로 돈다(둘 다 demo 등급).
+- 서명 URL은 인자·환경변수로만 넘기고 로그·리포트·커밋 어디에도 남기지 않는다.
+
+### A3.12 A3 사전 등록 이후 변경 기록
+(없음)

@@ -1,0 +1,267 @@
+# 사전 등록(pre-registration) — docs/adr/0013-ranker-v2-design.md "A3 사전 등록 (E15 신경망 비교)"
+# 결과를 보기 전에 커밋한 값이다. evaluation/recsys/ebnerd/neural/report.py(기계 판정), neural/tune.py(탐색 공간·예산),
+# run_neural.py(표본·시드·단계)와 scripts/e15_colab_driver.py(세션·예산)는 임계값·표본·시드·arm·탐색 공간을
+# 이 파일에서만 읽는다(코드에 같은 숫자를 다시 적지 않는다. 드라이버만 yaml 없이 돌아야 해서 세션 표를 따로 들고 있고,
+# 두 곳이 같은지는 테스트가 지킨다).
+# 이 파일의 등록 값은 커밋 뒤 고치지 않는다. 바꿔야 하면 아래 amendments에 날짜·사유·결과 열람 여부를 덧붙이고
+# ADR 0013의 "A3 사전 등록 이후 변경 기록"에 같은 내용을 적는다. 판정용 실행이 한 번이라도 시작된 뒤의 변경은
+# 새 id(ebnerd-neural-e15b 등)의 파일로 따로 등록한다.
+id: ebnerd-neural-e15
+registered_at: "2026-10-06"
+adr: docs/adr/0013-ranker-v2-design.md
+evidence_label: "[EB-NeRD]"
+amendments: []
+
+report:
+  json: reports/recsys/ebnerd_v1_3_neural.json
+  md: reports/recsys/ebnerd_v1_3_neural.md
+
+# 판정용 실행의 고정 인자. 하나라도 다르면 run_neural이 리포트 머리말을 "demo, not evidence"로 찍고 판정 표에
+# "판정 아님"을 붙인다(사람이 고르지 않는다).
+run:
+  dataset: ebnerd_small
+  seeds: [0, 1, 2]
+  n_boot: 1000
+  p2_sample: 20000            # 판정 표본(v1과 같은 인덱스)
+  p2_cold_sample: 60000       # 콜드 게이트 표본(v1 20,000 ∪ 추가 40,000)
+  p2_select_sample: 5000      # 모델 선택 표본(es 구간 전체 풀)
+  neural_trials: 12           # 신경망 family마다
+  gbdt_trials: 24             # A*와 A+ 각각. 반드시 neural_trials × (신경망 family 수 2)와 같다
+  tune_max_epochs: 6
+  final_max_epochs: 20
+  patience: 2
+  fake_dim: null
+  max_fit: null
+  max_test: null
+  tasks: [p1, p2]
+  # 실행 순서. 예산 경고선에 걸리면 뒤(서술용)부터 잘린다.
+  stages: [gate, gbdt_tune, gbdt_final, determinism, neural_tune, select, neural_final, stack, cold, narrative, assemble]
+  judged_stages: [gate, gbdt_tune, gbdt_final, determinism, neural_tune, select, neural_final, stack, cold]
+  descriptive_stages: [narrative]
+
+statistics:
+  split_seed: 20260925          # v1과 같은 값(run_ebnerd.SPLIT_SEED)
+  metric: "ndcg@10"
+  ci_level: 0.95                # 양측. 유저 단위 클러스터 부트스트랩
+  bootstrap_seed_mean: 0        # metrics.cluster_bootstrap(seed=0)
+  bootstrap_seed_paired: 1      # metrics.paired_bootstrap_diff(seed=1)
+  min_effect: 0.005             # 최소 효과 크기(nDCG@10)
+  seed_rule:
+    per_seed_ci_lo_gt: 0.0      # (a) 세 seed 각각의 쌍체 Δ 95% CI 하한 > 0
+    combined_lo_gt: 0.005       # (b) Δ̄ − sqrt(hw_boot² + (t·sd_Δ/√n_seed)²) > +0.005
+    t_crit: 4.30                # t(0.975, df=2). seed 3개 전제
+    n_seeds: 3
+  gate_ci_level: 0.90           # 비열등 게이트는 양측 90% 하한(= 단측 95%)
+  gate_margin: -0.005
+  holm: {family_size: 4, alpha: 0.05}     # 주장(claim)에만 쓴다. 판정(shadow 자격)은 비보정 4개
+
+seed_offsets:
+  p2_sample: 2                  # default_rng(split_seed + 2) — v1 P2 20,000 요청과 같은 표본
+  p2_select_sample: 5           # default_rng(split_seed + 5) — v1 select_p2_model과 같은 표본
+  p2_cold_extra: 6              # default_rng(split_seed + 6) — 판정 표본에 없는 validation 요청에서 40,000건
+  determinism_subsample: 7      # default_rng(split_seed + 7) — fit 10% 서브샘플
+  pool_negatives: 1000          # default_rng(1000 + seed), fit → es 순 — v1 ranker_v2_poolneg와 같은 네거티브
+  cold_augment: 2000            # default_rng(2000 + seed)
+  aux_negatives: 4000           # default_rng(4000 + seed) — SASRec-lite 보조 손실의 네거티브
+  tune_gbdt: 151                # default_rng(split_seed + 151) — A*·A+가 같은 24개 설정을 쓴다
+  tune_nrms: 152                # default_rng(split_seed + 152)
+  tune_sasrec: 153              # default_rng(split_seed + 153)
+  # 모델 seed(초기화·배치 순서·LightGBM seed·동점 처리)는 run.seeds의 값 그대로다. 튜닝은 seed 0.
+
+windows:
+  fit_blocks: 4                 # fit 창을 시작 시각부터 24h씩 자른 블록 b1..b4 (D의 시간 전진 교차 적합에만 쓴다)
+  block_hours: 24
+
+# 실행이 유효하려면 같은 실행에서 다시 학습한 A의 nDCG@10 seed 평균이 v1 CI 안에 있어야 한다
+# (reports/recsys/ebnerd_v1.json의 p1.ranker_v2, p1_seen_filtered.ranker_v2, p2.ranker_v2_poolneg ci95).
+reproduction_gate:
+  p1:
+    arm: A
+    seen_included_within: [0.6533, 0.6569]
+    seen_filtered_within: [0.6620, 0.6654]
+  p2:
+    arm: A
+    within: [0.2640, 0.2728]
+
+tasks:
+  p1:
+    fit_negatives: inview                 # 같은 노출의 비클릭 — v1 ranker_v2의 학습 데이터
+    judged_sample: "test 노출 전체, seen 제외판"
+    selection_sample: "es in-view 노출 전체, seen 제외판"
+    early_stop_rows: "es in-view, seen 제외판(A만 v1 그대로 seen 포함)"
+    cold_sample: "test 노출 전체, seen 제외판"
+    metrics: ["ndcg@10", "ndcg@5", "mrr", "auc"]
+  p2:
+    fit_negatives: {pool_random: 20, window_h: 48}   # prepare.pool_negative_task — v1 ranker_v2_poolneg와 같은 표본
+    judged_sample: "validation 요청 20,000건, 전체 풀(48h 발행 − seen), 풀 밖 정답은 n_pos_total 벌점"
+    selection_sample: "es 구간 요청 5,000건, 전체 풀"
+    early_stop_rows: "poolneg es 행(정답 + 무작위 20)"
+    cold_sample: "validation 요청 60,000건, 전체 풀"
+    metrics: ["ndcg@10", "recall@10", "mrr"]
+
+cold_augment:
+  fraction: 0.10                # fit 노출의 10%(비복원, seed별 고정)
+  ks: [0, 1, 3, 5]              # 고른 노출마다 균등 무작위
+  arms: [A_star, A_plus, nrms, sasrec, D, sel_no_scalars]   # A(재현 게이트)만 증강 없음
+  applies_to: fit               # es 행은 증강하지 않는다
+
+# 콜드 조건은 evaluation/recsys/ebnerd/neural/cold.py의 cold_conditions()가 정한다(여기에는 이름만 적는다).
+cold:
+  conditions: [pop0, k0, k1, k3, k5]
+  reference: A_star             # 같은 조건으로 다시 평가한 A*
+
+arms:
+  A:        {learner: lightgbm, params: TEAM_PARAMS, augment: false, role: "재현 게이트·서술 기준(판정 기준 아님)"}
+  A_star:   {learner: lightgbm, params: tuned, augment: true, role: "판정 기준"}
+  A_plus:   {learner: lightgbm, params: tuned, augment: true, extra_features: seq_scalars, role: "정보를 맞춘 대조군"}
+  nrms:     {learner: neural, family: nrms, augment: true, role: "B. NRMS-lite"}
+  sasrec:   {learner: neural, family: sasrec, augment: true, role: "C. SASRec-lite"}
+  D:        {learner: lightgbm, params: A_star_best, augment: true, extra_features: neural_score_rank,
+             role: "스태킹(시간 전진 OOF)"}
+  sel_no_scalars: {learner: neural, family: selected, use_scalars: false, augment: true, role: "B0(서술용)"}
+  A_star_noaug:   {learner: lightgbm, params: A_star_best, augment: false, role: "서술용: 증강 효과 분리"}
+  A_star_b234:    {learner: lightgbm, params: A_star_best, augment: true, fit_blocks: [2, 3, 4],
+                   role: "서술용: D와 같은 학습 행 수의 A*"}
+
+gbdt:
+  objective: lambdarank
+  query: request
+  base_features: V2_FEATURES    # models.V2_FEATURES 22개
+  fixed: {bagging_fraction: 0.8, bagging_freq: 5, deterministic: true, force_col_wise: true}
+  num_boost_round: 1000
+  early_stopping: 50
+  # trial 0 = 팀 설정(models.TEAM_PARAMS의 값과 LightGBM 기본값). 나머지 23개는 아래 공간에서 무작위.
+  trial0: {num_leaves: 31, learning_rate: 0.05, min_data_in_leaf: 20, feature_fraction: 0.9, lambda_l2: 0.0,
+           lambdarank_truncation_level: 30}
+  space:
+    num_leaves: {choice: [15, 31, 63, 127]}
+    learning_rate: {log_uniform: [0.02, 0.1]}
+    min_data_in_leaf: {choice: [20, 50, 100, 200]}
+    feature_fraction: {choice: [0.7, 0.9, 1.0]}
+    lambda_l2: {choice: [0.0, 1.0, 10.0]}
+    lambdarank_truncation_level: {choice: [10, 20, 30]}
+  seq_scalars:                  # A+가 더 받는 4개 열. 신경망과 같은 시퀀스(요청 시각 이전 마지막 n_hist 클릭)에서 계산
+    n_hist: 50
+    columns: [seq_cos_max, seq_cos_top3, seq_cos_last, seq_in_recent]
+    empty_value: 0.0            # 시퀀스가 비면 네 열 모두 0(hist_cos와 같은 규칙)
+  stack_feature: neural_score_rank      # 선택 arm 점수의 요청 내 평균 순위(0~1). 원점수 변형은 돌리지 않는다
+
+neural:
+  families: [nrms, sasrec]      # 선택에서 동률이면 앞의 것
+  # 공간의 키 순서가 난수 소비 순서다(순서를 바꾸면 다른 설정이 나온다).
+  space:
+    d: {choice: [128, 256]}
+    heads: {choice: [2, 4]}
+    dropout: {choice: [0.1, 0.3]}
+    lr: {log_uniform: [3.0e-4, 3.0e-3]}
+    weight_decay: {choice: [0.0, 1.0e-4, 1.0e-2]}
+    batch: {choice: [256, 512]}
+    n_hist: {choice: [20, 50]}
+  sasrec_space:                 # C에만. 위 공간 뒤에 이어서 뽑는다
+    layers: {choice: [1, 2]}
+    aux_lambda: {choice: [0.0, 0.5]}
+  fixed:
+    fusion_hidden: 128          # 후기 융합 MLP의 은닉 폭(2층)
+    interaction_dim: 8          # W_p: Linear(d → 8)
+    category_emb_dim: 8
+    gender_emb_dim: 4
+    ffn_mult: 4                 # SASRec-lite FFN = 4d
+    grad_clip: 1.0
+    optimizer: adamw
+    precision: fp32             # AMP·fp16·TF32 금지
+    dot_scale: "1/sqrt(d)"
+    label_smoothing: 0.0
+    aux_negatives: 4
+    aux_window_h: 48
+    empty_sequence: "u = 0"     # 학습되는 [EMPTY] 벡터 없음
+  # 스칼라 블록 x̃의 열별 변환. 통계(평균·표준편차)는 그 모델이 학습한 fit 행에서 계산해 모델과 함께 저장한다.
+  scalar_block:
+    log1p_standardize: [hours_since_pub, hist_len, cat_match_count, user_ncat, pop_clicks_6h, pop_clicks_24h,
+                        pop_clicks_48h, pop_inviews_24h, short_len, sess_len, hours_since_last_event]
+    standardize: [hist_cos, short_cos, sess_cos, cat_share, pop_ctr_24h, user_age]
+    passthrough: [is_fresh_24h, is_fresh_7d, is_cat_match]
+    category_embedding: news_category
+    gender_embedding: user_gender       # 결측 토큰 포함
+    missing_indicator: "fit 행에서 NaN이 한 번이라도 나온 열마다 1개, 그 뒤 NaN → 0"
+  determinism_gate:             # T4 세션마다, 신경망 단계 전에
+    spec: {d: 128, heads: 2, dropout: 0.1, lr: 1.0e-3, weight_decay: 1.0e-4, batch: 256, n_hist: 50, layers: 2,
+           aux_lambda: 0.5}
+    fit_fraction: 0.10
+    epochs: 1
+    repeats: 2
+    must_match: [loss_sum, es_scores_sha256]
+
+selection:
+  metric: "ndcg@10"
+  trial_tie_break: lowest_trial_index
+  family_rule: "각 family의 튠 best(seed 0)의 선택 표본 지표가 큰 쪽. 동률이면 neural.families의 앞쪽"
+  uses_test: false
+
+# 판정에 쓰는 비교는 과제마다 2개, 합쳐 4개다. Δ = 앞 − 뒤.
+judged_comparisons:
+  - {task: p1, arm: sel, reference: A_star}
+  - {task: p1, arm: D, reference: A_star}
+  - {task: p2, arm: sel, reference: A_star}
+  - {task: p2, arm: D, reference: A_star}
+
+gates:
+  cold: {conditions: [pop0, k0, k1, k3, k5], reference: A_star}        # arm − A*(같은 조건), 양측 90% 하한 > −0.005
+  info_control: {reference: A_plus}                                     # arm − A+, 판정 표본, 같은 규칙
+  classes:
+    pass: "하한 > gate_margin"
+    fail: "하한 <= gate_margin 이고 점추정 <= gate_margin"
+    hold: "하한 <= gate_margin 이고 점추정 > gate_margin (검정력 부족, 기각 아님)"
+  validity: [reproduction, determinism]     # 통계 검정이 아닌 실행 유효성 게이트. 실패하면 실행 무효
+  serving_cost:
+    status: deferred            # 이 등록의 코드는 재지 않는다. 재기 전에는 어떤 arm도 shadow 자격을 얻지 못한다
+    rule: "내보낸 모델의 CPU 마이크로벤치 p95 추가 지연 <= 30 ms, 모델 파일 <= 20 MB"
+
+# seed 규칙을 같이 적용하는 서술용 비교(판정 아님, 별도 결론으로만 기록)
+side_comparisons:
+  - {arm: A_star, reference: A, on_pass: "ADR 0013 하이퍼파라미터(+증강) 갱신 후보"}
+  - {arm: A_plus, reference: A_star, on_pass: "시퀀스 스칼라 피처 채택 후보"}
+  - {arm: sel, reference: A_plus, on_pass: "신경망 구조의 이득(정보를 맞춘 대조군 대비)"}
+
+claim:
+  values: [none, stacking_gain, neural_arm_both_tasks]
+  neural_arm_both_tasks: "두 과제의 선택 family가 같고, 두 과제 모두에서 sel−A*가 seed 규칙과 Holm(4)을 통과하고, sel−A+가 seed 규칙을 통과하고, 게이트가 전부 통과"
+  stacking_gain: "D−A*가 한 과제 이상에서 seed 규칙과 게이트를 통과(보완 정보로만 쓴다)"
+
+outcomes: [pending_serving_cost_gate, not_distinguishable, below_min_effect, seed_rule_failed, gate_failed, gate_hold,
+           unmeasured, invalid_run]
+
+# 원격 세션. 순서대로 돌리고, 뒤 세션은 앞 세션의 체크포인트 묶음을 받아 이어서 돈다.
+sessions:
+  s0: {runtime: cpu, data: synthetic, tasks: [p1, p2],
+       stages: [gate, gbdt_tune, gbdt_final, determinism, neural_tune, select, neural_final, stack, cold, narrative, assemble],
+       cu_cap: 0.5, judged: false, note: "드라이 런 — EB-NeRD 없음"}
+  s1: {runtime: cpu, data: registered, tasks: [p1, p2], stages: [gate, determinism], seeds: [0],
+       cu_cap: 1.0, judged: false, note: "파일럿 — 판정에서 제외"}
+  s2: {runtime: cpu, data: registered, tasks: [p1, p2], stages: [gate, gbdt_tune, gbdt_final],
+       cu_cap: 8.0, judged: true}
+  s3: {runtime: t4, data: registered, tasks: [p1], resumes_from: s2, recheck_gate: true,
+       stages: [determinism, neural_tune, select, neural_final, stack, cold, narrative],
+       cu_cap: 9.0, judged: true}
+  s4: {runtime: t4, data: registered, tasks: [p2], resumes_from: s3, recheck_gate: true,
+       stages: [determinism, neural_tune, select, neural_final, stack, cold, narrative, assemble],
+       cu_cap: 9.0, judged: true}
+
+budget:
+  cu_cap_total: 30.0            # E15 전체. 누적 추정이 이 값 이상이면 남은 단계를 돌리지 않는다(끝나지 않은 비교는 미측정)
+  cu_warn_total: 24.0           # 이 값 이상이면 서술용 단계(narrative)를 건너뛴다
+  rate_source: "S0 드라이 런과 각 세션 시작 시 잰 CU/h"
+
+environment:
+  requirements: requirements-colab-gpu.txt
+  torch: "2.11.0"               # 드라이버가 세션 시작 때 확인하는 버전(로컬 버전 꼬리표 +cu128 등은 무시)
+  python_expected: "3.13"       # 기록만 한다(v1은 3.11). 차이는 재현 게이트로 확인
+
+# 판정용 실행의 입력 파일. v1(reports/recsys/ebnerd_v1.json)·A2 사전 등록과 같은 값이다.
+data:
+  files_sha256:
+    train/behaviors.parquet: eeedd1b5cb42e952b7688f3199c5eb97da5596e6245a52714083eea3cb8e3736
+    train/history.parquet: 3f5ac2216f5807677c6225909cef80f1a84d08126c21e3cfeedacb54e3dd323c
+    validation/behaviors.parquet: 7a212113f427d218f3f36b3f52de876fb2868844e9657474b4be07872674c61d
+    validation/history.parquet: 4471f22424011192c892fecf3bb4fa3dcf769ebefd8e9fff05b625c3518ac861
+  articles_original_sha256: b1cea52ee4c152086ff6b70962fe543a43de50c684c1ec0735a4f061bded43d2
+  embeddings_sha256: 2f096ef8963ba332c72b1e89e3f0a8f29f48789d4367a5493e76d754d9b2ebeb
