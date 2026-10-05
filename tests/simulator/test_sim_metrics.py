@@ -108,6 +108,25 @@ def test_cold_start_serving_errors_and_engagement_summaries():
     assert m["engagement"]["click_ack_rate"] == 1.0
 
 
+def test_population_that_failed_onboarding_is_reported():
+    users = generate_population(PopulationConfig(n_users=10, seed=0, late_join_frac=0.0, drift_frac=0.0))
+    onboarding = {u.index: OnboardingRecord(u.index, (600,), (), T0) for u in users[:7]}
+    log = make_log(users, [], onboarding=onboarding)
+    log.onboarding_failures.update({users[7].index: "login", users[8].index: "login", users[9].index: "put_categories"})
+    m = compute_metrics(log)
+    assert m["onboarding"] == {"n_users_due": 10, "n_users_onboarded": 7, "n_onboarding_failures": 3,
+                               "failures_by_endpoint": {"login": 2, "put_categories": 1}}
+
+
+def test_a_401_that_was_retried_after_relogin_is_reported_but_is_not_an_error():
+    calls = [CallRecord("today", "GET", 401, 1.0, True, retried=True), CallRecord("login", "POST", 200, 40.0, True),
+             CallRecord("today", "GET", 200, 5.0, True), CallRecord("today", "GET", 401, 1.0, False)]
+    m = compute_metrics(make_log([], [], calls))["errors"]
+    assert m["token_expired_retries"] == 1
+    assert m["error_rate"] == pytest.approx(1 / 4)  # only the 401 that was not recovered
+    assert m["by_endpoint"]["today"]["errors"] == 1 and m["by_endpoint"]["today"]["statuses"] == {"401": 2, "200": 1}
+
+
 def test_fallback_rate_is_unknown_without_a_source_header():
     views = [view(0, 0, 0, 0, [1, 2]), view(1, 0, 0, 0, [])]
     m = compute_metrics(make_log([], views))

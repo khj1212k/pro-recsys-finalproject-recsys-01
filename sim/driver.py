@@ -25,6 +25,7 @@ from sim.click_model import ClickModel, ExposureHistory
 from sim.personas import Profile, SimUser
 
 REC_SOURCE_HEADER = "X-Rec-Source"
+TOKEN_EXPIRED_SUFFIX = "_token_expired"  # Locust request name of a 401 that was retried after re-login
 
 
 @dataclass
@@ -36,6 +37,8 @@ class CallRecord:
     ok: bool
     user: Optional[int] = None
     error: Optional[str] = None
+    # a 401 answered by a re-login and a retry (expired token): reported, not an error
+    retried: bool = False
 
 
 class ApiError(RuntimeError):
@@ -65,34 +68,45 @@ class ApiClient:
     def _request(self, endpoint: str, method: str, path: str, *, auth: bool = False,
                  expected: Sequence[int] = (200,), retry_auth: bool = True, **kw):
         headers = {"Authorization": f"Bearer {self.token}"} if auth and self.token else {}
+        # Tokens expire (ACCESS_TOKEN_EXPIRE_MINUTES), so a long run sees 401s on authenticated calls.
+        # The first one is answered by a re-login and one retry; that 401 is the contract working and
+        # is not an error. A second 401 (retry_auth=False) or a failed re-login is.
+        relogin_on_401 = bool(auth and retry_auth and self._credentials)
         t0 = time.perf_counter()
         try:
             if self.locust:
-                resp = self._locust_request(endpoint, method, path, headers, expected, kw)
+                resp = self._locust_request(endpoint, method, path, headers, expected, kw, relogin_on_401)
             else:
                 resp = self.session.request(method, self.base_url + path, headers=headers, **kw)
         except Exception as e:  # transport errors are data for the error-rate metric
             self.calls.append(CallRecord(endpoint, method, None, (time.perf_counter() - t0) * 1000, False,
                                          self.user_index, type(e).__name__))
             raise ApiError(endpoint, None, type(e).__name__) from e
-        ok = resp.status_code in expected
+        expired = relogin_on_401 and resp.status_code == 401
+        ok = expired or resp.status_code in expected
         self.calls.append(CallRecord(endpoint, method, resp.status_code, (time.perf_counter() - t0) * 1000, ok,
-                                     self.user_index, None if ok else _detail(resp)))
-        # Tokens expire (ACCESS_TOKEN_EXPIRE_MINUTES); a multi-day run must re-login once.
-        if auth and resp.status_code == 401 and retry_auth and self._credentials:
+                                     self.user_index, None if ok else _detail(resp), retried=expired))
+        if expired:
             self.login(*self._credentials)
             return self._request(endpoint, method, path, auth=auth, expected=expected, retry_auth=False, **kw)
         if not ok:
             raise ApiError(endpoint, resp.status_code, _detail(resp))
         return resp
 
-    def _locust_request(self, endpoint, method, path, headers, expected, kw):
+    def _locust_request(self, endpoint, method, path, headers, expected, kw, relogin_on_401=False):
         # Locust would count every non-2xx as a failure; the contract expects some
         # (signup 400 = account exists on a re-run), so judge by `expected` instead.
         # Transport errors come back as status 0 here, not as exceptions.
         with self.session.request(method, self.base_url + path, headers=headers, name=endpoint,
                                   catch_response=True, **kw) as resp:
             if resp.status_code in expected:
+                resp.success()
+            elif relogin_on_401 and resp.status_code == 401:
+                # Expired token, retried by the caller: not a failure, and reported under its own
+                # name so a fast 401 is not a sample in the endpoint's latency row.
+                meta = getattr(resp, "request_meta", None)
+                if isinstance(meta, dict):
+                    meta["name"] = f"{endpoint}{TOKEN_EXPIRED_SUFFIX}"
                 resp.success()
             else:
                 resp.failure(f"{endpoint}: status {resp.status_code}")
@@ -107,7 +121,11 @@ class ApiClient:
 
     def login(self, email: str, password: str) -> str:
         resp = self._request("login", "POST", "/auth/login", json={"email": email, "password": password})
-        self.token = resp.json()["access_token"]
+        try:
+            token = resp.json()["access_token"]
+        except (ValueError, KeyError, TypeError) as e:  # 200 without a token breaks the contract
+            raise ApiError("login", resp.status_code, "response has no access_token") from e
+        self.token = token
         self._credentials = (email, password)
         return self.token
 
@@ -292,6 +310,8 @@ class SimulationLog:
     config: SimulationConfig
     model_name: str
     drift_starts: Dict[int, datetime] = field(default_factory=dict)
+    # user index -> endpoint whose failure stopped signup/login/onboarding for that user
+    onboarding_failures: Dict[int, str] = field(default_factory=dict)
 
 
 def run_simulation(
@@ -316,6 +336,7 @@ def run_simulation(
     onboarding: Dict[int, OnboardingRecord] = {}
     views: List[ViewEvent] = []
     drift_starts: Dict[int, datetime] = {}
+    onboarding_failures: Dict[int, str] = {}
 
     def agent_for(u: SimUser) -> SimAgent:
         if u.index not in agents:
@@ -333,8 +354,11 @@ def run_simulation(
         try:
             a.ensure_account()
             onboarding[u.index] = a.onboard(day, now)
-        except Exception:  # recorded in calls; the user just stays un-onboarded
-            pass
+        except ApiError as e:
+            # A user who could not sign up, log in or onboard drops out of (or stays half in) the
+            # population. Counted, so a shrunken population is visible in the metrics; anything
+            # that is not an API failure is a bug in the simulator and propagates.
+            onboarding_failures[u.index] = e.endpoint
 
     warm = [u for u in users if u.join_day == 0]
     for u in warm:
@@ -372,4 +396,5 @@ def run_simulation(
             at(day_start + timedelta(days=1) - timedelta(minutes=1))
             on_day_end(day)
 
-    return SimulationLog(list(users), views, calls, onboarding, items, cfg, model.cfg.name, drift_starts)
+    return SimulationLog(list(users), views, calls, onboarding, items, cfg, model.cfg.name, drift_starts,
+                         onboarding_failures)

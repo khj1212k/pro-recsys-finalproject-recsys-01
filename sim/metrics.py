@@ -182,7 +182,24 @@ def error_metrics(log: SimulationLog) -> dict:
     return {
         "n_calls": n,
         "error_rate": (sum(1 for c in log.calls if not c.ok) / n) if n else None,
+        # 401s answered by a re-login and a retry (expired token): reported here, not errors
+        "token_expired_retries": sum(1 for c in log.calls if c.retried),
         "by_endpoint": out,
+    }
+
+
+def onboarding_metrics(log: SimulationLog) -> dict:
+    """How much of the generated population actually entered the simulation.
+
+    A user whose signup, login or onboarding failed produces few or no views, so every
+    other metric silently describes a smaller, biased population unless this is checked."""
+    due = [u for u in log.users if u.join_day < log.config.n_days]
+    by_endpoint = Counter(log.onboarding_failures.values())
+    return {
+        "n_users_due": len(due),
+        "n_users_onboarded": len(log.onboarding),
+        "n_onboarding_failures": len(log.onboarding_failures),
+        "failures_by_endpoint": dict(sorted(by_endpoint.items())),
     }
 
 
@@ -220,6 +237,7 @@ def compute_metrics(log: SimulationLog, k: int = 10) -> dict:
         "k": k,
         "model": log.model_name,
         "n_users": len(log.users),
+        "onboarding": onboarding_metrics(log),
         "cold_start": cold_start_metrics(log, k),
         "reactivity": reactivity_metrics(log, k),
         "drift": drift_metrics(log, k),

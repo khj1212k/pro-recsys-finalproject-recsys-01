@@ -128,6 +128,37 @@ def test_locust_mode_judges_success_by_the_contract_not_by_2xx():
     assert broken.results == [("signup", "failure")]
 
 
+class _ScriptedLocustSession:
+    """Locust-like session answering from a script of (status, body); keeps the reported name and verdict."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.results = []
+
+    @contextmanager
+    def request(self, method, url, name=None, catch_response=False, **kw):
+        status, body = self.script.pop(0)
+        resp = SimpleNamespace(status_code=status, headers={}, json=lambda: body, request_meta={"name": name})
+        verdict = []
+        resp.success = lambda: verdict.append("success")
+        resp.failure = lambda msg: verdict.append("failure")
+        yield resp
+        self.results.append((resp.request_meta["name"], verdict[-1]))
+
+
+def test_locust_mode_reports_a_retried_401_under_its_own_name_and_not_as_a_failure():
+    session = _ScriptedLocustSession([(200, {"access_token": "t1"}), (401, {"detail": "expired"}),
+                                      (200, {"access_token": "t2"}), (200, [])])
+    api = ApiClient(session, locust=True)
+    api.login("a@sim.invalid", "pw")
+
+    feed = api.today()
+
+    assert feed.items == [] and api.token == "t2"
+    assert session.results == [("login", "success"), ("today_token_expired", "success"), ("login", "success"),
+                               ("today", "success")]
+
+
 STATS_CSV = """Type,Name,Request Count,Failure Count,Median Response Time,Average Response Time,Min Response Time,Max Response Time,Average Content Size,Requests/s,Failures/s,50%,66%,75%,80%,90%,95%,98%,99%,99.9%,99.99%,100%
 GET,today,900,9,12,15.2,3,80,4000,15.0,0.15,12,14,15,16,20,31,40,52,79,80,80
 POST,click,100,0,8,9.0,2,30,40,1.7,0.0,8,9,9,10,12,14,20,25,30,30,30
