@@ -115,6 +115,7 @@ def test_tie_diag_rows_reads_iteration_one_and_best_iteration():
     assert r43["best_engine_order_ndcg5"] == pytest.approx(0.742)
     assert r43["positive_first_share_engine_order"] == 1.0
     assert r43["positive_first_share_as_evaluated"] == pytest.approx(0.17)
+    assert r43["iter1_as_evaluated_ndcg5"] == pytest.approx(0.775)  # 픽스처는 두 프레임이 같은 셀을 공유한다
     no_diag = RR.tie_diag_rows(_runs()["binary"])
     assert all(not r["has_diagnostic"] for r in no_diag)
 
@@ -133,6 +134,7 @@ def test_early_stopping_tie_artefact_counts_come_from_recorded_diagnostics():
     p43 = next(x for x in art["paired_current"] if x["seed"] == 43)
     assert p43["engine_order_best_iteration"] == 1 and p43["shuffled_best_iteration"] == 72
     assert p43["primary_mrr_engine_order"] == pytest.approx(0.55) and p43["primary_mrr_shuffled"] == pytest.approx(0.62)
+    assert "shuffled_iter1_as_evaluated_ndcg5" in p43
     # NDCG 진단이 없는 arm(AUC 조기 종료, 고정 라운드)은 arm별 표에 넣지 않는다.
     assert set(art["by_arm"]) == {"current", "current_es_engine_order"}
     assert art["by_arm"]["current_es_engine_order"]["n_stops_at_1"] == 1

@@ -527,7 +527,10 @@ def tie_diag_rows(results: List[dict]) -> List[dict]:
             frames = diag.get("frames") or {}
             it1_engine = _diag_cell(r, "engine_row_order", 1)
             best_engine = _diag_cell(r, "engine_row_order", bi)
+            it1_eval = _diag_cell(r, "as_evaluated", 1)
             row.update({
+                # 조기 종료가 실제로 본 순서(섞음 또는 엔진 순서)에서의 1라운드 NDCG - LightGBM이 1라운드에 기록했을 값
+                "iter1_as_evaluated_ndcg5": it1_eval.get("data_order"),
                 "positive_first_share_engine_order": (frames.get("engine_row_order") or {}).get("positive_first_share"),
                 "positive_first_share_as_evaluated": (frames.get("as_evaluated") or {}).get("positive_first_share"),
                 "n_groups": it1_engine.get("n_groups"),
@@ -572,6 +575,8 @@ def early_stopping_tie_artefact(runs: Dict[str, List[dict]], gen_runs: Dict[str,
             "iter1_tied_positive_group_share": shuf_row.get("iter1_tied_positive_group_share"),
             "shuffled_best_engine_order_ndcg5": best_engine,
             "shuffled_best_tie_expected_ndcg5": shuf_row.get("best_tie_expected_ndcg5"),
+            # 섞은 순서에서 LightGBM이 본 1라운드 값(동점 기대값과의 차이 = 한 번의 추첨이 남긴 잡음)
+            "shuffled_iter1_as_evaluated_ndcg5": shuf_row.get("iter1_as_evaluated_ndcg5"),
             "iter1_inflation": (it1_engine - shuf_row["iter1_tie_expected_ndcg5"])
             if it1_engine is not None and shuf_row.get("iter1_tie_expected_ndcg5") is not None else None,
             "engine_order_iter1_beats_tie_fair_best": (it1_engine > best_engine)

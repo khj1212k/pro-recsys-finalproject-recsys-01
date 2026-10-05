@@ -412,7 +412,6 @@ def main() -> None:
 
     # ---------------------------------------------------------------- 0. 요약
     cur_p = get(headline, "current", "primary_summary", default={})
-    cur_tie = get(headline, "current", "primary_tie_random_summary", default={})
     tf_p = get(headline, "team-final", "primary_summary", default={})
     tf_aw = get(headline, "team-final", "as_written_summary", default={})
     le_tf = get(hci, "team-final", "leak_effect", default={})
@@ -1078,10 +1077,30 @@ def main() -> None:
         "patience(50라운드) 뒤 멈춘다. 같은 시드에서 동점 기대값은 이후 라운드가 더 높다 - 모델은 계속 나아지고 있었고, 멈춘 "
         "이유는 지표였다."
     )
+    def _absdiff(x, a, b):
+        return abs(x[a] - x[b]) if x.get(a) is not None and x.get(b) is not None else None
+
+    noise_it1 = [v for v in (_absdiff(x, "shuffled_iter1_as_evaluated_ndcg5", "iter1_tie_expected_ndcg5") for x in paired) if v is not None]
+    noise_best = [v for v in (_absdiff(x, "shuffled_recorded_ndcg5", "shuffled_best_tie_expected_ndcg5") for x in paired) if v is not None]
+    # LightGBM이 섞은 순서에서 실제로 비교한 두 값의 차이: 고른 라운드의 기록값 - 1라운드의 값
+    margins = [
+        x["shuffled_recorded_ndcg5"] - x["shuffled_iter1_as_evaluated_ndcg5"] for x in paired
+        if x.get("shuffled_recorded_ndcg5") is not None and x.get("shuffled_iter1_as_evaluated_ndcg5") is not None
+    ]
+    noise_text = ""
+    if noise_it1 and noise_best and margins:
+        worst = max(max(noise_it1), max(noise_best))
+        noise_text = (
+            f" 이 실행들에서 섞은 순서의 NDCG@5와 동점 기대값의 차이는 1라운드에서 최대 {pct(max(noise_it1), 4)}, 고른 라운드에서 "
+            f"최대 {pct(max(noise_best), 4)}이고, LightGBM이 섞은 순서에서 본 '고른 라운드 − 1라운드' 차이는 최소 "
+            f"{pct(min(margins), 4)}다"
+            + (" - 추첨 잡음이 '1라운드가 최선'으로 뒤집을 크기는 아니다." if 2 * worst < min(margins) else
+               " - 추첨에 따라 고르는 라운드가 달라질 수 있는 크기다.")
+        )
     A(
         "- 섞기는 한 번의 추첨이다. 동점인 행의 순서가 무작위가 될 뿐 기대값 자체를 계산하는 것은 아니어서 잡음이 남는다"
-        "(위 표에서 LightGBM 기록값과 동점 기대값의 차이가 그 잡음이다). 학습 프레임의 행 순서는 엔진 그대로 두었다 - "
-        "lambdarank의 람다 계산도 점수가 같은 행의 순위를 행 순서로 정하지만, 그 영향은 이 실험에서 분리하지 않았다."
+        f"(위 표에서 LightGBM 기록값과 동점 기대값의 차이가 그 잡음이다).{noise_text} 학습 프레임의 행 순서는 엔진 그대로 "
+        "두었다 - lambdarank의 람다 계산도 점수가 같은 행의 순위를 행 순서로 정하지만, 그 영향은 이 실험에서 분리하지 않았다."
     )
     A("")
     by_arm = art.get("by_arm", {})

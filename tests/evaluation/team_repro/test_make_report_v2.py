@@ -112,6 +112,7 @@ def _artefact(engine_bi=(35, 1, 1, 90, 1), shuffled_bi=(35, 72, 49, 90, 28)):
             "iter1_engine_order_ndcg5": it1_engine, "iter1_tie_expected_ndcg5": it1_engine - 0.05,
             "iter1_reversed_order_ndcg5": it1_engine - 0.1, "iter1_tied_positive_group_share": 0.29,
             "shuffled_best_engine_order_ndcg5": 0.745, "shuffled_best_tie_expected_ndcg5": 0.742,
+            "shuffled_iter1_as_evaluated_ndcg5": it1_engine - 0.05 + 0.003,
             "iter1_inflation": 0.05, "engine_order_iter1_beats_tie_fair_best": collapsed,
             "tie_expected_improves_after_iter1": True,
             "positive_first_share_engine_order": 1.0, "positive_first_share_shuffled": 0.167,
@@ -571,3 +572,17 @@ def test_impression_arm_low_iteration_seeds_are_stated_next_to_its_effect(tmp_pa
     text = _render(tmp_path / "b", monkeypatch, data)
     sec = _section(text, "### 4-4.", "### 4-5.")
     assert "5라운드 이하에서 멈춘 시드가 3/5개다" in sec and "[6, 2, 73, 3, 4]" in sec
+
+
+def test_shuffle_noise_is_compared_with_the_gap_it_would_have_to_overturn(tmp_path, monkeypatch):
+    """섞기가 한 번의 추첨이라는 한계를 적을 때, 잡음 크기(1라운드·고른 라운드)와 LightGBM이 실제로 비교한
+    두 값의 차이를 JSON 값으로 함께 적고, 잡음이 그 차이를 뒤집을 수 있으면 그렇게 쓴다."""
+    base = _section(_render(tmp_path / "a", monkeypatch, _base_data()), "### 4-1.", "### 4-2.")
+    # 픽스처: 1라운드 잡음 0.003, 고른 라운드 잡음 0, 차이 = 0.742 - (0.725 + 0.003) = 0.014
+    assert "1라운드에서 최대 0.0030" in base and "고른 라운드에서 최대 0.0000" in base and "최소 0.0140다" in base
+    assert "뒤집을 크기는 아니다" in base
+    data = _base_data()
+    for x in data["early_stopping_tie_artefact"]["paired_current"]:
+        x["shuffled_iter1_as_evaluated_ndcg5"] = x["iter1_tie_expected_ndcg5"] + 0.012  # 잡음이 차이에 견줄 만한 경우
+    noisy = _section(_render(tmp_path / "b", monkeypatch, data), "### 4-1.", "### 4-2.")
+    assert "뒤집을 크기는 아니다" not in noisy and "달라질 수 있는 크기다" in noisy
