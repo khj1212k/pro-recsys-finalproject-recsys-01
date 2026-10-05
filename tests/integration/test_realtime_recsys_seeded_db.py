@@ -380,6 +380,31 @@ def test_impressions_are_written_to_the_log_table(engine, seeded, pg_conn):
     service.shutdown()
 
 
+def test_impression_log_accepts_the_longest_model_version_and_defaults_exploration_columns(
+    engine, seeded, pg_conn
+):
+    from app.models.recsys import ModelRegistry
+    from app.recsys.sql_repository import SqlImpressionWriter
+
+    registry = ModelRegistry.__table__.c
+    longest = f"lgbm:{'n' * registry.model_name.type.length}@{'v' * registry.model_version.type.length}"
+    uid = seeded.add_user()
+
+    SqlImpressionWriter(engine)([{
+        "request_id": str(uuid.uuid4()), "user_id": uid, "news_letter_id": seeded.by_topic[0][0],
+        "position": 0, "score": 0.5, "source": "realtime", "model_version": longest,
+    }])
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT model_version, propensity, explored FROM recommendation_impression_log WHERE user_id = %s",
+            (uid,),
+        )
+        rows = cur.fetchall()
+    # 결정적 정책이므로 propensity는 기록하지 않고(NULL) explored는 false다.
+    assert rows == [(longest, None, False)]
+
+
 def test_sql_path_latency_p50_p95(engine, seeded):
     """SQL 경로 지연(결과 캐시 끔). 절대값은 러너 사양에 좌우되므로 느슨한 상한만 두고
     수치는 출력한다 - CI에서는 별도 스텝이 -s로 이 테스트를 돌려 로그에 남긴다."""

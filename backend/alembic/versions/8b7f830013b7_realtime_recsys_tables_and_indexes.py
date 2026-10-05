@@ -2,7 +2,7 @@
 
 GET /newsletters/today를 요청 시점에 계산하면서(ADR 0015) 필요한 스키마.
 - recommendation_impression_log: 실제로 내보낸 추천 목록(요청 ID/순위/점수/
-  출처/모델 버전). FK 없이 append-only.
+  출처/모델 버전 + 탐색 슬롯용 propensity/explored 자리). FK 없이 append-only.
 - model_registry: LightGBMScorer가 60초마다 확인하는 LightGBM text 모델 저장소.
   이름별 활성 모델은 부분 UNIQUE 인덱스로 최대 1개.
 - 요청 경로가 매번 치는 조회용 인덱스:
@@ -40,7 +40,11 @@ def upgrade() -> None:
         sa.Column("position", sa.SmallInteger(), nullable=False),
         sa.Column("score", sa.Float(), nullable=True),
         sa.Column("source", sa.String(length=32), nullable=False),
-        sa.Column("model_version", sa.String(length=64), nullable=False),
+        # "lgbm:<name>@<version>" - model_registry의 이름·버전이 각각 64자라 최대 134자
+        sa.Column("model_version", sa.String(length=160), nullable=False),
+        # 탐색 슬롯용 자리. 결정적 정책에서는 propensity NULL, explored false
+        sa.Column("propensity", sa.Float(), nullable=True),
+        sa.Column("explored", sa.Boolean(), server_default=sa.false(), nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

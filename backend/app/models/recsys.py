@@ -25,6 +25,15 @@ from sqlmodel import Column, Field, SQLModel
 # (user_id, news_letter_id, 시각)으로 조인해 노출 대비 클릭을 계산하려고 남긴다.
 # 쓰기 빈도가 높은 append-only 로그라 FK를 걸지 않는다 - 뉴스레터/유저 삭제가
 # 로그 때문에 막히거나, INSERT마다 FK 검사 비용을 치르지 않도록.
+#
+# 컬럼 의미(docs/adr/0015 "노출 로그"):
+# - position: 화면 응답(표시 단계를 거친 목록) 안의 0부터 시작하는 순위.
+# - score: realtime/cold_start_onboarding/cold_start_category는 MMR 재정렬 전의 관련도 점수,
+#   cold_start_popular는 인기도-최신성 점수, batch/popular/recent 폴백은 NULL.
+# - model_version: "lgbm:<name>@<version>"까지 들어가야 한다(레지스트리의 이름·버전이 각각
+#   64자라 최대 134자).
+# - propensity / explored: 탐색 슬롯을 넣을 때 쓸 자리. 지금 정책은 결정적이라 propensity는
+#   기록하지 않고(NULL) explored는 항상 false다 - 이 로그로 IPS/SNIPS 추정은 할 수 없다.
 class RecommendationImpressionLog(SQLModel, table=True):
     __tablename__ = "recommendation_impression_log"
     __table_args__ = (
@@ -45,7 +54,12 @@ class RecommendationImpressionLog(SQLModel, table=True):
     position: int = Field(sa_column=Column(SmallInteger, nullable=False))
     score: Optional[float] = Field(default=None, sa_column=Column(Float, nullable=True))
     source: str = Field(sa_column=Column(String(32), nullable=False))
-    model_version: str = Field(sa_column=Column(String(64), nullable=False))
+    model_version: str = Field(sa_column=Column(String(160), nullable=False))
+    propensity: Optional[float] = Field(default=None, sa_column=Column(Float, nullable=True))
+    explored: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default=false()),
+    )
     created_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),

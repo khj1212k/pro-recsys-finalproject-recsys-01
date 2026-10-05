@@ -90,6 +90,29 @@ def test_active_model_scores_with_the_injected_feature_function():
     assert result.scores[0] > result.scores[1]
 
 
+def test_the_longest_registry_name_and_version_fit_the_impression_log_column():
+    """노출 로그의 model_version에는 "lgbm:<name>@<version>"이 들어간다. 레지스트리가 허용하는
+    가장 긴 이름·버전으로 만든 값이 로그 컬럼에 들어가지 않으면, 학습 모델을 켜는 순간 모든
+    노출 INSERT가 "value too long"으로 실패하고 로그가 조용히 끊긴다."""
+    from app.models.recsys import ModelRegistry, RecommendationImpressionLog
+
+    registry, log = ModelRegistry.__table__.c, RecommendationImpressionLog.__table__.c
+    name = "n" * registry.model_name.type.length
+    version = "v" * registry.model_version.type.length
+    source = FakeSource()
+    source.models[version] = RegisteredModel(name, version, _train_text(+1), ["cos_axis0", "zero"])
+    source.active = version
+    scorer = LightGBMScorer(
+        source, fallback=HeuristicScorer(), feature_fn=feature0_is_axis0_cosine,
+        model_name=name, clock=lambda: 0.0,
+    )
+
+    emitted = scorer.score(_state(), _items(), NOW).model_version
+
+    assert emitted == f"lgbm:{name}@{version}"
+    assert len(emitted) <= log.model_version.type.length
+
+
 def test_model_is_hot_reloaded_only_after_the_interval():
     source = FakeSource()
     source.publish("v1", _train_text(+1))
