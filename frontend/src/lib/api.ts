@@ -1,4 +1,4 @@
-import { NewsDetailResponse, TodayNewsResponse, OnboardingNewsResponse, SignupRequest, AuthResponse, LoginRequest, LoginResponse, UserProfileResponse, LogResponse } from "@/types";
+import { NewsDetailResponse, TodayNewsResponse, OnboardingNewsResponse, SignupRequest, AuthResponse, LoginRequest, LoginResponse, UserProfileResponse, LogResponse, ImpressionRef } from "@/types";
 
 // Base URL
 const BASE_URL = "/api";
@@ -31,12 +31,11 @@ const getHeaders = (token?: string) => {
 
 // --- API ---
 
-// 마지막 "오늘의 뉴스레터" 응답: 서버가 붙인 요청 ID(X-Request-Id)와 화면에 나간 순서.
-// 그 목록에서 난 클릭을 보낼 때 같이 실어, 서버가 클릭을 그 응답의 몇 번째 칸인지와 잇게 한다.
-// 헤더가 없으면(예전 서버) null로 두고 클릭은 전처럼 news_letter_id만 보낸다.
-let lastTodayFeed: { requestId: string; ids: number[] } | null = null;
-
 // 1. 오늘의 뉴스레터
+// 서버가 붙인 요청 ID(X-Request-Id)와 응답 안의 순위를 항목마다 붙여 돌려준다. 어느 응답의 몇 번째 칸이었는지를
+// 카드가 직접 들고 있어야, 목록을 다시 받은 뒤에 예전 카드를 눌러도 클릭이 그 카드를 낸 응답과 이어진다
+// (모듈 변수 하나에 "마지막 응답"을 기억하면 그 클릭이 새 응답의 다른 칸에 붙는다).
+// 헤더가 없으면(예전 서버) 붙이지 않고, 클릭은 전처럼 news_letter_id만 보낸다.
 export async function fetchTodayNews(): Promise<TodayNewsResponse[]> {
   const response = await fetch(`${BASE_URL}/newsletters/today`, {
     method: "GET",
@@ -49,8 +48,10 @@ export async function fetchTodayNews(): Promise<TodayNewsResponse[]> {
 
   const data: TodayNewsResponse[] = await response.json();
   const requestId = response.headers.get("X-Request-Id");
-  lastTodayFeed = requestId ? { requestId, ids: data.map((item) => item.news_letter_id) } : null;
-  return data;
+  if (!requestId) {
+    return data;
+  }
+  return data.map((item, position) => ({ ...item, impression: { requestId, position } }));
 }
 
 // 2. 뉴스레터 상세
@@ -175,11 +176,11 @@ export async function updateUserNewsletters(newsLetterIds: number[], token: stri
 }
 
 // 9. 뉴스레터 클릭 로그 전송
-// fromTodayFeed: "오늘의 뉴스레터" 목록에서 난 클릭이면 true. 그 목록의 요청 ID와 순위(0부터)를 같이 보낸다.
-// 다른 화면(카테고리 등)의 클릭은 그 목록의 노출이 아니므로 붙이지 않는다.
+// impression: 눌린 카드가 "오늘의 뉴스레터" 응답에서 왔으면 그 카드가 들고 있는 연결키. 요청 ID와 순위(0부터)를
+// 같이 보낸다. 다른 화면(카테고리 등)의 카드는 추천 응답의 노출이 아니므로 연결키가 없다.
 export async function sendNewsletterClickLog(
   newsLetterId: number,
-  fromTodayFeed: boolean = false,
+  impression?: ImpressionRef,
 ): Promise<LogResponse> {
   const token = getToken();
   // 로그인은 필수지만, 토큰이 없으면 전송하지 않음 (Silent Fail)
@@ -190,12 +191,9 @@ export async function sendNewsletterClickLog(
   const payload: { news_letter_id: number; request_id?: string; position?: number } = {
     news_letter_id: newsLetterId,
   };
-  if (fromTodayFeed && lastTodayFeed) {
-    const position = lastTodayFeed.ids.indexOf(newsLetterId);
-    if (position >= 0) {
-      payload.request_id = lastTodayFeed.requestId;
-      payload.position = position;
-    }
+  if (impression) {
+    payload.request_id = impression.requestId;
+    payload.position = impression.position;
   }
 
   const response = await fetch(`${BASE_URL}/logs/newsletter/click`, {

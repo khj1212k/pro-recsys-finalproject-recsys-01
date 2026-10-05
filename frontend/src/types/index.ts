@@ -41,6 +41,15 @@ export interface NewsArticle {
   hookingSentence?: string;
   popularity?: number;
   raw_news_count?: number;
+  // "오늘의 뉴스레터" 응답에서 그려진 카드만 값이 있다(lib/api.ts fetchTodayNews).
+  impression?: ImpressionRef;
+}
+
+// 추천 응답의 한 칸을 가리키는 연결키: 서버가 그 응답에 붙인 요청 ID(X-Request-Id)와 응답 안의 순위(0부터).
+// 클릭 로그에 실어 보내면 서버가 클릭을 그 응답의 그 칸과 잇는다.
+export interface ImpressionRef {
+  requestId: string;
+  position: number;
 }
 
 export interface IssueBundle {
@@ -94,6 +103,8 @@ export interface NewsResponse {
 export interface TodayNewsResponse extends NewsResponse {
   category_id: number;
   category_name: string;
+  // 서버 본문에는 없다. fetchTodayNews가 응답 헤더와 순서로 만들어 붙인다(헤더가 없는 서버면 비어 있다).
+  impression?: ImpressionRef;
 }
 
 export interface NewsDetailResponse extends NewsResponse {
