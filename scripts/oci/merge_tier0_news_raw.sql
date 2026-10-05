@@ -7,6 +7,9 @@
 --     (부분 UNIQUE uq_news_raw_content_sha256_ok, Alembic d48994e9d26e와 같은 규칙).
 --   * 병합된 행의 embedding_result는 NULL이다 - 대상 호스트의 embed 잡이 채운다.
 --   * 기대 행 수(병합 전 + 대상에 없는 URL 수)와 결과가 다르거나 매핑되지 않는 언론사가 있으면 전체를 되돌린다.
+--   * 대상 press 테이블에 같은 이름이 둘 이상이면(press_name에는 UNIQUE가 없다) 중단한다 - 이름 JOIN이 URL마다
+--     후보를 두 개 만들고 ON CONFLICT DO NOTHING이 그중 하나를 조용히 고르면, 행 수 검증은 통과하는데
+--     press_id가 임의로 정해지기 때문이다.
 --
 -- 입력: Tier 0에서 뽑은 CSV (열 순서 고정, 헤더 포함)
 --   psql -d newsletter -c "COPY (SELECT p.press_name, n.raw_news_title, n.raw_news_content, n.raw_news_url,
@@ -40,7 +43,11 @@ SELECT
     (SELECT count(*) FROM tier0_news_raw t
       WHERE NOT EXISTS (SELECT 1 FROM news_raw n WHERE n.raw_news_url = t.raw_news_url)) AS tier0_only,
     (SELECT count(DISTINCT t.press_name) FROM tier0_news_raw t
-      WHERE NOT EXISTS (SELECT 1 FROM press p WHERE p.press_name = t.press_name))      AS unmapped_press;
+      WHERE NOT EXISTS (SELECT 1 FROM press p WHERE p.press_name = t.press_name))      AS unmapped_press,
+    (SELECT count(*) FROM (
+        SELECT p.press_name FROM press p
+         WHERE EXISTS (SELECT 1 FROM tier0_news_raw t WHERE t.press_name = p.press_name)
+         GROUP BY p.press_name HAVING count(*) > 1) d)                                 AS ambiguous_press;
 
 DO $$
 DECLARE
@@ -49,6 +56,10 @@ BEGIN
     SELECT * INTO plan FROM merge_plan;
     IF plan.unmapped_press > 0 THEN
         RAISE EXCEPTION 'press_name % 개가 대상 press 테이블에 없다 - 병합 중단', plan.unmapped_press;
+    END IF;
+    IF plan.ambiguous_press > 0 THEN
+        RAISE EXCEPTION 'press_name % 개가 대상 press 테이블에 둘 이상 있다 - press_id를 정할 수 없어 병합 중단',
+            plan.ambiguous_press;
     END IF;
 END $$;
 
