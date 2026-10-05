@@ -61,8 +61,17 @@ python -m sim.run --target http://127.0.0.1:8100 --users 50 --days 3 \
 (3.3의 `export` 필요) 비밀번호가 든 URL이 `sim.run`의 인자에도, 인자를 기록하는 결과 JSON에도 남지 않는다.
 큰따옴표로 감싸 URL이 인자에 그대로 들어온 경우에도 결과 JSON에는 `scheme://***@host`로 가려서 쓴다.
 
-현재 main의 `/newsletters/today`는 `X-Rec-Source` 헤더를 보내지 않으므로 `fallback_rate`는 측정 불가(`None`)로
-나온다. 요청 시점 추천 브랜치(`feat/realtime-recommendation`)는 헤더를 보낸다.
+대상 API의 세대와 모드에 따라 결과가 다르게 읽힌다. 결과에는 대상 커밋과 `RECSYS_MODE`를 함께 적는다.
+
+- **배치 전용 `/newsletters/today`** (요청 시점 추천이 들어오기 전의 API): `X-Rec-Source` 헤더가 없어
+  `fallback_rate`는 0이 아니라 측정 불가(`None`)로 나온다. 도중 가입자의 첫 응답은 빈 목록이다
+  (`first_view_coverage` 0).
+- **요청 시점 추천 API** (`backend/app/recsys`, 브랜치 `feat/realtime-recommendation`): 모든 응답에 헤더가 있어
+  폴백률이 나온다. `RECSYS_MODE=batch`에서는 배치 행이 없는 사용자가 인기 목록을 받고(`popular`, 폴백으로
+  센다), `RECSYS_MODE=realtime`에서는 요청마다 계산한다.
+
+`tests/simulator/test_sim_backend_contract.py`가 실제 라우터에 드라이버를 붙여(SQLite) 배치 전용 API, 그리고
+요청 시점 API의 두 모드를 확인한다. 체크아웃된 backend에 있는 세대의 테스트만 돌고 나머지는 건너뛴다.
 
 ## 3. 부하 테스트 (Locust)
 
@@ -147,14 +156,17 @@ p50/p95/p99 표로, 5·50 RPS는 오류율과 빈 응답률·폴백률 위주로
 
 ### 3.4 이 부하 테스트가 재는 것과 못 재는 것
 
-- 재는 것: 합성 시드 DB 위에서 현재 API 경로(배치 행 읽기, 가입·로그인의 bcrypt, 클릭 로그 INSERT)의
-  단계별 지연 분포와 오류율, 빈 응답률(헤더가 있으면 폴백률). 현재 main에서는 Newcomer의 첫 `/today`가
-  배치 행이 없어 빈 목록이다 — `today_first_view`의 빈 응답률 100%는 콜드 스타트 공백이 그대로
-  보이는 것이고(ADR 0019 격자의 static_batch와 같은 현상), 그 지연은 "빈 목록을 돌려주는 비용"이다.
+- 재는 것: 합성 시드 DB 위에서 대상 API가 실제로 타는 경로(배치 행 읽기, 가입·로그인의 bcrypt, 클릭 로그
+  INSERT)의 단계별 지연 분포와 오류율, 빈 응답률(헤더가 있으면 폴백률).
+  - 대상이 **배치 전용 API**면 Newcomer의 첫 `/today`는 배치 행이 없어 빈 목록이다 — `today_first_view`의
+    빈 응답률 100%는 콜드 스타트 공백이 그대로 보이는 것이고(ADR 0019 격자의 static_batch와 같은 현상),
+    그 지연은 "빈 목록을 돌려주는 비용"이다.
+  - 대상이 **요청 시점 API**면 Newcomer의 첫 `/today`는 비지 않는다. `RECSYS_MODE=batch`에서는 인기 목록
+    (`popular`, 폴백으로 집계)이, `RECSYS_MODE=realtime`에서는 콜드 스타트 경로가 답한다.
 - 못 재는 것:
-  - 합성 뉴스레터에는 임베딩이 없다. 요청 시점 추천 브랜치에 붙이면 KNN 후보가 비어 다른 후보·폴백
-    경로만 탄다. 그 경로의 지연을 재려면 임베딩이 있는 콘텐츠 덤프(뉴스레터 테이블만, 사용자·로그 제외)를
-    일회용 DB에 복원한 뒤 돌린다.
+  - 합성 뉴스레터에는 임베딩이 없다. 요청 시점 API를 `RECSYS_MODE=realtime`으로 띄워도 개인 신호가
+    없는 콜드 스타트 경로(`cold_start_popular`)만 탄다(계약 테스트에서 확인). KNN·스코어링 경로의 지연을
+    재려면 임베딩이 있는 콘텐츠 덤프(뉴스레터 테이블만, 사용자·로그 제외)를 일회용 DB에 복원한 뒤 돌린다.
   - 밤 배치 대역(`sim.seed batches`)은 실제 추천 잡이 아니다. 배치 생성 시간은 이 측정에 없다.
   - API 컨테이너는 uvicorn 단일 프로세스다(`docker/api.Dockerfile`). 워커 수를 바꾼 결과는 별도 실행으로 적는다.
   - 가짜 앱을 대상으로 한 수치(CI 스모크)는 하네스 자체의 처리 능력일 뿐 API 성능이 아니다.

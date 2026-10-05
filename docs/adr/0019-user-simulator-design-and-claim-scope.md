@@ -20,10 +20,13 @@
     모델이 쓰는 카테고리 피처와 정답 라벨이 같은 정보에서 나와 **순환적**이다.
   - 클릭률이 비현실적이다: 19,500노출 중 9,281클릭 = **47.6%**, 사용자별 4.6%~97.4%
     (`python -m sim.calibration --team-ctr-csv ...`, 아래 "증거").
-- 현재 main의 `/newsletters/today`는 전날 밤 배치(`news_letter_today_batch`)를 읽기만 한다.
-  요청 시점 추천은 별도 브랜치(`feat/realtime-recommendation`)에서 설계 중이며, 그쪽 API는
-  응답 출처를 `X-Rec-Source` 헤더(realtime·cold_start_*·batch·popular·recent·empty)로 알린다.
-  시뮬레이터는 두 설계 모두를 같은 계약으로 몰아야 한다.
+- `/newsletters/today`에는 두 세대가 있고, 시뮬레이터는 둘 다 같은 계약으로 몰아야 한다.
+  어느 쪽이 main인지는 병합 순서에 달려 있으므로 아래에서는 이름으로 부른다.
+  - **배치 전용 API** (이 ADR을 처음 쓴 2026-09-26의 main): 전날 밤 배치(`news_letter_today_batch`)를
+    읽기만 한다. 배치 행이 없는 사용자는 빈 목록을 받고, 응답 출처를 알리는 헤더가 없다.
+  - **요청 시점 API** (브랜치 `feat/realtime-recommendation`, `backend/app/recsys`): `RECSYS_MODE=realtime`이면
+    요청마다 계산하고, `RECSYS_MODE=batch`면 배치 행을 읽되 없으면 인기·최신 목록으로 채운다. 두 모드 모두
+    응답 출처를 `X-Rec-Source` 헤더(realtime·cold_start_*·batch·popular·recent·empty)로 알린다.
 
 ## 검토한 대안
 
@@ -103,10 +106,13 @@
 - 같은 드라이버가 세 대상에 붙는다: (1) 프로세스 내 가짜 FastAPI 앱(장난감 정책 5종,
   가상 시계), (2) 실제 `backend/app` 라우터 + SQLite(계약 테스트
   `tests/simulator/test_sim_backend_contract.py`), (3) 실행 중인 스택의 URL.
+  계약 테스트는 배치 전용 API, 그리고 요청 시점 API의 두 모드(`RECSYS_MODE=batch`·`realtime`)를 각각
+  확인하며, 체크아웃된 backend에 있는 세대의 테스트만 돈다. 요청 시점 API의 저장소 계층은 Postgres·pgvector
+  전용 SQL이라 SQLite에서는 같은 테이블을 읽는 대역으로 바꿔 끼운다(라우터·추천 서비스·헤더 배선은 실제 코드).
 - 가짜 앱의 장난감 정책은 **지표가 알려진 설계 차이를 구분하는지** 보려는 테스트 더블이다:
-  `static_batch`(현재 설계: 밤 배치, 배치 없으면 빈 목록), `static_batch_fallback`(배치 없으면
-  인기 목록), `reactive`(요청마다 온보딩·클릭으로 재정렬), `reactive_explore`(reactive + top-10 중
-  3칸을 상위 2개 관심 밖 카테고리로 탐색), `random`. 운영 추천기가 아니다.
+  `static_batch`(배치 전용 API의 설계: 밤 배치, 배치 없으면 빈 목록), `static_batch_fallback`(배치 없으면
+  인기 목록 — 요청 시점 API의 `RECSYS_MODE=batch`와 같은 모양), `reactive`(요청마다 온보딩·클릭으로 재정렬),
+  `reactive_explore`(reactive + top-10 중 3칸을 상위 2개 관심 밖 카테고리로 탐색), `random`. 운영 추천기가 아니다.
 
 ### 행동 지표 (`sim/metrics.py`, k=10)
 - 콜드 스타트: 도중 가입자의 첫 `/today`가 비어 있지 않은 비율(`first_view_coverage`), 첫
@@ -116,7 +122,7 @@
 - drift 적응: drift 후 top-10의 50% 이상이 새 아키타입 핵심 카테고리가 될 때까지의 요청 수
   (중앙값·p90), 적응 비율, 관측 기간 내 미적응(censored) 수.
 - 서빙: 빈 응답 비율, `X-Rec-Source` 기준 폴백률(fallback·popular·recent·empty; 헤더가 없는
-  현재 main API에서는 측정 불가로 `None`), 엔드포인트별 오류율·p50/p95.
+  배치 전용 API에서는 측정 불가로 `None`), 엔드포인트별 오류율·p50/p95.
 - 참여: top-10 실현 CTR(보정 상태 점검용이지 품질 점수가 아니다), 클릭 ACK 비율(클릭이
   로그 API까지 도달한 비율).
 

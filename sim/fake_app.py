@@ -5,18 +5,21 @@ and a pluggable *toy* recommendation policy. The policies exist to check that
 the simulator's metrics can tell known architectures apart - they are not the
 production recommender and nothing here measures its quality:
 
-  static_batch           per-user list snapshotted at day end (the current
-                         design: /today reads news_letter_today_batch); users
+  static_batch           per-user list snapshotted at day end (the batch-only
+                         /today, which reads news_letter_today_batch); users
                          without a batch get [] (source "empty", as the
                          request-time API labels an exhausted fallback chain)
   static_batch_fallback  same, but users without a batch get the popular list
+                         (the shape of the request-time API in RECSYS_MODE=batch)
   reactive               request-time re-ranking from onboarding + clicks
   reactive_explore       reactive, plus 3 of the top-10 slots given to
                          categories outside the user's top-2 affinities
   random                 uniformly random candidates
 
-Responses carry an `X-Rec-Source` header (the production API does not - ADR 0019
-proposes adding it) so fallback rate can be measured directly.
+Every response carries an `X-Rec-Source` header, so the fallback rate can be
+measured directly. Of the real APIs only the request-time /today (branch
+feat/realtime-recommendation) sends it; the batch-only /today does not, and the
+metrics then report the fallback rate as unknown (None) rather than 0.
 """
 
 import itertools
