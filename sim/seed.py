@@ -18,6 +18,12 @@ load test does and does not exercise.
 
 Refuses to write to a database that holds collected articles (any news_raw row)
 or any non-synthetic user: fake newsletters must never reach the collection DB.
+
+The newsletters are inserted with their catalog ids. On Postgres an explicit id
+does not advance the sequence behind news_letter.news_letter_id, so a later
+insert without an id (the generation pipeline) would collide with a seeded row.
+A database seeded here is for the simulator and the load test only - drop it
+afterwards (sim/README.md 3.3, step 6) instead of pointing the pipeline at it.
 """
 
 import argparse
@@ -73,7 +79,10 @@ def check_disposable(session) -> None:
 
 
 def seed_catalog(session, catalog: Catalog) -> dict:
-    """Writes the catalog through the backend's own models; returns counts."""
+    """Writes the catalog through the backend's own models; returns counts.
+
+    Only fills an empty news_letter table (`skipped_existing` otherwise). Ids are the
+    catalog's, and the Postgres id sequence is left where it was - see the module docstring."""
     from sqlalchemy import func
     from sqlmodel import select
 
