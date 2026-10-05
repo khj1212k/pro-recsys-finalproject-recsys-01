@@ -70,9 +70,11 @@ def env(tmp_path):
         work = tmp_path / "work"
         out = tmp_path / "work" / "out"
 
-        def argv(self, *extra, urls=True):
+        def argv(self, *extra, urls=True, rate="0.1"):
             a = ["run", "--workdir", str(self.work), "--code-tarball", str(tarball), "--manifest",
                  str(tmp_path / "manifest.json"), "--skip-install", "--python", "PY"]
+            if rate is not None:                       # 판정용 실행의 고정 명령(A2.8)에는 --cu-rate가 있다
+                a += ["--cu-rate", rate]
             if urls:
                 for k in payload:
                     a += ["--url", f"{k}={_url(k)}"]
@@ -301,6 +303,8 @@ def test_budget_skips_descriptive_stages_at_the_warning_line_and_everything_at_t
     compute = json.loads((env.out / "compute.json").read_text())
     assert compute["skipped_for_budget"] == ["e8", "e4", "e2p1"]
     assert compute["cu_estimated"] == pytest.approx(8.0) and compute["rate_cu_per_hour"] == 2.0
+    assert compute["budget_rules_active"] is True
+    assert "예산 규칙이 꺼져 있다" not in (env.out / "run.log").read_text()
     assert compute["wall_seconds_by_stage"]["fit"] == 3600.0 and compute["cu_cap"] == 6.0
 
 
@@ -369,11 +373,51 @@ def test_real_registration_lists_the_inputs_the_driver_checks():
     assert PREREG["data"]["articles_original_sha256"] == v1["data"]["files"]["articles.parquet"]
 
 
-def test_without_a_rate_nothing_is_skipped_and_cu_is_recorded_as_unknown(env):
-    runner = Runner()
-    assert drv.main(env.argv(), runner=runner, opener=env.opener) == drv.EXIT_OK
+def test_a_real_run_without_a_cu_rate_is_refused_before_anything_is_downloaded(env, capsys):
+    """등록한 예산 규칙(상한 6 CU, 경고 5 CU)은 rate가 있어야 적용된다. rate 없이 도는 판정용 실행은 그 규칙을 말없이
+    건너뛰는 것이므로 시작하지 않는다."""
+    for extra in ((), ("--allow-unregistered-data",), ("--fresh",), ("--detach",)):
+        runner = Runner()
+        assert drv.main(env.argv(*extra, rate=None), runner=runner, opener=env.opener) == drv.EXIT_USAGE, extra
+        assert env.opened == [] and runner.calls == [], extra
+        assert not (env.out / "FAILED").exists() and not (env.out / "driver_state.json").exists(), extra
+        assert not (env.work / "repo").exists() and not (env.out / "driver.pid").exists(), extra
+    assert "--cu-rate" in capsys.readouterr().out
+    assert drv.main(env.argv("--cu-rate", "-1"), runner=Runner(), opener=env.opener) == drv.EXIT_USAGE
+    assert env.opened == []
+
+
+def test_a_usage_error_does_not_wipe_an_earlier_run_even_with_fresh(env):
+    assert drv.main(env.argv(), runner=Runner(), opener=env.opener) == drv.EXIT_OK
+    before = (env.out / "driver_state.json").read_text()
+    assert drv.main(env.argv("--fresh", rate=None), runner=Runner(), opener=env.opener) == drv.EXIT_USAGE
+    assert (env.out / "driver_state.json").read_text() == before and (env.work / "data").exists()
+
+
+def test_an_explicit_zero_rate_turns_the_budget_rules_off_and_the_record_says_so(env):
+    """CU로 과금하지 않는 런타임에서는 --cu-rate 0을 명시한다. 그때는 아무것도 건너뛰지 않고, 규칙이 꺼져 있었다는 것이
+    로그와 compute.json(리포트 meta.compute)에 남는다."""
+    clock = Clock()
+    runner = Runner(clock=clock, seconds=36000.0)       # 단계 하나에 10시간이어도
+    assert drv.main(env.argv("--cu-rate", "0"), runner=runner, opener=env.opener, clock=clock) == drv.EXIT_OK
+    assert runner.calls == list(drv.STAGES)
     compute = json.loads((env.out / "compute.json").read_text())
+    assert compute["budget_rules_active"] is False and compute["rate_cu_per_hour"] == 0.0
+    assert compute["cu_estimated"] == 0.0 and compute["skipped_for_budget"] == []
+    assert "예산 규칙이 꺼져 있다" in (env.out / "run.log").read_text()
+
+
+def test_a_synthetic_dry_run_needs_no_rate_and_is_recorded_as_unmetered(env):
+    """드라이 런은 CU/h를 재려고 돌리는 것이라 rate를 요구하지 않는다."""
+    runner = Runner()
+    argv = ["run", "--workdir", str(env.work), "--code-tarball", str(env.tarball), "--synthetic", "--skip-install",
+            "--python", "PY"]
+    assert drv.main(argv, runner=runner) == drv.EXIT_OK
+    assert runner.calls == ["synthetic", *drv.STAGES]
+    compute = json.loads((env.out / "compute.json").read_text())
+    assert compute["budget_rules_active"] is False and compute["rate_cu_per_hour"] is None
     assert compute["cu_estimated"] is None and compute["skipped_for_budget"] == []
+    assert "예산 규칙이 꺼져 있다" in (env.out / "run.log").read_text()
 
 
 def test_runtime_label_is_not_colab_unless_running_there_or_told_so(env, tmp_path):

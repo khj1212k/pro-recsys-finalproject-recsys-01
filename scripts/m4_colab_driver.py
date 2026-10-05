@@ -27,6 +27,8 @@
   마커가 있는 동안은 --fresh 없이 다시 돌지 않는다(통과할 때까지 조용히 재시도하는 길을 막는다).
 - 단계를 시작하기 전에 `rate x 누적 벽시계 시간`으로 CU를 추정한다. 경고선 이상이면 서술용 단계를 건너뛰고, 상한
   이상이면 남은 단계를 돌리지 않는다. 건너뛴 단계는 리포트에 "미측정"으로 남는다. assemble은 항상 돈다.
+  이 규칙은 rate가 있어야 적용되므로 --synthetic이 아닌 실행은 --cu-rate 없이 시작하지 않는다. CU로 과금하지 않는
+  런타임에서는 --cu-rate 0을 명시하고, 그때는 규칙이 꺼져 있었다는 것이 로그와 compute.json에 남는다.
 - argv를 넘길 수 없는 실행기에서는 환경변수 M4_DRIVER_ARGS_JSON(인자 목록의 JSON)으로 같은 인자를 준다.
 - --detach는 tarball을 푼 뒤 그 안의 이 스크립트를 새 세션의 자식 프로세스로 띄우고 pid만 남긴 채 돌아온다. URL은
   자식에게 환경변수로 넘긴다(명령줄에 남기지 않는다). 계산 내용은 분리하지 않은 실행과 같다. stop은 그 프로세스
@@ -329,6 +331,7 @@ def wall_seconds(state: dict) -> float:
     return float(sum(max(0.0, i["last_seen"] - i["started"]) for i in state.get("invocations", [])))
 
 
+
 def run_stages(workdir: Path, state: dict, state_path: Path, run_args: dict, *, python: str, threads: int,
                cu_rate: Optional[float], cu_cap: float, cu_warn: float, log: Log,
                runner: Callable = subprocess_runner, clock: Callable[[], float] = time.time,
@@ -348,6 +351,11 @@ def run_stages(workdir: Path, state: dict, state_path: Path, run_args: dict, *, 
     def cu_now() -> Optional[float]:
         return None if cu_rate is None else cu_rate * wall_seconds(state) / 3600.0
 
+    budget_active = cu_rate is not None and cu_rate > 0
+    if not budget_active:
+        log(f"budget: CU rate가 {'없다' if cu_rate is None else '0이다'} — 예산 규칙이 꺼져 있다"
+            f"(상한 {cu_cap}·경고 {cu_warn} CU를 적용하지 않고, 어떤 단계도 예산으로 건너뛰지 않는다)")
+
     def write_compute():
         cu = cu_now()
         write_json(out_dir / "compute.json", {
@@ -355,6 +363,7 @@ def run_stages(workdir: Path, state: dict, state_path: Path, run_args: dict, *, 
             "wall_seconds_total": round(wall_seconds(state), 1),
             "wall_seconds_by_stage": {s: v["seconds"] for s, v in state["stages"].items() if v.get("status") == "done"},
             "rate_cu_per_hour": cu_rate, "cu_estimated": None if cu is None else round(cu, 3),
+            "budget_rules_active": budget_active,
             "cu_cap": cu_cap, "cu_warn": cu_warn, "cu_before": state.get("cu_before"),
             "skipped_for_budget": [s for s, v in state["stages"].items() if v.get("status") == "skipped_budget"],
             "invocations": len(state["invocations"]),
@@ -437,12 +446,23 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def check_run_args(args) -> None:
+    """아무것도 지우거나 받거나 띄우기 전에 보는 인자 규칙."""
+    if args.cu_rate is None and not args.synthetic:
+        raise DriverError("--cu-rate가 필요합니다. 등록한 예산 규칙(상한·경고)은 rate가 있어야 적용됩니다: 드라이 런"
+                          "(--synthetic)에서 잰 CU/h를 주거나, CU로 과금하지 않는 런타임이면 --cu-rate 0을 명시하세요.",
+                          EXIT_USAGE)
+    if args.cu_rate is not None and args.cu_rate < 0:
+        raise DriverError("--cu-rate는 0 이상이어야 합니다", EXIT_USAGE)
+
+
 def cmd_detach(args) -> int:
     workdir = Path(args.workdir)
     out_dir = workdir / "out"
     out_dir.mkdir(parents=True, exist_ok=True)
     log = Log(out_dir / "run.log")
     try:
+        check_run_args(args)
         prev = read_json(out_dir / "driver.pid")
         if prev and _pid_alive(prev["pid"]):
             raise DriverError(f"이미 실행 중입니다(pid {prev['pid']}). status로 보거나 stop으로 끝내세요.", EXIT_USAGE)
@@ -497,6 +517,7 @@ def cmd_run(args, *, runner: Callable = subprocess_runner, opener: Callable = ur
     state_path = out_dir / "driver_state.json"
     urls: dict[str, str] = {}
     try:
+        check_run_args(args)
         urls = parse_urls(args.url, os.environ)
         if args.fresh:
             for p in (out_dir, data):
@@ -629,7 +650,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--url", action="append", default=[], metavar="KEY=URL", help="manifest 키별 서명 URL(출력하지 않음)")
     run.add_argument("--synthetic", action="store_true", help="EB-NeRD 없이 합성 데이터로 경로만 확인(demo 등급)")
     run.add_argument("--threads", type=int, default=2)
-    run.add_argument("--cu-rate", type=float, default=None, help="런타임의 CU/h(드라이 런에서 잰 값)")
+    run.add_argument("--cu-rate", type=float, default=None,
+                     help="런타임의 CU/h(드라이 런에서 잰 값). --synthetic이 아니면 필수이고, 0은 예산 규칙을 끈다는 명시")
     run.add_argument("--cu-cap", type=float, default=CU_CAP)
     run.add_argument("--cu-warn", type=float, default=CU_WARN)
     run.add_argument("--cu-before", type=float, default=None, help="실행 전 잔액(기록용)")
