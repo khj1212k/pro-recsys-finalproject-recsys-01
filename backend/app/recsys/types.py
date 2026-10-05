@@ -69,10 +69,11 @@ class DeterministicList:
     탐색 칸은 캐시에서 꺼낸 뒤 요청마다 새로 뽑는다(ADR 0025).
 
     scores / extra_scores / features는 eligible_ids와 같은 순서다 - 탐색으로 뽑힌 아이템의 점수와
-    피처도 로그에 남기려면 화면에 들지 못한 후보의 값까지 들고 있어야 한다."""
+    피처도 로그에 남기려면 화면에 들지 못한 후보의 값까지 들고 있어야 한다. 캐시 항목이 후보 수에
+    비례해 커지므로 전부 numpy 배열로 든다(파이썬 int 리스트·dict로 들면 항목이 약 3배 크다)."""
 
     ranked_ids: List[int]  # 결정론 순위(최대 top_k개)
-    eligible_ids: List[int]  # E: 제외와 표시 가능 필터를 거친 후보 전체
+    eligible_ids: np.ndarray  # E: 제외와 표시 가능 필터를 거친 후보 전체 (int32)
     scores: np.ndarray
     source: str
     model_version: str
@@ -86,7 +87,7 @@ class DeterministicList:
     fatigued_count: Optional[int] = None
 
     def __post_init__(self):
-        self.index: Dict[int, int] = {nid: i for i, nid in enumerate(self.eligible_ids)}
+        self.eligible_ids = np.asarray(self.eligible_ids, dtype=np.int32)
 
 
 @dataclass(frozen=True)

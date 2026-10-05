@@ -143,8 +143,10 @@ def build_recommendation(
     """결정론 목록에 이 요청의 탐색 칸을 넣어 화면을 만든다. rng가 없으면 결정론 목록 그대로다.
 
     결과 캐시에는 DeterministicList만 들어가므로, 캐시가 적중한 요청도 탐색 칸은 독립적으로 뽑힌다."""
-    plan = plan_slate(det.ranked_ids, det.eligible_ids, cfg.top_k, cfg.explore_slots_for(det.cold), rng)
-    rows = [det.index[slot.news_letter_id] for slot in plan.slots]
+    eligible: List[int] = det.eligible_ids.tolist()
+    plan = plan_slate(det.ranked_ids, eligible, cfg.top_k, cfg.explore_slots_for(det.cold), rng)
+    index = {nid: i for i, nid in enumerate(eligible)}
+    rows = [index[slot.news_letter_id] for slot in plan.slots]
     slots = [
         SlotInfo(
             explored=slot.explored,
@@ -167,7 +169,7 @@ def build_recommendation(
         policy_version=plan.policy,
         explore_positions=plan.explore_positions,
         explore_pool_size=plan.pool_size,
-        eligible_ids=det.eligible_ids,
+        eligible_ids=eligible,
         candidate_count=det.candidate_count,
         profile_source=det.profile_source,
         shadow_versions=sorted(det.extra_scores),

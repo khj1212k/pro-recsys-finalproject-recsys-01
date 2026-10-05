@@ -112,7 +112,7 @@ def test_the_default_draw_is_seeded_by_the_request_id_so_a_logged_request_can_be
 
     det = _det(service, repo, WARM)
     for rec in (first, second):
-        replayed = plan_slate(det.ranked_ids, det.eligible_ids, 20, 2, rng_for_request(rec.request_id))
+        replayed = plan_slate(det.ranked_ids, det.eligible_ids.tolist(), 20, 2, rng_for_request(rec.request_id))
         assert replayed.ids == rec.news_letter_ids
         assert replayed.explore_positions == rec.explore_positions
     assert first.request_id != second.request_id
@@ -166,7 +166,8 @@ def test_request_and_slot_rows_describe_the_slate_that_was_shown():
     assert (request["source"], request["model_version"]) == (SOURCE_REALTIME, "heuristic-v1")
     assert (request["policy_version"], request["profile_source"]) == ("eps-uniform-v1", "long_term")
     assert (request["cache_hit"], request["fallback_reason"]) == (False, None)
-    assert request["candidate_ids"] == det.eligible_ids
+    assert request["candidate_ids"] == det.eligible_ids.tolist()
+    assert all(type(nid) is int for nid in request["candidate_ids"])  # DB 드라이버는 numpy 정수를 못 받는다
     assert request["eligible_count"] == len(det.eligible_ids) == 30
     assert request["candidate_count"] == 30
     assert request["explore_pool_size"] == 30 - 18
@@ -253,6 +254,26 @@ def test_an_empty_response_still_leaves_one_request_row():
     assert (request["source"], request["shown_count"], request["fallback_reason"]) == ("empty", 0, "empty")
     assert log.slots == []
     assert service.counters.get("requests.logged") == 1
+
+
+def test_logged_values_are_plain_python_types_the_database_driver_accepts():
+    """칸 행과 요청 행에 numpy 스칼라가 섞이면 psycopg2가 바인딩하지 못해 로그 쓰기가 통째로 실패한다."""
+    repo = _repo()
+    log = LogRecorder()
+    service = _service(repo, log=log, scorer=ScorerStack(HeuristicScorer(), [ReverseOfActive()]),
+                       rng_factory=_seeded(11))
+    rec = service.recommend(WARM, fallback_repo=repo)
+    service.log_impressions(WARM, rec, rec.news_letter_ids)
+
+    plain = (int, float, str, bool, bytes, type(None))
+    for row in log.slots + log.requests:
+        for key, value in row.items():
+            if isinstance(value, dict):
+                assert all(type(v) in plain for v in value.values()), key
+            elif isinstance(value, list):
+                assert all(type(v) in plain for v in value), key
+            else:
+                assert type(value) in plain, (key, type(value))
 
 
 def test_a_cache_hit_is_recorded_on_the_request_row_with_its_own_exploration():
@@ -396,7 +417,7 @@ def test_fatigue_enforce_mode_removes_fatigued_items_from_the_list_and_from_the_
     log = LogRecorder()
     service = _service(repo, RecsysConfig(fatigue_mode="enforce"), log=log, rng_factory=_seeded(10))
     before = _det(service, repo, WARM)
-    fatigued = before.ranked_ids[:2] + before.eligible_ids[-2:]
+    fatigued = before.ranked_ids[:2] + before.eligible_ids.tolist()[-2:]
     _impress_three_times(repo, WARM, fatigued)
 
     seen = set()
