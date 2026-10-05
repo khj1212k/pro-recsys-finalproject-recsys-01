@@ -54,3 +54,29 @@ def test_impression_groups_merge_click_requests_of_the_same_impression():
     order, sizes = _order_and_groups(task, "impression", np.random.default_rng(0))
     assert sizes.tolist() == [6, 2]
     assert set(order[:6].tolist()) == set(range(6)) and set(order[6:].tolist()) == {6, 7}
+
+
+def test_extra_params_add_run_options_without_touching_team_hyperparameters():
+    import pytest
+
+    from evaluation.recsys.ebnerd.models import TEAM_PARAMS, _params
+
+    spec = ModelSpec("t", "pool_neg", "lambdarank", "request", ["f0"])
+    base = _params(spec, 3, 2)
+    assert _params(spec, 3, 2, None) == base and "deterministic" not in base  # 기본 동작(v1)은 그대로
+    det = _params(spec, 3, 2, {"deterministic": True, "force_col_wise": True})
+    assert det == {**base, "deterministic": True, "force_col_wise": True}
+    assert all(det[k] == v for k, v in TEAM_PARAMS.items())
+    for clash in ({"num_leaves": 63}, {"objective": "binary"}, {"seed": 9}):
+        with pytest.raises(ValueError):
+            _params(spec, 3, 2, clash)
+
+
+def test_deterministic_training_repeats_bit_for_bit():
+    spec = ModelSpec("t", "random_neg", "lambdarank", "request", ["f0", "f1", "f2"])
+    fit, es = _positive_first_task(n_groups=400, seed=0), _positive_first_task(n_groups=200, seed=1)
+    extra = {"deterministic": True, "force_col_wise": True}
+    a = train(spec, fit, es, seed=0, num_threads=2, extra_params=extra)
+    b = train(spec, fit, es, seed=0, num_threads=2, extra_params=extra)
+    assert a.best_iteration == b.best_iteration
+    assert np.array_equal(a.predict(es[1], es[0]), b.predict(es[1], es[0]))

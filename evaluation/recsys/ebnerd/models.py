@@ -123,12 +123,18 @@ def _order_and_groups(task: RankTask, group: str,
     raise ValueError(group)
 
 
-def _params(spec: ModelSpec, seed: int, num_threads: int) -> dict:
+def _params(spec: ModelSpec, seed: int, num_threads: int, extra_params: Optional[dict] = None) -> dict:
     p = dict(TEAM_PARAMS, seed=seed, num_threads=num_threads, objective=spec.objective)
     if spec.objective == "binary":
         p["metric"] = "auc"
     else:
         p.update(metric="ndcg", eval_at=[10], label_gain=[0, 1])
+    if extra_params:
+        # 하이퍼파라미터가 아닌 실행 옵션(deterministic 등)만 넘긴다. 팀 설정·목적함수·지표는 덮어쓸 수 없다.
+        clash = sorted(set(extra_params) & set(p))
+        if clash:
+            raise ValueError(f"extra_params가 고정 파라미터를 덮어씁니다: {clash}")
+        p.update(extra_params)
     return p
 
 
@@ -155,7 +161,7 @@ class TrainedModel:
 
 
 def train(spec: ModelSpec, fit: tuple[RankTask, pd.DataFrame], es: tuple[RankTask, pd.DataFrame],
-          seed: int, num_threads: int = 4) -> TrainedModel:
+          seed: int, num_threads: int = 4, extra_params: Optional[dict] = None) -> TrainedModel:
     t0 = time.time()
     sets = []
     rng = np.random.default_rng(seed)
@@ -169,7 +175,7 @@ def train(spec: ModelSpec, fit: tuple[RankTask, pd.DataFrame], es: tuple[RankTas
     des = lgb.Dataset(xe, ye, group=ge, reference=dfit, feature_name=spec.features)
     evals: dict = {}
     booster = lgb.train(
-        _params(spec, seed, num_threads), dfit, num_boost_round=NUM_BOOST_ROUND, valid_sets=[des],
+        _params(spec, seed, num_threads, extra_params), dfit, num_boost_round=NUM_BOOST_ROUND, valid_sets=[des],
         valid_names=["es"],
         callbacks=[lgb.early_stopping(EARLY_STOPPING, first_metric_only=True, verbose=False),
                    lgb.record_evaluation(evals)],
