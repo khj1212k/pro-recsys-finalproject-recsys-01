@@ -217,12 +217,39 @@ def _listing(items, field, mk="mrr") -> str:
     )
 
 
+def _beyond_like_with_like(cfg_e: dict, v21_e: dict, v21_trees, what: str) -> str:
+    """같은 조건 비교가 '모두 양수'가 아닐 때, 조건이 같지 않은 두 비교(config 그대로 / v2.1 비교 재현)의
+    판정을 그대로 적는다. v2.1이 보고한 양수가 1라운드 종료 아티팩트를 고친 뒤에도 남는지를 CI로만 말한다."""
+    cfg_v, v21_v = ci_verdict(cfg_e or {}), ci_verdict(v21_e or {})
+    v21_txt = f"current를 엔진 행 순서 그대로 조기 종료한 비교(트리 수 {list_str(v21_trees)}; {fmt_eff(v21_e)})"
+    cfg_txt = f"검증 행을 섞어 그 아티팩트를 없앤 config 그대로의 비교({fmt_eff(cfg_e)})"
+    if v21_v == "positive" and cfg_v == "positive":
+        return (
+            f"v2.1이 보고한 양수 {what}는 {v21_txt}에서 나온 값이다. {cfg_txt}에서도 양수이므로 1라운드 종료 아티팩트만으로 "
+            "생긴 값은 아니다. 다만 CI가 0을 벗어나는 두 비교는 모두 objective와 조기 종료 지표가 다르고(binary·AUC vs "
+            "lambdarank·NDCG), objective를 맞추거나 조기 종료를 없애 라운드 수를 맞춘 비교에서는 0을 포함한다 - 코드 버전의 "
+            "성질과 objective·조기 종료 방식의 영향을 가를 수 없다"
+        )
+    if v21_v == "positive":
+        return (
+            f"v2.1이 보고한 양수 {what}는 {v21_txt}에서만 나온다. {cfg_txt}에서는 검출되지 않는다"
+        )
+    if cfg_v in ("positive", "negative"):
+        return (
+            f"config 그대로의 비교에서는 {what}가 {fmt_eff(cfg_e)}({say(cfg_e, *SHORT_WORDS)})이지만, 이 비교는 objective와 "
+            f"조기 종료 지표가 함께 달라 코드 버전의 성질로 읽지 않는다. v2.1 비교의 재현값은 {fmt_eff(v21_e)}"
+            f"({say(v21_e, *SHORT_WORDS)})다"
+        )
+    return f"v2.1 비교의 재현값은 {fmt_eff(v21_e)}({say(v21_e, *SHORT_WORDS)}), config 그대로의 비교는 {fmt_eff(cfg_e)}({say(cfg_e, *SHORT_WORDS)})다"
+
+
 def version_gap_sentences(vc: dict, n_users="?") -> dict:
     """버전 비교(team-final - current)의 결론 문장을 CI 판정에서만 만든다.
 
-    결론은 같은 조건 비교(like_with_like)에서만 고른다. v2.1의 비교(엔진 순서 조기 종료)는
-    재현 수치로만 인용한다."""
+    결론은 같은 조건 비교(like_with_like)에서만 고른다. 조건이 같지 않은 비교(config 그대로, v2.1 비교의
+    재현)는 수치와 판정을 그대로 인용하되 코드 버전의 성질로 쓰지 않는다."""
     like = _pair_items(vc, like_only=True)
+    every = _pair_items(vc)
     cfg = get(vc, "pairs", "as_configured", default={})
     v21 = get(vc, "pairs", "v2_1_engine_order_es", default={})
     out = {}
@@ -240,22 +267,21 @@ def version_gap_sentences(vc: dict, n_users="?") -> dict:
 
     # 2차(팀 방식 추론 시점) 격차
     aw_v = verdicts("as_written")
+    aw_all_pos = bool(aw_v) and all(v == "positive" for v in aw_v)
     if aw_v and all(v == "inconclusive" for v in aw_v):
         out["aw"] = "2차(팀 방식 추론 시점) 격차도 같은 조건 비교에서는 검출되지 않는다"
-    elif aw_v and all(v == "positive" for v in aw_v):
+    elif aw_all_pos:
         out["aw"] = "2차(팀 방식 추론 시점) 격차는 같은 조건 비교 모두에서 양수다(team-final이 높다)"
     else:
         out["aw"] = "2차(팀 방식 추론 시점) 격차의 판정이 같은 조건 비교 안에서 갈린다"
-    if ci_verdict(get(v21, "as_written", "mrr", default={})) == "positive" and not (aw_v and all(v == "positive" for v in aw_v)):
-        out["aw"] += (
-            f" - v2.1이 보고한 양수 2차 격차는 current를 엔진 행 순서 그대로 조기 종료한 비교"
-            f"({fmt_eff(get(v21, 'as_written', 'mrr', default={}))})에서 나온 값이다"
+    if not aw_all_pos:
+        out["aw"] += ". " + _beyond_like_with_like(
+            get(cfg, "as_written", "mrr", default={}), get(v21, "as_written", "mrr", default={}),
+            v21.get("current_n_trees"), "2차 격차",
         )
 
     # 누출 효과의 차이(DiD)
     did_v = verdicts("leak_effect_did")
-    v21_did = get(v21, "leak_effect_did", "mrr", default={})
-    cfg_did = get(cfg, "leak_effect_did", "mrr", default={})
     if did_v and all(v == "inconclusive" for v in did_v):
         text = "누출 효과의 차이(DiD)는 같은 조건 비교 어디에서도 검출되지 않는다"
         out["did_like_with_like"] = "inconclusive"
@@ -268,19 +294,23 @@ def version_gap_sentences(vc: dict, n_users="?") -> dict:
     else:
         text = "누출 효과의 차이(DiD)의 판정이 같은 조건 비교 안에서 갈린다 - 코드 버전에 따른 누출 민감도 차이는 판단할 수 없다"
         out["did_like_with_like"] = "mixed"
-    if ci_verdict(v21_did) == "positive" and out["did_like_with_like"] != "positive":
-        text += (
-            f". v2.1이 보고한 양수 DiD는 current를 엔진 행 순서 그대로 조기 종료한 모델(트리 수 "
-            f"{list_str(v21.get('current_n_trees'))})과의 비교({fmt_eff(v21_did)})에서 나온 값이다. 조기 종료 아티팩트로 "
-            "생긴 학습 길이 차이가 섞여 있으므로 'team-final 코드가 추론 시점 누출에 더 민감하다'는 v2.1의 문장은 철회한다"
+    if out["did_like_with_like"] != "positive":
+        text += ". " + _beyond_like_with_like(
+            get(cfg, "leak_effect_did", "mrr", default={}), get(v21, "leak_effect_did", "mrr", default={}),
+            v21.get("current_n_trees"), "DiD",
         )
-    elif v21_did and ci_verdict(v21_did) != "positive":
-        text += f". v2.1의 양수 DiD는 이번 재현에서 {fmt_eff(v21_did)}({say(v21_did, *SHORT_WORDS)})다"
-    if ci_verdict(cfg_did) in ("positive", "negative") and out["did_like_with_like"] != ci_verdict(cfg_did):
-        text += (
-            f". 각 버전 config 그대로의 비교에서는 DiD가 {fmt_eff(cfg_did)}({say(cfg_did, *SHORT_WORDS)})이지만, 이 비교는 "
-            "objective와 조기 종료 지표가 함께 달라 코드 버전의 성질로 읽지 않는다"
-        )
+        text += ". 그래서 'team-final 코드가 추론 시점 누출에 더 민감하다'는 v2.1의 문장은 철회한다"
+        effects = [get(p, "leak_effect_did", "mrr", "effect") for _, p in every]
+        effects = [e for e in effects if e is not None]
+        if effects and all(e > 0 for e in effects):
+            text += (
+                f". MRR의 점추정은 {len(effects)}개 비교 모두 양수({min(effects):+.3f}~{max(effects):+.3f})라 '차이가 없다'는 "
+                "증거도 아니다 - 판단 불가다"
+            )
+        p5 = [get(p, "leak_effect_did", "precision@5", "effect") for _, p in every]
+        p5 = [e for e in p5 if e is not None]
+        if p5 and min(p5) < 0 < max(p5):
+            text += f". P@5로 보면 DiD의 부호부터 비교마다 갈린다({min(p5):+.3f}~{max(p5):+.3f})"
     out["did"] = text
     return out
 
@@ -481,6 +511,7 @@ def main() -> None:
     paired = art.get("paired_current", [])
     eng = get(decomp, "current_es_engine_order", "primary", default={})
     es_eff = get(boot, "es_valid_order_engine_vs_shuffled", "mrr", default={})
+    es_eff_p5 = get(boot, "es_valid_order_engine_vs_shuffled", "precision@5", default={})
     it1_engine_mean = mean_of([x.get("iter1_engine_order_ndcg5") for x in paired])
     it1_tie_mean = mean_of([x.get("iter1_tie_expected_ndcg5") for x in paired])
     it1_rev_mean = mean_of([x.get("iter1_reversed_order_ndcg5") for x in paired])
@@ -513,8 +544,8 @@ def main() -> None:
     art_sentence += (
         f"inner-valid를 섞어 조기 종료하면 best_iteration {list_str(cur_p.get('best_iteration'))}(1라운드 종료 "
         f"{asum.get('n_shuffled_stops_at_1', '?')}/{n_art}, {low_max} 이하 {asum.get('n_shuffled_low_iteration', '?')}/{n_art})이고, "
-        f"1차 MRR은 {fmt_ms(eng.get('mrr'))} → {fmt_ms(cur_p.get('mrr'))}다(섞음 − 엔진 순서 {fmt_eff(es_eff)}, "
-        f"{verdict_tag(es_eff)}). "
+        f"1차 MRR은 {fmt_ms(eng.get('mrr'))} → {fmt_ms(cur_p.get('mrr'))}다(섞음 − 엔진 순서, 시드 쌍: MRR {fmt_eff(es_eff)}, "
+        f"{say(es_eff, *SHORT_WORDS)}; P@5 {fmt_eff(es_eff_p5)}, {say(es_eff_p5, *SHORT_WORDS)}). "
     )
     if (asum.get("n_shuffled_stops_at_1") or 0) > 0:
         art_sentence += (
@@ -737,18 +768,19 @@ def main() -> None:
     A("")
     A(
         "team-final과 current는 코드만 다른 게 아니다. config의 objective가 다르고(binary vs lambdarank), 그에 따라 조기 종료 "
-        "지표(AUC vs NDCG)와 멈추는 라운드가 다르다. 그래서 세 가지 조건으로 비교한다. 1·2차 격차는 서로 다른 모델이라 시드를 "
-        "독립 재표본하고, DiD는 각 arm 안의 누출 효과(2차 − 1차)의 차이다. 결론은 '같은 조건 비교' 행에서만 고른다."
+        "지표(AUC vs NDCG)와 멈추는 라운드가 다르다. 그래서 config 그대로의 비교 외에 같은 조건 두 가지(둘 다 binary·AUC 조기 "
+        "종료 / 둘 다 조기 종료 없는 100라운드)로 비교하고, v2.1이 한 비교도 재현해 함께 싣는다. 1·2차 격차는 서로 다른 "
+        "모델이라 시드를 독립 재표본하고, DiD는 각 arm 안의 누출 효과(2차 − 1차)의 차이다. 결론은 '같은 조건 비교' 행에서만 고른다."
     )
     A("")
-    A("| 비교 조건 | 같은 조건 비교 | 남는 차이 | 트리 수 team-final / current | 1차 MRR 격차 | 2차 MRR 격차 | 누출 효과 차이(DiD) MRR | 판정(1차 / 2차 / DiD) |")
-    A("|---|---|---|---|---|---|---|---|")
+    A("| 비교 | 조건 | 같은 조건 비교 | 남는 차이 | 트리 수 team-final / current | 1차 MRR 격차 | 2차 MRR 격차 | 누출 효과 차이(DiD) MRR | 판정(1차 / 2차 / DiD) |")
+    A("|---|---|---|---|---|---|---|---|---|")
     for key in vc.get("order", []):
         p = get(vc, "pairs", key, default={})
         if not p:
             continue
         A(
-            f"| {PAIR_LABELS.get(key, key)}: {p.get('condition', '')} | {'예' if p.get('like_with_like') else '아니오'} "
+            f"| {PAIR_LABELS.get(key, key)} | {p.get('condition', '')} | {'예' if p.get('like_with_like') else '아니오'} "
             f"| {p.get('remaining_differences', '-')} | {list_str(p.get('team_final_n_trees'))} / {list_str(p.get('current_n_trees'))} "
             f"| {fmt_eff(get(p, 'primary', 'mrr'))} | {fmt_eff(get(p, 'as_written', 'mrr'))} "
             f"| {fmt_eff(get(p, 'leak_effect_did', 'mrr'))} "
@@ -947,9 +979,19 @@ def main() -> None:
         A(
             f"점추정 비교(CI 없음): 모델 평균 MRR {', '.join(gen_notes)}, random {pct(gen_rand)}. 학습 로그에 valid 아이템의 "
             "상호작용이 전혀 없으므로 클릭 기반 신호가 없는 최신 아이템을 모델이 낮게 매긴다는 것과 일관된다(가설). 이 결과는 "
-            "모델의 새 아이템 일반화에 대해 아무것도 증명하지 않는다 - 과제 자체가 '최신 아이템 찾기'다. 이 프로토콜의 "
-            f"inner-valid는 시간순 뒤쪽 그룹이라 정답(최신 아이템)과 분포가 달라, 조기 종료가 {low_max}라운드 이하에서 멈추는 시드가 "
-            "섞여 있어도 원인을 동점 순서로 단정하지 않는다(4-1절의 arm별 표 참고)."
+            "모델의 새 아이템 일반화에 대해 아무것도 증명하지 않는다 - 과제 자체가 '최신 아이템 찾기'다."
+        )
+        A("")
+    gen_low = {
+        VERSION_LABELS.get(v, v): get(d, "summary", default={}) for v, d in gen.items()
+        if (get(d, "summary", "n_low_iteration_seeds") or 0) > 0
+    }
+    if gen_low:
+        A(
+            f"조기 종료가 {low_max}라운드 이하에서 멈춘 시드: "
+            + ", ".join(f"{name} {list_str(sm.get('best_iteration'))}" for name, sm in gen_low.items())
+            + ". 모두 섞은 inner-valid에서 나온 값이라 동점 순서로 설명되지 않고(team-final은 AUC로 조기 종료한다), 원인은 "
+            "확인하지 않았다. 이 프로토콜의 inner-valid는 train 아이템의 로그라 정답 아이템(valid 파일)과 겹치지 않는다."
         )
         A("")
 
@@ -1026,7 +1068,6 @@ def main() -> None:
             f"| {pct(x.get('primary_mrr_engine_order'))} → {pct(x.get('primary_mrr_shuffled'))} |"
         )
     A("")
-    es_eff_p5 = get(boot, "es_valid_order_engine_vs_shuffled", "precision@5", default={})
     es_eff_tie = get(boot, "es_valid_order_engine_vs_shuffled_tie_random", "mrr", default={})
     A(
         f"- 1차 지표에 대한 효과(섞음 − 엔진 순서, 시드 쌍 재표본): MRR {fmt_eff(es_eff)} ({verdict_tag(es_eff)}), P@5 "
@@ -1064,13 +1105,26 @@ def main() -> None:
         A("")
         still_low = {name: v for name, v in by_arm.items() if v.get("es_valid_order") == "shuffled" and (v.get("n_low_iteration") or 0) > 0}
         if still_low:
-            A(
+            def _groups(v):
+                gs = [g for g in (v.get("n_inner_valid_groups") or []) if g is not None]
+                return max(gs) if gs else None
+
+            small = [name for name, v in still_low.items() if _groups(v) is not None and _groups(v) < 100]
+            text_low = (
                 f"섞은 뒤에도 {low_max}라운드 이하에서 멈춘 시드가 있는 arm: "
-                + ", ".join(f"{name} {list_str(v.get('best_iteration'))}" for name, v in still_low.items())
+                + ", ".join(
+                    f"{name} {list_str(v.get('best_iteration'))}(inner-valid 그룹 {_groups(v)}개)" for name, v in still_low.items()
+                )
                 + ". 이 시드들은 동점 순서로 설명되지 않는다(섞은 inner-valid에서도 초기 라운드가 최선으로 기록됐다). **원인은 "
-                "확인하지 않았다.** 표의 inner-valid 그룹 수가 수십 개 이하인 arm은 NDCG@5 자체의 잡음이 커서 초기 라운드가 "
-                "우연히 최선으로 기록될 수 있다는 것은 가설이다. 해당 arm의 효과는 이 표시와 함께만 읽는다."
+                "확인하지 않았다.**"
             )
+            if small:
+                text_low += (
+                    f" inner-valid 그룹이 100개 미만인 arm({', '.join(small)})은 NDCG@5 자체의 잡음이 커서 초기 라운드가 우연히 "
+                    "최선으로 기록될 수 있다는 것은 가설이다."
+                )
+            text_low += " 해당 arm의 효과는 이 표시와 함께만 읽는다."
+            A(text_low)
         else:
             A(f"섞은 조기 종료 arm 가운데 {low_max}라운드 이하에서 멈춘 시드는 없다.")
         A("")
@@ -1208,7 +1262,7 @@ def main() -> None:
     A("- **모델이 베이스라인보다 낫다는 것** (0절 3번, 3-3절).")
     A(
         "- **코드 버전(team-final vs current)에 따른 누출 민감도 차이.** 같은 조건 비교의 CI로만 판단한다(2-3절). objective나 "
-        "학습 길이가 다른 두 모델의 누출 효과 차이는 코드 차이가 아니다."
+        "학습 길이가 다른 두 모델의 누출 효과 차이는 코드 차이로 읽을 수 없다. 검출되지 않았다고 해서 차이가 없다는 뜻도 아니다."
     )
     A(
         "- **엔진 행 순서로 조기 종료한 lambdarank 모델의 수치를 모델 효과로 읽는 것.** 1라운드에서 멈춘 시드는 조기 종료 "
@@ -1379,9 +1433,15 @@ def main() -> None:
     )
     A("- \"LightGBM+MMR 모델이 베이스라인보다 우수했다\"(또는 \"못했다\")를 일반 문장으로 쓰는 것. (필터와 모델 설정에 따라 판정이 다르다)")
     if vg.get("did_like_with_like") != "positive":
+        v21_did_eff = get(vc, "pairs", "v2_1_engine_order_es", "leak_effect_did", "mrr", "effect")
+        why = (
+            "같은 조건 비교에서는 검출되지 않는다" if vg.get("did_like_with_like") == "inconclusive"
+            else "같은 조건 비교 안에서 판정이 갈린다"
+        )
         A(
             "- \"0.849 vs 0.772 격차의 원인은 추론 시점 누출이다\", \"team-final 코드가 current보다 누출에 더 민감하다\", v2.1의 "
-            "DiD +0.109를 코드 버전 효과로 인용하는 것. (같은 조건 비교에서는 검출되지 않는다 - 2-3절)"
+            f"DiD {pct(v21_did_eff, 3) if v21_did_eff is None else f'{v21_did_eff:+.3f}'}를 코드 버전 효과로 인용하는 것. "
+            f"({why} - 2-3절. \"두 버전의 누출 민감도가 같다\"도 쓰지 않는다)"
         )
     else:
         A(

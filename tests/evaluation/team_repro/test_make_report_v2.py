@@ -435,8 +435,24 @@ def test_seeds_still_stopping_early_after_shuffle_are_flagged(tmp_path, monkeypa
     assert "섞은 뒤에도 1개 시드가 1라운드에서 멈췄다" in summary
     sec = _section(text, "### 4-1.", "### 4-2.")
     assert "동점 순서로 설명되지 않는다" in sec
-    assert "원인은 확인하지 않았다" in sec and "가설이다" in sec  # 추정을 원인으로 쓰지 않는다
+    assert "원인은 확인하지 않았다" in sec  # 추정을 원인으로 쓰지 않는다
+    assert "가설이다" not in sec  # 그룹이 1432개인 arm에는 '그룹 수가 적어서'라는 가설을 붙이지 않는다
     assert "user_timestamp / [1432, 1432, 1432, 1432, 1432]" in sec
+    assert "current [35, 72, 1, 90, 28](inner-valid 그룹 1432개)" in sec
+
+
+def test_small_group_hypothesis_only_for_arms_with_few_inner_valid_groups(tmp_path, monkeypatch):
+    data = _base_data()
+    art = _artefact()
+    art["by_arm"]["impression"] = {
+        **art["by_arm"]["current"], "rank_group_key": "user_id", "n_inner_valid_groups": [24] * 5,
+        "best_iteration": [6, 2, 73, 3, 4], "n_stops_at_1": 0, "n_low_iteration": 3,
+    }
+    data["early_stopping_tie_artefact"] = art
+    sec = _section(_render(tmp_path, monkeypatch, data), "### 4-1.", "### 4-2.")
+    assert "impression [6, 2, 73, 3, 4](inner-valid 그룹 24개)" in sec
+    assert "inner-valid 그룹이 100개 미만인 arm(impression)" in sec and "가설이다" in sec
+    assert "원인은 확인하지 않았다" in sec
 
 
 def test_resume_artefact_sentence_only_when_shuffle_reduces_first_round_stops(tmp_path, monkeypatch):
@@ -456,10 +472,13 @@ def test_version_did_retracted_when_only_v21_comparison_is_positive(text):
     summary = _section(text, "## 0. 요약", "## 1.")
     assert "같은 조건 비교 어디에서도 검출되지 않는다" in summary
     assert "문장은 철회한다" in summary and "[35, 1, 1, 90, 1]" in summary
+    assert "v2.1이 보고한 양수 DiD는" in summary and "에서만 나온다" in summary
+    assert "아티팩트만으로 생긴 값은 아니다" not in summary
+    assert "판단 불가다" in summary  # 점추정이 모두 양수면 '차이 없음'으로도 쓰지 않는다
     avoid = _section(text, "### 쓰면 안 되는 문장", "## 부록")
     assert "team-final 코드가 current보다 누출에 더 민감하다" in avoid
     sec = _section(text, "### 2-3.", "### 2-4.")
-    assert "v2.1 비교 재현(엔진 순서 조기 종료)" in sec and "| 아니오 |" in sec and "| 예 |" in sec
+    assert "| v2.1 비교 재현(엔진 순서 조기 종료) |" in sec and "| 아니오 |" in sec and "| 예 |" in sec
 
 
 def test_version_did_positive_only_when_all_like_with_like_pairs_agree(tmp_path, monkeypatch):
@@ -476,6 +495,19 @@ def test_version_did_positive_only_when_all_like_with_like_pairs_agree(tmp_path,
     mixed["version_comparison"]["pairs"]["fixed100_rounds"]["leak_effect_did"] = _pair(0.1, 0.02, 0.2)
     text2 = _render(tmp_path / "b", monkeypatch, mixed)
     assert "같은 조건 비교 안에서 갈린다" in _section(text2, "## 0. 요약", "## 1.")
+
+
+def test_version_did_not_blamed_on_artefact_when_repaired_comparison_is_also_positive(tmp_path, monkeypatch):
+    """검증 행을 섞은 뒤(config 그대로)에도 DiD가 양수면 '아티팩트 때문'이라고 쓰지 않는다. 그래도 objective가
+    다른 비교라 코드 버전의 성질로는 쓰지 않고, 같은 조건 비교가 검출 안 됨이면 문장은 철회한다."""
+    data = _base_data()
+    data["version_comparison"]["pairs"]["as_configured"]["leak_effect_did"] = _pair(0.099, 0.004, 0.204)
+    text = _render(tmp_path, monkeypatch, data)
+    summary = _section(text, "## 0. 요약", "## 1.")
+    assert "1라운드 종료 아티팩트만으로 생긴 값은 아니다" in summary
+    assert "성질과 objective·조기 종료 방식의 영향을 가를 수 없다" in summary
+    assert "문장은 철회한다" in summary
+    assert "에서만 나온다" not in summary.split("DiD")[1]
 
 
 def test_as_written_gap_wording_follows_like_with_like_ci(tmp_path, monkeypatch):
