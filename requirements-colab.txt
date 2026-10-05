@@ -1,0 +1,9 @@
+# 원격 CPU 런타임(Colab)에서 EB-NeRD 평가 사슬을 돌릴 때 설치하는 고정 버전.
+# v1·v1.1 리포트를 만든 로컬 환경(evaluation/requirements.txt)과 같은 핀이다. 런타임 기본 버전(numpy·pandas·lightgbm이
+# 한 단계씩 다르다)이 섞이지 않게, 어떤 import보다 먼저 `pip install -r requirements-colab.txt`를 실행한다.
+# 평가 사슬에 필요 없는 패키지(scikit-learn, hdbscan, fastapi 등)는 넣지 않았다.
+numpy==2.4.6
+pandas==3.0.6
+pyarrow==25.0.1
+lightgbm==4.7.0
+pyyaml==6.0.3
