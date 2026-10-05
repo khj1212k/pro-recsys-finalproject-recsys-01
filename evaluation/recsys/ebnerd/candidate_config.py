@@ -2,7 +2,8 @@
 
 서빙(backend/app/recsys/pipeline.generate_candidates)은 출처마다 상위 k개를 뽑아 **라운드로빈**으로 합치고 cap에서
 자른 뒤, 그다음에 이미 클릭한 아이템을 뺀다. 하네스 v1은 출처별 상위 k개의 단순 합집합이었다. 두 방식을 한 모듈에
-두고, 서빙 쪽 합치기는 서빙 코드와 같은 결과를 내는지 테스트로 묶는다(구성이 어긋나면 2단계 수치가 서빙의 것이 아니다).
+둔다. 라운드로빈 합치기는 서빙과 같은 함수(recsys_core.round_robin_union)이고, 구성 값이 서빙의 기본값과 같은지는
+테스트와 parity 게이트가 본다(구성이 어긋나면 2단계 수치가 서빙의 것이 아니다).
 
 출처의 EB-NeRD 대응(ADR 0013 A2 사전 등록 E8):
   knn_profile = hist_cos 상위(히스토리가 있을 때만), knn_short = short_cos 상위(24h 이벤트가 있을 때만),
@@ -16,7 +17,7 @@ from typing import Mapping, Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from recsys_core import rank_within_groups, source_flags
+from recsys_core import CandidateSpec, rank_within_groups, round_robin_union, source_flags
 
 from .cold_verdicts import load_prereg
 
@@ -38,6 +39,13 @@ def config_from_prereg(name: str, d: Mapping) -> CandidateConfig:
     return CandidateConfig(name=name, window_h=float(d["window_h"]),
                            sources=tuple((s, int(d["sources"][s])) for s in order),
                            cap=d.get("cap"), model=d.get("model"))
+
+
+def spec_of(config: CandidateConfig) -> CandidateSpec:
+    """서빙 구성과 비교할 수 있는 모양으로(이름·모델은 뺀다). cap이 없는 구성(하네스 v1)은 비교 대상이 아니다."""
+    if config.cap is None:
+        raise ValueError(f"{config.name}: cap이 없는 구성은 서빙 구성과 비교할 수 없습니다")
+    return CandidateSpec(window_h=config.window_h, sources=config.sources, cap=int(config.cap))
 
 
 # 사전 등록(preregistration/cold-v1.2.yaml e8)의 두 구성. 값은 yaml이 기준이고 여기서는 읽기만 한다.
@@ -66,28 +74,6 @@ def source_scores(feats: pd.DataFrame, names: Sequence[str]) -> dict[str, tuple[
     if unknown:
         raise ValueError(f"알 수 없는 후보 출처: {unknown}")
     return {s: table[s]() for s in names}
-
-
-def round_robin_union(sources: Mapping[str, Sequence[int]], cap: int) -> tuple[list[int], dict[str, int]]:
-    """서빙 `_round_robin_union`과 같은 합치기: 출처를 번갈아 돌며 아직 없는 첫 아이템을 하나씩 넣고 cap에서 멈춘다."""
-    seen: set[int] = set()
-    merged: list[int] = []
-    contributed = {name: 0 for name in sources}
-    iters = {name: iter(ids) for name, ids in sources.items()}
-    while iters and len(merged) < cap:
-        for name in list(iters):
-            for nid in iters[name]:
-                if nid not in seen:
-                    seen.add(nid)
-                    merged.append(nid)
-                    contributed[name] += 1
-                    break
-            else:
-                del iters[name]
-                continue
-            if len(merged) >= cap:
-                break
-    return merged, contributed
 
 
 def union_mask(config: CandidateConfig, feats: pd.DataFrame, ptr: np.ndarray,

@@ -6,18 +6,24 @@
 쓴다. profile_cutoff를 t와 따로 둔 이유는 "일 배치 프로필 vs 실시간 프로필" 같은 재생
 실험에서 아이템 쪽 조건은 고정한 채 유저 상태의 신선도만 바꿔 보기 위해서다.
 
-같은 코드를 오프라인 평가(EB-NeRD 하네스)와 이후 요청 시점 추천 API가 공유하도록
-numpy/pandas만 쓴다.
+같은 코드를 오프라인 평가(EB-NeRD 하네스)와 요청 시점 추천 API(recsys_core/serving.py)가 공유한다.
+계산은 numpy만 쓴다. pandas는 DataFrame을 돌려주는 compute_features 안에서만 읽으므로, 서빙처럼
+compute_feature_columns만 쓰는 쪽은 pandas 없이 돈다.
+
+서빙은 이벤트 로그 전체 대신 스냅숏 두 가지를 넘길 수 있다(FeatureContext.user_hist_state,
+item_window_counts). 스냅숏에는 시각이 없으므로 "한 유저의 요청이 모두 같은 시점"일 때만 쓴다.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Iterable, Optional, Sequence
+from typing import TYPE_CHECKING, Iterable, Mapping, Optional, Sequence
 
 import numpy as np
-import pandas as pd
 
 from .events import EventIndex, expand_ranges
+
+if TYPE_CHECKING:  # pragma: no cover
+    import pandas as pd
 
 HOUR = 3600
 DAY = 86400
@@ -96,11 +102,77 @@ class FeatureConfig:
     floor_days: bool = False
     min_weight: float = 0.0
     short_window_h: float = 24.0
+    # 단기 창과 세션에서 가장 최근 N개 이벤트만 쓴다. None이면 제한이 없다(EB-NeRD 하네스의 정의).
+    # 서빙은 요청마다 읽는 클릭 수에 상한이 있어야 해서 값을 준다(ADR 0017, 0033).
+    short_max_events: Optional[int] = None
     pop_windows_h: Sequence[float] = (6, 24, 48)
     ctr_window_h: float = 24.0
+    # 아이템 상태(인기도 창)의 끝을 요청 시각보다 이만큼 앞에 둔다: 창 = [t - lag - w, t - lag).
+    # 0이면 요청 시각까지다(EB-NeRD 하네스의 정의). 서빙은 아직 커밋되지 않은 로그 행과의 경합을 피하려고
+    # 값을 준다(ADR 0033).
+    item_lag_s: int = 0
     request_chunk: int = 8192
     event_chunk: int = 16384
     pair_chunk: int = 32768
+
+
+@dataclass
+class UserHistState:
+    """유저별 장기 히스토리 스냅숏: 서빙이 클릭마다 갱신해 두는 증분 상태(recsys_core/profile.py).
+
+    hist_sum은 어떤 기준 시각의 감쇠 가중합이다. 반감기 감쇠는 기준 시각을 옮겨도 벡터 전체에 같은 양수가
+    곱해질 뿐이라 코사인이 그대로다 - 그래서 기준 시각을 들고 다니지 않는다.
+    """
+    users: np.ndarray       # 오름차순 유저 키 [m]
+    hist_sum: np.ndarray    # [m, d] float64
+    hist_len: np.ndarray    # [m] 반영된 이벤트 수
+    cat_counts: np.ndarray  # [m, n_categories] 카테고리별 이벤트 수
+    last_time: np.ndarray   # [m] 마지막 이벤트 시각(epoch 초), 없으면 -1
+
+    def __post_init__(self):
+        self.users = np.asarray(self.users, dtype=np.int64)
+        self.hist_sum = np.asarray(self.hist_sum, dtype=np.float64)
+        self.hist_len = np.asarray(self.hist_len, dtype=np.int64)
+        self.cat_counts = np.asarray(self.cat_counts, dtype=np.int64)
+        self.last_time = np.asarray(self.last_time, dtype=np.int64)
+        m = len(self.users)
+        if not (len(self.hist_sum) == len(self.hist_len) == len(self.cat_counts) == len(self.last_time) == m):
+            raise ValueError("UserHistState의 배열 길이가 다릅니다")
+        if m > 1 and np.any(np.diff(self.users) <= 0):
+            raise ValueError("UserHistState.users는 중복 없이 오름차순이어야 합니다")
+
+    def rows_for(self, users: np.ndarray) -> "UserHistState":
+        """요청 유저 순서로 다시 놓은 스냅숏. 스냅숏에 없는 유저는 빈 상태(합 0, 길이 0, 마지막 시각 -1)다."""
+        users = np.asarray(users, dtype=np.int64)
+        n, d, c = len(users), self.hist_sum.shape[1], self.cat_counts.shape[1]
+        out = UserHistState.__new__(UserHistState)
+        out.users = users
+        out.hist_sum = np.zeros((n, d), dtype=np.float64)
+        out.hist_len = np.zeros(n, dtype=np.int64)
+        out.cat_counts = np.zeros((n, c), dtype=np.int64)
+        out.last_time = np.full(n, -1, dtype=np.int64)
+        if len(self.users) and n:
+            pos = np.clip(np.searchsorted(self.users, users), 0, len(self.users) - 1)
+            has = self.users[pos] == users
+            out.hist_sum[has] = self.hist_sum[pos[has]]
+            out.hist_len[has] = self.hist_len[pos[has]]
+            out.cat_counts[has] = self.cat_counts[pos[has]]
+            out.last_time[has] = self.last_time[pos[has]]
+        return out
+
+
+@dataclass
+class ItemWindowCounts:
+    """카탈로그 행별 인기도 창 집계 스냅숏: 서빙이 SQL로 센 값. clicks는 창 길이(시간) -> [n_items],
+    inviews는 ctr_window_h 창의 노출 수 [n_items]다."""
+    clicks: Mapping[float, np.ndarray]
+    inviews: np.ndarray
+
+    def clicks_in(self, window_h: float) -> np.ndarray:
+        for w, counts in self.clicks.items():
+            if float(w) == float(window_h):
+                return np.asarray(counts)
+        raise ValueError(f"item_window_counts에 {window_h}h 창의 클릭 수가 없습니다")
 
 
 @dataclass
@@ -113,6 +185,10 @@ class FeatureContext:
     # 팀 방식의 "온보딩 선호 카테고리" 대체물: (정렬된 유저 키, [유저, 카테고리] bool 행렬)
     static_categories: Optional[tuple] = None
     config: FeatureConfig = field(default_factory=FeatureConfig)
+    # 서빙 스냅숏(선택). 있으면 history·category 그룹과 마지막 이벤트 시각을 user_log 대신,
+    # popularity 그룹을 item_clicks/item_inviews 대신 여기서 읽는다.
+    user_hist_state: Optional[UserHistState] = None
+    item_window_counts: Optional[ItemWindowCounts] = None
 
 
 def feature_groups(config: FeatureConfig | None = None) -> dict[str, list[str]]:
@@ -150,17 +226,20 @@ def _request_chunks(counts: np.ndarray, max_events: int) -> Iterable[tuple[int, 
 
 def window_vectors(index: EventIndex, emb: np.ndarray, key, t_lo, t_hi, *,
                    ref_time=None, config: FeatureConfig | None = None,
-                   decay: bool = False) -> tuple[np.ndarray, np.ndarray]:
+                   decay: bool = False, max_events: Optional[int] = None) -> tuple[np.ndarray, np.ndarray]:
     """각 요청의 [t_lo, t_hi) 이벤트 아이템 임베딩의 (감쇠) 가중합을 L2 정규화해 반환.
 
     코사인은 크기에 불변이라 가중 평균 대신 가중합을 정규화해도 결과가 같다.
     이벤트가 없는 요청은 0 벡터(코사인 0)다. 반환: (벡터 [n, d], 이벤트 수 [n]).
+    max_events를 주면 구간 안에서 가장 늦은 max_events개만 쓴다(이벤트 수도 그 값으로 잘린다).
     """
     cfg = config or FeatureConfig()
     key = np.asarray(key, dtype=np.int64)
     n, d = len(key), emb.shape[1]
     out = np.zeros((n, d), dtype=np.float32)
     lo, hi = index.bounds(key, t_lo, t_hi)
+    if max_events is not None:
+        lo = np.maximum(lo, hi - int(max_events))
     counts = hi - lo
     if n == 0 or counts.sum() == 0:
         return out, counts
@@ -277,10 +356,17 @@ def _pair_dot(vecs: np.ndarray, local_rows: np.ndarray, emb: np.ndarray, items: 
     return out
 
 
-def compute_features(ctx: FeatureContext, req: Requests,
-                     groups: Sequence[str] = ("recency", "history", "category", "popularity", "short_term"),
-                     ) -> pd.DataFrame:
-    """요청 x 후보 쌍마다 한 행인 피처 DataFrame (행 순서 = cand_item 순서)."""
+def _unit_rows64(vec: np.ndarray) -> np.ndarray:
+    """float64 벡터 행을 L2 정규화해 float32로 - 히스토리 벡터를 후보와 내적하기 직전의 모양."""
+    norms = np.linalg.norm(vec, axis=1, keepdims=True)
+    return np.divide(vec, norms, out=np.zeros_like(vec), where=norms > 0).astype(np.float32)
+
+
+def compute_feature_columns(ctx: FeatureContext, req: Requests,
+                            groups: Sequence[str] = ("recency", "history", "category", "popularity",
+                                                     "short_term"),
+                            ) -> dict[str, np.ndarray]:
+    """요청 x 후보 쌍마다 한 값인 피처 열들 (열 순서 = feature_groups 순서, 행 순서 = cand_item 순서)."""
     cfg = ctx.config
     cat = ctx.catalog
     names = feature_groups(cfg)
@@ -301,15 +387,25 @@ def compute_features(ctx: FeatureContext, req: Requests,
         cols["is_fresh_7d"] = (hours <= 168).astype(np.float32)
 
     if "popularity" in groups:
-        if ctx.item_clicks is None or ctx.item_inviews is None:
-            raise ValueError("popularity 그룹에는 item_clicks/item_inviews 인덱스가 필요합니다")
-        for w in cfg.pop_windows_h:
-            cols[f"pop_clicks_{int(w)}h"] = ctx.item_clicks.count(items, t_pair - int(w * HOUR), t_pair).astype(np.float32)
-        cw = int(cfg.ctr_window_h * HOUR)
-        clicks = ctx.item_clicks.count(items, t_pair - cw, t_pair).astype(np.float32)
-        inviews = ctx.item_inviews.count(items, t_pair - cw, t_pair).astype(np.float32)
-        cols[f"pop_inviews_{int(cfg.ctr_window_h)}h"] = inviews
-        cols[f"pop_ctr_{int(cfg.ctr_window_h)}h"] = clicks / np.maximum(inviews, 1.0)
+        cw_name = int(cfg.ctr_window_h)
+        if ctx.item_window_counts is not None:
+            snap = ctx.item_window_counts
+            for w in cfg.pop_windows_h:
+                cols[f"pop_clicks_{int(w)}h"] = snap.clicks_in(w)[items].astype(np.float32)
+            clicks = snap.clicks_in(cfg.ctr_window_h)[items].astype(np.float32)
+            inviews = np.asarray(snap.inviews)[items].astype(np.float32)
+        else:
+            if ctx.item_clicks is None or ctx.item_inviews is None:
+                raise ValueError("popularity 그룹에는 item_clicks/item_inviews 인덱스가 필요합니다")
+            t_item = t_pair - int(cfg.item_lag_s)
+            for w in cfg.pop_windows_h:
+                cols[f"pop_clicks_{int(w)}h"] = ctx.item_clicks.count(
+                    items, t_item - int(w * HOUR), t_item).astype(np.float32)
+            cw = int(cfg.ctr_window_h * HOUR)
+            clicks = ctx.item_clicks.count(items, t_item - cw, t_item).astype(np.float32)
+            inviews = ctx.item_inviews.count(items, t_item - cw, t_item).astype(np.float32)
+        cols[f"pop_inviews_{cw_name}h"] = inviews
+        cols[f"pop_ctr_{cw_name}h"] = clicks / np.maximum(inviews, 1.0)
 
     if "team_category" in groups:
         cols["news_category"] = cat.category[items].astype(np.float32)
@@ -330,14 +426,29 @@ def compute_features(ctx: FeatureContext, req: Requests,
         cols["is_cat_match"] = match.astype(np.float32)
         cols["user_ncat"] = user_ncat[pair_req]
 
-    fast_history = "history" in groups and not cfg.floor_days and cfg.min_weight <= 0
+    # 스냅숏이 있으면 요청 순서로 다시 놓는다: snap의 i번째 행이 i번째 요청의 유저다.
+    snap = None if ctx.user_hist_state is None else ctx.user_hist_state.rows_for(req.user)
+    if snap is not None and "history" in groups:
+        if snap.hist_sum.shape[1] != cat.emb.shape[1]:
+            raise ValueError("user_hist_state.hist_sum의 차원이 카탈로그 임베딩과 다릅니다")
+        cols["hist_cos"] = _pair_dot(_unit_rows64(snap.hist_sum), pair_req, cat.emb, items, cfg.pair_chunk)
+        cols["hist_len"] = snap.hist_len.astype(np.float32)[pair_req]
+    if snap is not None and "category" in groups:
+        if snap.cat_counts.shape[1] != cat.n_categories:
+            raise ValueError("user_hist_state.cat_counts의 열 수가 카탈로그의 카테고리 수와 다릅니다")
+        cc = snap.cat_counts.astype(np.float32)
+        share = cc / np.maximum(cc.sum(axis=1, keepdims=True), 1.0)
+        cols["cat_share"] = share[pair_req, cat.category[items]]
+
+    fast_history = "history" in groups and snap is None and not cfg.floor_days and cfg.min_weight <= 0
     if fast_history:
         hc, hl = _history_cosine_segments(ctx.user_log, cat.emb, req.user, req.profile_cutoff, req.cand_ptr,
                                           items, cfg)
         cols["hist_cos"] = hc
         cols["hist_len"] = hl[pair_req]
+    from_snapshot = ("history", "category") if snap is not None else ()
     loop_groups = [g for g in ("history", "category", "short_term") if g in groups
-                   and not (g == "history" and fast_history)]
+                   and not (g == "history" and fast_history) and g not in from_snapshot]
     if loop_groups:
         n_pairs = len(items)
         for g in loop_groups:
@@ -364,17 +475,31 @@ def compute_features(ctx: FeatureContext, req: Requests,
                 cols["cat_share"][pa:pb] = share[local, cat.category[it]]
             if "short_term" in loop_groups:
                 v, cnt = window_vectors(ctx.user_log, cat.emb, users, cut - int(cfg.short_window_h * HOUR), cut,
-                                        config=cfg)
+                                        config=cfg, max_events=cfg.short_max_events)
                 cols["short_cos"][pa:pb] = _pair_dot(v, local, cat.emb, it, cfg.pair_chunk)
                 cols["short_len"][pa:pb] = cnt[local]
                 if ctx.session_log is not None and req.session is not None:
-                    v, cnt = window_vectors(ctx.session_log, cat.emb, req.session[a:b], 0, cut, config=cfg)
+                    v, cnt = window_vectors(ctx.session_log, cat.emb, req.session[a:b], 0, cut, config=cfg,
+                                            max_events=cfg.short_max_events)
                     cols["sess_cos"][pa:pb] = _pair_dot(v, local, cat.emb, it, cfg.pair_chunk)
                     cols["sess_len"][pa:pb] = cnt[local]
-                last = ctx.user_log.last_time_before(users, cut)
+                if snap is not None:
+                    # 스냅숏에 든 이벤트는 전부 요청 시각 이전이다(서빙 어댑터가 그렇게 만든다).
+                    last = snap.last_time[a:b]
+                else:
+                    last = ctx.user_log.last_time_before(users, cut)
                 t_req = req.time[a:b]
                 gap = np.where(last >= 0, (t_req - last) / HOUR, np.nan).astype(np.float32)
                 cols["hours_since_last_event"][pa:pb] = gap[local]
 
     ordered = [n for g in names for n in names[g] if g in groups]
-    return pd.DataFrame({n: cols[n] for n in ordered})
+    return {n: cols[n] for n in ordered}
+
+
+def compute_features(ctx: FeatureContext, req: Requests,
+                     groups: Sequence[str] = ("recency", "history", "category", "popularity", "short_term"),
+                     ) -> "pd.DataFrame":
+    """compute_feature_columns의 결과를 DataFrame으로 (행 순서 = cand_item 순서)."""
+    import pandas as pd
+
+    return pd.DataFrame(compute_feature_columns(ctx, req, groups))
