@@ -18,7 +18,8 @@
 
 규칙:
 - 서명 URL은 인자(--url) 또는 환경변수(M4_URLS_JSON, {"키": "URL"})로만 받는다. 로그·상태 파일·오류 메시지 어디에도
-  URL을 쓰지 않는다. 내려받은 파일은 키(상대 경로)로만 부른다.
+  URL을 쓰지 않는다. 내려받은 파일은 키(상대 경로)로만 부른다. 인자를 잘못 줘서(--url이나 `키=`를 빼먹음) 파서가 내는
+  오류 메시지에서도 URL처럼 보이는 토큰은 지우고, 그때의 종료 코드는 64(사용법 오류)다.
 - 데이터 파일의 sha256이 하나라도 다르면 그 파일을 지우고 FAILED 마커를 남긴 채 멈춘다. 내려받기 자체의 실패
   (만료된 URL, 네트워크)와 설치 실패는 마커 없이 멈추고, 같은 명령으로 다시 시도할 수 있다.
 - 세션이 끊겨 프로세스가 죽은 경우에는 같은 명령으로 다시 실행하면 끝난 단계·단위를 건너뛰고 이어서 돈다
@@ -39,6 +40,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import signal
 import subprocess
@@ -99,6 +101,15 @@ def redact(text: str, secrets: list[str]) -> str:
             if len(part) >= 8:
                 out = out.replace(part, "<signed-url>")
     return out
+
+
+# URL처럼 보이는 토큰: 스킴이 있거나(://), 쿼리 문자열(?a=b, &a=b)이 붙었거나, 서명 인자 이름이 들어 있다.
+_URLISH = re.compile(r"\S*(?:://|[?&][^\s=&]+=|Signature=|Credential=)\S*")
+
+
+def scrub_urls(text: str) -> str:
+    """어떤 값이 URL인지 모르는 자리(인자 파서의 오류 메시지)에서 URL처럼 보이는 토큰을 통째로 지운다."""
+    return _URLISH.sub("<signed-url>", str(text))
 
 
 class Log:
@@ -241,9 +252,10 @@ def parse_urls(pairs: list[str], env: dict) -> dict[str, str]:
     if raw:
         urls.update(json.loads(raw))
     for p in pairs or []:
-        if "=" not in p:
-            raise DriverError("--url은 <manifest 키>=<URL> 형식이어야 합니다", EXIT_USAGE)
-        key, url = p.split("=", 1)
+        key, sep, url = p.partition("=")
+        # `키=`를 빼먹으면 URL의 쿼리 문자열에 있는 첫 "="에서 잘려 URL 앞부분이 키가 된다. 그 값은 쓰지도 찍지도 않는다.
+        if not sep or not key or not url or scrub_urls(key) != key:
+            raise DriverError("--url은 <manifest 키>=<URL> 형식이어야 합니다(키는 manifest의 상대 경로)", EXIT_USAGE)
         urls[key] = url
     return urls
 
@@ -597,8 +609,17 @@ def cmd_manifest(args) -> int:
     return EXIT_OK
 
 
+class _Parser(argparse.ArgumentParser):
+    """인자 오류를 낼 때 URL을 되찍지 않는 파서. argparse는 인식하지 못한 인자나 잘못된 값을 오류 메시지에 그대로 넣는데,
+    `--url`이나 `키=`를 빼먹은 명령에서는 그 값이 서명 URL이다. 하위 명령의 파서도 이 클래스로 만들어진다."""
+
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        self.exit(EXIT_USAGE, f"{self.prog}: error: {scrub_urls(message)}\n")
+
+
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="EB-NeRD v1.2 콜드 regime 사슬 드라이버")
+    ap = _Parser(description="EB-NeRD v1.2 콜드 regime 사슬 드라이버")
     sub = ap.add_subparsers(dest="command", required=True)
     run = sub.add_parser("run", help="tarball·데이터 준비 → 단계 실행 → 리포트")
     run.add_argument("--workdir", required=True)

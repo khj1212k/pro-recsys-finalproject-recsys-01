@@ -204,6 +204,44 @@ def test_urls_can_come_from_the_environment_and_missing_urls_are_a_usage_error(e
     assert "TOPSECRET" not in _all_text(env.work, capsys)
 
 
+def test_a_misplaced_url_on_the_command_line_is_never_echoed(env, capsys, monkeypatch):
+    """--url이나 `키=`를 빼먹은 명령에서도 URL이 나가지 않는다. argparse는 인식하지 못한 인자를 오류 메시지에 그대로
+    되찍는데, 원격 실행기는 그 stderr를 기록으로 남긴다."""
+    secret_url = _url("ebnerd_small/articles.parquet")
+    base = env.argv(urls=False)
+    cases = {
+        "--url을 빼먹음": base + [secret_url],
+        "키=URL을 --url 없이": base + [f"ebnerd_small/articles.parquet={secret_url}"],
+        "하위 명령 자리에 URL": [secret_url] + base[1:],
+        "다른 인자의 값 자리에 URL": base + ["--cu-rate", secret_url],
+        "키= 를 빼먹음": base + ["--url", secret_url],
+        "스킴 없는 서명 URL": base + [secret_url.split("://", 1)[1]],
+    }
+    for name, argv in cases.items():
+        runner = Runner()
+        try:
+            rc = drv.main(argv, runner=runner, opener=env.opener)
+        except SystemExit as e:
+            rc = e.code
+        text = _all_text(env.tmp, capsys)
+        assert rc == drv.EXIT_USAGE, name                      # sha256 불일치(2)와 섞이지 않는 사용법 오류 코드
+        assert "TOPSECRET" not in text and "storage.example.invalid" not in text and "private-bucket" not in text, name
+        assert runner.calls == [] and env.opened == [], name
+    # 환경변수로 인자를 받는 경로도 같은 파서를 쓴다
+    monkeypatch.setenv("M4_DRIVER_ARGS_JSON", json.dumps(cases["--url을 빼먹음"]))
+    with pytest.raises(SystemExit) as e:
+        drv.main()
+    assert e.value.code == drv.EXIT_USAGE and "TOPSECRET" not in _all_text(env.tmp, capsys)
+
+
+def test_argument_errors_still_say_what_was_wrong(env, capsys):
+    """URL을 지우느라 오류 메시지가 쓸모없어지면 안 된다: URL이 아닌 잘못된 인자는 그대로 보여 준다."""
+    with pytest.raises(SystemExit) as e:
+        drv.main(env.argv(urls=False) + ["--no-such-flag", "--cu-rate", "abc"])
+    err = capsys.readouterr().err
+    assert e.value.code == drv.EXIT_USAGE and "usage:" in err and ("abc" in err or "--no-such-flag" in err)
+
+
 def test_redact_removes_whole_urls_and_their_parts():
     u = _url("a/b.parquet")
     msg = drv.redact(f"failed {u} then {u.split('?')[0]} and {SECRET}", [u])
