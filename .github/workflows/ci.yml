@@ -209,6 +209,21 @@ jobs:
       - name: Report realtime recsys SQL-path latency (p50/p95)
         run: .venv/bin/python -m pytest -q -s -m integration tests/integration/test_realtime_recsys_seeded_db.py -k "latency or click_moves"
 
+      # train/serve parity 게이트(docs/adr/0033). 위 integration 실행에서 이미 한 번 돈 테스트를, 리포트 경로를 주고
+      # 다시 돌려 JSON을 남긴다. reports/recsys/parity_v1.json은 이 아티팩트(recsys-parity)를 옮겨 적은 것이다.
+      - name: Write parity gate report
+        env:
+          RECSYS_PARITY_REPORT: parity_v1.json
+        run: .venv/bin/python -m pytest -q -s -m integration tests/integration/test_feature_parity.py
+
+      - name: Upload parity gate report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recsys-parity
+          path: parity_v1.json
+          if-no-files-found: warn
+
   # Dockerfile이 깨지지 않게 linux/amd64로 이미지를 빌드만 한다(푸시 없음). 배포 대상(Oracle A1)은
   # arm64지만 GitHub 호스티드 러너에서 arm64 에뮬레이션 빌드는 느려서 amd64로 문법/의존성만 검증하고,
   # arm64 빌드는 로컬 colima(Apple Silicon)에서 확인한다(docs/adr/0006).
