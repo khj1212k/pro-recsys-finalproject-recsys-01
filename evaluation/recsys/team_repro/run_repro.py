@@ -696,7 +696,9 @@ def version_comparison_pairs(runs: Dict[str, List[dict]]) -> dict:
 
 # ------------------------------------------------------------------ v2.1 재현 대조
 
-V21_RAW_COMMIT = "67a5db2"  # v2.1 리포트 원자료를 생성·커밋한 커밋
+# v2.1 리포트 원자료를 생성·커밋한 커밋. 브랜치를 main 위에 다시 쌓으면서 SHA가 67a5db2에서 바뀌었다
+# (team_repro_v2_raw.json의 blob은 39c8d03으로 같다). 이미 커밋된 v2.2 리포트·JSON에는 옛 SHA가 적혀 있다.
+V21_RAW_COMMIT = "aa9d91a"
 
 
 def reproduction_check_vs_v21(runs: Dict[str, List[dict]], gen_runs: Dict[str, List[dict]]) -> dict:
