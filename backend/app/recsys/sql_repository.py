@@ -90,18 +90,20 @@ class SqlRecsysRepository:
         self, user_id: int, since: datetime, until: datetime, limit: int
     ) -> List[ClickEvent]:
         rows = self._rows(
-            "SELECT l.created_at::timestamptz, vector_send(n.news_letter_embedding)"
+            "SELECT l.created_at::timestamptz, vector_send(n.news_letter_embedding), l.news_letter_id"
             "  FROM user_newsletter_ctr_log l"
             "  JOIN news_letter n ON n.news_letter_id = l.news_letter_id"
             "  WHERE l.user_id = :uid AND l.created_at >= :since AND l.created_at < :until"
             "    AND l.event = 'click' AND n.news_letter_embedding IS NOT NULL"
-            "  ORDER BY l.created_at DESC, l.log_id DESC LIMIT :lim",
+            # (초, 뉴스레터 ID) 순으로 가장 뒤의 것들. 같은 초의 클릭을 마이크로초로 가르지 않는다(저장소 계약 참고).
+            "  ORDER BY date_trunc('second', l.created_at) DESC, l.news_letter_id DESC, l.log_id DESC"
+            "  LIMIT :lim",
             uid=user_id,
             since=since,
             until=until,
             lim=limit,
         )
-        return [ClickEvent(r[0], vector_from_send(r[1])) for r in rows]
+        return [ClickEvent(r[0], vector_from_send(r[1]), int(r[2])) for r in rows]
 
     def item_window_counts(
         self,

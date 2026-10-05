@@ -218,3 +218,28 @@ def test_kendall_tau_ignores_pairs_tied_on_either_side():
 def test_top_k_breaks_ties_by_id_so_both_sides_break_them_the_same_way():
     assert top_k([30, 10, 20, 40], [1.0, 1.0, 2.0, 1.0], k=3) == [20, 10, 30]
     assert top_k([1, 2], [0.1, 0.2], k=20) == [2, 1]
+
+
+def test_a_repository_that_picks_the_latest_clicks_by_microsecond_fails_items_1_and_2(model_text, predict, monkeypatch):
+    """CI의 첫 PostgreSQL 실행에서 게이트가 실제로 잡은 어긋남을 고정해 둔다. 요청과 클릭이 밀리초 간격으로
+    이어지면 같은 초에 클릭이 여러 건 쌓이고, 최근 20개의 경계가 그 초에 걸린다. 저장소가 그 20개를 마이크로초
+    순으로 고르면 정수 초로 다시 계산하는 쪽과 다른 클릭이 남는다(short_cos·sess_cos가 0.04쯤 어긋났다)."""
+    from app.recsys.types import ClickEvent
+    from tests.recsys.fakes import FakeRepo
+
+    def by_microsecond(self, user_id, since, until, limit):
+        recent = sorted(
+            (c for c in self.clicks if c[1] == user_id and since <= c[3] < until and c[2] in self.newsletters),
+            key=lambda c: (c[3], c[0]), reverse=True,
+        )[:limit]
+        return [ClickEvent(c[3], self.newsletters[c[2]].embedding, c[2]) for c in recent]
+
+    monkeypatch.setattr(FakeRepo, "recent_clicks", by_microsecond)
+    drifted = simulate(n_items=200, n_users=4, n_requests=90, fast_requests=90, model_text=model_text, seed=2)
+
+    report = run_gate(drifted.logs, drifted.requests, predict, drifted.serving_spec)
+
+    assert report["features"]["pass"] is False
+    off = {name for name, d in report["features"]["per_column_max_abs_diff"].items() if d > 1e-6}
+    assert off == {"short_cos", "sess_cos"}  # 세는 열(short_len 등)은 같고, 어떤 클릭이 남았는지만 다르다
+    assert report["scores"]["pass"] is False  # 피처가 어긋나면 같은 모델의 순서도 갈린다

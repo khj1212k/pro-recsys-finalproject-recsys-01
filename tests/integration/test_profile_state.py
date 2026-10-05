@@ -297,6 +297,30 @@ def test_recent_clicks_are_the_latest_n_in_a_half_open_interval(engine, seeded):
     np.testing.assert_allclose(inside[0].embedding, seeded.vec_of[seeded.by_topic[0][3]], atol=1e-6)
 
 
+def test_recent_clicks_within_one_second_are_ordered_by_newsletter_id_not_by_microsecond(engine, seeded):  # noqa: F811
+    """"최근 N개"의 순서는 (초, 뉴스레터 ID)다. 마이크로초 순이면 상한의 경계가 같은 초의 클릭들에 걸릴 때 로그
+    재계산(정수 초)과 다른 클릭이 남는다 - parity 게이트가 첫 PostgreSQL 실행에서 잡은 어긋남이다."""
+    from sqlalchemy.orm import Session
+
+    from app.recsys.sql_repository import SqlRecsysRepository
+
+    uid = seeded.add_user()
+    base = datetime.now(timezone.utc).replace(microsecond=0) - timedelta(minutes=5)
+    nids = sorted(seeded.by_topic[1][:4])
+    for k, nid in enumerate(reversed(nids)):  # 같은 초 안에서 ID가 큰 것부터 클릭: 마이크로초 순과 ID 순이 반대다
+        seeded.click(uid, nid, at=base + timedelta(microseconds=1000 * (k + 1)))
+    older = seeded.by_topic[2][0]
+    seeded.click(uid, older, at=base - timedelta(seconds=1))
+
+    with Session(engine) as s:
+        repo = SqlRecsysRepository(s)
+        top3 = repo.recent_clicks(uid, base - timedelta(hours=1), base + timedelta(hours=1), 3)
+        everything = repo.recent_clicks(uid, base - timedelta(hours=1), base + timedelta(hours=1), 20)
+
+    assert [c.news_letter_id for c in top3] == sorted(nids, reverse=True)[:3]
+    assert [c.news_letter_id for c in everything] == sorted(nids, reverse=True) + [older]
+
+
 def test_item_window_counts_count_clicks_and_impressions_of_all_users_per_window(engine, seeded, pg_conn):  # noqa: F811
     from sqlalchemy.orm import Session
 

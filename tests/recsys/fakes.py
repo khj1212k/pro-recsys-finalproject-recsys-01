@@ -127,12 +127,13 @@ class FakeRepo:
 
     def recent_clicks(self, user_id, since, until, limit):
         self._call("recent_clicks")
+        # SQL 구현과 같은 순서: (초 단위 시각, 뉴스레터 ID)로 가장 뒤의 limit개
         recent = sorted(
             (c for c in self.clicks if c[1] == user_id and since <= c[3] < until and c[2] in self.newsletters),
-            key=lambda c: (c[3], c[0]),
+            key=lambda c: (epoch_seconds(c[3]), c[2], c[0]),
             reverse=True,
         )[:limit]
-        return [ClickEvent(c[3], self.newsletters[c[2]].embedding) for c in recent]
+        return [ClickEvent(c[3], self.newsletters[c[2]].embedding, c[2]) for c in recent]
 
     def item_window_counts(self, news_letter_ids, click_starts, inview_start, end):
         self._call("item_window_counts")

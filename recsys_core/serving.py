@@ -17,7 +17,11 @@
 입력(state가 들고 있어야 하는 것 - 덕 타이핑):
 - category_ids: 온보딩에서 고른 선호 카테고리 ID들
 - hist: recsys_core.profile.HistState - now 이전의 클릭이 전부 반영된 증분 상태(없으면 빈 상태)
-- recent_clicks: [ClickEvent] - [T - 24h, now) 구간의 최근 SHORT_MAX_EVENTS개 클릭
+- recent_clicks: [ClickEvent] - [T - 24h, now) 구간의 최근 SHORT_MAX_EVENTS개 클릭.
+  "최근 N개"는 (초 단위로 내린 시각, 뉴스레터 ID) 순으로 가장 뒤의 N개다(latest_events). 같은 초 안의 순서를
+  마이크로초로 가르지 않는 이유: 피처의 시각이 정수 초라서, 이벤트 로그에서 다시 계산하는 쪽은 같은 초의
+  클릭들을 시각으로 구별하지 못한다. 상한의 경계가 같은 초의 클릭 여러 건에 걸리면 두 쪽이 서로 다른 클릭을
+  남기게 된다(빠르게 이어지는 클릭에서 실제로 short_cos가 0.04 어긋났다).
 - popularity: {news_letter_id: WindowCounts} - 후보 아이템의 창 집계. 없는 ID는 0건이다.
   None이면 아직 읽지 않은 것이므로 FeatureInputsMissing을 낸다(0으로 채워 조용히 틀린 값을 내지 않는다).
 items의 원소: news_letter_id, embedding, created_at, category_id(대표 카테고리, 없으면 None).
@@ -75,6 +79,7 @@ SCHEMA_DEFINITION = {
     "item_lag_s": SERVING_FEATURE_CONFIG.item_lag_s,
     "session_gap_s": SESSION_GAP_S,
     "request_time": "floor(now)+1 s; user events strictly before now",
+    "latest_events_order": "(floor second, news_letter_id)",
     "embedding": "float32 l2-normalized",
     "category": "primary category id, 0 = none",
     "extras": {name: "nan" for name in schema.EXTRA_COLUMNS},
@@ -90,6 +95,7 @@ class FeatureInputsMissing(ValueError):
 class ClickEvent:
     at: datetime  # tz-aware
     embedding: np.ndarray
+    news_letter_id: int = 0  # 같은 초의 클릭 사이의 순서를 정한다(latest_events)
 
 
 @dataclass(frozen=True)
@@ -136,6 +142,17 @@ def inview_window_start(now: datetime) -> datetime:
     return from_epoch_seconds(end - int(SERVING_FEATURE_CONFIG.ctr_window_h * HOUR))
 
 
+def event_order(click: ClickEvent) -> Tuple[int, int]:
+    """클릭의 순서 키: (초 단위 시각, 뉴스레터 ID). recsys_core의 이벤트 인덱스가 같은 초의 이벤트를 아이템
+    순으로 세우는 것과 같은 순서다(로그 재계산 경로의 카탈로그는 뉴스레터 ID 순이다)."""
+    return (epoch_seconds(click.at), int(click.news_letter_id))
+
+
+def latest_events(clicks: Sequence[ClickEvent], n: int = SHORT_MAX_EVENTS) -> list:
+    """event_order로 가장 뒤의 n개(오름차순). 단기 창·세션의 "최근 N개"는 전부 이 함수의 순서다."""
+    return sorted(clicks, key=event_order)[-int(n):]
+
+
 def _category(value: Optional[int]) -> int:
     c = NO_CATEGORY if value is None else int(value)
     if not 0 <= c <= MAX_CATEGORY_ID:
@@ -170,7 +187,7 @@ def build_context(state, items: Sequence, now: datetime) -> Tuple[FeatureContext
     check_inputs(state, now)
     cfg = SERVING_FEATURE_CONFIG
     hist: HistState = getattr(state, "hist", None) or HistState()
-    clicks = sorted(getattr(state, "recent_clicks", None) or (), key=lambda c: c.at)[-SHORT_MAX_EVENTS:]
+    clicks = latest_events(getattr(state, "recent_clicks", None) or ())
     popularity: Mapping[int, WindowCounts] = state.popularity
     n, m = len(items), len(clicks)
     t_req = request_second(now)

@@ -19,6 +19,7 @@ from recsys_core.serving import (
     inview_window_start,
     item_window_end,
     item_window_starts,
+    latest_events,
     short_window_start,
 )
 
@@ -60,8 +61,9 @@ class World:
 
     def recent_clicks(self, user: int, now: datetime) -> List[ClickEvent]:
         since = short_window_start(now)
-        mine = sorted((c for c in self.clicks if c[0] == user and since <= c[2] < now), key=lambda c: c[2])
-        return [ClickEvent(at, self.items[nid].embedding) for _, nid, at in mine[-SHORT_MAX_EVENTS:]]
+        mine = [ClickEvent(at, self.items[nid].embedding, nid) for u, nid, at in self.clicks
+                if u == user and since <= at < now]
+        return latest_events(mine, SHORT_MAX_EVENTS)
 
     def popularity(self, ids, now: datetime) -> Dict[int, WindowCounts]:
         end = item_window_end(now)
@@ -103,7 +105,7 @@ class World:
 def make_world(seed: int = 0, n_items: int = 90, n_users: int = 6, dim: int = 24, days: int = 12) -> World:
     """뉴스레터 n_items개와 사용자 n_users명의 클릭·노출 로그. 일부러 넣은 것:
     정규화되지 않은 임베딩, 카테고리 없는 아이템, 같은 초의 연속 클릭, 30분 안에 이어지는 세션,
-    24시간에 20건을 넘는 사용자, 클릭이 전혀 없는 사용자."""
+    24시간에 20건을 넘는 사용자, 3초 안에 26번 클릭한 사용자, 클릭이 전혀 없는 사용자."""
     rng = np.random.default_rng(seed)
     span = days * 86400
     items = {}
@@ -131,6 +133,10 @@ def make_world(seed: int = 0, n_items: int = 90, n_users: int = 6, dim: int = 24
     burst = T0 + timedelta(seconds=span - 20 * 3600)
     for k in range(34):
         world.clicks.append((1, int(rng.choice(ids)), burst + timedelta(seconds=k * 1700, microseconds=k * 7)))
+    # 사용자 2는 3초 안에 26번 클릭한다(자동화된 클라이언트나 연타): 20건 상한의 경계가 같은 초의 클릭들에 걸린다.
+    rapid = T0 + timedelta(seconds=span - 3600)
+    for k in range(26):
+        world.clicks.append((2, int(rng.choice(ids)), rapid + timedelta(microseconds=110_000 * k + int(rng.integers(0, 900)))))
     for _ in range(4000):
         at = T0 + timedelta(seconds=int(rng.integers(0, span)), microseconds=int(rng.integers(0, 1_000_000)))
         world.inviews.append((int(rng.choice(ids)), at))

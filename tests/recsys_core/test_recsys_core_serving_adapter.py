@@ -93,6 +93,35 @@ def test_adapter_matrix_equals_the_harness_path_on_the_same_logs(seed):
     assert all(seen.values()), seen  # 상한·세션·무이력 경우가 실제로 지나갔다
 
 
+def test_the_cap_boundary_inside_one_second_keeps_the_same_clicks_on_both_paths():
+    """3초 안에 26번 클릭한 사용자: 최근 20개의 경계가 같은 초의 클릭 여러 건에 걸린다. 서빙이 마이크로초로
+    최근 20개를 고르면 로그 재계산(정수 초)과 서로 다른 클릭이 남아 short_cos가 어긋난다."""
+    world = make_world(8)
+    bench = LogBench(world.logs())
+    rapid = sorted(at for u, _, at in world.clicks if u == 2)[-26:]
+    cands = sorted(world.items)[:40]
+    by_second = {}
+    for at in rapid:
+        by_second[epoch_seconds(at)] = by_second.get(epoch_seconds(at), 0) + 1
+    assert max(by_second.values()) >= 8 and rapid[-1] - rapid[0] < timedelta(seconds=3)
+
+    for now in (rapid[-1] + timedelta(microseconds=1), rapid[22] + timedelta(microseconds=1),
+                rapid[-1] + timedelta(seconds=20)):
+        serving, offline = _compare(world, bench, 2, now, cands)
+        assert serving[0, COL["short_len"]] == offline[0, COL["short_len"]] == SHORT_MAX_EVENTS
+        assert np.nanmax(np.abs(serving.astype(np.float64) - offline)) < 1e-6
+
+    # 마이크로초 순으로 최근 20개를 고른 입력은 실제로 다른 값을 낸다(이 테스트가 그 차이를 볼 수 있다는 확인)
+    now = rapid[-1] + timedelta(microseconds=1)
+    state = world.state(2, now, cands)
+    since = short_window_start(now)
+    by_micro = sorted(((at, nid) for u, nid, at in world.clicks if u == 2 and since <= at < now))[-SHORT_MAX_EVENTS:]
+    wrong = WorldState(**{**state.__dict__, "recent_clicks": [
+        type(state.recent_clicks[0])(at, world.items[nid].embedding, nid) for at, nid in by_micro]})
+    drifted = features(wrong, [world.items[i] for i in cands], now)
+    assert np.abs(drifted[:, COL["short_cos"]] - bench.request_features(2, epoch_us(now), cands)[:, COL["short_cos"]]).max() > 1e-4
+
+
 def test_a_click_just_before_the_request_counts_and_one_just_after_does_not():
     world = make_world(3)
     bench = LogBench(world.logs())

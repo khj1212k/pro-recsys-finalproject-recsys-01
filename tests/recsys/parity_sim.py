@@ -63,7 +63,10 @@ class SimResult:
 
 
 def simulate(n_items: int = 120, n_users: int = 8, n_requests: int = 200, dim: int = 24, seed: int = 0,
-             model_text: Optional[str] = None, click_rate: float = 0.5, **cfg_kw) -> SimResult:
+             model_text: Optional[str] = None, click_rate: float = 0.5, fast_requests: int = 60,
+             **cfg_kw) -> SimResult:
+    """fast_requests: 처음 그만큼의 요청은 밀리초 간격으로 이어진다(요청·클릭이 같은 초에 여러 건). 자동화된
+    클라이언트와 통합 테스트의 재생이 이런 모양이고, 같은 초의 클릭이 20건 상한의 경계에 걸리는 경우가 여기서 나온다."""
     rng = np.random.default_rng(seed)
     topics = rng.standard_normal((6, dim)).astype(np.float32)
     newsletters = []
@@ -110,17 +113,26 @@ def simulate(n_items: int = 120, n_users: int = 8, n_requests: int = 200, dim: i
     )
     as_of_by_request = {}
     try:
-        for _ in range(n_requests):
-            clock["now"] += timedelta(seconds=float(rng.uniform(0.2, 900)), microseconds=int(rng.integers(0, 10**6)))
-            user = int(rng.integers(1, n_users + 1))
+        for step in range(n_requests):
+            fast = step < fast_requests
+            if fast:
+                clock["now"] += timedelta(milliseconds=float(rng.uniform(15, 90)))
+            else:
+                clock["now"] += timedelta(seconds=float(rng.uniform(0.2, 900)), microseconds=int(rng.integers(0, 10**6)))
+            user = int(rng.integers(1, n_users + 1)) if not fast else 1 + step % 2
             rec = service.recommend(user, fallback_repo=repo)
             service.log_impressions(user, rec, rec.news_letter_ids)
             as_of_by_request[rec.request_id] = rec.features_as_of
             # 노출 로그는 응답 뒤에 쓰인다(요청보다 조금 늦은 시각), 클릭은 그 뒤에 온다
-            repo.impress(user, rec.news_letter_ids, clock["now"] + timedelta(milliseconds=int(rng.integers(5, 400))))
-            if rec.news_letter_ids and rng.random() < click_rate:
+            repo.impress(user, rec.news_letter_ids,
+                         clock["now"] + timedelta(milliseconds=int(rng.integers(1, 4) if fast else rng.integers(5, 400))))
+            if rec.news_letter_ids and rng.random() < (0.9 if fast else click_rate):
                 for nid in rng.choice(rec.news_letter_ids, size=int(rng.integers(1, 3)), replace=False):
-                    clock["now"] += timedelta(seconds=float(rng.uniform(0.5, 40)), microseconds=int(rng.integers(0, 10**6)))
+                    if fast:
+                        clock["now"] += timedelta(milliseconds=float(rng.uniform(4, 30)))
+                    else:
+                        clock["now"] += timedelta(seconds=float(rng.uniform(0.5, 40)),
+                                                  microseconds=int(rng.integers(0, 10**6)))
                     repo.click(user, int(nid), clock["now"])
     finally:
         service.shutdown()

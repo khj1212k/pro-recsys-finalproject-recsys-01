@@ -77,15 +77,22 @@ class LogBench:
                  session_gap_s: int = SESSION_GAP_S):
         self.config = config
         self.session_gap_s = int(session_gap_s)
-        item_ids = np.asarray(logs.item_ids, dtype=np.int64)
-        category = np.asarray(logs.item_category, dtype=np.int64)
+        # 카탈로그 행은 뉴스레터 ID 순이다. 이벤트 인덱스는 같은 초의 이벤트를 카탈로그 행 순으로 세우므로,
+        # "최근 N개"의 경계가 같은 초의 클릭들에 걸릴 때 서빙(recsys_core.serving.latest_events: 초, 뉴스레터 ID 순)과
+        # 같은 클릭을 남기려면 이 순서여야 한다.
+        by_id = np.argsort(np.asarray(logs.item_ids, dtype=np.int64), kind="stable")
+        item_ids = np.asarray(logs.item_ids, dtype=np.int64)[by_id]
+        category = np.asarray(logs.item_category, dtype=np.int64)[by_id]
+        item_emb = np.asarray(logs.item_emb, dtype=np.float32)[by_id] if len(item_ids) else logs.item_emb
+        item_created_us = np.asarray(logs.item_created_us, dtype=np.int64)[by_id]
+        if len(item_ids) > 1 and np.any(np.diff(item_ids) == 0):
+            raise ValueError("ServiceLogs.item_ids에 같은 뉴스레터가 두 번 있습니다")
         user_cats = {int(u): sorted({int(c) for c in cats}) for u, cats in logs.user_categories.items()}
         top = max([NO_CATEGORY, *category.tolist(), *(c for cats in user_cats.values() for c in cats)])
         self.catalog = ItemCatalog(
             ids=item_ids,
-            emb=unit_rows(np.asarray(logs.item_emb, dtype=np.float32)) if len(item_ids) else
-            np.zeros((0, 1), dtype=np.float32),
-            pub_time=np.asarray(logs.item_created_us, dtype=np.int64) // US,
+            emb=unit_rows(item_emb) if len(item_ids) else np.zeros((0, 1), dtype=np.float32),
+            pub_time=item_created_us // US,
             category=category,
             n_categories=top + 1,
         )

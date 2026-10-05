@@ -22,7 +22,9 @@ class RecsysRepository(Protocol):
     def recent_clicks(
         self, user_id: int, since: datetime, until: datetime, limit: int
     ) -> List[ClickEvent]:
-        """[since, until) 구간의 클릭(event = 'click', 임베딩이 있는 뉴스레터) 중 가장 늦은 limit개."""
+        """[since, until) 구간의 클릭(event = 'click', 임베딩이 있는 뉴스레터) 중 가장 늦은 limit개.
+        "늦은" 순서는 (초 단위로 내린 시각, 뉴스레터 ID)다 - recsys_core.serving.latest_events와 같은 순서여야
+        상한의 경계가 같은 초의 클릭들에 걸려도 로그 재계산과 같은 클릭이 남는다(ADR 0033)."""
         ...
 
     def item_window_counts(

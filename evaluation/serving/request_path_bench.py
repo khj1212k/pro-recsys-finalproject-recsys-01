@@ -292,17 +292,27 @@ def explain(engine, now: datetime, sample_user: int, sample_vec: np.ndarray) -> 
         ),
         # 최근 클릭 20건(시각 + 벡터). 예전에는 DB에서 AVG로 한 벡터를 받았다(결과 파일의 short_term_avg).
         "recent_clicks": (
-            "SELECT l.created_at::timestamptz, vector_send(n.news_letter_embedding) "
+            "SELECT l.created_at::timestamptz, vector_send(n.news_letter_embedding), l.news_letter_id "
             "FROM user_newsletter_ctr_log l JOIN news_letter n ON n.news_letter_id = l.news_letter_id "
             "WHERE l.user_id = :uid AND l.created_at >= :since AND l.created_at < :until "
             "AND l.event = 'click' AND n.news_letter_embedding IS NOT NULL "
-            "ORDER BY l.created_at DESC, l.log_id DESC LIMIT 20",
+            "ORDER BY date_trunc('second', l.created_at) DESC, l.news_letter_id DESC, l.log_id DESC LIMIT 20",
             {"uid": sample_user, "since": since24, "until": now},
         ),
         "last_click_id": (
             "SELECT log_id FROM user_newsletter_ctr_log WHERE user_id = :uid "
             "ORDER BY created_at DESC, log_id DESC LIMIT 1",
             {"uid": sample_user},
+        ),
+        # 피처 어댑터의 인기도 창 집계 중 클릭 쪽(ADR 0033): 72시간 창의 뉴스레터 300개, 최근 48시간.
+        "item_window_clicks": (
+            "SELECT news_letter_id, COUNT(*) FILTER (WHERE created_at >= :s6), "
+            "COUNT(*) FILTER (WHERE created_at >= :s24), COUNT(*) FROM user_newsletter_ctr_log "
+            "WHERE event = 'click' AND news_letter_id = ANY(ARRAY(SELECT news_letter_id FROM news_letter "
+            "WHERE news_letter_created_at >= :since ORDER BY news_letter_id LIMIT 300)) "
+            "AND created_at >= :s48 AND created_at < :until GROUP BY news_letter_id",
+            {"since": since72, "s6": now - timedelta(hours=6), "s24": since24, "s48": now - timedelta(hours=48),
+             "until": now},
         ),
         "window_meta": (
             "SELECT n.news_letter_id, n.news_letter_created_at::timestamptz, n.raw_news_count "

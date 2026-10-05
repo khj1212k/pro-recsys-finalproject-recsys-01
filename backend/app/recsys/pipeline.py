@@ -85,9 +85,11 @@ def build_user_state(
         now,
         max(core_serving.SHORT_MAX_EVENTS, cfg.short_term_max_clicks),
     )
-    clicks = sorted(clicks, key=lambda c: c.at)
-    for_adapter = [c for c in clicks if c.at >= adapter_since][-core_serving.SHORT_MAX_EVENTS:]
-    for_heuristic = [c for c in clicks if c.at >= heuristic_since][-cfg.short_term_max_clicks:]
+    # "최근 N개"의 순서는 어댑터가 정한 것 하나다((초, 뉴스레터 ID) 순 - recsys_core.serving.latest_events).
+    for_adapter = core_serving.latest_events([c for c in clicks if c.at >= adapter_since])
+    for_heuristic = core_serving.latest_events(
+        [c for c in clicks if c.at >= heuristic_since], cfg.short_term_max_clicks
+    )
 
     long_term = profile_state.hist.direction()
     state = UserState(
