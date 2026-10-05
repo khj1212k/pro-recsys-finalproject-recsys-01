@@ -12,7 +12,10 @@ BGE-M3 similarity is deliberately NOT a feature: the recommender under test
 ranks with those embeddings, and a simulator that clicks by the same cosine
 would grade the recommender with its own answer key. Keyword/category overlap
 still correlates with embedding similarity, so content-based rankers remain
-structurally favored (ADR 0019).
+structurally favored (ADR 0019). "Not a feature" is about phi itself: on the
+team-archive catalog most category labels are BGE-M3 k-NN guesses, so there the
+embedding does reach phi indirectly, through the category feature
+(sim.catalog.team_archive_catalog).
 """
 
 import math

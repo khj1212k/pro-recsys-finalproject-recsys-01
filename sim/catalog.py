@@ -186,7 +186,10 @@ def team_archive_catalog(
     Original created_at order is kept but spread over the simulated window so the
     candidate pool refreshes daily. Press is not stored per newsletter in the
     export, so `press_names` stays empty (same as the production API payload).
-    Category labels come from data/team_archive/derived (partly kNN-inferred).
+    Category labels come from data/team_archive/derived. Most of them (148 of 195) are not
+    direct labels but BGE-M3 cosine k-NN guesses (k=5, leave-one-out accuracy 29.8%), so on
+    this catalog embedding similarity reaches the click model through the category feature.
+    Do not use it to evaluate an embedding-based recommender (ADR 0019).
     """
     cats: Dict[int, int] = {}
     with open(categories_csv, newline="", encoding="utf-8") as f:

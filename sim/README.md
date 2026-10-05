@@ -13,9 +13,9 @@
 | 모듈 | 역할 |
 |---|---|
 | `personas.py` | 아키타입 10종 → 디리클레 잡음을 얹은 사용자(도중 가입 10%, 3일차 drift 10%, `@sim.invalid`) |
-| `click_model.py` | 위치 기반 클릭 모델 P = (1/(r+1))^η · σ(w·φ + b), BGE-M3 코사인 미사용, 프리셋 `default`·`category_only` |
+| `click_model.py` | 위치 기반 클릭 모델 P = (1/(r+1))^η · σ(w·φ + b), φ에 BGE-M3 코사인을 직접 쓰지 않음, 프리셋 `default`·`category_only` |
 | `calibration.py` | 편향 b를 무작위 top-10 CTR 2%에 맞춤, EB-NeRD·팀 합성 데이터 기저율 집계 |
-| `catalog.py` | 합성 카탈로그, 팀 뉴스레터 195개 카탈로그(로컬 전용) |
+| `catalog.py` | 합성 카탈로그, 팀 뉴스레터 195개 카탈로그(로컬 전용; 카테고리 라벨 148개는 BGE-M3 kNN 추정값) |
 | `driver.py` | API 계약만 쓰는 HTTP 드라이버(가입·로그인·온보딩·`/newsletters/today`·클릭·상세) |
 | `fake_app.py` | 프로세스 내 가짜 FastAPI 앱과 장난감 정책 5종(지표 검증용 테스트 더블) |
 | `metrics.py` | 행동 지표(콜드 스타트, 클릭 반응성, drift 적응, 폴백·빈 응답, 오류·지연) |
@@ -44,6 +44,9 @@ python -m sim.calibration --ebnerd-dir data/benchmarks/ebnerd/ebnerd_small \
 
 - 결과: [reports/sim/grid_v1.md](../reports/sim/grid_v1.md), [reports/sim/base_rates_v1.json](../reports/sim/base_rates_v1.json).
   실행별 JSON(`out/`)은 커밋하지 않는다.
+- 팀 카탈로그는 임베딩 기반 추천기를 평가하는 데 쓰지 않는다. 카테고리 라벨 195개 중 148개가 BGE-M3 코사인
+  kNN으로 채운 값이라(leave-one-out 정확도 29.8%), 임베딩 유사도가 카테고리 피처를 거쳐 클릭 모델에 간접적으로
+  들어온다. 이 카탈로그의 격자 결과는 내부 일관성으로만 읽는다(ADR 0019 "등록 후 보완").
 - 개발 Mac에서는 `nice -n 19 env OMP_NUM_THREADS=2`와 `--workers 2`로 돌렸다(격자 G1 30회 약 5분).
 - EB-NeRD와 `data/team_archive`는 이 Mac 밖으로 나가지 않는다. 리포트에는 집계 수치만 싣는다.
 
