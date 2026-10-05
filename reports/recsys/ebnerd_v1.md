@@ -5,6 +5,9 @@
 > (사전 등록 커밋 `d27a700`)을 따른다. 모든 표는 `reports/recsys/ebnerd_v1.json`에서
 > `python -m evaluation.recsys.ebnerd.make_report`로 생성했다(손으로 옮겨 적지 않음). 부록 A·B의 표는 각각
 > `ebnerd_v1_1_poolneg.json`, `ebnerd_v1_click_time_sensitivity.json`에서 같은 방식으로 생성했다.
+>
+> 커밋 SHA 안내(2026-10-06): 이 리포트와 JSON에 적힌 SHA(`d27a700`, `2d223a5`, `9a44f54`)는 브랜치를 main 위로 옮기기 전
+> 것이다. 지금 이력에서 대응하는 커밋과 확인한 범위는 ADR 0013 "사후 변경 기록"의 통합 기록에 있다. 수치와 표는 바꾸지 않았다.
 
 ## 0. 실행 정보
 
@@ -251,10 +254,11 @@ popularity_6h·recency·popularity_24h·cosine 상위 50개 합집합(평균 121
 CI가 겹친다는 것은 차이가 없다는 증거가 아니므로, "후보 생성으로 풀을 절반으로 줄여도 된다"(요청 시점 계산량 절감)는
 **잠정** 근거로만 쓴다.
 
-> **재실행 대기** — 쌍체 차이(`p2_two_stage.union@k.paired_vs_full_pool`, 같은 점수·같은 요청의 전체 풀 랭킹 대비)는
-> 코드에 추가했지만 이 수치는 아직 없다. 전체 재학습(약 1시간, 피크 메모리 약 10GB)이라 맥 가벼운 모드 중에는 돌리지 않았고,
-> EB-NeRD는 라이선스상 이 Mac 밖으로 옮기지 않으므로 가벼운 모드가 풀린 뒤 이 Mac에서 실행한다. v1이 고른 모델만 같은 seed로
-> 다시 학습한다(학습은 결정적 — v1.1에서 겹치는 모델 수치가 v1과 같게 재현됨):
+> **재실행 대기(클라우드)** — 쌍체 차이(`p2_two_stage.union@k.paired_vs_full_pool`, 같은 점수·같은 요청의 전체 풀 랭킹 대비)는
+> 코드에 추가했지만 이 수치는 아직 없다. 전체 재학습(약 1시간, 피크 메모리 약 10GB)이라 개발용 Mac에서는 돌리지 않는다.
+> 비공개 클라우드 런타임에서 실행한다(데이터는 실행마다 올리고 실행 뒤 지운다. 저장소 커밋·공개 반출 금지는 그대로 —
+> ADR 0013 통합 기록 4). v1이 고른 모델만 같은 seed로 다시 학습한다(같은 Mac에서는 v1.1에서 겹치는 모델 수치가 v1과 같게
+> 재현됐다. 다른 머신에서는 먼저 아래 재현 확인을 한다):
 > `EBNERD_ROOT=<repo>/data/benchmarks/ebnerd .venv/bin/python -m evaluation.recsys.ebnerd.run_ebnerd --dataset ebnerd_small
 > --seeds 0 1 2 --n-boot 1000 --p2-sample 20000 --p2-select-sample 5000 --mmr-sample 3000 --threads 6
 > --only-models ranker_v2_poolneg --skip replay --out-json reports/recsys/ebnerd_v1_2_two_stage.json`
