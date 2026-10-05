@@ -79,6 +79,8 @@ EXIT_OK, EXIT_SHA_MISMATCH, EXIT_CONFIG_MISMATCH, EXIT_FAILED_MARKER, EXIT_STAGE
 EXIT_DOWNLOAD, EXIT_INSTALL, EXIT_USAGE = 6, 7, 64
 # run_cold가 재현 게이트 실패로 끝날 때의 종료 코드와 그 기록 파일(run_cold.EXIT_GATE_FAILED, GATE_JSON과 같은 값)
 RUN_COLD_EXIT_GATE, GATE_JSON = 4, "reproduction_gate.json"
+# manifest의 articles.original_sha256을 단계 프로세스에 넘기는 환경변수(run_cold.ARTICLES_ORIGINAL_ENV와 같은 이름)
+ARTICLES_ORIGINAL_ENV = "M4_ARTICLES_ORIGINAL_SHA256"
 
 
 class DriverError(RuntimeError):
@@ -231,7 +233,8 @@ def ensure_data(manifest: dict, data_dir: Path, urls: dict[str, str], log: Log,
 
 
 def check_manifest(manifest: dict, repo: Path, allow_unregistered: bool = False) -> None:
-    """내려받기 전에 manifest를 본다: 필요한 파일 8개가 다 있는지, 등록된 입력의 sha256이 사전 등록 yaml에 적힌 값인지.
+    """내려받기 전에 manifest를 본다: 필요한 파일 8개가 다 있는지, 등록된 입력의 sha256이 사전 등록 yaml에 적힌 값인지,
+    기사 파일의 원본 sha256이 등록한 원본의 값인지.
 
     여러 시간 돌린 뒤에 "입력이 등록값과 달라 demo 등급"으로 끝나는 일을 막는다. yaml 파서 없이 돌아야 하므로
     등록 파일 안에 그 sha256 문자열이 있는지만 본다(정식 대조는 run_cold의 증거 등급 판정이 한다).
@@ -252,6 +255,12 @@ def check_manifest(manifest: dict, repo: Path, allow_unregistered: bool = False)
     if wrong:
         raise DriverError(f"manifest의 sha256이 사전 등록 값과 다릅니다: {wrong}. 등록하지 않은 입력으로 돌리려면 "
                           "--allow-unregistered-data(결과는 demo 등급).", EXIT_USAGE)
+    # 기사 파일은 본문을 뺀 파생본이라 그 sha256은 등록값이 없다. 대신 manifest가 적은 원본의 sha256이 등록값이어야 한다
+    # (run_cold도 이 값이 등록값일 때만 판정용 등급을 준다).
+    original = str((manifest.get("articles") or {}).get("original_sha256") or "").lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", original) or original not in registered:
+        raise DriverError("manifest의 articles.original_sha256이 없거나 사전 등록한 원본 기사 파일의 값과 다릅니다. "
+                          "등록하지 않은 입력으로 돌리려면 --allow-unregistered-data(결과는 demo 등급).", EXIT_USAGE)
 
 
 def parse_urls(pairs: list[str], env: dict) -> dict[str, str]:
@@ -307,9 +316,14 @@ def subprocess_runner(cmd: list[str], cwd: Path, env: dict, log_path: Path) -> i
         return proc.wait()
 
 
+def articles_original(manifest: Optional[dict]) -> Optional[str]:
+    return ((manifest or {}).get("articles") or {}).get("original_sha256") or None
+
+
 def config_digest(code_sha256: str, manifest: Optional[dict], run_args: dict) -> str:
     files = {k: v["sha256"] for k, v in (manifest or {"files": {}})["files"].items()}
-    blob = json.dumps({"code": code_sha256, "files": files, "run": run_args}, sort_keys=True)
+    blob = json.dumps({"code": code_sha256, "files": files, "run": run_args,
+                       "articles_original": articles_original(manifest)}, sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
@@ -619,6 +633,8 @@ def cmd_run(args, *, runner: Callable = subprocess_runner, opener: Callable = ur
             state["articles"] = manifest.get("articles")
         write_json(state_path, state)
         extra_env = {"M4_CODE_SHA": code["commit"] or f"tarball-{code['sha256'][:16]}"}
+        if articles_original(manifest):
+            extra_env[ARTICLES_ORIGINAL_ENV] = articles_original(manifest)
         if args.prereg_commit:
             extra_env["M4_PREREG_COMMIT"] = args.prereg_commit
         rc = run_stages(workdir, state, state_path, run_args, python=python, threads=args.threads,

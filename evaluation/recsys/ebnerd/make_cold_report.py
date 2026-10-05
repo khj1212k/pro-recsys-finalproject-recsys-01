@@ -264,7 +264,19 @@ def models_section(d: dict) -> str:
     comp = d["meta"].get("compute")
     if comp:
         parts.append("계산 자원: " + json.dumps(comp, ensure_ascii=False))
+    parts.append(articles_line(d["meta"]))
     return "\n\n".join(parts)
+
+
+def articles_line(meta: dict) -> str:
+    """기사 파일의 출처. 등록한 원본 sha(상수)와 이 실행이 받은 원본 sha(manifest)를 섞어 적지 않는다."""
+    short = lambda v: f"`{v[:12]}…`" if v else "없음"   # noqa: E731
+    told = meta.get("articles_original_sha256_manifest")
+    return (f"기사 파일: 쓴 파일 sha256 {short(meta.get('articles_file_sha256'))}. 원본 sha256 — 등록값 "
+            f"{short(meta.get('articles_original_sha256_registered'))}, 이 실행이 받은 값 "
+            + (f"{short(told)}(manifest, 올린 쪽에서 잰 값이고 런타임에서는 다시 확인하지 못한다)" if told
+               else "받지 못함(manifest 없이 돈 실행)")
+            + f". 등록한 원본에 이어짐: {'예' if meta.get('articles_linked_to_registration') else '아니오'}.")
 
 
 def render(d: dict) -> str:

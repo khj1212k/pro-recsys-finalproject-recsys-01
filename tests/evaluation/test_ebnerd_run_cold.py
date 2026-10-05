@@ -373,9 +373,12 @@ def test_training_frames_mask_the_same_requests_for_the_zero_and_nan_arms(synth_
 # --- 증거 등급 ---------------------------------------------------------------------------------
 
 def _registered_config():
+    """원격 런타임의 판정용 실행: 등록한 인자, 등록한 입력 4개, 메타 전용 기사 파일(+manifest가 적은 원본 sha)."""
     run = PREREG["run"]
     return {"dataset": run["dataset"], "seeds": run["seeds"], "p2_sample": run["p2_sample"], "sub_cap": run["sub_cap"],
-            "fake_dim": None, "max_fit": None, "max_test": None, "data_files": dict(PREREG["data"]["files_sha256"]),
+            "fake_dim": None, "max_fit": None, "max_test": None,
+            "data_files": {**PREREG["data"]["files_sha256"], "articles.parquet": "d" * 64},
+            "articles_original_sha256_manifest": PREREG["data"]["articles_original_sha256"],
             "embeddings_sha256": PREREG["data"]["embeddings_sha256"], "code_sha": "a" * 40,
             "prereg_sha256": prereg_sha256()}
 
@@ -386,7 +389,9 @@ def test_only_the_registered_arguments_and_inputs_earn_the_evidence_grade():
     deviations = [("dataset", "ebnerd_demo"), ("seeds", [0]), ("p2_sample", 300), ("sub_cap", 100), ("fake_dim", 8),
                   ("max_fit", 1000), ("max_test", 1000), ("embeddings_sha256", "x"), ("code_sha", "unknown"),
                   ("code_sha", "a" * 40 + "-dirty"), ("code_sha", "tarball-0123456789abcdef"),
-                  ("prereg_sha256", "0" * 64)]
+                  ("prereg_sha256", "0" * 64),
+                  # 기사 파일은 파생본이라 등록한 sha가 없다. 원본이 등록값이라는 기록이 없거나 다르면 판정용이 아니다
+                  ("articles_original_sha256_manifest", None), ("articles_original_sha256_manifest", "0" * 64)]
     for key, value in deviations:
         cfg = _registered_config()
         cfg[key] = value
@@ -396,6 +401,51 @@ def test_only_the_registered_arguments_and_inputs_earn_the_evidence_grade():
     cfg["data_files"]["train/behaviors.parquet"] = "deadbeef"
     assert run_cold.evidence_grade(cfg, PREREG["run"]["n_boot"], PREREG)["grade"] == DEMO_GRADE
     assert run_cold.evidence_grade(_registered_config(), 200, PREREG)["grade"] == DEMO_GRADE
+    # 원본 기사 파일을 그대로 쓴 실행(파생본·manifest 없음)은 파일 sha가 곧 등록값이다
+    cfg = _registered_config()
+    cfg["articles_original_sha256_manifest"] = None
+    cfg["data_files"]["articles.parquet"] = PREREG["data"]["articles_original_sha256"]
+    assert run_cold.evidence_grade(cfg, PREREG["run"]["n_boot"], PREREG) == {"grade": EVIDENCE_GRADE, "reasons": []}
+
+
+def test_report_separates_the_registered_articles_sha_from_what_the_run_was_told(synth_root, tmp_path, monkeypatch, caplog):
+    """리포트의 기사 원본 sha는 등록 상수를 베낀 값과 이 실행이 받은 값(manifest → 드라이버 → 환경변수)을 따로 적는다.
+    단계 함수는 빈 것으로 바꿔, 환경변수 → 설정 → progress.json → 리포트로 가는 길만 본다."""
+    import logging
+
+    from evaluation.recsys.ebnerd.prepare import sha256_file
+
+    monkeypatch.setitem(run_cold.STAGE_FUNCS, "fit", lambda run: None)
+    registered = PREREG["data"]["articles_original_sha256"]
+    file_sha = sha256_file(synth_root / "ebnerd_synth" / "articles.parquet")
+
+    def report(out, value):
+        if value is None:
+            monkeypatch.delenv(run_cold.ARTICLES_ORIGINAL_ENV, raising=False)
+        else:
+            monkeypatch.setenv(run_cold.ARTICLES_ORIGINAL_ENV, value)
+        assert run_cold.main(_args(synth_root, out, "--stage", "fit")) == 0
+        monkeypatch.delenv(run_cold.ARTICLES_ORIGINAL_ENV, raising=False)      # 조립은 다른 기계에서 다시 할 수 있다
+        assert run_cold.main(_args(synth_root, out, "--stage", "assemble")) == 0
+        return json.loads((out / run_cold.REPORT_JSON).read_text())["meta"], (out / run_cold.REPORT_MD).read_text()
+
+    with caplog.at_level(logging.INFO, logger="ebnerd.cold"):
+        meta, md = report(tmp_path / "told", "e" * 64)
+    assert meta["articles_original_sha256_registered"] == registered
+    assert meta["articles_original_sha256_manifest"] == "e" * 64 and meta["articles_file_sha256"] == file_sha
+    assert meta["articles_linked_to_registration"] is False and "articles_original_sha256" not in meta
+    assert any("기사 파일" in r for r in meta["evidence"]["reasons"])
+    assert "e" * 12 in md and registered[:12] in md and file_sha[:12] in md
+    # 실행을 시작할 때 등급과 사유를 로그에 찍는다(몇 시간 뒤 조립 때가 아니라)
+    assert any("evidence grade" in r.getMessage() and DEMO_GRADE in r.getMessage() for r in caplog.records)
+
+    meta, md = report(tmp_path / "linked", registered)
+    assert meta["articles_original_sha256_manifest"] == registered and meta["articles_linked_to_registration"] is True
+    assert not any("기사 파일" in r for r in meta["evidence"]["reasons"])
+
+    meta, md = report(tmp_path / "untold", None)
+    assert meta["articles_original_sha256_manifest"] is None and meta["articles_linked_to_registration"] is False
+    assert "받지 못함" in md
 
 
 def test_unknown_stage_is_rejected(synth_root, tmp_path):

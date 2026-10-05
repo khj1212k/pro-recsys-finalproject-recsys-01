@@ -112,6 +112,8 @@ REPORT_MD = "ebnerd_v1_2_cold.md"
 GATE_JSON = "reproduction_gate.json"
 EXIT_CONFIG_MISMATCH = 3
 EXIT_GATE_FAILED = 4      # scripts/m4_colab_driver.py의 RUN_COLD_EXIT_GATE와 같은 값(테스트가 묶는다)
+# 드라이버가 manifest의 articles.original_sha256(올리기 전에 로컬에서 잰 원본 기사 파일의 sha256)을 넘기는 환경변수
+ARTICLES_ORIGINAL_ENV = "M4_ARTICLES_ORIGINAL_SHA256"
 
 
 class ConfigMismatch(RuntimeError):
@@ -736,6 +738,18 @@ def _pairs_for_cell(methods: list[str]) -> list[tuple[str, str]]:
     return [(a, b) for a, b in pairs if a in methods and b in methods]
 
 
+def articles_linked_to_registration(config: dict, prereg: dict) -> bool:
+    """기사 파일을 등록한 원본에 이을 수 있는가.
+
+    원격 실행은 본문을 뺀 파생 파일을 쓰므로 그 파일의 sha256은 등록값과 맞춰 볼 수 없다. 그래서 (1) 쓴 파일이 원본
+    그대로이거나 (2) 올린 쪽이 manifest에 적어 넘긴 원본 sha256이 등록값일 때만 이어진 것으로 본다. (2)는 올린 쪽에서
+    잰 값이고 런타임 안에서는 다시 확인할 수 없다(원본을 올리지 않는다).
+    """
+    registered = prereg["data"]["articles_original_sha256"]
+    return registered in (config.get("data_files", {}).get("articles.parquet"),
+                          config.get("articles_original_sha256_manifest"))
+
+
 def evidence_grade(config: dict, n_boot: int, prereg: dict) -> dict:
     """실행 인자·입력 파일이 사전 등록과 같은지. 다르면 demo 등급이고 판정에 쓰지 않는다."""
     run, reasons = prereg["run"], []
@@ -748,6 +762,8 @@ def evidence_grade(config: dict, n_boot: int, prereg: dict) -> dict:
     for f, sha in prereg["data"]["files_sha256"].items():
         if files.get(f) != sha:
             reasons.append(f"{f} sha256이 등록값과 다름")
+    if not articles_linked_to_registration(config, prereg):
+        reasons.append("기사 파일을 등록한 원본에 잇지 못함(원본 그대로가 아니고, manifest가 적은 원본 sha256도 등록값이 아님)")
     if config.get("embeddings_sha256") != prereg["data"]["embeddings_sha256"]:
         reasons.append("임베딩 sha256이 등록값과 다름")
     sha = str(config.get("code_sha") or "unknown")
@@ -924,8 +940,12 @@ def stage_assemble(store: Store, prereg: dict, args, config: dict, bench_info: O
         "fake_dim": config["fake_dim"], "max_fit": config["max_fit"], "max_test": config["max_test"],
         "environments": store.progress.get("environments", []), "assembled_on": environment(),
         "data_files": config["data_files"], "embeddings_sha256": config["embeddings_sha256"],
-        "articles_original_sha256": prereg["data"]["articles_original_sha256"], "compute": compute,
-        "config_hash": store.progress["config_hash"],
+        # 기사 파일: 쓴 파일의 sha(잰 값), 등록한 원본 sha(yaml의 상수), 이 실행이 받은 원본 sha(manifest, 올린 쪽에서 잰 값)
+        "articles_file_sha256": config["data_files"].get("articles.parquet"),
+        "articles_original_sha256_registered": prereg["data"]["articles_original_sha256"],
+        "articles_original_sha256_manifest": config.get("articles_original_sha256_manifest"),
+        "articles_linked_to_registration": articles_linked_to_registration(config, prereg),
+        "compute": compute, "config_hash": store.progress["config_hash"],
     }
     if bench_info:
         meta["data"] = bench_info
@@ -1000,6 +1020,7 @@ def main(argv=None) -> int:
         "max_fit": args.max_fit, "max_test": args.max_test, "data_files": bench.data_info["files"],
         "embeddings_sha256": bench.catalog_info.get("embeddings_sha256"),
         "code_sha": os.getenv("M4_CODE_SHA") or _git_sha(),
+        "articles_original_sha256_manifest": os.getenv(ARTICLES_ORIGINAL_ENV) or None,
     }
     tr, va = bench.imps["train"], bench.imps["validation"]
     rng = np.random.default_rng(SPLIT_SEED)
@@ -1016,6 +1037,10 @@ def main(argv=None) -> int:
     except ConfigMismatch as e:
         log.error("%s", e)
         return EXIT_CONFIG_MISMATCH
+
+    # 등급은 몇 시간 뒤 조립할 때가 아니라 시작할 때 알 수 있다: 판정용으로 돌린 실행이 demo로 끝나는 것을 로그에서 먼저 본다
+    grade = evidence_grade(store.progress["config"], args.n_boot, prereg)
+    log.info("evidence grade: %s%s", grade["grade"], " — " + "; ".join(grade["reasons"]) if grade["reasons"] else "")
 
     run = Run(args=args, prereg=prereg, bench=bench, windows=W, idx=idx, store=store, seeds=list(args.seeds))
     for stage in stages:

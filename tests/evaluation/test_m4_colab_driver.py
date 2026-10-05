@@ -51,12 +51,15 @@ def env(tmp_path):
 
     keys = [f"ebnerd_small/{f}" for f in drv.DATA_FILES] + [f"derived/ebnerd_small/{f}" for f in drv.EMB_FILES]
     payload = {k: f"bytes-of-{k}".encode() * 40 for k in keys}
+    original = hashlib.sha256(b"original articles with text").hexdigest()
     manifest = {"dataset": "ebnerd_small",
                 "files": {k: {"sha256": hashlib.sha256(v).hexdigest(), "bytes": len(v)} for k, v in payload.items()},
-                "articles": {"derived_sha256": "d", "original_sha256": "o"}}
+                "articles": {"derived_sha256": hashlib.sha256(payload["ebnerd_small/articles.parquet"]).hexdigest(),
+                             "original_sha256": original}}
     (tmp_path / "manifest.json").write_text(json.dumps(manifest))
     # 드라이버는 등록 yaml에 그 sha256 문자열이 있는지만 본다: 가짜 등록 파일에 가짜 입력의 sha를 적는다
-    registered = "\n".join(v["sha256"] for k, v in manifest["files"].items() if k.endswith(drv.REGISTERED_INPUTS))
+    registered = "\n".join([v["sha256"] for k, v in manifest["files"].items() if k.endswith(drv.REGISTERED_INPUTS)]
+                           + [original])
     tarball = _tarball(tmp_path / "code.tar.gz", {"requirements-colab.txt": "numpy\n", "evaluation/__init__.py": "",
                                                   drv.PREREG_YAML: registered})
     opened = []
@@ -162,6 +165,10 @@ def test_downloads_verify_sha256_and_never_leak_the_signed_url(env, capsys):
     assert "TOPSECRET" not in text and "storage.example.invalid" not in text and "private-bucket" not in text
     assert "M4_URLS_JSON" not in runner.last_env                        # 서브프로세스에는 URL을 넘기지 않는다
     assert runner.last_env["EBNERD_ROOT"] == str(env.work / "data") and runner.last_env["M4_CODE_SHA"] == "c" * 40
+    # manifest가 적은 기사 원본 sha는 단계 프로세스까지 간다(리포트가 등록 상수와 따로 적는다)
+    from evaluation.recsys.ebnerd.run_cold import ARTICLES_ORIGINAL_ENV
+    assert drv.ARTICLES_ORIGINAL_ENV == ARTICLES_ORIGINAL_ENV
+    assert runner.last_env[ARTICLES_ORIGINAL_ENV] == env.manifest["articles"]["original_sha256"]
     assert runner.last_cwd == env.work / "repo" and (env.work / "repo" / "requirements-colab.txt").exists()
 
 
@@ -301,7 +308,8 @@ def test_reproduction_gate_failure_stops_the_chain_and_is_recorded_as_such(env):
 def test_changed_inputs_refuse_to_resume(env):
     with pytest.raises(KeyboardInterrupt):
         drv.main(env.argv(), runner=Runner(die="e1"), opener=env.opener)
-    registered = "\n".join(v["sha256"] for v in env.manifest["files"].values())
+    registered = "\n".join([v["sha256"] for v in env.manifest["files"].values()]
+                           + [env.manifest["articles"]["original_sha256"]])
     other = _tarball(env.tmp / "other.tar.gz", {"requirements-colab.txt": "numpy\n", "x.py": "changed",
                                                 drv.PREREG_YAML: registered})
     argv = env.argv()
@@ -424,6 +432,13 @@ def test_manifest_is_checked_against_the_registration_before_any_download(env):
                                                    for k, v in env.manifest["files"].items()}}
     (env.tmp / "manifest.json").write_text(json.dumps(renamed))
     assert drv.main(env.argv(), runner=runner, opener=env.opener) == drv.EXIT_USAGE
+    # (4) 기사 파일의 원본이 등록한 원본이 아니거나, 원본 sha가 적혀 있지 않은 manifest
+    for articles in ({"derived_sha256": "d" * 64, "original_sha256": "f" * 64}, {"derived_sha256": "d" * 64}, None):
+        other = {k: v for k, v in env.manifest.items() if k != "articles"}
+        if articles is not None:
+            other["articles"] = articles
+        (env.tmp / "manifest.json").write_text(json.dumps(other))
+        assert drv.main(env.argv(), runner=runner, opener=env.opener) == drv.EXIT_USAGE
     assert env.opened == [] and runner.calls == [] and not (env.out / "FAILED").exists()   # 아무것도 받거나 돌리지 않았다
     # 등록하지 않은 입력은 명시적으로 허용해야만 받는다(그 결과는 run_cold가 demo 등급으로 표기한다)
     payload = dict(env.payload)
@@ -437,6 +452,15 @@ def test_manifest_is_checked_against_the_registration_before_any_download(env):
         return io.BytesIO(payload[url.split("/private-bucket/")[1].split("?")[0]])
 
     assert drv.main(env.argv("--allow-unregistered-data"), runner=runner, opener=opener) == drv.EXIT_OK
+
+
+def test_config_digest_covers_the_claimed_articles_origin():
+    m = {"files": {"a": {"sha256": "1"}}, "articles": {"original_sha256": "x"}}
+    base = drv.config_digest("code", m, drv.REGISTERED)
+    assert base == drv.config_digest("code", json.loads(json.dumps(m)), drv.REGISTERED)
+    assert base != drv.config_digest("code", {**m, "articles": {"original_sha256": "y"}}, drv.REGISTERED)
+    assert base != drv.config_digest("code", {"files": m["files"]}, drv.REGISTERED)
+    assert drv.config_digest("code", None, drv.SYNTHETIC) == drv.config_digest("code", None, drv.SYNTHETIC)
 
 
 def test_real_registration_lists_the_inputs_the_driver_checks():
