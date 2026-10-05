@@ -4,6 +4,11 @@ The unit tests in tests/simulator run the seed through the backend's SQLModel
 tables on SQLite; here the same functions write to the migrated pgvector DB
 (JSON columns, timestamp without time zone, serial ids). Everything happens in
 one outer transaction that is rolled back, so the shared test DB is untouched.
+
+Precondition: sim.seed only fills an empty, disposable database. The test DB is
+shared with the other integration tests, so a news_raw row, a user outside
+@sim.invalid or a news_letter row left behind by one of them makes this test
+fail - with a message that says so, because the cause is then in another test.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -12,8 +17,10 @@ def test_seed_catalog_and_batches_on_the_migrated_schema(database_url):
     from sqlalchemy import create_engine
     from sqlmodel import Session, select
 
+    import pytest
+
     from sim.catalog import synthetic_catalog
-    from sim.seed import _models, seed_catalog, write_today_batches
+    from sim.seed import NotDisposableError, _models, seed_catalog, write_today_batches
 
     m = _models()
     now = datetime.now(timezone.utc)
@@ -24,7 +31,14 @@ def test_seed_catalog_and_batches_on_the_migrated_schema(database_url):
         outer = conn.begin()
         try:
             with Session(bind=conn, join_transaction_mode="create_savepoint") as s:
-                out = seed_catalog(s, catalog)
+                try:
+                    out = seed_catalog(s, catalog)
+                except NotDisposableError as e:
+                    pytest.fail(f"the shared test DB is not empty - another integration test left rows behind: {e}",
+                                pytrace=False)
+                assert out["skipped_existing"] == 0, (
+                    f"the shared test DB already holds {out['skipped_existing']} news_letter row(s) - another "
+                    "integration test left them behind (sim.seed only fills an empty table)")
                 assert out["newsletters"] == len(catalog.items)
 
                 user = m["User"](user_email="seed-it@sim.invalid", user_password_hash="x", user_nickname="sim")
