@@ -232,7 +232,7 @@ def ensure_data(manifest: dict, data_dir: Path, urls: dict[str, str], log: Log,
     return report
 
 
-def check_manifest(manifest: dict, repo: Path, allow_unregistered: bool = False) -> None:
+def check_manifest(manifest: dict, repo: Path, allow_unregistered: bool = False, prereg_yaml: str = PREREG_YAML) -> None:
     """내려받기 전에 manifest를 본다: 필요한 파일 8개가 다 있는지, 등록된 입력의 sha256이 사전 등록 yaml에 적힌 값인지,
     기사 파일의 원본 sha256이 등록한 원본의 값인지.
 
@@ -249,7 +249,8 @@ def check_manifest(manifest: dict, repo: Path, allow_unregistered: bool = False)
     if dataset != REGISTERED["dataset"]:
         raise DriverError(f"manifest의 dataset이 {dataset!r}입니다(등록값 {REGISTERED['dataset']!r}). 등록하지 않은 입력으로 "
                           "돌리려면 --allow-unregistered-data(결과는 demo 등급).", EXIT_USAGE)
-    registered = (repo / PREREG_YAML).read_text(encoding="utf-8") if (repo / PREREG_YAML).exists() else ""
+    # prereg_yaml: 어느 사전 등록의 입력값과 대조할지(다른 실험의 드라이버가 이 함수를 쓸 때 자기 등록 파일을 준다)
+    registered = (repo / prereg_yaml).read_text(encoding="utf-8") if (repo / prereg_yaml).exists() else ""
     wrong = [k for k in need if k.split("/", 1)[1].endswith(REGISTERED_INPUTS)
              and manifest["files"][k]["sha256"].lower() not in registered]
     if wrong:
