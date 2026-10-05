@@ -62,6 +62,10 @@ REQUIREMENTS = "requirements-colab.txt"
 DATA_FILES = ("train/behaviors.parquet", "train/history.parquet", "validation/behaviors.parquet",
               "validation/history.parquet", "articles.parquet")
 EMB_FILES = ("article_ids.npy", "bge_m3_tsb512.f16.npy", "bge_m3_tsb512.meta.json")
+PREREG_YAML = "evaluation/recsys/ebnerd/preregistration/cold-v1.2.yaml"
+# 사전 등록에 sha256이 적혀 있는 입력(나머지 셋 — 메타 전용 기사 파일, 기사 id 배열, 임베딩 meta — 은 등록값이 없다).
+REGISTERED_INPUTS = ("train/behaviors.parquet", "train/history.parquet", "validation/behaviors.parquet",
+                     "validation/history.parquet", "bge_m3_tsb512.f16.npy")
 
 EXIT_OK, EXIT_SHA_MISMATCH, EXIT_CONFIG_MISMATCH, EXIT_FAILED_MARKER, EXIT_STAGE_FAILED = 0, 2, 3, 4, 5
 EXIT_DOWNLOAD, EXIT_INSTALL, EXIT_USAGE = 6, 7, 64
@@ -207,6 +211,30 @@ def ensure_data(manifest: dict, data_dir: Path, urls: dict[str, str], log: Log,
     return report
 
 
+def check_manifest(manifest: dict, repo: Path, allow_unregistered: bool = False) -> None:
+    """내려받기 전에 manifest를 본다: 필요한 파일 8개가 다 있는지, 등록된 입력의 sha256이 사전 등록 yaml에 적힌 값인지.
+
+    여러 시간 돌린 뒤에 "입력이 등록값과 달라 demo 등급"으로 끝나는 일을 막는다. yaml 파서 없이 돌아야 하므로
+    등록 파일 안에 그 sha256 문자열이 있는지만 본다(정식 대조는 run_cold의 증거 등급 판정이 한다).
+    """
+    dataset = manifest.get("dataset")
+    need = [f"{dataset}/{rel}" for rel in DATA_FILES] + [f"derived/{dataset}/{rel}" for rel in EMB_FILES]
+    missing = [k for k in need if k not in manifest.get("files", {})]
+    if missing:
+        raise DriverError(f"manifest에 필요한 파일이 없습니다: {missing}", EXIT_USAGE)
+    if allow_unregistered:
+        return
+    if dataset != REGISTERED["dataset"]:
+        raise DriverError(f"manifest의 dataset이 {dataset!r}입니다(등록값 {REGISTERED['dataset']!r}). 등록하지 않은 입력으로 "
+                          "돌리려면 --allow-unregistered-data(결과는 demo 등급).", EXIT_USAGE)
+    registered = (repo / PREREG_YAML).read_text(encoding="utf-8") if (repo / PREREG_YAML).exists() else ""
+    wrong = [k for k in need if k.split("/", 1)[1].endswith(REGISTERED_INPUTS)
+             and manifest["files"][k]["sha256"].lower() not in registered]
+    if wrong:
+        raise DriverError(f"manifest의 sha256이 사전 등록 값과 다릅니다: {wrong}. 등록하지 않은 입력으로 돌리려면 "
+                          "--allow-unregistered-data(결과는 demo 등급).", EXIT_USAGE)
+
+
 def parse_urls(pairs: list[str], env: dict) -> dict[str, str]:
     urls: dict[str, str] = {}
     raw = env.get("M4_URLS_JSON")
@@ -321,10 +349,13 @@ def run_stages(workdir: Path, state: dict, state_path: Path, run_args: dict, *, 
             "note": "cu_estimated = rate x 벽시계 시간. 죽은 세션의 마지막 단계 시간은 빠지므로 하한이다. "
                     "정확한 값은 실행 전후의 잔액 차이로 따로 적는다."})
 
+    ran_any = False
     for stage in stages:
         beat()
         st = state["stages"].setdefault(stage, {})
-        if st.get("status") == "done":
+        # assemble은 이번 호출에서 다른 단계가 하나라도 돌았으면 다시 돈다(예산으로 건너뛴 단계를 나중에 채운 경우에
+        # 예전 리포트가 남지 않게).
+        if st.get("status") == "done" and not (stage == "assemble" and ran_any):
             log(f"stage {stage}: 이미 끝남, 건너뜀")
             continue
         if stage == "assemble":
@@ -352,6 +383,7 @@ def run_stages(workdir: Path, state: dict, state_path: Path, run_args: dict, *, 
             log(f"stage {stage}: 실패(returncode {code}) — FAILED 마커를 남겼다")
             return EXIT_STAGE_FAILED
         st.update(status="done")
+        ran_any = True
         beat()
         log(f"stage {stage}: 완료 {st['seconds']}s")
     write_compute()
@@ -420,7 +452,7 @@ def cmd_detach(args) -> int:
         print(json.dumps({"detached": True, "pid": proc.pid}))
         return EXIT_OK
     except DriverError as e:
-        log(f"중단: {redact(str(e), list(parse_urls(args.url, os.environ).values()))}")
+        log(f"중단: {redact(str(e), [u.split('=', 1)[-1] for u in args.url])}")
         return e.code
 
 
@@ -469,6 +501,8 @@ def cmd_run(args, *, runner: Callable = subprocess_runner, opener: Callable = ur
         manifest = None if args.synthetic else read_json(Path(args.manifest))
         if not args.synthetic and not manifest:
             raise DriverError("--manifest가 필요합니다(--synthetic이 아닐 때)", EXIT_USAGE)
+        if manifest:
+            check_manifest(manifest, repo, allow_unregistered=args.allow_unregistered_data)
         digest = config_digest(code["sha256"], manifest, run_args)
         state = read_json(state_path)
         if state and state.get("config_digest") != digest:
@@ -493,8 +527,9 @@ def cmd_run(args, *, runner: Callable = subprocess_runner, opener: Callable = ur
             write_json(state_path, state)
         if args.synthetic:
             if not (data / SYNTHETIC["dataset"] / "articles.parquet").exists():
+                clean_env = {k: v for k, v in os.environ.items() if k != "M4_URLS_JSON"}
                 rc = runner([python, "-m", "evaluation.recsys.ebnerd.synthetic", "--out", str(data),
-                             "--name", SYNTHETIC["dataset"]], repo, dict(os.environ), out_dir / "run.log")
+                             "--name", SYNTHETIC["dataset"]], repo, clean_env, out_dir / "run.log")
                 if rc != 0:
                     raise DriverError(f"합성 데이터 생성 실패(returncode {rc})", EXIT_INSTALL)
             state["data"] = {"synthetic": True}
@@ -582,6 +617,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--python", default=None)
     run.add_argument("--skip-install", action="store_true")
     run.add_argument("--fresh", action="store_true", help="이전 산출물·데이터를 지우고 처음부터")
+    run.add_argument("--allow-unregistered-data", action="store_true",
+                     help="사전 등록과 다른 입력도 받는다(run_cold가 결과를 demo 등급으로 표기한다)")
     run.add_argument("--detach", action="store_true", help="새 세션의 자식 프로세스로 띄우고 바로 돌아온다")
     sp = sub.add_parser("stop", help="분리 실행을 끝낸다(FAILED 마커 없음)")
     sp.add_argument("--workdir", required=True)

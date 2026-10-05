@@ -47,14 +47,18 @@ def _tarball(path: Path, files: dict, commit="c" * 40) -> Path:
 @pytest.fixture
 def env(tmp_path):
     """작업 디렉터리, 코드 tarball, 데이터 2개짜리 manifest, 그리고 그 데이터를 내주는 가짜 opener."""
-    payload = {"ebnerd_small/train/behaviors.parquet": b"behaviors-bytes" * 100,
-               "derived/ebnerd_small/article_ids.npy": b"ids" * 50}
+    import hashlib
+
+    keys = [f"ebnerd_small/{f}" for f in drv.DATA_FILES] + [f"derived/ebnerd_small/{f}" for f in drv.EMB_FILES]
+    payload = {k: f"bytes-of-{k}".encode() * 40 for k in keys}
     manifest = {"dataset": "ebnerd_small",
-                "files": {k: {"sha256": __import__("hashlib").sha256(v).hexdigest(), "bytes": len(v)}
-                          for k, v in payload.items()},
+                "files": {k: {"sha256": hashlib.sha256(v).hexdigest(), "bytes": len(v)} for k, v in payload.items()},
                 "articles": {"derived_sha256": "d", "original_sha256": "o"}}
     (tmp_path / "manifest.json").write_text(json.dumps(manifest))
-    tarball = _tarball(tmp_path / "code.tar.gz", {"requirements-colab.txt": "numpy\n", "evaluation/__init__.py": ""})
+    # 드라이버는 등록 yaml에 그 sha256 문자열이 있는지만 본다: 가짜 등록 파일에 가짜 입력의 sha를 적는다
+    registered = "\n".join(v["sha256"] for k, v in manifest["files"].items() if k.endswith(drv.REGISTERED_INPUTS))
+    tarball = _tarball(tmp_path / "code.tar.gz", {"requirements-colab.txt": "numpy\n", "evaluation/__init__.py": "",
+                                                  drv.PREREG_YAML: registered})
     opened = []
 
     def opener(url, timeout=None):
@@ -151,7 +155,7 @@ def test_downloads_verify_sha256_and_never_leak_the_signed_url(env, capsys):
     for key, data in env.payload.items():
         assert (env.work / "data" / key).read_bytes() == data
     assert runner.calls == list(drv.STAGES)
-    assert len(env.opened) == 2
+    assert len(env.opened) == 8
     text = _all_text(env.work, capsys)
     assert "TOPSECRET" not in text and "storage.example.invalid" not in text and "private-bucket" not in text
     assert "M4_URLS_JSON" not in runner.last_env                        # 서브프로세스에는 URL을 넘기지 않는다
@@ -161,7 +165,7 @@ def test_downloads_verify_sha256_and_never_leak_the_signed_url(env, capsys):
 
 def test_sha256_mismatch_deletes_the_file_marks_the_run_failed_and_blocks_reruns(env, capsys):
     bad = dict(env.manifest)
-    key = "derived/ebnerd_small/article_ids.npy"
+    key = "derived/ebnerd_small/article_ids.npy"      # 등록값이 없는 파일이라 내려받은 뒤에야 불일치가 드러난다
     bad["files"] = {**env.manifest["files"], key: {"sha256": "0" * 64, "bytes": 1}}
     (env.tmp / "manifest.json").write_text(json.dumps(bad))
     runner = Runner()
@@ -218,7 +222,7 @@ def test_dropped_session_resumes_from_the_first_unfinished_stage(env):
     second = Runner()
     assert drv.main(env.argv(), runner=second, opener=env.opener) == drv.EXIT_OK
     assert second.calls == ["e2p2", "e8", "e4", "e2p1", "assemble"]       # 끝난 단계는 다시 돌리지 않는다
-    assert len(env.opened) == 2                                            # 검증된 데이터도 다시 받지 않는다
+    assert len(env.opened) == 8                                            # 검증된 데이터도 다시 받지 않는다
     state = json.loads((env.out / "driver_state.json").read_text())
     assert len(state["invocations"]) == 2 and all(v["status"] == "done" for v in state["stages"].values())
     third = Runner()
@@ -237,7 +241,9 @@ def test_failed_stage_invalidates_the_run(env):
 def test_changed_inputs_refuse_to_resume(env):
     with pytest.raises(KeyboardInterrupt):
         drv.main(env.argv(), runner=Runner(die="e1"), opener=env.opener)
-    other = _tarball(env.tmp / "other.tar.gz", {"requirements-colab.txt": "numpy\n", "x.py": "changed"})
+    registered = "\n".join(v["sha256"] for v in env.manifest["files"].values())
+    other = _tarball(env.tmp / "other.tar.gz", {"requirements-colab.txt": "numpy\n", "x.py": "changed",
+                                                drv.PREREG_YAML: registered})
     argv = env.argv()
     argv[argv.index("--code-tarball") + 1] = str(other)
     runner = Runner()
@@ -267,6 +273,62 @@ def test_warning_line_drops_only_descriptive_stages(env):
     assert drv.main(env.argv("--cu-rate", "1.3"), runner=runner, opener=env.opener, clock=clock) == drv.EXIT_OK
     assert runner.calls == ["fit", "e1", "e2p2", "e8", "assemble"]
     assert json.loads((env.out / "compute.json").read_text())["skipped_for_budget"] == ["e4", "e2p1"]
+
+
+def test_stages_skipped_for_budget_can_be_filled_later_and_the_report_is_reassembled(env):
+    clock = Clock()
+    first = Runner(clock=clock, seconds=3600.0)
+    assert drv.main(env.argv("--cu-rate", "2.0"), runner=first, opener=env.opener, clock=clock) == drv.EXIT_OK
+    assert first.calls == ["fit", "e1", "e2p2", "assemble"]
+    # 예산을 늘려 같은 명령으로 다시: 건너뛴 단계만 돌고, 리포트(assemble)는 다시 만든다
+    second = Runner(clock=clock, seconds=60.0)
+    assert drv.main(env.argv("--cu-rate", "2.0", "--cu-cap", "100", "--cu-warn", "100"), runner=second,
+                    opener=env.opener, clock=clock) == drv.EXIT_OK
+    assert second.calls == ["e8", "e4", "e2p1", "assemble"]
+    assert json.loads((env.out / "compute.json").read_text())["skipped_for_budget"] == []
+
+
+def test_manifest_is_checked_against_the_registration_before_any_download(env):
+    runner = Runner()
+    key = "ebnerd_small/train/history.parquet"
+    # (1) 필요한 파일이 빠진 manifest
+    short = {**env.manifest, "files": {k: v for k, v in env.manifest["files"].items() if k != key}}
+    (env.tmp / "manifest.json").write_text(json.dumps(short))
+    assert drv.main(env.argv(), runner=runner, opener=env.opener) == drv.EXIT_USAGE
+    # (2) 등록값과 다른 sha256
+    wrong = {**env.manifest, "files": {**env.manifest["files"], key: {"sha256": "f" * 64, "bytes": 1}}}
+    (env.tmp / "manifest.json").write_text(json.dumps(wrong))
+    assert drv.main(env.argv(), runner=runner, opener=env.opener) == drv.EXIT_USAGE
+    # (3) 등록하지 않은 데이터셋 이름
+    renamed = {"dataset": "ebnerd_demo", "files": {k.replace("ebnerd_small", "ebnerd_demo"): v
+                                                   for k, v in env.manifest["files"].items()}}
+    (env.tmp / "manifest.json").write_text(json.dumps(renamed))
+    assert drv.main(env.argv(), runner=runner, opener=env.opener) == drv.EXIT_USAGE
+    assert env.opened == [] and runner.calls == [] and not (env.out / "FAILED").exists()   # 아무것도 받거나 돌리지 않았다
+    # 등록하지 않은 입력은 명시적으로 허용해야만 받는다(그 결과는 run_cold가 demo 등급으로 표기한다)
+    payload = dict(env.payload)
+    payload[key] = b"other-bytes"
+    import hashlib
+    other = {**env.manifest, "files": {**env.manifest["files"],
+                                       key: {"sha256": hashlib.sha256(payload[key]).hexdigest(), "bytes": 11}}}
+    (env.tmp / "manifest.json").write_text(json.dumps(other))
+
+    def opener(url, timeout=None):
+        return io.BytesIO(payload[url.split("/private-bucket/")[1].split("?")[0]])
+
+    assert drv.main(env.argv("--allow-unregistered-data"), runner=runner, opener=opener) == drv.EXIT_OK
+
+
+def test_real_registration_lists_the_inputs_the_driver_checks():
+    """드라이버가 문자열로 찾는 sha256들이 실제 사전 등록 yaml에 있어야 한다(v1 리포트의 입력과 같은 값)."""
+    text = (REPO / drv.PREREG_YAML).read_text()
+    for name, sha in PREREG["data"]["files_sha256"].items():
+        assert name.endswith(drv.REGISTERED_INPUTS) and sha in text
+    assert PREREG["data"]["embeddings_sha256"] in text and "bge_m3_tsb512.f16.npy".endswith(drv.REGISTERED_INPUTS)
+    v1 = json.loads((REPO / "reports/recsys/ebnerd_v1.json").read_text())
+    assert PREREG["data"]["files_sha256"] == {k: v for k, v in v1["data"]["files"].items() if k != "articles.parquet"}
+    assert PREREG["data"]["embeddings_sha256"] == v1["data"]["catalog"]["embeddings_sha256"]
+    assert PREREG["data"]["articles_original_sha256"] == v1["data"]["files"]["articles.parquet"]
 
 
 def test_without_a_rate_nothing_is_skipped_and_cu_is_recorded_as_unknown(env):
