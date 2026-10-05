@@ -209,8 +209,8 @@ def nested_bootstrap_paired_diff(
 
 def ci_verdict(effect: Dict[str, float]) -> str:
     """부트스트랩 효과 dict를 CI 부호로만 분류한다 - 리포트 문장이 숫자와 무관하게
-    하드코딩되어 '1.0을 0.897에 근접'처럼 쓰이던 문제(v2 리뷰 MINOR)를 막기 위해,
-    결론 단어는 이 함수가 돌려주는 값에서만 고른다.
+    하드코딩되어, 정의 오류로 나온 MRR 1.0을 '팀 보고값에 근접'이라고 쓰던 문제(v2 리뷰
+    MINOR)를 막기 위해, 결론 단어는 이 함수가 돌려주는 값에서만 고른다.
 
     반환: "positive"(CI 전체가 0 초과), "negative"(CI 전체가 0 미만),
     "inconclusive"(CI가 0을 포함), "nan"(계산 불가)."""

@@ -40,10 +40,13 @@ point-in-time 추론을 1차 프로토콜로 삼는다:
      '순수 추론 누출' 효과를 보기 위해 정답 구간은 1차와 동일하게 둔다.
   5. team-final에 한해 **team-final-as-written** 행을 추가로 낸다 - 실제
      scripts/evaluate_results.py의 정답 정의(created_at >= NOW()-6 DAYS)를 이
-     아카이브에 옮긴 것이다. 팀 DB 테이블(user_newsletter_ctr_log)에는 클릭 행만
-     있으므로(is_clicked 컬럼 자체가 없음), 아카이브에서의 올바른 번역은 "창 안의
-     is_clicked==1 행"이다. 이 아카이브 구간이 6시간 16분뿐이라 창이 로그 전체(학습
-     구간 포함)와 같아진다.
+     아카이브에 옮긴 것이다. 가장 그럴듯한 번역은 "창 안의 is_clicked==1 행"이다:
+     테이블(user_newsletter_ctr_log)에 is_clicked 컬럼이 없고, 운영 경로에서 이
+     테이블에 행을 쓰는 것은 클릭 이벤트 API(backend/app/api/log.py의
+     POST /logs/newsletter/click)다. 다만 팀이 합성 로그를 DB에 어떻게 적재했는지
+     (클릭 행만/전체 행)는 문서로 남아 있지 않아 확정할 수 없다(file_loader.
+     LabelMode 참고) - 그래서 '노출 행 전체' 쌍을 상한으로 함께 남긴다. 이 아카이브
+     구간이 6시간 16분뿐이라 창이 로그 전체(학습 구간 포함)와 같아진다.
 
 === v2.1: v2 재검토(blocker 2 / major 4) 이후 수정 ===
 
@@ -63,6 +66,27 @@ point-in-time 추론을 1차 프로토콜로 삼는다:
     (user_id 그룹은 시간상 섞여 있어 인접 검사만으로는 85명 중 32명이 양쪽에
     걸쳤다).
   - 1차 추론에 'unshown-only' 필터 변형(경계 이전 노출분 전체 제거)을 추가했다.
+
+=== v2.2: v2.1 재검토(major 2) 이후 수정 ===
+
+  - **조기 종료 지표의 동점 처리 아티팩트.** v2.1이 '퇴화'라고 부른 lambdarank
+    조기 종료의 1라운드 종료는 모델·데이터의 성질이 아니었다. LightGBM의 NDCG는
+    동점을 데이터 행 순서로 깬다(안정 정렬). 엔진의 lgbm_dataset.create_train_dataset은
+    각 positive를 그 negative들보다 먼저 쌓고, 시간순 분할과 그룹 정렬이 모두 안정
+    정렬이라, inner-valid의 모든 그룹에서 positive가 첫 행이 된다. 그래서 동점이
+    많은 1라운드(서로 다른 점수 수십 개)의 NDCG가 부풀려지고(상수 모델이면 1.0),
+    이후 라운드가 그 값을 넘지 못해 조기 종료가 1라운드를 고른다.
+    `--es-valid-order shuffled`(기본)는 inner-valid 행을 고정 시드로 섞어 넘겨
+    조기 종료 지표가 행 순서에 기대지 않게 한다(엔진 소스는 그대로 - inner-valid는
+    하네스가 만든 것이다). `--es-valid-order engine`은 엔진이 만든 순서 그대로(v2.1과
+    같은 동작)이며, 아티팩트를 수치로 보이는 진단 arm에만 쓴다.
+  - 조기 종료 실행마다 `es_tie_diagnostic`을 남긴다: 1라운드와 선택된 라운드의
+    inner-valid NDCG를 (a) 엔진 행 순서 (b) 그 역순 (c) 동점 무작위 기대값으로 각각
+    계산한다. (a)-(c) 차이가 곧 아티팩트의 크기다.
+  - `best_iteration` 5 이하도 함께 표시한다(1라운드 종료만 보면 같은 아티팩트가
+    부분적으로 나타난 시드를 놓친다).
+  - unshown 필터 뒤 추천 리스트 길이 통계를 남긴다(top-20에서 사후 제거라 5건
+    미만으로 줄어드는 유저가 있을 수 있고, P@5는 그래도 5로 나눈다).
 """
 from __future__ import annotations
 
@@ -362,13 +386,157 @@ def _tie_random_metrics(
     }
 
 
-def _train_ranker(LGBMRanker, config, effective_group_key, train_df_fit, inner_valid_fit, fixed_rounds: int) -> dict:
+ES_VALID_ORDERS = ("shuffled", "engine")
+ES_SHUFFLE_SALT = 20261006  # inner-valid 섞기 전용 난수 흐름(시드와 묶어 쓴다)
+LOW_BEST_ITERATION_MAX = 5  # 이 값 이하의 best_iteration은 '의심'으로 표시
+
+
+def order_inner_valid_for_early_stopping(inner_valid_df: pd.DataFrame, es_valid_order: str, seed: int) -> pd.DataFrame:
+    """조기 종료에 쓸 inner-valid 프레임의 행 순서를 정한다.
+
+    "engine": 엔진이 만든 순서 그대로. lgbm_dataset.create_train_dataset은 positive를
+    그 negative들보다 먼저 쌓고 이후 정렬이 전부 안정 정렬이라, 모든 그룹에서 positive가
+    첫 행이다. LightGBM의 NDCG는 동점을 행 순서로 깨므로 동점이 많은 초기 라운드의
+    점수가 부풀려진다(v2.1의 1라운드 종료 원인).
+
+    "shuffled"(기본): 행 전체를 고정 시드로 한 번 섞는다. 엔진의 그룹 정렬이 안정
+    정렬이라 그룹 안 순서가 균등 무작위가 되고, 엔진이 그룹을 무엇으로 묶든(user_timestamp,
+    user_id, 그룹 없음) 똑같이 적용된다. 동점 행의 기대 NDCG가 '동점 무작위 기대값'과
+    같아진다(한 번의 추첨이라 잡음은 남는다 - es_tie_diagnostic에 기대값을 함께 기록).
+    AUC는 동점을 묶어서 계산하므로 행 순서에 영향받지 않는다."""
+    if es_valid_order not in ES_VALID_ORDERS:
+        raise ValueError(f"알 수 없는 es_valid_order: {es_valid_order!r}")
+    if es_valid_order == "engine" or len(inner_valid_df) == 0:
+        return inner_valid_df
+    rng = np.random.default_rng([int(seed), ES_SHUFFLE_SALT])
+    return inner_valid_df.iloc[rng.permutation(len(inner_valid_df))].reset_index(drop=True)
+
+
+def _group_row_blocks(group_ids: Sequence) -> List[np.ndarray]:
+    """그룹별 행 위치 배열(그룹 안에서는 프레임의 행 순서 유지). LightGBM에 넘어가는
+    그룹 안 순서와 같다 - 엔진의 _build_groups가 그룹 id로 안정 정렬하기 때문이다."""
+    codes, _ = pd.factorize(np.asarray(group_ids), sort=False)
+    order = np.argsort(codes, kind="stable")
+    sorted_codes = codes[order]
+    bounds = np.flatnonzero(np.diff(sorted_codes)) + 1
+    return np.split(order, bounds) if len(order) else []
+
+
+def ndcg_by_tie_policy(scores: Sequence[float], labels: Sequence[float], group_ids: Sequence, k: int = 5) -> dict:
+    """같은 점수·같은 그룹에 대해 NDCG@k를 동점 처리 방식만 바꿔 세 가지로 계산한다.
+
+      - data_order: 동점을 행 순서로 깬다(점수 내림차순 안정 정렬). LightGBM의 NDCG와
+        같은 정의다(DCGCalculator가 std::stable_sort를 쓴다). 정답이 없는 그룹은
+        LightGBM처럼 1.0으로 센다.
+      - reversed_order: 그룹 안 행 순서를 뒤집은 뒤 같은 계산.
+      - tie_expected: 동점 블록 안 순서가 균등 무작위일 때의 기대 DCG(블록의 평균 gain x
+        블록이 차지하는 위치들의 discount 합). 행 순서와 무관하다.
+
+    gain은 라벨 값 그대로(label_gain=[0, 1]), discount는 1/log2(2+순위)다.
+    tied_positive_group_share: positive와 점수가 같은 negative가 하나라도 있는 그룹의 비율."""
+    scores = np.asarray(scores, dtype=float)
+    gains = np.asarray(labels, dtype=float)
+    blocks = _group_row_blocks(group_ids)
+    disc = 1.0 / np.log2(2.0 + np.arange(k))
+    vals = {"data_order": [], "reversed_order": [], "tie_expected": []}
+    n_tied_pos = 0
+    for idx in blocks:
+        s, g = scores[idx], gains[idx]
+        n_pos = int((g > 0).sum())
+        if n_pos == 0:
+            for v in vals.values():
+                v.append(1.0)
+            continue
+        ideal = float(np.sort(g)[::-1][:k].dot(disc[: min(k, len(g))]))
+        top = np.argsort(-s, kind="stable")[:k]
+        vals["data_order"].append(float(g[top].dot(disc[: len(top)])) / ideal)
+        s_r, g_r = s[::-1], g[::-1]
+        top_r = np.argsort(-s_r, kind="stable")[:k]
+        vals["reversed_order"].append(float(g_r[top_r].dot(disc[: len(top_r)])) / ideal)
+        order = np.argsort(-s, kind="stable")
+        s_sorted, g_sorted = s[order], g[order]
+        starts = np.concatenate(([0], np.flatnonzero(np.diff(s_sorted)) + 1, [len(s_sorted)]))
+        exp_dcg = 0.0
+        tied_pos = False
+        for a, b in zip(starts[:-1], starts[1:]):
+            block = g_sorted[a:b]
+            if a < k:
+                exp_dcg += float(block.mean()) * float(disc[a: min(b, k)].sum())
+            if b - a > 1 and (block > 0).any() and (block <= 0).any():
+                tied_pos = True
+        vals["tie_expected"].append(exp_dcg / ideal)
+        n_tied_pos += int(tied_pos)
+    n = len(blocks)
+    out = {name: (float(np.mean(v)) if v else None) for name, v in vals.items()}
+    out["n_groups"] = n
+    out["tied_positive_group_share"] = (n_tied_pos / n) if n else None
+    return out
+
+
+def positive_first_share(labels: Sequence[float], group_ids: Sequence) -> Optional[float]:
+    """positive와 negative가 함께 있는 그룹 중 첫 행이 positive인 그룹의 비율. 엔진 순서
+    에서는 1.0에 가깝고(positive를 먼저 쌓는다), 섞은 뒤에는 그룹 안 positive 비율
+    (positive 1 + negative 5면 약 1/6)에 가까워야 한다."""
+    gains = np.asarray(labels, dtype=float)
+    first, mixed = 0, 0
+    for idx in _group_row_blocks(group_ids):
+        g = gains[idx]
+        if (g > 0).any() and (g <= 0).any():
+            mixed += 1
+            first += int(g[0] > 0)
+    return (first / mixed) if mixed else None
+
+
+def _es_tie_diagnostic(ranker, frames: Dict[str, pd.DataFrame], rank_group_key: str, best_iteration: Optional[int]) -> Optional[dict]:
+    """조기 종료가 실제로 본 inner-valid(as_evaluated)와 엔진 순서 그대로(engine_row_order)
+    두 프레임에서, 1라운드와 선택된 라운드의 NDCG를 동점 처리 방식별로 계산한다.
+    조기 종료 지표가 NDCG일 때만(lambdarank) 의미가 있다 - 아니면 None."""
+    params = getattr(ranker, "params", {}) or {}
+    metric = params.get("metric")
+    metric_names = metric if isinstance(metric, (list, tuple)) else [metric]
+    if "ndcg" not in [str(m) for m in metric_names] or not best_iteration:
+        return None
+    feature_names = list(ranker.model.feature_name())
+    eval_at = params.get("ndcg_eval_at") or params.get("eval_at") or [5]
+    eval_at = [int(k) for k in (eval_at if isinstance(eval_at, (list, tuple)) else [eval_at])]
+    iterations = sorted({1, int(best_iteration)})
+    out = {"rank_group_key": rank_group_key, "ndcg_eval_at": eval_at, "frames": {}}
+    for frame_name, df in frames.items():
+        if df is None or len(df) == 0 or "label" not in df.columns:
+            continue
+        group_ids = _group_ids_for(df, rank_group_key)
+        entry = {
+            "n_rows": int(len(df)),
+            "positive_first_share": positive_first_share(df["label"].to_numpy(), group_ids),
+            "by_iteration": {},
+        }
+        X = df[feature_names]
+        for it in iterations:
+            scores = ranker.model.predict(X, num_iteration=it)
+            per_k = {f"ndcg@{k}": ndcg_by_tie_policy(scores, df["label"].to_numpy(), group_ids, k=k) for k in eval_at}
+            entry["by_iteration"][str(it)] = {
+                "n_distinct_scores": int(len(set(np.round(scores, 8).tolist()))),
+                **per_k,
+            }
+        out["frames"][frame_name] = entry
+    return out
+
+
+def _train_ranker(
+    LGBMRanker, config, effective_group_key, train_df_fit, inner_valid_fit, fixed_rounds: int,
+    es_valid_order: str = "shuffled", diag_frames: Optional[Dict[str, pd.DataFrame]] = None,
+) -> dict:
     """조기 종료(기본) 또는 고정 라운드 학습. 엔진 소스는 고치지 않고, 인스턴스 속성
-    num_boost_round만 덮어쓴다(current LGBMRanker는 __init__에서 이 값을 정한다)."""
+    num_boost_round만 덮어쓴다(세 버전의 LGBMRanker 모두 __init__에서 이 값을 정한다).
+
+    inner_valid_fit은 이미 es_valid_order에 맞춰 행 순서가 정해진 프레임이어야 한다.
+    diag_frames: {"as_evaluated": ..., "engine_row_order": ...} - '_timestamp'를 지우지 않은
+    inner-valid 프레임(그룹 계산용). 조기 종료 + NDCG 지표일 때 es_tie_diagnostic에 쓴다."""
     try:
         ranker = LGBMRanker(params=config["lightgbm"]["params"], group_key=effective_group_key)
     except TypeError:
         ranker = LGBMRanker(params=config["lightgbm"]["params"])
+    tie_diag = None
     if fixed_rounds and fixed_rounds > 0:
         if not hasattr(ranker, "num_boost_round"):
             raise RuntimeError("이 엔진 버전의 LGBMRanker에는 num_boost_round 속성이 없어 --fixed-rounds를 쓸 수 없습니다.")
@@ -376,11 +544,17 @@ def _train_ranker(LGBMRanker, config, effective_group_key, train_df_fit, inner_v
         ranker.train(train_df_fit, valid_df=None)
         policy = f"fixed_{int(fixed_rounds)}_rounds_no_early_stopping"
         best_iteration = None
+        es_order_used = None
     else:
         ranker.train(train_df_fit, valid_df=inner_valid_fit)
         policy = "inner_valid_early_stopping"
         bi = getattr(ranker.model, "best_iteration", None)
         best_iteration = int(bi) if bi is not None else None
+        es_order_used = es_valid_order if inner_valid_fit is not None else None
+        if diag_frames and inner_valid_fit is not None:
+            # fix-snapshot의 _build_groups는 group_key 없이 user_id로만 묶는다(속성이 없다).
+            rank_group_key = getattr(ranker, "group_key", "user_id")
+            tie_diag = _es_tie_diagnostic(ranker, diag_frames, rank_group_key, best_iteration)
     best_score = {}
     raw_best = getattr(ranker.model, "best_score", None) or {}
     for ds_name, metrics in dict(raw_best).items():
@@ -388,12 +562,41 @@ def _train_ranker(LGBMRanker, config, effective_group_key, train_df_fit, inner_v
     return {
         "ranker": ranker,
         "rounds_policy": policy,
+        "es_valid_order": es_order_used,
         "best_iteration": best_iteration,
         "n_trees": int(ranker.model.num_trees()),
         "best_score_inner_valid": best_score,
-        # 조기 종료가 1라운드에서 멈춘 모델: 트리 1개, 서로 다른 점수 수십 개 - 결과를
-        # 모델 효과로 해석하지 않는다(리포트에 '퇴화 시드'로 표시).
+        "es_tie_diagnostic": tie_diag,
+        # 조기 종료가 1라운드에서 멈춘 모델: 트리 1개, 서로 다른 점수 수십 개. 키 이름은
+        # v2.1과의 호환을 위해 그대로 둔다 - 원인은 es_tie_diagnostic으로 판단한다.
         "degenerate_single_tree": bool(best_iteration is not None and best_iteration <= 1),
+        "low_best_iteration": bool(best_iteration is not None and best_iteration <= LOW_BEST_ITERATION_MAX),
+    }
+
+
+def _fit_with_inner_valid(args, LGBMRanker, config, effective_group_key, train_df, inner_valid_df, needs_manual_timestamp_drop) -> dict:
+    """team_split/generator_split 공통: inner-valid 행 순서를 정하고 학습한다."""
+    es_valid_order = getattr(args, "es_valid_order", "shuffled") or "shuffled"
+    inner_valid_eval_df = order_inner_valid_for_early_stopping(inner_valid_df, es_valid_order, args.seed)
+    train_df_fit = _drop_timestamp_if_needed(train_df, needs_manual_timestamp_drop)
+    inner_valid_fit = (
+        _drop_timestamp_if_needed(inner_valid_eval_df, needs_manual_timestamp_drop) if len(inner_valid_eval_df) else None
+    )
+    return _train_ranker(
+        LGBMRanker, config, effective_group_key, train_df_fit, inner_valid_fit, getattr(args, "fixed_rounds", 0),
+        es_valid_order=es_valid_order,
+        diag_frames={"as_evaluated": inner_valid_eval_df, "engine_row_order": inner_valid_df},
+    )
+
+
+def _list_len_stats(recs: Dict[int, List[int]], users: Set[int], k: int = 5) -> dict:
+    """필터 뒤 추천 리스트 길이(평가 유저 기준). 사후 제거라 k건 미만이 될 수 있다."""
+    lens = [len(recs.get(u, [])) for u in users if u in recs]
+    if not lens:
+        return {"n_users": 0, "mean_len": None, "min_len": None, f"n_users_len_lt_{k}": 0}
+    return {
+        "n_users": len(lens), "mean_len": float(np.mean(lens)), "min_len": int(min(lens)),
+        f"n_users_len_lt_{k}": int(sum(1 for n in lens if n < k)),
     }
 
 
@@ -505,11 +708,8 @@ def _run_team_split(args, engine, bundle, pinned_now, config, config_hash, cfg_o
     train_df, inner_valid_df = _time_group_safe_split(train_all, val_ratio=0.2, group_key=effective_group_key)
     split_overlap = _n_groups_on_both_sides(train_df, inner_valid_df, effective_group_key)
 
-    train_df_fit = _drop_timestamp_if_needed(train_df, needs_manual_timestamp_drop)
-    inner_valid_fit = _drop_timestamp_if_needed(inner_valid_df, needs_manual_timestamp_drop) if len(inner_valid_df) else None
-
-    trained = _train_ranker(
-        LGBMRanker, config, effective_group_key, train_df_fit, inner_valid_fit, getattr(args, "fixed_rounds", 0)
+    trained = _fit_with_inner_valid(
+        args, LGBMRanker, config, effective_group_key, train_df, inner_valid_df, needs_manual_timestamp_drop
     )
     ranker = trained["ranker"]
 
@@ -576,6 +776,7 @@ def _run_team_split(args, engine, bundle, pinned_now, config, config_hash, cfg_o
     pit_recs_unshown = PR.filter_seen(pit_recommendations, shown)
     pit_per_user_unshown = M.per_user_metrics(evaluator, pit_recs_unshown, ground_truth, category_map)
     pit_agg_unshown = M.aggregate(pit_per_user_unshown)
+    unshown_len_stats = _list_len_stats(pit_recs_unshown, eval_users, k=5)
 
     # ---- 2차(as-written/leaky): 원래(미제한) loader #1/fe1/dataset1, eval_timestamp=pinned_now ----
     aw_inference_df = dataset1.create_inference_dataset(target_user_ids=None, eval_timestamp=pinned_now)
@@ -622,11 +823,14 @@ def _run_team_split(args, engine, bundle, pinned_now, config, config_hash, cfg_o
         "n_candidates": len(candidate_ids) if candidate_ids is not None else len(bundle.newsletters),
         "answer_start": answer_start.isoformat(),
         "rounds_policy": trained["rounds_policy"],
+        "es_valid_order": trained["es_valid_order"],
         "fixed_rounds": int(getattr(args, "fixed_rounds", 0) or 0),
         "best_iteration": trained["best_iteration"],
         "n_trees": trained["n_trees"],
         "best_score_inner_valid": trained["best_score_inner_valid"],
+        "es_tie_diagnostic": trained["es_tie_diagnostic"],
         "degenerate_single_tree": trained["degenerate_single_tree"],
+        "low_best_iteration": trained["low_best_iteration"],
         "n_distinct_scores_primary": n_distinct_primary,
         "top_tie_size_eval_users_median": float(np.median(top_ties)) if top_ties else None,
         "top_tie_size_eval_users_mean": float(np.mean(top_ties)) if top_ties else None,
@@ -645,6 +849,7 @@ def _run_team_split(args, engine, bundle, pinned_now, config, config_hash, cfg_o
             "unshown_filtered": {
                 "aggregate_metrics": pit_agg_unshown,
                 "per_user_metrics": {str(k): v for k, v in pit_per_user_unshown.items()},
+                "list_len_stats": unshown_len_stats,
             },
             "tie_random": pit_tie_random,
         },
@@ -669,9 +874,12 @@ def team_final_written_ground_truth(ctr_logs: pd.DataFrame, clicks_only: bool) -
     """team-final scripts/evaluate_results.py의 정답 창(created_at >= NOW()-6 DAYS)을 이
     아카이브에 옮긴 정답. 아카이브 전체가 6시간 16분이라 창 = 로그 전체다.
 
-    clicks_only=True(올바른 번역): 팀 DB 테이블에는 클릭 행만 있으므로 is_clicked==1만.
-    clicks_only=False(v2의 정의 오류): 노출 행 전체 - 페르소나마다 195건 전부가 정답이
-    되어 어떤 랭킹도 MRR 1.0이 되는 퇴화 정의. 기록 보존용으로만 계산한다."""
+    clicks_only=True(가장 그럴듯한 번역): is_clicked==1만. 테이블에 is_clicked 컬럼이 없고
+    운영 경로의 쓰기는 클릭 이벤트 API(POST /logs/newsletter/click)뿐이다. 팀이 합성 로그를
+    DB에 어떻게 적재했는지는 문서로 남아 있지 않아 확정은 아니다.
+    clicks_only=False(상한 겸 v2의 정의 오류): 노출 행 전체 - 페르소나마다 195건 전부가
+    정답이 되어 어떤 랭킹도 MRR 1.0이 된다. 합성 로그가 전체 행으로 적재됐다면 이쪽이
+    되지만, 그 경우 지표는 랭킹 품질과 무관하다."""
     logs = ctr_logs[ctr_logs["is_clicked"] == 1] if clicks_only else ctr_logs
     return logs.groupby("user_id")["news_letter_id"].apply(set).to_dict()
 
@@ -683,15 +891,17 @@ def _team_final_written_rows(bundle, aw_recommendations, evaluator, category_map
             "team_final_written",
             True,
             "team-final scripts/evaluate_results.py의 정답 창(NOW()-6일)을 아카이브로 옮긴 것: "
-            "창 안의 클릭(is_clicked==1) 전체. 아카이브가 약 6시간16분이라 창 = 로그 전체(학습 "
-            "구간 클릭 포함). 추천은 팀 방식 추론 시점(데이터셋 끝)으로 만든 것.",
+            "창 안의 클릭(is_clicked==1) 전체 - 가장 그럴듯한 번역(운영 경로는 클릭 이벤트만 쓰고 "
+            "테이블에 is_clicked 컬럼이 없다; 합성 로그의 DB 적재 방식은 문서로 남아 있지 않다). "
+            "아카이브가 약 6시간16분이라 창 = 로그 전체(학습 구간 클릭 포함). 추천은 팀 방식 추론 "
+            "시점(데이터셋 끝)으로 만든 것.",
         ),
         (
             "team_final_written_all_rows_definition_error",
             False,
-            "v2의 정의 오류(기록 보존용): is_clicked 필터 없이 노출 행 전체를 정답으로 셌다. "
-            "페르소나마다 195건 전부가 노출되므로 정답 = 전체 아이템이 되어 무작위 추천도 "
-            "MRR/P@5 1.0이 나온다. 해석 대상이 아니다.",
+            "상한 겸 v2의 정의 오류: is_clicked 필터 없이 노출 행 전체를 정답으로 센다(합성 로그가 "
+            "전체 행으로 적재됐을 경우에 해당). 페르소나마다 195건 전부가 노출되므로 정답 = 전체 "
+            "아이템이 되어 무작위 추천도 MRR/P@5 1.0이 나온다. 랭킹 품질로 해석할 수 없다.",
         ),
     ]:
         gt = team_final_written_ground_truth(bundle.ctr_logs, clicks_only=clicks_only)
@@ -750,10 +960,8 @@ def _run_generator_split(args, engine, bundle, pinned_now, config, config_hash, 
     # 경계가 없다 - inner-validation도 학습 구간 자체의 시간순으로만 나눈다.
     train_df, inner_valid_df = _time_group_safe_split(full_df, val_ratio=0.2, group_key=effective_group_key)
 
-    train_df_fit = _drop_timestamp_if_needed(train_df, needs_manual_timestamp_drop)
-    inner_valid_fit = _drop_timestamp_if_needed(inner_valid_df, needs_manual_timestamp_drop) if len(inner_valid_df) else None
-    trained = _train_ranker(
-        LGBMRanker, config, effective_group_key, train_df_fit, inner_valid_fit, getattr(args, "fixed_rounds", 0)
+    trained = _fit_with_inner_valid(
+        args, LGBMRanker, config, effective_group_key, train_df, inner_valid_df, needs_manual_timestamp_drop
     )
     ranker = trained["ranker"]
 
@@ -806,11 +1014,14 @@ def _run_generator_split(args, engine, bundle, pinned_now, config, config_hash, 
         "n_candidates": len(candidate_ids) if candidate_ids is not None else len(bundle.newsletters),
         "answer_start": None,
         "rounds_policy": trained["rounds_policy"],
+        "es_valid_order": trained["es_valid_order"],
         "fixed_rounds": int(getattr(args, "fixed_rounds", 0) or 0),
         "best_iteration": trained["best_iteration"],
         "n_trees": trained["n_trees"],
         "best_score_inner_valid": trained["best_score_inner_valid"],
+        "es_tie_diagnostic": trained["es_tie_diagnostic"],
         "degenerate_single_tree": trained["degenerate_single_tree"],
+        "low_best_iteration": trained["low_best_iteration"],
         "n_distinct_scores_primary": n_distinct_primary,
         "primary": {
             "aggregate_metrics": agg,
@@ -836,6 +1047,10 @@ def main() -> None:
     parser.add_argument("--harness-sha", default="unknown", help="이 하네스(evaluation/recsys/team_repro) 자체의 git SHA")
     parser.add_argument("--tie-draws", type=int, default=0, help="1차 추론의 동점을 무작위로 깨는 추첨 횟수(0=끔)")
     parser.add_argument("--fixed-rounds", type=int, default=0, help=">0이면 조기 종료 없이 정확히 N 라운드 학습(민감도 arm)")
+    parser.add_argument(
+        "--es-valid-order", default="shuffled", choices=list(ES_VALID_ORDERS),
+        help="조기 종료용 inner-valid 행 순서: shuffled(기본, 고정 시드로 섞음) / engine(엔진 순서 그대로 - 아티팩트 진단용)",
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--out", required=True)
@@ -846,7 +1061,10 @@ def main() -> None:
     Path(args.out).write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     summary = {
         k: v for k, v in result.items()
-        if k not in ("primary", "as_written", "team_final_written", "team_final_written_all_rows_definition_error")
+        if k not in (
+            "primary", "as_written", "team_final_written", "team_final_written_all_rows_definition_error",
+            "es_tie_diagnostic",
+        )
     }
     print(json.dumps(summary, ensure_ascii=False))
 

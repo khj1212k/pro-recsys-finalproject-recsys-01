@@ -395,3 +395,208 @@ def test_run_one_tie_draws_and_fixed_rounds_are_recorded(small_real_bundle, monk
     assert result["as_written"]["tie_random"]["n_draws"] == 2
     assert "unshown_filtered" in result["primary"]
     assert result["inner_split_groups_on_both_sides"] == 0
+
+
+# --- v2.2: 조기 종료 지표의 동점 처리 아티팩트 ----------------------------------------
+
+
+def _positive_first_groups(n_groups: int = 300, group_size: int = 6):
+    """엔진의 create_train_dataset이 만드는 모양: 그룹마다 positive 1행이 먼저, negative가 뒤."""
+    labels = np.zeros(n_groups * group_size)
+    labels[::group_size] = 1.0
+    group_ids = np.repeat(np.arange(n_groups), group_size)
+    return labels, group_ids
+
+
+def _lgb_ndcg_of_constant_model(labels, group_sizes):
+    import lightgbm as lgb
+
+    X = np.ones((len(labels), 1))
+    train = lgb.Dataset(X, labels, group=group_sizes)
+    valid = lgb.Dataset(X, labels, group=group_sizes, reference=train)
+    history = {}
+    lgb.train(
+        {"objective": "lambdarank", "metric": "ndcg", "ndcg_eval_at": [5], "label_gain": [0, 1], "verbose": -1},
+        train, num_boost_round=1, valid_sets=[valid], callbacks=[lgb.record_evaluation(history)],
+    )
+    return float(history["valid_0"]["ndcg@5"][0])
+
+
+def test_lightgbm_ndcg_breaks_ties_by_row_order():
+    """아티팩트의 전제를 고정한다: 모든 점수가 같은(상수) 모델의 LightGBM NDCG@5는 positive가
+    그룹 첫 행이면 1.0, 마지막 행이면 0.0이다. LightGBM이 이 동작을 바꾸면 이 테스트가
+    알려준다(그때는 섞기가 필요 없어진다)."""
+    labels, group_ids = _positive_first_groups()
+    sizes = [6] * (len(labels) // 6)
+    assert _lgb_ndcg_of_constant_model(labels, sizes) == pytest.approx(1.0)
+    last = labels.reshape(-1, 6)[:, ::-1].ravel()
+    assert _lgb_ndcg_of_constant_model(last, sizes) == pytest.approx(0.0)
+
+
+def test_ndcg_by_tie_policy_constant_scores():
+    labels, group_ids = _positive_first_groups(n_groups=50)
+    out = PIPE.ndcg_by_tie_policy(np.zeros(len(labels)), labels, group_ids, k=5)
+    disc = 1.0 / np.log2(2.0 + np.arange(5))
+    assert out["data_order"] == pytest.approx(1.0)
+    assert out["reversed_order"] == pytest.approx(0.0)
+    assert out["tie_expected"] == pytest.approx(disc.sum() / 6.0)  # 6자리 중 앞 5자리에 균등하게 놓일 기대값
+    assert out["tied_positive_group_share"] == pytest.approx(1.0)
+    assert out["n_groups"] == 50
+
+
+def test_ndcg_by_tie_policy_without_ties_all_policies_agree():
+    rng = np.random.default_rng(0)
+    labels, group_ids = _positive_first_groups(n_groups=40)
+    scores = rng.normal(size=len(labels))  # 연속값이라 동점 없음
+    out = PIPE.ndcg_by_tie_policy(scores, labels, group_ids, k=5)
+    assert out["data_order"] == pytest.approx(out["reversed_order"])
+    assert out["data_order"] == pytest.approx(out["tie_expected"])
+    assert out["tied_positive_group_share"] == 0.0
+
+
+def test_ndcg_by_tie_policy_data_order_matches_lightgbm_and_expected_is_order_invariant():
+    """data_order는 LightGBM이 기록하는 NDCG와 같아야 하고(동점 포함), tie_expected는 행
+    순서를 바꿔도 같아야 한다."""
+    import lightgbm as lgb
+
+    rng = np.random.default_rng(1)
+    n_groups, size = 200, 6
+    labels, group_ids = _positive_first_groups(n_groups, size)
+    X = rng.integers(0, 3, size=(len(labels), 2)).astype(float)  # 값이 3종류뿐이라 동점이 많다
+    X[:, 0] += labels * (rng.random(len(labels)) < 0.4)  # 약한 신호
+    sizes = [size] * n_groups
+    train = lgb.Dataset(X, labels, group=sizes)
+    valid = lgb.Dataset(X, labels, group=sizes, reference=train)
+    history = {}
+    booster = lgb.train(
+        {"objective": "lambdarank", "metric": "ndcg", "ndcg_eval_at": [5], "label_gain": [0, 1],
+         "verbose": -1, "num_leaves": 4, "min_data_in_leaf": 5},
+        train, num_boost_round=2, valid_sets=[valid], callbacks=[lgb.record_evaluation(history)],
+    )
+    scores = booster.predict(X)
+    assert len(set(np.round(scores, 10))) < 30  # 동점이 실제로 있다
+    out = PIPE.ndcg_by_tie_policy(scores, labels, group_ids, k=5)
+    assert out["data_order"] == pytest.approx(history["valid_0"]["ndcg@5"][-1], abs=1e-9)
+    assert out["data_order"] > out["tie_expected"] > out["reversed_order"]  # positive가 먼저라 부풀려진다
+
+    perm = rng.permutation(len(labels))
+    shuffled = PIPE.ndcg_by_tie_policy(scores[perm], labels[perm], group_ids[perm], k=5)
+    assert shuffled["tie_expected"] == pytest.approx(out["tie_expected"], abs=1e-12)
+
+
+def test_ndcg_by_tie_policy_group_without_positive_counts_as_one_like_lightgbm():
+    out = PIPE.ndcg_by_tie_policy([0.3, 0.2, 0.1], [0, 0, 0], ["g", "g", "g"], k=5)
+    assert out["data_order"] == out["reversed_order"] == out["tie_expected"] == 1.0
+
+
+def _inner_valid_frame(n_groups: int = 200):
+    labels, group_ids = _positive_first_groups(n_groups)
+    base = datetime(2026, 1, 1)
+    return pd.DataFrame(
+        {
+            "user_id": group_ids,
+            "news_id": np.arange(len(labels)),
+            "label": labels.astype(int),
+            "_timestamp": [base + timedelta(seconds=int(g)) for g in group_ids],
+            "f0": 1.0,
+        }
+    )
+
+
+def test_order_inner_valid_engine_keeps_rows_and_shuffled_is_seeded_permutation():
+    df = _inner_valid_frame()
+    assert PIPE.order_inner_valid_for_early_stopping(df, "engine", seed=42) is df
+    a = PIPE.order_inner_valid_for_early_stopping(df, "shuffled", seed=42)
+    b = PIPE.order_inner_valid_for_early_stopping(df, "shuffled", seed=42)
+    c = PIPE.order_inner_valid_for_early_stopping(df, "shuffled", seed=43)
+    pd.testing.assert_frame_equal(a, b)  # 같은 시드면 같은 순서(캐시·재현성)
+    assert not a["news_id"].equals(c["news_id"])
+    assert sorted(a["news_id"]) == sorted(df["news_id"])  # 행을 잃거나 복제하지 않는다
+    assert not a["news_id"].equals(df["news_id"])
+    with pytest.raises(ValueError):
+        PIPE.order_inner_valid_for_early_stopping(df, "sorted", seed=1)
+
+
+def test_shuffling_removes_positive_first_ordering():
+    df = _inner_valid_frame(n_groups=600)
+    gid = PIPE._group_ids_for(df, "user_timestamp")
+    assert PIPE.positive_first_share(df["label"].to_numpy(), gid) == 1.0
+    shuffled = PIPE.order_inner_valid_for_early_stopping(df, "shuffled", seed=7)
+    share = PIPE.positive_first_share(shuffled["label"].to_numpy(), PIPE._group_ids_for(shuffled, "user_timestamp"))
+    assert 1 / 6 - 0.06 < share < 1 / 6 + 0.06  # 그룹 6행 중 positive 1행
+
+
+def test_lightgbm_ndcg_on_shuffled_valid_tracks_tie_expected_value():
+    """섞은 inner-valid 위에서는 상수 모델의 LightGBM NDCG가 1.0이 아니라 동점 무작위
+    기대값 근처로 내려온다 - 섞기가 조기 종료 지표의 부풀림을 없앤다는 직접 확인."""
+    df = _inner_valid_frame(n_groups=600)
+    shuffled = PIPE.order_inner_valid_for_early_stopping(df, "shuffled", seed=3)
+    # 엔진의 _build_groups와 같은 방식: 그룹 id로 안정 정렬
+    gid = PIPE._group_ids_for(shuffled, "user_timestamp")
+    ordered = shuffled.assign(_g=gid.values).sort_values("_g", kind="mergesort")
+    sizes = ordered.groupby("_g", sort=False).size().tolist()
+    measured = _lgb_ndcg_of_constant_model(ordered["label"].to_numpy().astype(float), sizes)
+    expected = PIPE.ndcg_by_tie_policy(np.zeros(len(df)), df["label"].to_numpy(), PIPE._group_ids_for(df, "user_timestamp"), k=5)
+    assert expected["data_order"] == pytest.approx(1.0)
+    assert abs(measured - expected["tie_expected"]) < 0.04
+    assert measured < 0.6
+
+
+@_needs_archive
+@pytest.mark.parametrize("es_valid_order", ["shuffled", "engine"])
+def test_run_one_records_es_valid_order_and_tie_diagnostic(small_real_bundle, monkeypatch, es_valid_order):
+    monkeypatch.setattr(FL, "load_archive_bundle", lambda: small_real_bundle)
+    _install_torch_stub()
+    clicks = small_real_bundle.ctr_logs[small_real_bundle.ctr_logs["is_clicked"] == 1]
+    answer_start = PR.compute_fixed_answer_start(clicks, val_ratio=0.3)
+    args = argparse.Namespace(
+        engine_root=str(ENGINE_ROOT), version="current", protocol="team_split",
+        label_mode="clicks_only", leakage_mode="fixed", candidate_pool="full_195",
+        negative_source="random", objective_override="none",
+        answer_start=answer_start.isoformat(), code_sha="test", harness_sha="test",
+        seed=0, top_k=5, out="/tmp/_unused_test_pipeline_v22_out.json", tie_draws=0, fixed_rounds=0,
+        es_valid_order=es_valid_order,
+    )
+    result = PIPE.run_one(args)
+    assert result["es_valid_order"] == es_valid_order
+    assert result["rounds_policy"] == "inner_valid_early_stopping"
+    assert result["low_best_iteration"] == (result["best_iteration"] <= 5)
+    diag = result["es_tie_diagnostic"]
+    assert diag["rank_group_key"] == "user_timestamp"
+    frames = diag["frames"]
+    # 엔진이 만든 순서에서는 모든 그룹의 첫 행이 positive다(아티팩트의 전제).
+    assert frames["engine_row_order"]["positive_first_share"] == 1.0
+    if es_valid_order == "engine":
+        assert frames["as_evaluated"]["positive_first_share"] == 1.0
+    else:
+        assert frames["as_evaluated"]["positive_first_share"] < 0.5
+    # 하네스가 계산한 data_order NDCG는 LightGBM이 조기 종료에 쓴 값과 같아야 한다.
+    best = str(result["best_iteration"])
+    for metric_name, recorded in result["best_score_inner_valid"]["valid_0"].items():
+        mine = frames["as_evaluated"]["by_iteration"][best][metric_name]["data_order"]
+        assert mine == pytest.approx(recorded, abs=1e-6)
+    # 동점 무작위 기대값은 행 순서와 무관하다.
+    for it, entry in frames["as_evaluated"]["by_iteration"].items():
+        other = frames["engine_row_order"]["by_iteration"][it]
+        assert entry["ndcg@5"]["tie_expected"] == pytest.approx(other["ndcg@5"]["tie_expected"], abs=1e-9)
+    assert "list_len_stats" in result["primary"]["unshown_filtered"]
+
+
+@_needs_archive
+def test_run_one_binary_objective_has_no_ndcg_tie_diagnostic(small_real_bundle, monkeypatch):
+    """AUC로 조기 종료하는 설정에는 NDCG 동점 진단이 없다(AUC는 동점을 묶어 계산한다)."""
+    monkeypatch.setattr(FL, "load_archive_bundle", lambda: small_real_bundle)
+    _install_torch_stub()
+    clicks = small_real_bundle.ctr_logs[small_real_bundle.ctr_logs["is_clicked"] == 1]
+    answer_start = PR.compute_fixed_answer_start(clicks, val_ratio=0.3)
+    args = argparse.Namespace(
+        engine_root=str(ENGINE_ROOT), version="current", protocol="team_split",
+        label_mode="clicks_only", leakage_mode="fixed", candidate_pool="full_195",
+        negative_source="random", objective_override="binary",
+        answer_start=answer_start.isoformat(), code_sha="test", harness_sha="test",
+        seed=0, top_k=5, out="/tmp/_unused_test_pipeline_v22_bin_out.json", tie_draws=0, fixed_rounds=0,
+    )
+    result = PIPE.run_one(args)
+    assert result["objective_used"] == "binary"
+    assert result["es_valid_order"] == "shuffled"  # 섞기는 모든 arm에 똑같이 적용된다
+    assert result["es_tie_diagnostic"] is None
