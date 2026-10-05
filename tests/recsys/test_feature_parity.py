@@ -243,3 +243,21 @@ def test_a_repository_that_picks_the_latest_clicks_by_microsecond_fails_items_1_
     off = {name for name, d in report["features"]["per_column_max_abs_diff"].items() if d > 1e-6}
     assert off == {"short_cos", "sess_cos"}  # 세는 열(short_len 등)은 같고, 어떤 클릭이 남았는지만 다르다
     assert report["scores"]["pass"] is False  # 피처가 어긋나면 같은 모델의 순서도 갈린다
+
+
+def test_the_committed_report_is_evidence_about_the_current_feature_schema():
+    """reports/recsys/parity_v1.json은 CI 실행이 쓴 파일을 옮긴 것이다. 서빙 피처의 정의가 바뀌면 그 파일은 지난
+    정의의 증거다: 그대로 두고 "게이트 통과"라고 읽히지 않게, 새 실행의 파일로 바꿀 때까지 실패한다."""
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / "reports" / "recsys" / "parity_v1.json"
+    committed = json.loads(path.read_text(encoding="utf-8"))
+
+    assert committed["meta"]["feature_schema_hash"] == serving.SCHEMA_HASH, (
+        "서빙 피처 스키마가 리포트를 만든 때와 다릅니다. CI의 recsys-parity 아티팩트로 "
+        "reports/recsys/parity_v1.json을 갱신하세요(reports/recsys/parity_v1.md)."
+    )
+    assert committed["meta"]["thresholds"] == THRESHOLDS
+    assert committed["candidate_config"]["serving"] == SERVING_CANDIDATE_SPEC.as_dict()
+    assert committed["meta"]["ci_run_id"] and committed["meta"]["commit"]  # 로컬에서 만든 파일이 아니다
+    assert committed["pass"] is True
