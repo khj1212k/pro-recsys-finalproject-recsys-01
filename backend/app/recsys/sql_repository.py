@@ -36,6 +36,9 @@ def _vec_param(v: np.ndarray) -> np.ndarray:
     return np.ascontiguousarray(v, dtype=np.float32)
 
 
+# 화면 응답(app/api/newsletter.py의 hydrate_today_news)은 카테고리 매핑이 있는 뉴스레터만
+# 내보낸다. 추천 ID를 만드는 쪽(아이템 조회, 인기/최신 목록, 배치 행)이 같은 조건을 걸어야
+# "ID는 있는데 응답 본문이 비는" 일이 없다. KNN은 걸지 않는다 - 뒤의 items()가 거른다.
 _DISPLAYABLE = (
     "EXISTS (SELECT 1 FROM news_letter_categories c WHERE c.news_letter_id = n.news_letter_id)"
 )
@@ -126,16 +129,16 @@ class SqlRecsysRepository:
 
     def recent_ids(self, n: int) -> List[int]:
         rows = self._rows(
-            "SELECT news_letter_id FROM news_letter "
-            "ORDER BY news_letter_created_at DESC LIMIT :n",
+            "SELECT n.news_letter_id FROM news_letter n WHERE " + _DISPLAYABLE + " "
+            "ORDER BY n.news_letter_created_at DESC LIMIT :n",
             n=n,
         )
         return [r[0] for r in rows]
 
     def window_meta(self, since: datetime) -> List[NewsletterMeta]:
         rows = self._rows(
-            "SELECT news_letter_id, news_letter_created_at::timestamptz, raw_news_count "
-            "FROM news_letter WHERE news_letter_created_at >= :since",
+            "SELECT n.news_letter_id, n.news_letter_created_at::timestamptz, n.raw_news_count "
+            "FROM news_letter n WHERE n.news_letter_created_at >= :since AND " + _DISPLAYABLE,
             since=since,
         )
         return [NewsletterMeta(r[0], r[1], r[2]) for r in rows]
@@ -158,6 +161,16 @@ class SqlRecsysRepository:
             "SELECT DISTINCT news_letter_id FROM user_newsletter_ctr_log "
             "WHERE user_id = :uid AND news_letter_id = ANY(:ids)",
             uid=user_id,
+            ids=list(news_letter_ids),
+        )
+        return {r[0] for r in rows}
+
+    def displayable_among(self, news_letter_ids: Sequence[int]) -> Set[int]:
+        if not news_letter_ids:
+            return set()
+        rows = self._rows(
+            "SELECT DISTINCT c.news_letter_id FROM news_letter_categories c "
+            "WHERE c.news_letter_id = ANY(:ids)",
             ids=list(news_letter_ids),
         )
         return {r[0] for r in rows}

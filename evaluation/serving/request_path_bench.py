@@ -286,8 +286,9 @@ def explain(engine, now: datetime, sample_user: int, sample_vec: np.ndarray) -> 
             {"uid": sample_user},
         ),
         "window_meta": (
-            "SELECT news_letter_id, news_letter_created_at::timestamptz, raw_news_count "
-            "FROM news_letter WHERE news_letter_created_at >= :since",
+            "SELECT n.news_letter_id, n.news_letter_created_at::timestamptz, n.raw_news_count "
+            "FROM news_letter n WHERE n.news_letter_created_at >= :since AND EXISTS "
+            "(SELECT 1 FROM news_letter_categories c WHERE c.news_letter_id = n.news_letter_id)",
             {"since": since72},
         ),
     }

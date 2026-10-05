@@ -73,6 +73,9 @@ class StaticRepo:
     def clicked_among(self, user_id, ids):
         return set()
 
+    def displayable_among(self, ids):
+        return set(ids)
+
     def items(self, ids):
         return {i: self.items_by_id[i] for i in ids if i in self.items_by_id}
 

@@ -59,6 +59,10 @@ class FakeRepo:
             raise RuntimeError(f"injected failure in {name}")
 
     # --- helpers for tests ---
+    def _displayable(self, n: FakeNewsletter) -> bool:
+        # SQL 구현의 _DISPLAYABLE과 같은 뜻: 카테고리 매핑이 없으면 화면 응답에서 빠진다.
+        return bool(n.category_ids)
+
     def click(self, user_id: int, nl_id: int, at: datetime) -> int:
         log_id = len(self.clicks) + 1
         self.clicks.append((log_id, user_id, nl_id, at))
@@ -112,7 +116,8 @@ class FakeRepo:
 
     def recent_ids(self, n):
         self._call("recent_ids")
-        ordered = sorted(self.newsletters.values(), key=lambda x: x.created_at, reverse=True)
+        shown = [x for x in self.newsletters.values() if self._displayable(x)]
+        ordered = sorted(shown, key=lambda x: x.created_at, reverse=True)
         return [x.id for x in ordered[:n]]
 
     def window_meta(self, since):
@@ -120,7 +125,7 @@ class FakeRepo:
         return [
             NewsletterMeta(x.id, x.created_at, x.raw_news_count)
             for x in self.newsletters.values()
-            if x.created_at >= since
+            if x.created_at >= since and self._displayable(x)
         ]
 
     def category_recent_ids(self, category_ids, since, n):
@@ -145,9 +150,17 @@ class FakeRepo:
         out = {}
         for i in news_letter_ids:
             n = self.newsletters.get(i)
-            if n is not None:
+            if n is not None and self._displayable(n):
                 out[i] = Item(i, n.embedding, n.created_at, n.raw_news_count)
         return out
+
+    def displayable_among(self, news_letter_ids):
+        self._call("displayable_among")
+        return {
+            i
+            for i in news_letter_ids
+            if i in self.newsletters and self._displayable(self.newsletters[i])
+        }
 
     def latest_batch(self, user_id):
         self._call("latest_batch")

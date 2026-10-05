@@ -8,7 +8,10 @@ from app.recsys.types import Item, NewsletterMeta
 
 class RecsysRepository(Protocol):
     """요청 시점 추천이 읽는 모든 데이터 접근. SQL 구현은 sql_repository.py,
-    단위 테스트는 메모리 fake를 쓴다. 시각 인자는 모두 tz-aware(UTC)다."""
+    단위 테스트는 메모리 fake를 쓴다. 시각 인자는 모두 tz-aware(UTC)다.
+
+    recent_ids / window_meta / items는 화면에 내보낼 수 있는(카테고리 매핑이 있는) 뉴스레터만
+    돌려준다. 그래야 추천 ID가 비어 있지 않으면 응답 본문도 비어 있지 않다."""
 
     def last_click_id(self, user_id: int) -> Optional[int]: ...
 
@@ -29,6 +32,8 @@ class RecsysRepository(Protocol):
     def category_recent_ids(self, category_ids: Sequence[int], since: datetime, n: int) -> List[int]: ...
 
     def clicked_among(self, user_id: int, news_letter_ids: Sequence[int]) -> Set[int]: ...
+
+    def displayable_among(self, news_letter_ids: Sequence[int]) -> Set[int]: ...
 
     def items(self, news_letter_ids: Sequence[int]) -> Dict[int, Item]: ...
 

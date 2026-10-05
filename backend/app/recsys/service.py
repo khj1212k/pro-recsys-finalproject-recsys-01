@@ -161,8 +161,9 @@ class RecommendationService:
         now: datetime,
         reason: Optional[str],
     ) -> Recommendation:
-        # 표시 단계에서 카테고리 없는 뉴스레터가 빠질 수 있어 top_k보다 넉넉히 가져온다
-        # (배치 행은 기존 동작대로 통째로 넘기고 표시 단계가 앞에서부터 자른다).
+        # 저장소가 화면에 내보낼 수 있는 뉴스레터만 돌려주므로(repository.py) 여기서 ID가
+        # 비어 있지 않으면 응답 본문도 비지 않는다. 이 조회와 표시 단계 사이에 행이 지워지는
+        # 경우를 대비해 top_k보다 넉넉히 넘기고 표시 단계가 앞에서부터 자른다.
         n = self.cfg.top_k * 2
         steps = (
             (SOURCE_BATCH, lambda: self._batch_ids(repo, user_id, now)),
@@ -207,6 +208,13 @@ class RecommendationService:
             created_at = created_at.replace(tzinfo=timezone.utc)
         if now - created_at > timedelta(hours=self.cfg.batch_max_age_hours):
             self.counters.inc("fallback.batch_stale")
+            return None
+        # 배치 행은 만들어진 시점의 목록이라 화면에 못 내보내는 뉴스레터가 섞여 있을 수 있다.
+        # 하나도 보여 줄 수 없으면 빈 화면 대신 다음 단계(인기)로 넘어간다.
+        shown = repo.displayable_among(ids)
+        ids = [i for i in ids if i in shown]
+        if not ids:
+            self.counters.inc("fallback.batch_undisplayable")
             return None
         return ids, "batch"
 

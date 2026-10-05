@@ -10,6 +10,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from functools import partial
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -101,6 +102,22 @@ def seeded(pg_conn):
         created["users"].append(uid)
         return uid
 
+    def add_uncategorized(count, raw_news_count):
+        """카테고리 매핑이 없는(화면 응답에서 빠지는) 방금 만든 뉴스레터. 정리는 seeded가 한다."""
+        ids = []
+        with pg_conn.cursor() as cur:
+            for j in range(count):
+                cur.execute(
+                    "INSERT INTO news_letter (news_letter_title, news_letter_sentence, news_letter_content, "
+                    "news_letter_embedding, news_letter_keywords, raw_news_count, news_letter_created_at) "
+                    "VALUES (%s, %s, %s, %s::vector, %s, %s, %s) RETURNING news_letter_id",
+                    (f"hidden-{j}-{suffix}", "요약", "내용", str(_topic_vec(rng, 0).tolist()), "[]",
+                     raw_news_count, datetime.now(timezone.utc) - timedelta(seconds=j)),
+                )
+                ids.append(cur.fetchone()[0])
+        created["news"].extend(ids)
+        return ids
+
     def click(uid, nid, at=None):
         with pg_conn.cursor() as cur:
             cur.execute(
@@ -113,6 +130,7 @@ def seeded(pg_conn):
     ctx = type("Seeded", (), {})()
     ctx.topic_of, ctx.vec_of, ctx.cat_ids = topic_of, vec_of, created["cats"]
     ctx.add_user, ctx.click, ctx.now = add_user, click, now
+    ctx.add_uncategorized = add_uncategorized
     ctx.by_topic = {t: [n for n, tt in topic_of.items() if tt == t] for t in range(TOPICS)}
     try:
         yield ctx
@@ -160,6 +178,50 @@ def _request_repo(engine):
 def _recommend(service, engine, uid):
     with _request_repo(engine) as repo:
         return service.recommend(uid, fallback_repo=repo)
+
+
+@pytest.fixture
+def api_client(engine, database_url):
+    """GET /newsletters/today를 실제 요청 세션·실제 표시 단계(hydrate_today_news)·운영 배선
+    (build_sql_service)으로 부르는 TestClient 팩토리. 인증만 시드한 사용자로 바꿔 끼운다."""
+    # app.security는 임포트 시점에 이 값들을 읽는다(실제 토큰 검증은 아래에서 대체한다).
+    os.environ.setdefault("SECRET_KEY", "test-secret")
+    os.environ.setdefault("ALGORITHM", "HS256")
+    os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
+
+    from fastapi.testclient import TestClient
+    from sqlmodel import Session as SQLModelSession
+
+    from app.api.user_check import get_current_user
+    from app.database import get_session
+    from app.main import app
+    from app.recsys.config import RecsysConfig
+    from app.recsys.runtime import build_sql_service, get_recommendation_service
+
+    services = []
+
+    def make(uid, app_engine=None, service=None, **cfg_overrides):
+        app_engine = app_engine or engine
+        if service is None:
+            cfg = RecsysConfig(**{"time_budget_ms": 5000, **cfg_overrides})
+            service = build_sql_service(cfg, app_engine, database_url)
+        services.append(service)
+
+        def session_dep():
+            with SQLModelSession(app_engine) as session:
+                yield session
+
+        app.dependency_overrides[get_session] = session_dep
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(user_id=uid)
+        app.dependency_overrides[get_recommendation_service] = lambda: service
+        return TestClient(app)
+
+    try:
+        yield make
+    finally:
+        app.dependency_overrides.clear()
+        for service in services:
+            service.shutdown()
 
 
 def test_a_click_moves_the_next_response_toward_the_clicked_topic(engine, seeded):
@@ -378,3 +440,43 @@ def test_request_sessions_holding_every_app_connection_do_not_starve_the_realtim
     finally:
         service.shutdown()
         app_engine.dispose()
+
+
+def test_today_body_is_not_empty_when_the_most_popular_newsletters_have_no_category(api_client, seeded):
+    """표시 단계는 카테고리 매핑이 없는 뉴스레터를 뺀다. 인기 상위가 전부 그런 뉴스레터여도
+    신규 유저의 응답 본문(추천 ID가 아니라 화면에 나가는 목록)이 비지 않아야 한다."""
+    hidden = seeded.add_uncategorized(25, raw_news_count=10_000)
+    uid = seeded.add_user()
+
+    resp = api_client(uid).get("/newsletters/today")
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Rec-Source"] == "cold_start_popular"
+    shown = [item["news_letter_id"] for item in resp.json()]
+    assert shown
+    assert not set(shown) & set(hidden)
+
+
+def test_batch_rows_are_filtered_to_what_the_screen_can_show(api_client, seeded, pg_conn):
+    hidden = seeded.add_uncategorized(3, raw_news_count=1)
+    visible = seeded.by_topic[1][:2]
+    uid = seeded.add_user()
+    other = seeded.add_user()
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO news_letter_today_batch (user_id, news_letter_ids, created_at) VALUES (%s, %s, NOW())",
+            (uid, json.dumps([hidden[0], visible[0], hidden[1], visible[1]])),
+        )
+        cur.execute(
+            "INSERT INTO news_letter_today_batch (user_id, news_letter_ids, created_at) VALUES (%s, %s, NOW())",
+            (other, json.dumps(hidden)),
+        )
+
+    mixed = api_client(uid, mode="batch").get("/newsletters/today")
+    nothing_visible = api_client(other, mode="batch").get("/newsletters/today")
+
+    assert mixed.headers["X-Rec-Source"] == "batch"
+    assert [item["news_letter_id"] for item in mixed.json()] == visible
+    # 배치 행에 보여 줄 수 있는 것이 하나도 없으면 빈 화면 대신 인기 목록으로 넘어간다.
+    assert nothing_visible.headers["X-Rec-Source"] == "popular"
+    assert nothing_visible.json()
