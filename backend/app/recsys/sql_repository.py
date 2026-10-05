@@ -1,12 +1,14 @@
 """RecsysRepository의 PostgreSQL(+pgvector) 구현.
 
-규칙 두 가지 (ADR 0008/0015):
+규칙 세 가지 (ADR 0008/0015):
 - 벡터 쿼리 파라미터는 numpy 배열로 넘긴다. app.database가 커넥션마다
   register_vector를 등록하므로 ndarray는 vector 리터럴로 바인딩된다. 파이썬 list는
   numeric[]로 바인딩돼 `<=>`가 "operator does not exist"로 실패한다.
 - 벡터를 읽을 때는 vector_send()로 바이너리를 받아 np.frombuffer로 푼다. 텍스트
-  표현을 파이썬에서 float로 파싱하면 300개 x 1024차원에서 수백 ms가 걸린다
-  (ADR 0015 측정).
+  표현을 파이썬에서 파싱하면 300개 x 1024차원에 수십 ms가 든다: float4 최단 표기 기준
+  pgvector Vector.from_text 32~33ms, float() 직접 파싱 41~50ms이고 바이너리는 0.3ms다
+  (M2, loadavg 4~8, nice 19, p50; `pytest -s -m benchmark tests/recsys/test_latency_microbench.py`,
+  ADR 0015 증거 5). 처음에 "수백 ms"라고 적었던 값은 loadavg 100 이상에서 잰 것이라 버렸다.
 - `timestamp without time zone` 컬럼은 서버 기본 TimeZone 기준 벽시계 값으로
   저장돼 있다(NOW()/aware datetime 모두 세션 TimeZone으로 변환되어 저장됨).
   비교는 tz-aware 파라미터로, 읽기는 ::timestamptz로 해 같은 규칙으로 해석한다.

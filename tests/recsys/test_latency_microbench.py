@@ -5,6 +5,7 @@
 저장소는 미리 계산한 답을 O(1)로 돌려주는 StaticRepo라서, 측정값은 후보 합집합·아이템
 캐시·스코어링·MMR·스레드 전환 같은 이 패키지 자체의 비용이다. 부하가 큰 머신에서
 벽시계 시간이 흔들리므로 스레드 CPU 시간(time.thread_time)도 같이 낸다.
+두 번째 테스트는 임베딩을 텍스트로 받아 파싱하는 비용과 바이너리로 받는 비용을 비교한다.
 """
 import os
 import time
@@ -142,3 +143,38 @@ def test_in_process_latency_breakdown():
     # service.recommend의 thread-cpu는 호출 스레드 몫만 잡히므로(계산은 작업 스레드) 벽시계로 본다.
     (_, service_wall_p95), _ = results["service.recommend (+thread hop)"]
     assert service_wall_p95 < RecsysConfig().time_budget_ms
+
+
+def test_vector_read_cost_text_vs_binary():
+    """뉴스레터 임베딩 300개 x 1024차원을 DB에서 받아 numpy로 만드는 비용. pgvector의 텍스트
+    표현("[0.1,0.2,...]")을 파이썬에서 파싱하는 경로와, vector_send() 바이너리를 np.frombuffer로
+    푸는 경로(sql_repository.vector_from_send)를 같은 값으로 비교한다. DB 왕복은 포함하지 않는다."""
+    import struct
+
+    from pgvector import Vector
+
+    from app.recsys.sql_repository import vector_from_send
+
+    rng = np.random.default_rng(0)
+    emb = rng.normal(size=(N_ITEMS, DIM)).astype(np.float32)
+    # PostgreSQL의 vector 출력처럼 float4를 왕복 가능한 가장 짧은 십진수로 적는다
+    texts = ["[" + ",".join(str(x) for x in row) + "]" for row in emb]
+    binaries = [struct.pack(">HH", DIM, 0) + row.astype(">f4").tobytes() for row in emb]
+    np.testing.assert_allclose(vector_from_send(binaries[0]), emb[0])
+
+    reps = 30
+    results = {
+        "text: pgvector Vector.from_text": _measure(lambda: [Vector.from_text(t).to_numpy() for t in texts], reps),
+        "text: float() per element": _measure(
+            lambda: [np.asarray([float(x) for x in t[1:-1].split(",")], dtype=np.float32) for t in texts], reps
+        ),
+        "binary: np.frombuffer": _measure(lambda: [vector_from_send(b) for b in binaries], reps),
+    }
+
+    load = os.getloadavg()[0]
+    print(f"\n[recsys vector read] vectors={N_ITEMS} dim={DIM} reps={reps} loadavg1={load:.2f}")
+    for name, res in results.items():
+        print(_line(name, res))
+    (text_p50, _), _ = results["text: pgvector Vector.from_text"]
+    (binary_p50, _), _ = results["binary: np.frombuffer"]
+    assert binary_p50 < text_p50
