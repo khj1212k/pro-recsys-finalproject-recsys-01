@@ -199,3 +199,39 @@ def test_cold_shape_uses_four_slots_and_small_pools_shrink_the_slate():
     plan = plan_slate([1, 2, 3], [1, 2, 3], 20, 4, np.random.default_rng(1))
     assert sorted(plan.ids) == [1, 2, 3]
     assert [s.propensity for s in plan.slots] == pytest.approx([1 / 3] * 3)
+
+
+@pytest.mark.parametrize(
+    "det_ranked,eligible,what",
+    [
+        ([1, 2], [1, 2, 3, 3, 4], "eligible has 1 repeated"),  # 후보에 같은 ID가 두 번
+        ([1, 2, 2], [1, 2, 3, 4], "det_ranked has 1 repeated"),  # 결정론 목록에 같은 ID가 두 번
+        ([1, 9], [1, 2, 3, 4], "not in eligible"),  # 결정론 목록에 후보가 아닌 ID
+    ],
+)
+@pytest.mark.parametrize("n_explore,with_rng", [(2, True), (2, False), (0, True)])
+def test_repeated_or_foreign_ids_are_rejected_before_any_propensity_is_computed(
+    det_ranked, eligible, what, n_explore, with_rng
+):
+    """식은 E가 집합이라는 전제 위에 있다. 후보에 같은 ID가 두 번 있으면 |E'|가 그만큼 크게 세어져
+    기록되는 propensity가 실제 포함 확률보다 작아진다(아래 테스트가 그 크기를 보인다). 조용히 틀린 값을
+    남기는 대신 화면을 만들지 않는다. 탐색이 꺼져 있어도 같은 전제를 요구한다(후보 집합은 그대로 로그에 남는다)."""
+    rng = np.random.default_rng(0) if with_rng else None
+
+    with pytest.raises(ValueError, match=what):
+        plan_slate(det_ranked, eligible, 4, n_explore, rng)
+
+
+def test_a_repeated_id_would_have_halved_the_logged_propensity_of_that_item():
+    """막지 않았을 때 틀리는 크기. 화면 3칸 중 1칸 탐색, 결정론 2칸, 탐색 풀이 실제로는 {3, 4}인데
+    3이 한 번 더 들어 있으면 풀 크기가 3으로 세어진다. 가능한 뽑기를 전부 열거하면 3의 실제 포함 확률은
+    2/3인데(풀 인덱스 셋 중 둘이 3이다), 칸에 기록되는 값을 위치로 더하면 1/3이다."""
+    det_ranked, pool = [1, 2], [3, 3, 4]
+    plans = [assemble_slate(det_ranked, pool, d, n_det=2) for d in _all_draws(3, 1, len(pool))]
+
+    shown = sum(1 for plan in plans if 3 in plan.ids)
+    logged = {s.propensity for plan in plans for s in plan.slots if s.news_letter_id == 3}
+
+    assert Fraction(shown, len(plans)) == Fraction(2, 3)
+    (per_position,) = logged
+    assert 3 * per_position == pytest.approx(1 / 3)  # 세 위치를 더한 값: 실제의 절반

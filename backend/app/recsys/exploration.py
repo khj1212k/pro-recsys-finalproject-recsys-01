@@ -19,6 +19,11 @@
 
 뽑기(draw_exploration)와 조립(assemble_slate)을 나눈 이유: 조립은 순수 함수라 가능한 뽑기를 전부
 넣어 볼 수 있고, 뽑기는 난수만 다루므로 균등성을 따로 검사할 수 있다.
+
+전제: E는 집합이다. 후보(eligible)와 결정론 목록(det_ranked)에는 같은 ID가 두 번 나오지 않고, 결정론 목록의
+ID는 모두 후보에 있다. 후보에 같은 ID가 k번 들어 있으면 |E'|가 k-1만큼 크게 세어져, 기록되는 값이 그 아이템의
+실제 포함 확률의 1/k배가 된다(오류도 없이 로그만 틀린다). plan_slate가 이 전제를 검사하고, 어기면 화면을
+만들지 않는다(ValueError). 요청 경로에서는 그 요청이 폴백으로 응답하고 propensity는 남지 않는다.
 """
 from dataclasses import dataclass
 from math import comb
@@ -146,6 +151,21 @@ def assemble_slate(
     return SlatePlan(tuple(slots), tuple(draw.positions), len(pool), POLICY_EPS_UNIFORM)
 
 
+def check_candidate_sets(det_ranked: Sequence[int], eligible: Sequence[int]) -> None:
+    """모듈 설명의 전제를 검사한다. 후보 300개에서 수 마이크로초다."""
+    eligible_set = set(eligible)
+    if len(eligible_set) != len(eligible):
+        raise ValueError(
+            f"eligible has {len(eligible) - len(eligible_set)} repeated id(s): "
+            "the logged propensity would be wrong"
+        )
+    det_set = set(det_ranked)
+    if len(det_set) != len(det_ranked):
+        raise ValueError(f"det_ranked has {len(det_ranked) - len(det_set)} repeated id(s)")
+    if not det_set <= eligible_set:
+        raise ValueError(f"det_ranked has {len(det_set - eligible_set)} id(s) that are not in eligible")
+
+
 def plan_slate(
     det_ranked: Sequence[int],
     eligible: Sequence[int],
@@ -155,7 +175,9 @@ def plan_slate(
 ) -> SlatePlan:
     """결정론 목록(det_ranked, 순위순)과 후보 전체(eligible ⊇ det_ranked)로 한 요청의 화면을 만든다.
 
-    n_explore가 0이거나 rng가 없으면 결정론 목록을 그대로 내고 propensity는 1이다."""
+    n_explore가 0이거나 rng가 없으면 결정론 목록을 그대로 내고 propensity는 1이다.
+    후보나 결정론 목록에 같은 ID가 두 번 있거나 결정론 목록이 후보를 벗어나면 ValueError다."""
+    check_candidate_sets(det_ranked, eligible)
     n_det, m = slate_shape(len(det_ranked), len(eligible), top_k, n_explore if rng is not None else 0)
     pool = explore_pool(det_ranked, eligible, n_det)
     if m == 0:

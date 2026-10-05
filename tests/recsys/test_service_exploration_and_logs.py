@@ -5,6 +5,7 @@
 """
 from collections import Counter
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import timedelta
 
 import numpy as np
@@ -239,6 +240,28 @@ def test_a_fallback_response_logs_a_request_row_with_its_reason_and_no_propensit
     assert len(slots) == 20
     assert all(s["propensity"] is None and s["explored"] is False and s["det_rank"] is None for s in slots)
     assert service.counters.get("impressions.slate_mismatch") == 0
+
+
+def test_a_candidate_set_with_a_repeated_id_is_answered_by_the_fallback_and_logs_no_propensity():
+    """후보에 같은 ID가 두 번 들어오면(후보 생성기의 버그) propensity 식의 전제가 깨진다. 틀린 값을 로그에
+    남기는 대신 그 요청은 폴백으로 응답한다: 사용자는 목록을 받고, 로그에는 추정에 쓰지 않는 행만 남는다."""
+    repo = _repo()
+    log = LogRecorder()
+    service = _service(repo, log=log, rng_factory=_seeded(13))
+    rank = service.recommender.rank
+
+    def rank_with_a_repeated_candidate(*args):
+        det = rank(*args)
+        return replace(det, eligible_ids=np.append(det.eligible_ids, det.eligible_ids[-1]))
+
+    service.recommender.rank = rank_with_a_repeated_candidate
+    rec = service.recommend(WARM, fallback_repo=repo)
+    service.log_impressions(WARM, rec, rec.news_letter_ids[:20])
+
+    assert (rec.source, rec.fallback_reason, rec.policy_version) == (SOURCE_POPULAR, "error", "none")
+    assert len(log.slots) == 20 and all(s["propensity"] is None for s in log.slots)
+    assert service.counters.get("fallback.error") == 1
+    assert service.counters.get("explore.requests") == 0
 
 
 def test_an_empty_response_still_leaves_one_request_row():
