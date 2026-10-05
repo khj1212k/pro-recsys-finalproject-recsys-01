@@ -416,6 +416,40 @@ def test_heartbeat_stops_with_the_stage_and_never_outlives_it():
     assert len(beats) == n
 
 
+def test_stage_output_reaches_the_log_while_the_stage_is_still_running(tmp_path):
+    """단계가 도는 동안 그 출력이 run.log에 줄 단위로 보인다. 몇 시간짜리 단계의 진행 줄과 시작할 때 찍히는
+    증거 등급 줄을 단계가 끝난 뒤에야 보게 되면 안 된다(원격 런타임에서는 run.log를 내려받아 진행을 본다)."""
+    import os
+    import threading
+    import time
+
+    log_path, gate = tmp_path / "run.log", tmp_path / "go"
+    child = ("import pathlib, time\n"
+             "print('-'.join(['line', 'from', 'a', 'running', 'stage']), flush=True)\n"   # 명령줄 머리말에는 없는 문자열
+             f"gate = pathlib.Path({str(gate)!r})\n"
+             "t0 = time.time()\n"
+             "while not gate.exists() and time.time() - t0 < 30:\n"
+             "    time.sleep(0.05)\n"
+             "print('stage finished')\n")
+    seen = {}
+
+    def watch():
+        deadline = time.time() + 10
+        while time.time() < deadline:
+            if log_path.exists() and "line-from-a-running-stage" in log_path.read_text(encoding="utf-8"):
+                seen["while_running"] = not gate.exists()
+                break
+            time.sleep(0.05)
+        gate.write_text("go")                                            # 못 봤어도 자식은 끝내 준다
+
+    watcher = threading.Thread(target=watch)
+    watcher.start()
+    code = drv.subprocess_runner([sys.executable, "-c", child], tmp_path, dict(os.environ), log_path)
+    watcher.join()
+    assert code == 0 and seen.get("while_running") is True
+    assert "stage finished" in log_path.read_text(encoding="utf-8")
+
+
 def test_manifest_is_checked_against_the_registration_before_any_download(env):
     runner = Runner()
     key = "ebnerd_small/train/history.parquet"

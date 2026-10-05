@@ -305,14 +305,20 @@ def stage_command(python: str, workdir: Path, run_args: dict, threads: int, stag
 
 
 def subprocess_runner(cmd: list[str], cwd: Path, env: dict, log_path: Path) -> int:
-    """단계를 서브프로세스로 돌리고 출력(집계 수치와 진행 상태뿐이다)을 run.log에 이어 쓴다."""
+    """단계를 서브프로세스로 돌리고 출력(집계 수치와 진행 상태뿐이다)을 run.log에 이어 쓴다.
+
+    줄마다 바로 내보낸다. 버퍼에 두면 몇 시간짜리 단계의 진행 줄과 시작할 때 찍히는 증거 등급 줄이 버퍼가 차거나
+    단계가 끝날 때까지 run.log(와 분리 실행의 driver_stdout.log)에 보이지 않는다.
+    """
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(f"--- {' '.join(cmd[1:])}\n")
         f.flush()
         proc = subprocess.Popen(cmd, cwd=str(cwd), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         for line in proc.stdout:
             sys.stdout.write(line)
+            sys.stdout.flush()
             f.write(line)
+            f.flush()
         return proc.wait()
 
 
