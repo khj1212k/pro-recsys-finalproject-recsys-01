@@ -1,0 +1,586 @@
+"""요청 시점 추천(app.recsys)을 작게 시드한 실제 PostgreSQL+pgvector에서 검증한다.
+
+다른 통합 테스트가 남긴 뉴스레터가 있어도 깨지지 않도록, 결과 중 이 테스트가
+시드한 항목만 골라 상대적인 성질(주제 비율 변화 등)만 검사한다.
+"""
+import json
+import os
+import time
+import uuid
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from functools import partial
+from types import SimpleNamespace
+
+import numpy as np
+import pytest
+from sqlalchemy import text
+
+DIM = 1024
+TOPICS = 4
+PER_TOPIC = 12
+
+
+def _topic_vec(rng, axis):
+    v = np.zeros(DIM, dtype=np.float32)
+    v[axis] = 1.0
+    v += rng.normal(0, 0.02, DIM).astype(np.float32)
+    return v / np.linalg.norm(v)
+
+
+@pytest.fixture
+def engine(database_url):
+    from sqlalchemy import create_engine
+
+    from app.database import register_pgvector_on_connect
+
+    eng = create_engine(database_url)
+    register_pgvector_on_connect(eng)
+    try:
+        yield eng
+    finally:
+        eng.dispose()
+
+
+@pytest.fixture
+def seeded(pg_conn):
+    """TOPICS개 주제 x PER_TOPIC개 뉴스레터(모두 신선, 주제별 카테고리) + 헬퍼."""
+    rng = np.random.default_rng(7)
+    suffix = uuid.uuid4().hex[:8]
+    created = {"news": [], "users": [], "cats": []}
+    topic_of = {}
+    vec_of = {}
+    now = datetime.now(timezone.utc)
+    with pg_conn.cursor() as cur:
+        cat_ids = []
+        for t in range(TOPICS):
+            code = 900000 + int(uuid.uuid4().int % 90000)
+            cur.execute(
+                "INSERT INTO category (category_name, category_code) VALUES (%s, %s) RETURNING category_id",
+                (f"topic{t}-{suffix}", code),
+            )
+            cat_ids.append(cur.fetchone()[0])
+        created["cats"] = cat_ids
+        for t in range(TOPICS):
+            for j in range(PER_TOPIC):
+                v = _topic_vec(rng, t)
+                cur.execute(
+                    "INSERT INTO news_letter (news_letter_title, news_letter_sentence, news_letter_content, "
+                    "news_letter_embedding, news_letter_keywords, raw_news_count, news_letter_created_at) "
+                    "VALUES (%s, %s, %s, %s::vector, %s, %s, %s) RETURNING news_letter_id",
+                    (f"t{t}-{j}-{suffix}", "요약", "내용", str(v.tolist()), "[]", 1 + j % 3,
+                     now - timedelta(hours=1 + j)),
+                )
+                nid = cur.fetchone()[0]
+                cur.execute(
+                    "INSERT INTO news_letter_categories (news_letter_id, category_id) VALUES (%s, %s)",
+                    (nid, cat_ids[t]),
+                )
+                created["news"].append(nid)
+                topic_of[nid] = t
+                vec_of[nid] = v
+
+    def add_user(long_term=None, onboarding=(), categories=()):
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                'INSERT INTO "user" (user_email, user_password_hash, user_nickname, user_created_at, user_embedding) '
+                "VALUES (%s, 'h', 'n', NOW(), %s::vector) RETURNING user_id",
+                (f"rt-{uuid.uuid4().hex[:10]}@example.com",
+                 None if long_term is None else str(np.asarray(long_term).tolist())),
+            )
+            uid = cur.fetchone()[0]
+            for nid in onboarding:
+                cur.execute(
+                    "INSERT INTO user_preferred_newsletter (news_letter_id, user_id) VALUES (%s, %s)",
+                    (nid, uid),
+                )
+            for cid in categories:
+                cur.execute(
+                    "INSERT INTO user_preferred_categories (category_id, user_id) VALUES (%s, %s)",
+                    (cid, uid),
+                )
+        created["users"].append(uid)
+        return uid
+
+    def add_uncategorized(count, raw_news_count):
+        """카테고리 매핑이 없는(화면 응답에서 빠지는) 방금 만든 뉴스레터. 정리는 seeded가 한다."""
+        ids = []
+        with pg_conn.cursor() as cur:
+            for j in range(count):
+                cur.execute(
+                    "INSERT INTO news_letter (news_letter_title, news_letter_sentence, news_letter_content, "
+                    "news_letter_embedding, news_letter_keywords, raw_news_count, news_letter_created_at) "
+                    "VALUES (%s, %s, %s, %s::vector, %s, %s, %s) RETURNING news_letter_id",
+                    (f"hidden-{j}-{suffix}", "요약", "내용", str(_topic_vec(rng, 0).tolist()), "[]",
+                     raw_news_count, datetime.now(timezone.utc) - timedelta(seconds=j)),
+                )
+                ids.append(cur.fetchone()[0])
+        created["news"].extend(ids)
+        return ids
+
+    def click(uid, nid, at=None):
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO user_newsletter_ctr_log (user_id, news_letter_id, created_at) "
+                "VALUES (%s, %s, %s) RETURNING log_id",
+                (uid, nid, at or datetime.now(timezone.utc)),
+            )
+            return cur.fetchone()[0]
+
+    ctx = type("Seeded", (), {})()
+    ctx.topic_of, ctx.vec_of, ctx.cat_ids = topic_of, vec_of, created["cats"]
+    ctx.add_user, ctx.click, ctx.now = add_user, click, now
+    ctx.add_uncategorized = add_uncategorized
+    ctx.by_topic = {t: [n for n, tt in topic_of.items() if tt == t] for t in range(TOPICS)}
+    try:
+        yield ctx
+    finally:
+        with pg_conn.cursor() as cur:
+            uids, nids = created["users"], created["news"]
+            if uids:
+                cur.execute("DELETE FROM recommendation_impression_log WHERE user_id = ANY(%s)", (uids,))
+                cur.execute("DELETE FROM news_letter_today_batch WHERE user_id = ANY(%s)", (uids,))
+                cur.execute("DELETE FROM user_newsletter_ctr_log WHERE user_id = ANY(%s)", (uids,))
+                cur.execute("DELETE FROM user_preferred_newsletter WHERE user_id = ANY(%s)", (uids,))
+                cur.execute("DELETE FROM user_preferred_categories WHERE user_id = ANY(%s)", (uids,))
+                cur.execute('DELETE FROM "user" WHERE user_id = ANY(%s)', (uids,))
+            if nids:
+                cur.execute("DELETE FROM news_letter_categories WHERE news_letter_id = ANY(%s)", (nids,))
+                cur.execute("DELETE FROM news_letter WHERE news_letter_id = ANY(%s)", (nids,))
+            cur.execute("DELETE FROM category WHERE category_id = ANY(%s)", (created["cats"],))
+
+
+def _service(engine, **cfg_overrides):
+    from app.recsys.config import RecsysConfig
+    from app.recsys.service import build_service
+    from app.recsys.sql_repository import SqlImpressionWriter, sql_repo_scope
+
+    # CI 러너의 첫 요청(임베딩 캐시 미적중) 지연에 흔들리지 않도록 기본 예산을 넉넉히 둔다.
+    # 예산 자체의 동작은 fault injection 테스트가 따로 검증한다.
+    cfg = RecsysConfig(**{"time_budget_ms": 5000, **cfg_overrides})
+    return build_service(
+        cfg,
+        repo_factory=partial(sql_repo_scope, engine, cfg.time_budget_ms),
+        impression_writer=SqlImpressionWriter(engine),
+    )
+
+
+@contextmanager
+def _request_repo(engine):
+    from sqlalchemy.orm import Session
+
+    from app.recsys.sql_repository import SqlRecsysRepository
+
+    with Session(engine) as s:
+        yield SqlRecsysRepository(s)
+
+
+def _recommend(service, engine, uid):
+    with _request_repo(engine) as repo:
+        return service.recommend(uid, fallback_repo=repo)
+
+
+@pytest.fixture
+def api_client(engine, database_url):
+    """GET /newsletters/today를 실제 요청 세션·실제 표시 단계(hydrate_today_news)·운영 배선
+    (build_sql_service)으로 부르는 TestClient 팩토리. 인증만 시드한 사용자로 바꿔 끼운다."""
+    # app.security는 임포트 시점에 이 값들을 읽는다(실제 토큰 검증은 아래에서 대체한다).
+    os.environ.setdefault("SECRET_KEY", "test-secret")
+    os.environ.setdefault("ALGORITHM", "HS256")
+    os.environ.setdefault("ACCESS_TOKEN_EXPIRE_MINUTES", "30")
+
+    from fastapi.testclient import TestClient
+    from sqlmodel import Session as SQLModelSession
+
+    from app.api.user_check import get_current_user
+    from app.database import get_session
+    from app.main import app
+    from app.recsys.config import RecsysConfig
+    from app.recsys.runtime import build_sql_service, get_recommendation_service
+
+    services = []
+
+    def make(uid, app_engine=None, service=None, **cfg_overrides):
+        app_engine = app_engine or engine
+        if service is None:
+            cfg = RecsysConfig(**{"time_budget_ms": 5000, **cfg_overrides})
+            service = build_sql_service(cfg, database_url)
+        services.append(service)
+
+        def session_dep():
+            with SQLModelSession(app_engine) as session:
+                yield session
+
+        app.dependency_overrides[get_session] = session_dep
+        app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(user_id=uid)
+        app.dependency_overrides[get_recommendation_service] = lambda: service
+        return TestClient(app)
+
+    try:
+        yield make
+    finally:
+        app.dependency_overrides.clear()
+        for service in services:
+            service.shutdown()
+
+
+def test_a_click_moves_the_next_response_toward_the_clicked_topic(engine, seeded):
+    long_term = seeded.vec_of[seeded.by_topic[0][0]] + 0.6 * seeded.vec_of[seeded.by_topic[2][0]]
+    uid = seeded.add_user(long_term=long_term / np.linalg.norm(long_term))
+    service = _service(engine)
+
+    def topic1_share(rec):
+        mine = [n for n in rec.news_letter_ids if n in seeded.topic_of][:10]
+        return sum(seeded.topic_of[n] == 1 for n in mine) / max(1, len(mine))
+
+    before = _recommend(service, engine, uid)
+    clicked = seeded.by_topic[1][0]
+    seeded.click(uid, clicked)
+    after = _recommend(service, engine, uid)
+
+    print(f"\n[recsys click-shift] topic1 share@10 before={topic1_share(before):.2f} after={topic1_share(after):.2f}")
+    assert before.source == after.source == "realtime"
+    assert after.cache_hit is False
+    assert clicked not in after.news_letter_ids
+    assert topic1_share(after) > topic1_share(before)
+    service.shutdown()
+
+
+def test_a_click_older_than_24h_does_not_count_as_short_term(engine, seeded):
+    uid = seeded.add_user(long_term=seeded.vec_of[seeded.by_topic[0][0]])
+    seeded.click(uid, seeded.by_topic[1][0], at=datetime.now(timezone.utc) - timedelta(hours=30))
+
+    from app.recsys.sql_repository import SqlRecsysRepository
+    from sqlalchemy.orm import Session
+
+    with Session(engine) as s:
+        vec = SqlRecsysRepository(s).short_term_vector(
+            uid, datetime.now(timezone.utc) - timedelta(hours=24), 20
+        )
+    assert vec is None
+
+
+def test_brand_new_users_never_get_an_empty_list(engine, seeded):
+    service = _service(engine)
+    nobody = seeded.add_user()
+    onboarded = seeded.add_user(onboarding=seeded.by_topic[3][:2])
+    categorized = seeded.add_user(categories=[seeded.cat_ids[2]])
+
+    rec_nobody = _recommend(service, engine, nobody)
+    rec_onboarded = _recommend(service, engine, onboarded)
+    rec_categorized = _recommend(service, engine, categorized)
+
+    assert rec_nobody.source == "cold_start_popular" and rec_nobody.news_letter_ids
+    assert rec_onboarded.source == "cold_start_onboarding"
+    mine = [n for n in rec_onboarded.news_letter_ids if n in seeded.topic_of][:5]
+    assert sum(seeded.topic_of[n] == 3 for n in mine) >= 3
+    assert rec_categorized.source == "cold_start_category"
+    service.shutdown()
+
+
+def test_db_fault_triggers_batch_fallback_within_budget_and_frees_the_connection(engine, seeded, pg_conn):
+    from app.recsys.config import RecsysConfig
+    from app.recsys.service import build_service
+    from app.recsys.sql_repository import sql_repo_scope
+
+    uid = seeded.add_user(long_term=seeded.vec_of[seeded.by_topic[0][0]])
+    batch_ids = seeded.by_topic[2][:5]
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO news_letter_today_batch (user_id, news_letter_ids, created_at) VALUES (%s, %s, NOW())",
+            (uid, json.dumps(batch_ids)),
+        )
+
+    budget_ms = 200
+
+    @contextmanager
+    def stalled_repo():
+        # 실시간 경로의 첫 쿼리가 DB에서 멈춘 상황. 서버 쪽 statement_timeout이 쿼리를
+        # 끊어야 요청이 폴백으로 응답한 뒤 남은 작업 스레드가 커넥션을 오래 붙잡지 않는다.
+        # (여기서는 요청 쪽 예산 초과가 항상 먼저 나도록 예산의 2배로 둔다.)
+        with sql_repo_scope(engine, 2 * budget_ms) as repo:
+            repo.session.execute(text("SELECT pg_sleep(5)"))
+            yield repo
+
+    service = build_service(RecsysConfig(time_budget_ms=budget_ms), repo_factory=stalled_repo)
+    started = time.perf_counter()
+    rec = _recommend(service, engine, uid)
+    elapsed = time.perf_counter() - started
+
+    assert rec.source == "batch"
+    assert rec.fallback_reason == "timeout"
+    assert rec.news_letter_ids == batch_ids
+    assert elapsed < 1.0
+    assert service.counters.get("fallback.timeout") == 1
+
+    deadline = time.monotonic() + 3.0
+    while engine.pool.checkedout() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert engine.pool.checkedout() == 0
+    service.shutdown()
+
+
+def test_knn_binds_the_query_as_a_numpy_array(engine, seeded):
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+
+    from app.recsys.sql_repository import SqlRecsysRepository
+
+    seen = []
+
+    def spy(conn, cursor, statement, parameters, context, executemany):
+        if "<=>" in statement:
+            seen.append(parameters)
+
+    event.listen(engine, "before_cursor_execute", spy)
+    try:
+        target = seeded.by_topic[2][0]
+        with Session(engine) as s:
+            ids = SqlRecsysRepository(s).knn_ids(
+                seeded.vec_of[target], datetime.now(timezone.utc) - timedelta(hours=72), 5
+            )
+    finally:
+        event.remove(engine, "before_cursor_execute", spy)
+
+    assert ids[0] == target
+    assert all(seeded.topic_of.get(n) == 2 for n in ids if n in seeded.topic_of)
+    assert len(seen) == 1 and isinstance(seen[0]["q"], np.ndarray)
+
+
+def test_python_list_vector_param_fails_which_is_why_numpy_is_required(engine, seeded):
+    from sqlalchemy import exc
+    from sqlalchemy.orm import Session
+
+    with Session(engine) as s:
+        with pytest.raises(exc.ProgrammingError, match="operator does not exist"):
+            s.execute(
+                text("SELECT news_letter_id FROM news_letter ORDER BY news_letter_embedding <=> :q LIMIT 1"),
+                {"q": seeded.vec_of[seeded.by_topic[0][0]].tolist()},
+            )
+
+
+def test_impressions_are_written_to_the_log_table(engine, seeded, pg_conn):
+    uid = seeded.add_user(long_term=seeded.vec_of[seeded.by_topic[0][0]])
+    service = _service(engine)
+    rec = _recommend(service, engine, uid)
+
+    service.log_impressions(uid, rec, rec.news_letter_ids[:3])
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT request_id::text, news_letter_id, position, source, model_version "
+            "FROM recommendation_impression_log WHERE user_id = %s ORDER BY position",
+            (uid,),
+        )
+        rows = cur.fetchall()
+    assert [r[1] for r in rows] == rec.news_letter_ids[:3]
+    assert [r[2] for r in rows] == [0, 1, 2]
+    assert {r[0] for r in rows} == {rec.request_id}
+    assert {(r[3], r[4]) for r in rows} == {("realtime", "heuristic-v1")}
+    service.shutdown()
+
+
+def test_impression_log_accepts_the_longest_model_version_and_defaults_exploration_columns(
+    engine, seeded, pg_conn
+):
+    from app.models.recsys import ModelRegistry
+    from app.recsys.sql_repository import SqlImpressionWriter
+
+    registry = ModelRegistry.__table__.c
+    longest = f"lgbm:{'n' * registry.model_name.type.length}@{'v' * registry.model_version.type.length}"
+    uid = seeded.add_user()
+
+    SqlImpressionWriter(engine)([{
+        "request_id": str(uuid.uuid4()), "user_id": uid, "news_letter_id": seeded.by_topic[0][0],
+        "position": 0, "score": 0.5, "source": "realtime", "model_version": longest,
+    }])
+
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT model_version, propensity, explored FROM recommendation_impression_log WHERE user_id = %s",
+            (uid,),
+        )
+        rows = cur.fetchall()
+    # 결정적 정책이므로 propensity는 기록하지 않고(NULL) explored는 false다.
+    assert rows == [(longest, None, False)]
+
+
+def test_sql_path_latency_p50_p95(engine, seeded):
+    """SQL 경로 지연(결과 캐시 끔). 절대값은 러너 사양에 좌우되므로 느슨한 상한만 두고
+    수치는 출력한다 - CI에서는 별도 스텝이 -s로 이 테스트를 돌려 로그에 남긴다."""
+    uid = seeded.add_user(long_term=seeded.vec_of[seeded.by_topic[0][0]])
+    seeded.click(uid, seeded.by_topic[1][0])
+    service = _service(engine, cache_ttl_s=0)
+
+    def run(n):
+        samples = []
+        for _ in range(n):
+            t0 = time.perf_counter()
+            rec = _recommend(service, engine, uid)
+            samples.append((time.perf_counter() - t0) * 1000)
+            assert rec.source == "realtime"
+        return samples
+
+    cold = run(1)  # 첫 요청: 뉴스레터 임베딩 캐시 미적중
+    warm = sorted(run(40))
+    p50, p95 = warm[len(warm) // 2], warm[int(len(warm) * 0.95) - 1]
+    load = os.getloadavg()[0] if hasattr(os, "getloadavg") else float("nan")
+    print(
+        f"\n[recsys sql-path] candidates<={service.cfg.candidate_cap} "
+        f"cold_first={cold[0]:.1f}ms warm_p50={p50:.1f}ms warm_p95={p95:.1f}ms "
+        f"n={len(warm)} loadavg1={load:.2f}"
+    )
+    assert p95 < 1000
+    service.shutdown()
+
+
+def test_request_sessions_holding_every_app_connection_do_not_starve_the_realtime_path(
+    database_url, seeded
+):
+    """API 요청은 인증 조회 때부터 앱 풀 커넥션 하나를 쥔 채 추천을 기다린다. 실시간 경로가
+    같은 풀에서 커넥션을 또 빌리면, 동시 요청 수가 풀 크기에 닿는 순간 요청들이 커넥션을
+    쥐고 작업 스레드는 커넥션을 기다리는 순환 대기가 생기고, 요청은 시간 예산을 다 쓴 뒤
+    폴백으로 끝난다(예산이 길면 풀 타임아웃 에러까지 간다 - ADR 0015 대안 7)."""
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from app.database import register_pgvector_on_connect
+    from app.recsys.config import RecsysConfig
+    from app.recsys.runtime import build_sql_service
+    from app.recsys.sql_repository import SqlRecsysRepository
+
+    # 예산은 부하가 큰 러너에서도 정상 경로가 넉넉히 끝나도록 크게 두고, 앱 풀 대기
+    # 한도(pool_timeout)는 그보다 길게 둬서 풀을 공유하면 반드시 예산 초과로 폴백하게 한다.
+    app_engine = create_engine(database_url, pool_size=2, max_overflow=0, pool_timeout=10)
+    register_pgvector_on_connect(app_engine)
+    uid = seeded.add_user(long_term=seeded.vec_of[seeded.by_topic[0][0]])
+    service = build_sql_service(RecsysConfig(time_budget_ms=5000), database_url)
+    try:
+        with Session(app_engine) as held, Session(app_engine) as request_session:
+            held.execute(text("SELECT 1"))
+            request_session.execute(text("SELECT 1"))
+            assert app_engine.pool.checkedout() == 2
+            rec = service.recommend(uid, fallback_repo=SqlRecsysRepository(request_session))
+        assert rec.source == "realtime", rec.fallback_reason
+    finally:
+        service.shutdown()
+        app_engine.dispose()
+
+
+def test_today_body_is_not_empty_when_the_most_popular_newsletters_have_no_category(api_client, seeded):
+    """표시 단계는 카테고리 매핑이 없는 뉴스레터를 뺀다. 인기 상위가 전부 그런 뉴스레터여도
+    신규 유저의 응답 본문(추천 ID가 아니라 화면에 나가는 목록)이 비지 않아야 한다."""
+    hidden = seeded.add_uncategorized(25, raw_news_count=10_000)
+    uid = seeded.add_user()
+
+    resp = api_client(uid).get("/newsletters/today")
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Rec-Source"] == "cold_start_popular"
+    shown = [item["news_letter_id"] for item in resp.json()]
+    assert shown
+    assert not set(shown) & set(hidden)
+
+
+def test_batch_rows_are_filtered_to_what_the_screen_can_show(api_client, seeded, pg_conn):
+    hidden = seeded.add_uncategorized(3, raw_news_count=1)
+    visible = seeded.by_topic[1][:2]
+    uid = seeded.add_user()
+    other = seeded.add_user()
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO news_letter_today_batch (user_id, news_letter_ids, created_at) VALUES (%s, %s, NOW())",
+            (uid, json.dumps([hidden[0], visible[0], hidden[1], visible[1]])),
+        )
+        cur.execute(
+            "INSERT INTO news_letter_today_batch (user_id, news_letter_ids, created_at) VALUES (%s, %s, NOW())",
+            (other, json.dumps(hidden)),
+        )
+
+    mixed = api_client(uid, mode="batch").get("/newsletters/today")
+    nothing_visible = api_client(other, mode="batch").get("/newsletters/today")
+
+    assert mixed.headers["X-Rec-Source"] == "batch"
+    assert [item["news_letter_id"] for item in mixed.json()] == visible
+    # 배치 행에 보여 줄 수 있는 것이 하나도 없으면 빈 화면 대신 인기 목록으로 넘어간다.
+    assert nothing_visible.headers["X-Rec-Source"] == "popular"
+    assert nothing_visible.json()
+
+
+def test_a_sql_error_in_one_fallback_step_does_not_poison_the_next_step(engine, seeded):
+    """폴백 단계들은 요청 세션 하나를 같이 쓴다. PostgreSQL은 문장이 실패하면 트랜잭션을 중단
+    상태로 두므로, 되돌리지 않으면 뒤 단계가 전부 "current transaction is aborted"로 실패해
+    체인이 인기/최신에 닿지 못하고 empty로 끝난다."""
+    from sqlalchemy.orm import Session
+
+    from app.recsys.config import RecsysConfig
+    from app.recsys.service import build_service
+    from app.recsys.sql_repository import SqlRecsysRepository, sql_repo_scope
+
+    class BrokenBatchRepo(SqlRecsysRepository):
+        def latest_batch(self, user_id):
+            self.session.execute(text("SELECT 1/0"))
+
+    uid = seeded.add_user()
+    service = build_service(
+        RecsysConfig(mode="batch"), repo_factory=partial(sql_repo_scope, engine, 5000)
+    )
+    try:
+        with Session(engine) as session:
+            rec = service.recommend(uid, fallback_repo=BrokenBatchRepo(session))
+    finally:
+        service.shutdown()
+
+    assert rec.source == "popular"
+    assert rec.news_letter_ids
+    assert service.counters.get("fallback_step_error.batch") == 1
+
+
+def test_one_request_needs_only_one_app_pool_connection(api_client, database_url, seeded, pg_conn):
+    """요청 세션 1개 말고는 앱 풀을 쓰지 않는다: 실시간 계산은 전용 풀, 모델 레지스트리 확인과
+    노출 로그 쓰기는 보조 풀을 쓴다. 그래서 앱 풀이 1개뿐이어도 /newsletters/today가 realtime으로
+    응답하고 노출 로그까지 남는다 - 응답 뒤 작업과 요청 세션 정리의 순서(FastAPI 버전에 따라
+    다르다)에 기대지 않는다."""
+    from sqlalchemy import create_engine
+
+    from app.database import register_pgvector_on_connect
+
+    app_engine = create_engine(database_url, pool_size=1, max_overflow=0, pool_timeout=1)
+    register_pgvector_on_connect(app_engine)
+    uid = seeded.add_user(long_term=seeded.vec_of[seeded.by_topic[0][0]])
+    try:
+        resp = api_client(uid, app_engine=app_engine).get("/newsletters/today")
+    finally:
+        app_engine.dispose()
+
+    assert resp.status_code == 200
+    assert resp.headers["X-Rec-Source"] == "realtime"
+    shown = [item["news_letter_id"] for item in resp.json()]
+    assert shown
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            "SELECT news_letter_id FROM recommendation_impression_log WHERE user_id = %s ORDER BY position",
+            (uid,),
+        )
+        logged = [r[0] for r in cur.fetchall()]
+    assert logged == shown
+
+
+def test_daily_report_counts_responses_and_items_per_source_from_the_impression_log(engine, seeded, pg_conn):
+    from app.recsys.sql_repository import SqlImpressionWriter
+    from jobs.tasks.daily_report import impression_sources
+
+    uid = seeded.add_user()
+    source = f"t-{uuid.uuid4().hex[:8]}"  # 다른 테스트가 남긴 행과 섞이지 않는 출처 이름
+    first, second = str(uuid.uuid4()), str(uuid.uuid4())
+    row = {"user_id": uid, "score": None, "source": source, "model_version": "none"}
+    SqlImpressionWriter(engine)([
+        {**row, "request_id": first, "news_letter_id": seeded.by_topic[0][0], "position": 0},
+        {**row, "request_id": first, "news_letter_id": seeded.by_topic[0][1], "position": 1},
+        {**row, "request_id": second, "news_letter_id": seeded.by_topic[1][0], "position": 0},
+    ])
+
+    with pg_conn.cursor() as cur:
+        counted = impression_sources(cur, "24 hours")
+
+    assert counted[source] == {"responses": 2, "items": 3}

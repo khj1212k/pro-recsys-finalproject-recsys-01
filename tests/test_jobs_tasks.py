@@ -163,6 +163,40 @@ def test_daily_report_text_flags_a_silent_scheduler():
     assert "실행된 잡 없음" in format_report(report)
 
 
+def test_daily_report_lists_recommendation_responses_by_source_largest_first():
+    from jobs.tasks.daily_report import format_report
+
+    report = {
+        "job_runs": {"popularity": {"success": 24}},
+        "news_raw_24h": {"total": 0, "ok": 0, "dropped": 0, "empty": 0, "fetch_failed": 0, "error": 0, "duplicate": 0,
+                         "embedded": 0, "per_press": {}},
+        "totals": {"news_raw": 10, "embedded": 8, "newsletters_24h": 0},
+        "recsys_24h": {"by_source": {
+            "popular": {"responses": 3, "items": 60},
+            "realtime": {"responses": 90, "items": 1800},
+            "cold_start_popular": {"responses": 7, "items": 140},
+        }},
+    }
+
+    text = format_report(report)
+
+    assert "추천 응답 100건 (노출 로그 기준: realtime 90, cold_start_popular 7, popular 3)" in text
+
+
+def test_daily_report_says_so_when_no_recommendation_was_logged():
+    from jobs.tasks.daily_report import format_report
+
+    report = {
+        "job_runs": {"popularity": {"success": 24}},
+        "news_raw_24h": {"total": 0, "ok": 0, "dropped": 0, "empty": 0, "fetch_failed": 0, "error": 0, "duplicate": 0,
+                         "embedded": 0, "per_press": {}},
+        "totals": {"news_raw": 10, "embedded": 8, "newsletters_24h": 0},
+        "recsys_24h": {"by_source": {}},
+    }
+
+    assert "추천 응답 0건 (노출 로그 기준)" in format_report(report)
+
+
 def test_embed_job_passes_budget_and_limit_and_fails_when_nothing_could_be_saved(monkeypatch):
     from jobs.tasks import embed
 
@@ -188,3 +222,33 @@ def test_embed_job_passes_budget_and_limit_and_fails_when_nothing_could_be_saved
     seen["on_batch"]()
     assert checkpoints == [1]
     assert ctx.stats["embed"]["failed_batches"] == 1
+
+
+def test_user_embed_job_fills_missing_vectors_then_refreshes_users_who_clicked_in_the_last_day(monkeypatch):
+    from core import user_embedder
+    from jobs.tasks import user_embed
+
+    calls = []
+
+    class FakeEmbedder:
+        def batch_update_all_users(self):
+            calls.append(("fill", None))
+            return {"success": 2, "failed": 0, "skipped": 0}
+
+        def refresh_recently_active_users(self, since):
+            calls.append(("refresh", since))
+            return {"success": 5, "failed": 0, "skipped": 1}
+
+    monkeypatch.setattr(user_embedder, "UserEmbedder", FakeEmbedder)
+    before = datetime.now(timezone.utc)
+
+    result = user_embed.run(JobContext(job="user_embed", args=argparse.Namespace()))
+
+    assert [name for name, _ in calls] == ["fill", "refresh"]
+    since = calls[1][1]
+    assert since.tzinfo is not None
+    assert abs((before - since).total_seconds() - 24 * 3600) < 60
+    assert result == {
+        "user_embed": {"success": 2, "failed": 0, "skipped": 0},
+        "user_embed_refresh": {"success": 5, "failed": 0, "skipped": 1},
+    }

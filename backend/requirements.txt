@@ -36,3 +36,7 @@ typing-inspection==0.4.2
 typing_extensions==4.15.0
 urllib3==2.6.3
 uvicorn==0.40.0
+# 요청 시점 추천(app/recsys)은 recommend_engine의 MMR(src.core.reranker, numpy만 사용)을 재사용한다.
+# API 이미지는 그 디렉터리만 복사하므로(docker/api.Dockerfile) 여기에 -e 줄을 두지 않는다 - 두면 이미지
+# 빌드가 깨지고 pandas/scikit-learn/lightgbm이 딸려 온다. 저장소에서 직접 띄울 때는 backend/README.md의
+# `pip install --no-deps -e ../ai_workspace/recommend_engine`을 따로 실행한다.

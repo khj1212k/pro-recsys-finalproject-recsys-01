@@ -1,8 +1,6 @@
 import sys
 import os
-import math
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict
 from sqlmodel import Session, select
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -10,40 +8,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from app.database import engine
 from app.models.news import NewsLetter
 from app.models.batch import NewsLettersCategory
-
-
-def compute_scores(newsletters, cutoff_utc: datetime) -> List[Dict]:
-    """뉴스레터 리스트에 인기도-최신성 점수를 매겨 내림차순 정렬해 반환 (순수 함수, DB 비의존).
-
-    Score = exp(-age_hours/48) + log1p(raw_news_count)/5
-    """
-    scored_newsletters = []
-
-    for nl in newsletters:
-        created_at = nl.news_letter_created_at
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=timezone.utc)
-
-        age_delta = cutoff_utc - created_at
-        age_hours = age_delta.total_seconds() / 3600.0
-
-        if age_hours < 0:
-            age_hours = 0
-
-        popularity = nl.raw_news_count
-
-        score = math.exp(-age_hours / 48.0) + math.log1p(popularity) / 5.0
-
-        scored_newsletters.append({
-            "id": nl.news_letter_id,
-            "score": score,
-            "title": nl.news_letter_title,
-            "age": age_hours,
-            "pop": popularity
-        })
-
-    scored_newsletters.sort(key=lambda x: x["score"], reverse=True)
-    return scored_newsletters
+# 점수 식은 요청 시점 추천(app.recsys)과 공유한다. 기존 임포트 경로
+# (scheduler.calculate_ranking.compute_scores)도 그대로 동작한다.
+from app.recsys.popularity import compute_scores  # noqa: F401
 
 
 def get_kst_day_utc_bounds(cutoff_kst: datetime):

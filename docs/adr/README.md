@@ -15,5 +15,7 @@
 | [0009](0009-llm-eval-protocol-and-preregistered-decision-rule.md) | LLM 평가 프로토콜과 사전 등록한 모델 선정 규칙 (bake-off v1) | 채택됨 (사전 등록, 결과 없음) | 2026-09-25 |
 | [0010](0010-faithfulness-gate-and-judge-v2.md) | 결정론적 사실성 게이트, 문체 드리프트 게이트, judge v2 | 채택됨 (차단 유형·judge 임계값·모드는 잠정, ADR 0009로 보정) | 2026-09-26 |
 | [0013](0013-ranker-v2-design.md) | ranker v2 설계 — EB-NeRD 오프라인 벤치마크 프로토콜과 승격 규칙 | 채택됨 (사전 등록 후 R1–R4 통과, 서빙은 shadow부터; 0003의 랭킹 부분 대체) | 2026-09-26 |
+| [0015](0015-request-time-recommendation.md) | 요청 시점 추천 - API 프로세스 안에서 후보 합집합·휴리스틱 스코어·MMR을 요청마다 계산, 시간 예산 300ms와 폴백 체인, 실시간 전용 커넥션 풀, 노출 로그 | 채택됨 (추천 품질·대상 장비·HTTP 수준 지연은 미확인, 휴리스틱 가중치는 합성 사전값) | 2026-10-06 |
+| [0017](0017-short-term-state-store.md) | 단기 사용자 상태 저장소 - Redis 없이 클릭 로그에서 요청마다 계산(최근 24시간·20클릭 평균) | 채택됨 (지연은 합성 데이터·CI 러너 측정) | 2026-10-06 |
 
 > 날짜는 각 ADR이 이 fork(`port/july-self-review` 브랜치 계열)에 커밋된 날짜다. 0001–0003의 원 채택 시점(설계 당시)은 2026-07이지만, 이 fork로 문서가 이식된 시점은 2026-09-25다 — 자세한 배경은 [0004](0004-continue-in-fork-and-port-july-fixes.md)를 참고.
