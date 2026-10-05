@@ -217,7 +217,7 @@ def _listing(items, field, mk="mrr") -> str:
     )
 
 
-def version_gap_sentences(vc: dict) -> dict:
+def version_gap_sentences(vc: dict, n_users="?") -> dict:
     """버전 비교(team-final - current)의 결론 문장을 CI 판정에서만 만든다.
 
     결론은 같은 조건 비교(like_with_like)에서만 고른다. v2.1의 비교(엔진 순서 조기 종료)는
@@ -262,7 +262,7 @@ def version_gap_sentences(vc: dict) -> dict:
     elif did_v and all(v == "positive" for v in did_v):
         text = (
             "누출 효과의 차이(DiD)는 같은 조건 비교 모두에서 양수다 - team-final 쪽 누출 효과가 더 크다는 것과 "
-            "일관되지만, 합성 유저 31명 위의 결과라 코드 버전이 원인이라는 인과 문장으로는 쓰지 않는다"
+            f"일관되지만, 합성 유저 {n_users}명 위의 결과라 코드 버전이 원인이라는 인과 문장으로는 쓰지 않는다"
         )
         out["did_like_with_like"] = "positive"
     else:
@@ -422,7 +422,7 @@ def main() -> None:
     )
 
     # 2) 버전 격차 - 같은 조건 비교
-    vg = version_gap_sentences(vc)
+    vg = version_gap_sentences(vc, n_users)
     like_items = _pair_items(vc, like_only=True)
     A(
         f"2. **v1의 'team-final이 current보다 낫다'(MRR 0.849 vs 0.772) 격차.** team-final − current를 같은 조건끼리 비교했다"
@@ -1276,7 +1276,8 @@ def main() -> None:
     )
     cur_aw_vals = [get(mle, k, "as_written_mrr_mean") for k in cur_settings]
     cur_p_vals = [get(mle, k, "primary_mrr_mean") for k in cur_settings]
-    cur_setting_names = "·".join(ARM_LABELS[k].split(": ", 1)[1].split(",")[0] + ("" if k != "fixed100" else " 100라운드") for k in cur_settings)
+    short_names = {"current": "lambdarank 조기 종료", "binary": "binary 조기 종료", "fixed100": "lambdarank 100라운드"}
+    cur_setting_names = "·".join(short_names[k] for k in cur_settings)
     if leak_verdicts and all(leak_verdicts.get(k) == "positive" for k in ["team-final", *cur_settings] if k in leak_verdicts):
         A(
             f"- \"재현한 파이프라인에서 평가 시점 누출을 찾았다: 유저 히스토리 피처가 데이터셋 끝 시각 기준으로 계산돼 채점 대상 "
@@ -1376,7 +1377,7 @@ def main() -> None:
     else:
         A(
             "- \"0.849 vs 0.772 격차의 원인은 추론 시점 누출이다\"(인과 문장). 쓸 수 있는 형태: '같은 조건 비교에서 team-final 쪽 "
-            "누출 효과가 더 컸다(합성 유저 31명)'."
+            f"누출 효과가 더 컸다(합성 유저 {n_users}명)'."
         )
     A(
         "- \"inner-validation 조기 종료가 붕괴를 고쳤다\", \"lambdarank 모델은 트리 1개 이후 배울 것이 없다\", 붕괴 원인을 작은 "

@@ -385,6 +385,7 @@ def test_resume_leak_sentence_quotes_current_as_range_over_settings(text):
     safe = _section(text, "### 쓸 수 있는 문장", "### 쓰면 안 되는 문장")
     assert "0.85→0.56" in safe  # team-final이 1차 인용
     assert "0.80~0.84→0.59~0.62" in safe  # current는 모델 설정 3가지의 범위
+    assert "lambdarank 조기 종료·binary 조기 종료·lambdarank 100라운드" in safe
 
 
 def test_baseline_claim_withdrawn_only_without_model_win(tmp_path, monkeypatch):
