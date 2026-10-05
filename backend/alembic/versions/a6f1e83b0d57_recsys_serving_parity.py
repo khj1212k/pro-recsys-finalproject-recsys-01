@@ -10,7 +10,8 @@
 - recommendation_request_log.features_as_of: 칸 로그의 피처를 계산한 요청 시각. 로그에서 피처를 다시
   계산할 때의 기준이다.
 - model_registry.feature_schema_hash: 모델을 등록할 때의 서빙 피처 스키마 지문.
-- 인기도 창 집계용 인덱스 둘: 클릭 로그와 칸 로그의 (news_letter_id, created_at).
+- 인기도 창 집계용 인덱스 둘: 클릭 로그(event = 'click' 행만 담는 부분 인덱스)와 칸 로그의
+  (news_letter_id, created_at).
 
 Revision ID: a6f1e83b0d57
 Revises: c4d2a91e7f30
@@ -59,10 +60,12 @@ def upgrade() -> None:
         sa.Column("feature_schema_hash", sa.String(length=64), nullable=True),
     )
 
+    # 집계가 읽는 것은 'click' 행의 (뉴스레터, 시각)뿐이다: 그 행만 담는 부분 인덱스(인덱스만 읽고 끝낼 수 있다).
     op.create_index(
         "ix_user_newsletter_ctr_log_news_letter_id_created_at",
         "user_newsletter_ctr_log",
         ["news_letter_id", "created_at"],
+        postgresql_where=sa.text("event = 'click'"),
     )
     op.create_index(
         "ix_recommendation_impression_log_news_letter_id_created_at",

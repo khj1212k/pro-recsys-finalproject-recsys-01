@@ -27,8 +27,14 @@ class UserNewsLetterCTRLog(SQLModel, table=True):
             postgresql_where=text("request_id IS NOT NULL"),
         ),
         CheckConstraint("event IN ('click', 'detail_view')", name="ck_user_newsletter_ctr_log_event"),
-        # 아이템별 최근 클릭 수(인기도 창 집계, ADR 0033)
-        Index("ix_user_newsletter_ctr_log_news_letter_id_created_at", "news_letter_id", "created_at"),
+        # 아이템별 최근 클릭 수(인기도 창 집계, ADR 0033). 그 집계가 읽는 것은 'click' 행의 (뉴스레터, 시각)뿐이라
+        # 그 행만 담는 부분 인덱스로 둔다: 인덱스만 읽고 끝낼 수 있다(체류 보고 행을 걸러 내려고 테이블을 읽지 않는다).
+        Index(
+            "ix_user_newsletter_ctr_log_news_letter_id_created_at",
+            "news_letter_id",
+            "created_at",
+            postgresql_where=text("event = 'click'"),
+        ),
     )
 
     log_id: Optional[int] = Field(default=None, primary_key=True)
