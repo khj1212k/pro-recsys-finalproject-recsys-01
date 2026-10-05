@@ -496,3 +496,18 @@ def test_invalid_exploration_or_fatigue_settings_fail_at_startup():
     assert (cfg.explore_enabled, cfg.explore_slots_cold, cfg.fatigue_mode) == (False, 6, "enforce")
     assert cfg.explore_slots_for(cold=True) == 0
     assert RecsysConfig().explore_slots_for(cold=True) == 4 and RecsysConfig().explore_slots_for(cold=False) == 2
+
+
+def test_a_persistently_failing_fatigue_lookup_logs_one_traceback_not_one_per_request(caplog):
+    import logging
+
+    repo = _repo()
+    repo.fail_on.add("fatigued_among")
+    service = _service(repo, RecsysConfig(fatigue_mode="log", cache_ttl_s=0))
+
+    with caplog.at_level(logging.ERROR, logger="app.recsys.pipeline"):
+        recs = [service.recommend(WARM, fallback_repo=repo) for _ in range(5)]
+
+    assert all(rec.source == SOURCE_REALTIME for rec in recs)
+    assert service.counters.get("fatigue.lookup_error") == 5  # 건수는 빠짐없이 센다
+    assert len([r for r in caplog.records if r.exc_info and "fatigue lookup failed" in r.getMessage()]) == 1

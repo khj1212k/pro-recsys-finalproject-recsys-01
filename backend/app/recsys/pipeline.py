@@ -19,6 +19,7 @@ from app.recsys.exploration import plan_slate
 from app.recsys.metrics import RecsysCounters
 from app.recsys.repository import RecsysRepository
 from app.recsys.scoring import Scorer, ScorerStack
+from app.recsys.throttle import ThrottledExceptionLog
 from app.recsys.types import (
     SOURCE_COLD_CATEGORY,
     SOURCE_COLD_ONBOARDING,
@@ -195,6 +196,7 @@ class RealtimeRecommender:
         self.stack = scorer if isinstance(scorer, ScorerStack) else ScorerStack(scorer, counters=self.counters)
         self.reranker = reranker or CategoryBasedMMRReranker()
         self.item_cache = item_cache or TTLCache(cfg.item_cache_ttl_s, cfg.item_cache_max_entries)
+        self._errors = ThrottledExceptionLog(logger=logger)
 
     def _items(self, repo: RecsysRepository, ids: Sequence[int]) -> List[Item]:
         # 뉴스레터 임베딩/생성시각/기사 수는 생성 후 바뀌지 않고, 신선도 창 안의 후보는
@@ -224,7 +226,8 @@ class RealtimeRecommender:
         except Exception:
             if mode == "enforce":
                 raise
-            logger.warning("fatigue lookup failed in log mode; continuing without it", exc_info=True)
+            # 조회가 계속 실패하면(예: 마이그레이션 전의 DB) 요청마다 같은 예외가 난다: traceback은 분당 한 번만.
+            self._errors.exception("fatigue", "fatigue lookup failed in log mode; continuing without it")
             self.counters.inc("fatigue.lookup_error")
             # PostgreSQL은 실패한 문장 뒤의 문장을 전부 거부하므로 되돌려야 다음 조회가 된다. 되돌리면
             # 트랜잭션 로컬로 건 statement_timeout도 풀린다: 이 요청의 남은 조회는 요청 쪽 시간 예산만 지킨다.
