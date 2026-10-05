@@ -276,6 +276,16 @@ def test_without_a_rate_nothing_is_skipped_and_cu_is_recorded_as_unknown(env):
     assert compute["cu_estimated"] is None and compute["skipped_for_budget"] == []
 
 
+def test_runtime_label_is_not_colab_unless_running_there_or_told_so(env, tmp_path):
+    assert drv.main(env.argv(), runner=Runner(), opener=env.opener) == drv.EXIT_OK
+    label = json.loads((env.out / "compute.json").read_text())["runtime"]
+    if not (sys.platform.startswith("linux") and Path("/content").is_dir()):
+        assert label.startswith("local-")
+    assert drv.main(env.argv("--fresh", "--runtime-label", "colab-cpu-highmem"), runner=Runner(),
+                    opener=env.opener) == drv.EXIT_OK
+    assert json.loads((env.out / "compute.json").read_text())["runtime"] == "colab-cpu-highmem"
+
+
 # --- tarball -----------------------------------------------------------------------------------
 
 def test_tarball_commit_id_is_read_and_wrong_sha_or_escaping_paths_are_rejected(tmp_path):

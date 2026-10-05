@@ -270,6 +270,14 @@ def host_info() -> dict:
             "cpu_count": os.cpu_count(), "ram_gb": ram_gb}
 
 
+def default_runtime_label() -> str:
+    """--runtime-label을 주지 않았을 때의 표기. Colab VM(/content가 있는 Linux)이 아니면 local로 적어, 다른 곳에서 돈
+    기록이 원격 런타임의 것으로 읽히지 않게 한다."""
+    if platform.system() == "Linux" and Path("/content").is_dir():
+        return "colab-cpu"
+    return f"local-{platform.system().lower()}-{platform.machine()}"
+
+
 def wall_seconds(state: dict) -> float:
     return float(sum(max(0.0, i["last_seen"] - i["started"]) for i in state.get("invocations", [])))
 
@@ -378,7 +386,8 @@ def cmd_run(args, *, runner: Callable = subprocess_runner, opener: Callable = ur
         if not state:
             state = {"config_digest": digest, "code": {"sha256": code["sha256"], "commit": code["commit"]},
                      "run_args": run_args, "synthetic": bool(args.synthetic), "stages": {}, "invocations": [],
-                     "host": host_info(), "runtime_label": args.runtime_label, "cu_before": args.cu_before}
+                     "host": host_info(), "runtime_label": args.runtime_label or default_runtime_label(),
+                     "cu_before": args.cu_before}
         now = clock()
         state["invocations"].append({"started": now, "last_seen": now})
         write_json(state_path, state)
@@ -475,7 +484,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--cu-cap", type=float, default=CU_CAP)
     run.add_argument("--cu-warn", type=float, default=CU_WARN)
     run.add_argument("--cu-before", type=float, default=None, help="실행 전 잔액(기록용)")
-    run.add_argument("--runtime-label", default="colab-cpu")
+    run.add_argument("--runtime-label", default=None, help="기록용 런타임 이름(생략하면 자동 판별)")
     run.add_argument("--prereg-commit", default=None, help="사전 등록을 담은 커밋 SHA(리포트 머리말에 적힌다)")
     run.add_argument("--python", default=None)
     run.add_argument("--skip-install", action="store_true")
