@@ -41,8 +41,9 @@ def config_from_prereg(name: str, d: Mapping) -> CandidateConfig:
 
 
 # 사전 등록(preregistration/cold-v1.2.yaml e8)의 두 구성. 값은 yaml이 기준이고 여기서는 읽기만 한다.
-SERVING = config_from_prereg("serving", load_prereg()["e8"]["serving"])
-HARNESS = config_from_prereg("harness", load_prereg()["e8"]["harness"])
+_E8 = load_prereg()["e8"]
+SERVING = config_from_prereg("serving", _E8["serving"])
+HARNESS = config_from_prereg("harness", _E8["harness"])
 
 
 def source_scores(feats: pd.DataFrame, names: Sequence[str]) -> dict[str, tuple[np.ndarray, np.ndarray]]:
