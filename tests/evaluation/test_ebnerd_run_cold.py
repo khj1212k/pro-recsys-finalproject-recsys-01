@@ -1,0 +1,305 @@
+"""콜드 regime 사슬 실행기(run_cold): 합성 데이터로 전 구간, 체크포인트 재개, 증거 등급, 조건별 입력.
+
+EB-NeRD 없이 돈다. demo 데이터가 있는 로컬에서는 맨 아래 테스트가 같은 경로를 실데이터 스키마로 한 번 더 돈다.
+여기서 나오는 수치는 전부 합성 데이터의 것이라 해석하지 않는다(배선만 본다).
+"""
+import json
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from evaluation.recsys.ebnerd import run_cold
+from evaluation.recsys.ebnerd.cold_transforms import SHRUNK_COLUMN
+from evaluation.recsys.ebnerd.cold_verdicts import DEMO_GRADE, EVIDENCE_GRADE, load_prereg, prereg_sha256
+from evaluation.recsys.ebnerd.loaders import ebnerd_root
+from evaluation.recsys.ebnerd.neural.cold import POP_RAW_COLUMNS
+
+PREREG = load_prereg()
+SMALL = ["--seeds", "0", "--n-boot", "20", "--p2-sample", "120", "--sub-cap", "80", "--threads", "2"]
+
+
+def _args(root, out, *extra):
+    return ["--dataset", "ebnerd_synth", "--root", str(root), "--out-dir", str(out), *SMALL, *extra]
+
+
+@pytest.fixture(scope="module")
+def full_run(synth_root, tmp_path_factory):
+    out = tmp_path_factory.mktemp("cold_full")
+    assert run_cold.main(_args(synth_root, out, "--stage", "all")) == 0
+    return out, json.loads((out / run_cold.REPORT_JSON).read_text())
+
+
+def _strip_timing(d):
+    d = json.loads(json.dumps(d))
+    for s in d.get("stages", {}).values():
+        s.pop("seconds", None)
+    for ms in d.get("models", {}).values():
+        for m in ms:
+            m.pop("train_seconds", None)
+    return d
+
+
+def test_chain_produces_every_registered_cell_and_a_machine_verdict(full_run):
+    out, d = full_run
+    traffic = PREREG["conditions"]["traffic"]
+    pools = ["full"] + [str(n) for n in PREREG["conditions"]["pool_sizes"]]
+    assert set(d["e1"]["cells"]) == {f"{t}|{p}" for t in traffic for p in pools}
+    base = d["e1"]["cells"]["orig|full"]
+    arms_48 = [a for a, c in PREREG["arms"].items() if c["data"] == "pool_neg" and c["window_h"] == 48]
+    assert set(arms_48) <= set(base["methods"])
+    assert {"heuristic_cold", "heuristic_prior4", "heuristic_fit_a", "heuristic_fit_b", "popularity_6h"} <= set(base["methods"])
+    assert "poolneg_masknan@nan" in d["e1"]["cells"]["pop0|full"]["methods"]      # NaN 입력 변형은 pop0에서만
+    assert "poolneg_masknan@nan" not in base["methods"]
+    grid = [f"{t}|k{k}" for t in ("orig", "pop0") for k in PREREG["conditions"]["truncate_ks"] + ["all"]]
+    assert set(d["e2"]["p2"]) == set(grid)
+    assert set(d["e2"]["p1"]) == {f"k{k}" for k in PREREG["conditions"]["truncate_ks"] + ["all"]}
+    assert set(d["e8"]) == {"serving", "harness"} and d["e8"]["serving"]["judged_model"] == "poolneg72"
+    assert len(d["e4"]["buckets"]) == 5
+    v = d["verdicts"]
+    assert set(v["verdicts"]) == {"e1", "e2", "e3", "e6", "e7", "e8"}
+    assert d["unmeasured"] == {"rules": [], "stages": []}
+    assert all(s["units_done"] == s["units_total"] for s in d["stages"].values())
+
+
+def test_untruncated_e2_reproduces_the_e1_base_cell_exactly(full_run):
+    _, d = full_run
+    assert d["e2"]["consistency_with_e1"]["max_abs_diff"] == 0.0
+    a = d["e2"]["p2"]["orig|kall"]["methods"]["poolneg"]["ndcg@10"]
+    b = d["e1"]["cells"]["orig|full"]["methods"]["poolneg"]["ndcg@10"]
+    assert a["mean"] == b["mean"] and a["ci95"] == b["ci95"]
+    # 절단이 걸리는 요청 비율은 k가 커질수록 줄고, 절단 없음에서는 0이다
+    shares = [d["e2"]["p2"][f"orig|k{k}"]["truncated_share"] for k in PREREG["conditions"]["truncate_ks"] + ["all"]]
+    assert shares == sorted(shares, reverse=True) and shares[-1] == 0.0 and shares[0] > 0.5
+
+
+def test_pool_shrink_cells_use_the_same_requests_and_smaller_pools(full_run):
+    out, d = full_run
+    with np.load(out / "units/e1_base.npz") as z:
+        n = len(z["clusters"])
+        assert all(z[k].shape == (3, n) for k in z.files if k != "clusters")
+    cells = d["e1"]["cells"]
+    assert cells["orig|40"]["n_requests"] == cells["orig|full"]["n_requests"] == 120
+    # 풀이 작아지면 무작위 순위의 nDCG는 올라간다(정답은 남고 경쟁 후보만 준다)
+    r = [cells[f"orig|{p}"]["methods"]["random"]["ndcg@10"]["mean"] for p in ("full", "60", "40")]
+    assert r[0] < r[1] < r[2]
+
+
+def test_pop0_cells_make_popularity_baseline_carry_no_signal(full_run):
+    _, d = full_run
+    cells = d["e1"]["cells"]
+    assert cells["pop0|full"]["methods"]["recency"]["ndcg@10"] == cells["orig|full"]["methods"]["recency"]["ndcg@10"]
+    assert (cells["pop0|full"]["methods"]["heuristic_prior4"]["ndcg@10"]["mean"]
+            == cells["pop0|full"]["methods"]["heuristic_cold"]["ndcg@10"]["mean"])   # 인기 항이 0이면 두 휴리스틱이 같다
+    assert (cells["orig|full"]["methods"]["heuristic_prior4"]["ndcg@10"]["mean"]
+            != cells["orig|full"]["methods"]["heuristic_cold"]["ndcg@10"]["mean"])
+
+
+def test_report_is_labelled_demo_and_not_judgeable(full_run):
+    out, d = full_run
+    ev = d["meta"]["evidence"]
+    assert ev["grade"] == DEMO_GRADE and any("dataset" in r for r in ev["reasons"])
+    assert d["verdicts"]["judgeable"] is False
+    md = (out / run_cold.REPORT_MD).read_text()
+    assert "demo, not evidence" in md.splitlines()[2] and "이 실행은 판정에 쓰지 않는다" in md
+    assert d["meta"]["preregistration"]["sha256"] == prereg_sha256()
+    from evaluation.recsys.ebnerd.make_cold_report import render
+    assert render(d) == md      # 표는 JSON에서 다시 만들 수 있다
+
+
+def test_report_has_no_per_user_or_article_content(full_run):
+    out, d = full_run
+    text = (out / run_cold.REPORT_JSON).read_text()
+    assert "user_id" not in text and "article_id" not in text and "title" not in text
+    with np.load(out / "units/e1_base.npz") as z:
+        clusters = z["clusters"]
+    assert clusters.min() == 0 and clusters.max() < 200     # 원 유저 id(500000대)가 아니라 묶음 번호
+
+
+def test_assemble_alone_rebuilds_the_same_report_without_the_dataset(full_run, tmp_path):
+    out, d = full_run
+    js, md = tmp_path / "again.json", tmp_path / "again.md"
+    rc = run_cold.main(["--dataset", "ebnerd_synth", "--root", str(tmp_path / "no-data-here"), "--out-dir", str(out),
+                        *SMALL, "--stage", "assemble", "--out-json", str(js), "--out-md", str(md)])
+    assert rc == 0
+    assert json.loads(js.read_text()) == d and md.read_text() == (out / run_cold.REPORT_MD).read_text()
+
+
+def test_resume_refuses_a_different_config_and_requires_the_flag(full_run, synth_root):
+    out, _ = full_run
+    before = (out / "progress.json").read_text()
+    assert run_cold.main(_args(synth_root, out, "--stage", "e1")) == run_cold.EXIT_CONFIG_MISMATCH           # --resume 없음
+    changed = [a if a != "120" else "121" for a in _args(synth_root, out, "--stage", "e1", "--resume")]
+    assert run_cold.main(changed) == run_cold.EXIT_CONFIG_MISMATCH                                           # 표본 크기 다름
+    assert (out / "progress.json").read_text() == before
+
+
+def test_resume_skips_completed_units_without_rewriting_them(full_run, synth_root):
+    out, _ = full_run
+    files = sorted((out / "models").glob("*.txt")) + sorted((out / "units").glob("*.npz"))
+    stamps = {f: f.stat().st_mtime_ns for f in files}
+    assert run_cold.main(_args(synth_root, out, "--stage", "fit", "--resume")) == 0
+    assert run_cold.main(_args(synth_root, out, "--stage", "e1", "--resume")) == 0
+    assert {f: f.stat().st_mtime_ns for f in files} == stamps
+
+
+def test_interrupted_run_resumes_to_the_same_numbers(full_run, synth_root, tmp_path, monkeypatch):
+    """단계 중간에 죽은 뒤 이어서 돌린 결과가 한 번에 돌린 결과와 같아야 한다(모델·지표 배열·판정)."""
+    _, want = full_run
+    out = tmp_path / "interrupted"
+    real_save_model, real_save_arrays = run_cold.Store.save_model, run_cold.Store.save_arrays
+    calls = {"model": 0, "arrays": 0}
+
+    def dying_save_model(self, *a, **k):
+        calls["model"] += 1
+        if calls["model"] == 4:
+            raise KeyboardInterrupt("세션 끊김")
+        return real_save_model(self, *a, **k)
+
+    def dying_save_arrays(self, unit, *a, **k):
+        calls["arrays"] += 1
+        if calls["arrays"] == 2:
+            raise KeyboardInterrupt("세션 끊김")
+        return real_save_arrays(self, unit, *a, **k)
+
+    monkeypatch.setattr(run_cold.Store, "save_model", dying_save_model)
+    with pytest.raises(KeyboardInterrupt):
+        run_cold.main(_args(synth_root, out, "--stage", "all"))
+    done = json.loads((out / "progress.json").read_text())["units"]
+    assert len([u for u in done if u.startswith("model:")]) == 3
+    monkeypatch.setattr(run_cold.Store, "save_model", real_save_model)
+    monkeypatch.setattr(run_cold.Store, "save_arrays", dying_save_arrays)
+    with pytest.raises(KeyboardInterrupt):
+        run_cold.main(_args(synth_root, out, "--stage", "all", "--resume"))
+    assert "e1_base" in json.loads((out / "progress.json").read_text())["units"]
+    assert not list((out / "units").glob("*.tmp*"))          # 반쯤 쓴 단위가 완료로 남지 않는다
+    monkeypatch.setattr(run_cold.Store, "save_arrays", real_save_arrays)
+    assert run_cold.main(_args(synth_root, out, "--stage", "all", "--resume")) == 0
+    got = json.loads((out / run_cold.REPORT_JSON).read_text())
+    assert _strip_timing(got) == _strip_timing(want)
+
+
+def test_stored_model_predicts_exactly_like_the_model_that_was_saved(full_run, synth_bench):
+    from evaluation.recsys.ebnerd.models import ALL_GROUPS
+    from evaluation.recsys.ebnerd.prepare import impressions_in, p2_task, protocol_windows
+    from recsys_core import compute_features
+
+    out, _ = full_run
+    store = run_cold.Store.open_existing(out)
+    m = store.load_model("poolneg", 0)
+    W = protocol_windows(synth_bench)
+    task = p2_task(synth_bench, "validation", impressions_in(synth_bench.imps["validation"], W["test"])[:30])
+    feats = compute_features(synth_bench.ctx["validation"], task.req, groups=ALL_GROUPS)
+    again = store.load_model("poolneg", 0)
+    assert np.array_equal(m.predict(feats, task), again.predict(feats, task))
+    assert m.best_iteration == m.info["best_iteration"] and m.booster.num_trees() >= m.best_iteration
+    assert m.features == m.info["features"] and SHRUNK_COLUMN not in m.features
+    assert SHRUNK_COLUMN in store.load_model("poolneg_shrunk_a20", 0).features
+
+
+# --- 조건별 입력이 등록한 순서로 만들어지는지 ---------------------------------------------------
+
+class _FakeRun:
+    prereg = PREREG
+
+    def arm_cfg(self, arm):
+        return PREREG["arms"][arm]
+
+
+def _raw(synth_bench, n=40):
+    from evaluation.recsys.ebnerd.models import ALL_GROUPS
+    from evaluation.recsys.ebnerd.prepare import impressions_in, p2_task, protocol_windows
+    from recsys_core import compute_features
+
+    W = protocol_windows(synth_bench)
+    task = p2_task(synth_bench, "validation", impressions_in(synth_bench.imps["validation"], W["test"])[:n])
+    ctx = synth_bench.ctx["validation"]
+    return task, ctx, compute_features(ctx, task.req, groups=ALL_GROUPS)
+
+
+def test_pop0_is_applied_at_the_raw_stage_before_rank_and_also_zeroes_shrunk_ctr(synth_bench):
+    task, ctx, raw = _raw(synth_bench)
+    pop = list(POP_RAW_COLUMNS)
+    plain = run_cold._eval_view(_FakeRun(), "poolneg", raw, task.req, ctx, task.req.cand_ptr, 0.0)
+    assert np.all(plain[pop].to_numpy() == 0.0) and plain["hist_cos"].equals(raw["hist_cos"])
+    shrunk = run_cold._eval_view(_FakeRun(), "poolneg_shrunk_a20", raw, task.req, ctx, task.req.cand_ptr, 0.0)
+    assert np.all(shrunk[pop + [SHRUNK_COLUMN]].to_numpy() == 0.0)
+    warm = run_cold._eval_view(_FakeRun(), "poolneg_shrunk_a20", raw, task.req, ctx, task.req.cand_ptr, None)
+    assert (warm[SHRUNK_COLUMN] > 0).any()
+    rank = run_cold._eval_view(_FakeRun(), "poolneg_rank", raw, task.req, ctx, task.req.cand_ptr, 0.0)
+    # raw 0을 먼저 넣고 랭크로 바꾸므로 인기도 열은 전부 동점(0.5)이다. 순서가 반대면 0이 된다.
+    assert np.all(rank[pop].to_numpy() == 0.5)
+    cols = PREREG["features"]["rank_columns"]
+    assert rank[cols].to_numpy().min() >= 0.0 and rank[cols].to_numpy().max() <= 1.0
+    untouched = [c for c in raw.columns if c not in cols]
+    pd.testing.assert_frame_equal(rank[untouched], raw[untouched])
+    nan = run_cold._eval_view(_FakeRun(), "poolneg_masknan", raw, task.req, ctx, task.req.cand_ptr, float("nan"))
+    assert nan[pop].isna().all().all()
+
+
+def test_training_frames_mask_the_same_requests_for_the_zero_and_nan_arms(synth_bench):
+    task, ctx, raw = _raw(synth_bench, n=200)
+
+    class R(_FakeRun):
+        off = PREREG["seed_offsets"]
+
+    pop = list(POP_RAW_COLUMNS)
+    (_, f0), (_, e0), info0 = run_cold._training_frames(R(), "poolneg_mask0", (task, raw), (task, raw), ctx, seed=1)
+    (_, fn), (_, en), infon = run_cold._training_frames(R(), "poolneg_masknan", (task, raw), (task, raw), ctx, seed=1)
+    z, n = (f0[pop] == 0).all(axis=1).to_numpy(), fn[pop].isna().all(axis=1).to_numpy()
+    originally_zero = (raw[pop] == 0).all(axis=1).to_numpy()
+    assert np.array_equal(z & ~originally_zero, n & ~originally_zero) and n.any() and not n.all()
+    assert info0 == infon and 0.3 < info0["masked_fit_request_share"] < 0.7
+    # es는 fit 다음 난수로 가린다: 같은 과제를 넣어도 fit과 다른 요청이 가려진다
+    assert not np.array_equal(fn[pop].isna().all(axis=1).to_numpy(), en[pop].isna().all(axis=1).to_numpy())
+    (_, plain), _, info = run_cold._training_frames(R(), "poolneg", (task, raw), (task, raw), ctx, seed=1)
+    assert plain is raw and info == {}
+
+
+# --- 증거 등급 ---------------------------------------------------------------------------------
+
+def _registered_config():
+    run = PREREG["run"]
+    return {"dataset": run["dataset"], "seeds": run["seeds"], "p2_sample": run["p2_sample"], "sub_cap": run["sub_cap"],
+            "fake_dim": None, "max_fit": None, "max_test": None, "data_files": dict(PREREG["data"]["files_sha256"]),
+            "embeddings_sha256": PREREG["data"]["embeddings_sha256"], "code_sha": "a" * 40,
+            "prereg_sha256": prereg_sha256()}
+
+
+def test_only_the_registered_arguments_and_inputs_earn_the_evidence_grade():
+    ok = run_cold.evidence_grade(_registered_config(), PREREG["run"]["n_boot"], PREREG)
+    assert ok == {"grade": EVIDENCE_GRADE, "reasons": []}
+    deviations = [("dataset", "ebnerd_demo"), ("seeds", [0]), ("p2_sample", 300), ("sub_cap", 100), ("fake_dim", 8),
+                  ("max_fit", 1000), ("max_test", 1000), ("embeddings_sha256", "x"), ("code_sha", "unknown"),
+                  ("code_sha", "a" * 40 + "-dirty"), ("prereg_sha256", "0" * 64)]
+    for key, value in deviations:
+        cfg = _registered_config()
+        cfg[key] = value
+        g = run_cold.evidence_grade(cfg, PREREG["run"]["n_boot"], PREREG)
+        assert g["grade"] == DEMO_GRADE and len(g["reasons"]) == 1, key
+    cfg = _registered_config()
+    cfg["data_files"]["train/behaviors.parquet"] = "deadbeef"
+    assert run_cold.evidence_grade(cfg, PREREG["run"]["n_boot"], PREREG)["grade"] == DEMO_GRADE
+    assert run_cold.evidence_grade(_registered_config(), 200, PREREG)["grade"] == DEMO_GRADE
+
+
+def test_unknown_stage_is_rejected(synth_root, tmp_path):
+    with pytest.raises(SystemExit):
+        run_cold.main(_args(synth_root, tmp_path / "x", "--stage", "e5"))
+
+
+# --- demo 데이터(로컬 전용) --------------------------------------------------------------------
+
+DEMO = ebnerd_root() / "ebnerd_demo"
+
+
+@pytest.mark.skipif(not (DEMO / "articles.parquet").exists(), reason="EB-NeRD demo 데이터 없음 (로컬 전용)")
+def test_chain_runs_on_ebnerd_demo_schema_and_stays_demo_grade(tmp_path):
+    out = tmp_path / "demo"
+    rc = run_cold.main(["--dataset", "ebnerd_demo", "--root", str(ebnerd_root()), "--fake-dim", "8",
+                        "--out-dir", str(out), "--seeds", "0", "--n-boot", "20", "--p2-sample", "60", "--sub-cap", "60",
+                        "--max-fit", "1200", "--max-test", "1200", "--threads", "2", "--stage", "all"])
+    assert rc == 0
+    d = json.loads((out / run_cold.REPORT_JSON).read_text())
+    assert d["meta"]["evidence"]["grade"] == DEMO_GRADE and d["verdicts"]["judgeable"] is False
+    assert d["unmeasured"]["stages"] == [] and "orig|full" in d["e1"]["cells"]
