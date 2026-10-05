@@ -5,14 +5,17 @@ In-process fake app (no server needed):
 
 Against a running stack (disposable DB only - this creates users and click logs;
 sim/README.md has the full procedure). The day-end command stands in for the
-nightly job that writes news_letter_today_batch:
+nightly job that writes news_letter_today_batch. Single quotes: the exported
+$LOAD_DB_URL is expanded by the child shell, so the URL (and its password) is in
+neither this command line's arguments nor the report:
     python -m sim.run --target http://127.0.0.1:8100 --users 50 --days 3 \
-        --day-end-cmd "python -m sim.seed --database-url $LOAD_DB_URL batches" \
+        --day-end-cmd 'python -m sim.seed --database-url "$LOAD_DB_URL" batches' \
         --out out/sim_stack.json
 """
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from dataclasses import asdict, replace
@@ -27,6 +30,17 @@ from sim.driver import ApiClient, SimulationConfig, VirtualClock, run_simulation
 from sim.metrics import compute_metrics
 from sim.personas import PopulationConfig, generate_population
 from sim.reference import REFERENCE_START
+
+
+_URL_CREDENTIALS = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.\-]*://)[^\s/@:]+:[^\s/@]+@")
+
+
+def redact_credentials(value):
+    """`scheme://user:password@host` -> `scheme://***@host` in a string argument.
+
+    The report records the arguments of the run; a database URL typed into
+    --day-end-cmd (or a --target with basic auth) must not be written to disk with it."""
+    return _URL_CREDENTIALS.sub(r"\g<scheme>***@", value) if isinstance(value, str) else value
 
 
 def build_catalog(kind: str, n_days: int, seed: int, team_archive_dir: Optional[Path]) -> Catalog:
@@ -105,7 +119,7 @@ def main(argv=None) -> int:
         n_users=args.users, seed=args.seed, n_days=args.days, late_join_frac=args.late_join_frac,
         drift_frac=args.drift_frac, drift_day=args.drift_day, run_tag=args.run_tag))
     cfg = preset(args.preset)
-    report = {"args": {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()}}
+    report = {"args": {k: redact_credentials(str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()}}
 
     if args.target == "fake":
         catalog = build_catalog(args.catalog, args.days, args.seed, args.team_archive_dir)

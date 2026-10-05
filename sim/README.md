@@ -54,8 +54,12 @@ python -m sim.calibration --ebnerd-dir data/benchmarks/ebnerd/ebnerd_small \
 
 ```bash
 python -m sim.run --target http://127.0.0.1:8100 --users 50 --days 3 \
-    --day-end-cmd "python -m sim.seed --database-url $LOAD_DB_URL batches" --out out/sim_stack.json
+    --day-end-cmd 'python -m sim.seed --database-url "$LOAD_DB_URL" batches' --out out/sim_stack.json
 ```
+
+`--day-end-cmd`는 **작은따옴표**로 감싼다. `$LOAD_DB_URL`은 `sim.run`이 띄우는 자식 셸에서 풀리므로
+(3.3의 `export` 필요) 비밀번호가 든 URL이 `sim.run`의 인자에도, 인자를 기록하는 결과 JSON에도 남지 않는다.
+큰따옴표로 감싸 URL이 인자에 그대로 들어온 경우에도 결과 JSON에는 `scheme://***@host`로 가려서 쓴다.
 
 현재 main의 `/newsletters/today`는 `X-Rec-Source` 헤더를 보내지 않으므로 `fallback_rate`는 측정 불가(`None`)로
 나온다. 요청 시점 추천 브랜치(`feat/realtime-recommendation`)는 헤더를 보낸다.
@@ -85,12 +89,14 @@ python -m sim.run --target http://127.0.0.1:8100 --users 50 --days 3 \
 
 ```bash
 # 0) 일회용 프로젝트용 env 파일: 수집 DB와 다른 프로젝트 이름·볼륨·포트
-cp .env.compose.example .env.load        # POSTGRES_*·API_SECRET_KEY를 새 값으로 채운다
+#    파일 이름은 .env.load.local — .gitignore의 `.env.*.local`에 걸려 커밋되지 않는다.
+cp .env.compose.example .env.load.local  # POSTGRES_*·API_SECRET_KEY를 새 값으로 채운다
 #    DB_HOST_PORT=5434, API_HOST_PORT=8100, POSTGRES_DB=newsletter_load
+#    COMPOSE_PROJECT_NAME=newsletter-load   # -p를 빠뜨려도 수집 프로젝트(newsletter-recsys)의 볼륨을 건드리지 않게
 export LOAD_DB_URL="postgresql://<user>:<pw>@127.0.0.1:5434/newsletter_load"   # 셸에만, 파일에 남기지 않는다
 
 # 1) db + migrate + api만 기동 (scheduler는 띄우지 않는다)
-docker compose -p newsletter-load --env-file .env.load up -d --build api
+docker compose -p newsletter-load --env-file .env.load.local up -d --build api
 
 # 2) 합성 뉴스레터 시드 (news_raw에 행이 있거나 실사용자가 있으면 sim.seed가 거부한다)
 python -m sim.seed --database-url "$LOAD_DB_URL" catalog --days 2
@@ -105,8 +111,14 @@ python -m sim.seed --database-url "$LOAD_DB_URL" batches
 python -m sim.loadtest --host http://127.0.0.1:8100 --rps 5 20 50 --duration 120s --out-dir out/load_v1
 
 # 6) 정리: 일회용 프로젝트의 컨테이너와 볼륨 삭제 (수집 프로젝트 newsletter-recsys는 건드리지 않는다)
-docker compose -p newsletter-load --env-file .env.load down -v
+docker compose -p newsletter-load --env-file .env.load.local down -v
 ```
+
+`docker-compose.yml`은 프로젝트 이름을 `newsletter-recsys`로 고정한다. `down -v`는 그 프로젝트의 볼륨
+(수집 DB의 `pgdata` 포함)을 지우므로 일회용 스택에는 이름을 두 겹으로 건다: 명령마다 `-p newsletter-load`,
+env 파일에 `COMPOSE_PROJECT_NAME=newsletter-load`. env 파일의 값이 compose 파일의 `name:`보다 우선한다
+(`docker compose --env-file <파일> config`로 프로젝트·볼륨 이름을 띄우기 전에 확인할 수 있다).
+`out/`은 gitignore 대상이다.
 
 결과 보고: `out/load_v1/summary.md`를 `reports/serving/load_v1.md`로 옮기고 머리말에 `[LOAD]`, VM
 셰이프(OCPU·메모리), 부하 생성기 위치, 대상 커밋, uvicorn 워커 수, 시드 조건을 적는다. 20 RPS는

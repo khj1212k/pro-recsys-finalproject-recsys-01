@@ -260,12 +260,12 @@ drift 사용자 수 확대(예: 1,000명 또는 drift 30%).
 확보하지 못했다(ADR 0026). CI의 헤드리스 스모크는 가짜 앱을 대상으로 한 하네스 동작 확인이다.
 
 > **재실행 대기(클라우드)** — A1 확보 후 `sim/README.md` 3.3 절차 그대로:
-> `docker compose -p newsletter-load --env-file .env.load up -d --build api` →
+> `docker compose -p newsletter-load --env-file .env.load.local up -d --build api` →
 > `python -m sim.seed --database-url "$LOAD_DB_URL" catalog --days 2` →
 > `python -m sim.loadtest --host http://127.0.0.1:8100 --rps 50 --duration 30s --out-dir out/load_warmup` →
 > `python -m sim.seed --database-url "$LOAD_DB_URL" batches` →
 > `python -m sim.loadtest --host http://127.0.0.1:8100 --rps 5 20 50 --duration 120s --out-dir out/load_v1` →
-> `docker compose -p newsletter-load --env-file .env.load down -v`. 결과는 `reports/serving/load_v1.md`에
+> `docker compose -p newsletter-load --env-file .env.load.local down -v`. 결과는 `reports/serving/load_v1.md`에
 > VM 셰이프·부하 생성기 위치·대상 커밋과 함께 싣는다.
 
 ### 테스트
