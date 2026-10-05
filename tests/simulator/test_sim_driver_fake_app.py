@@ -142,6 +142,8 @@ def test_a_user_whose_onboarding_call_fails_is_counted_not_silently_dropped():
     assert m["onboarding"] == {"n_users_due": 12, "n_users_onboarded": 11, "n_onboarding_failures": 1,
                                "failures_by_endpoint": {"put_categories": 1}}
     assert m["errors"]["by_endpoint"]["put_categories"]["errors"] == 1
+    # logged in, so this user still reads - but as a user the server knows no categories for
+    assert 3 not in log.onboarding and [v for v in log.views if v.user == 3]
 
 
 def test_a_login_answer_without_a_token_is_an_onboarding_failure_and_the_user_has_no_views():
