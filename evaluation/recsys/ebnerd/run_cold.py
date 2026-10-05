@@ -17,6 +17,10 @@ scripts/m4_colab_driver.py가 단계마다 서브프로세스로 부른다(개�
   e2p1      units/e2p1_k{...}.npz
   assemble  ebnerd_v1_2_cold.json, ebnerd_v1_2_cold.md   (CI·쌍체 차이·기계 판정은 여기서 배열로부터 계산)
 
+재현 게이트: e1의 첫 단위(e1_base)가 끝나면 바로 게이트(poolneg, 원본 조건·전체 풀의 nDCG@10 seed 평균이 v1 CI 안)를
+계산해 <OUT>/reproduction_gate.json에 적는다. 증거 등급 실행에서 실패면 종료 코드 4로 멈춘다 — 게이트 실패는 등록상
+실행 무효라서, 나머지 단계에 예산을 쓰기 전에 끝낸다. demo 등급 실행은 기록만 하고 계속 돈다.
+
 재개: 단위(모델 하나, 조건 하나)가 끝날 때마다 파일을 원자적으로 쓰고 progress.json에 적는다. 다시 실행하면 설정 해시
 (사전 등록 sha, 데이터 sha, seed, 표본 크기, 코드 SHA)가 같을 때만 끝난 단위를 건너뛴다. 다르면 거부한다.
 
@@ -60,7 +64,16 @@ from .cold_transforms import (
     subsample_request_indices,
     subsample_users,
 )
-from .cold_verdicts import DEMO_GRADE, EVIDENCE_GRADE, cold_verdicts, load_prereg, prereg_commit, prereg_sha256
+from .cold_verdicts import (
+    DEMO_GRADE,
+    EVIDENCE_GRADE,
+    cell_key,
+    cold_verdicts,
+    load_prereg,
+    prereg_commit,
+    prereg_sha256,
+    reproduction_gate,
+)
 from .heuristic_fit import fit_pairwise_logistic, fitted_scores, heuristic_terms, prior_scores
 from .loaders import ebnerd_root
 from .models import (
@@ -96,10 +109,16 @@ P1_CURVE_METRICS = ("ndcg@10", "auc")
 BASELINES = ("random", "popularity_6h", "popularity_24h", "recency", "cosine_history")
 REPORT_JSON = "ebnerd_v1_2_cold.json"
 REPORT_MD = "ebnerd_v1_2_cold.md"
+GATE_JSON = "reproduction_gate.json"
 EXIT_CONFIG_MISMATCH = 3
+EXIT_GATE_FAILED = 4      # scripts/m4_colab_driver.py의 RUN_COLD_EXIT_GATE와 같은 값(테스트가 묶는다)
 
 
 class ConfigMismatch(RuntimeError):
+    pass
+
+
+class ReproductionGateFailed(RuntimeError):
     pass
 
 
@@ -501,6 +520,7 @@ def stage_e1(run: Run):
         return arrays, {"traffic": ["orig", "pop0"], **_task_meta(task)}
 
     _unit(run, "e1_base", base)
+    enforce_reproduction_gate(run)
     for traffic in run.prereg["conditions"]["subsample_fractions"]:
         def sub(traffic=traffic):
             s = run.subsample(traffic)
@@ -514,6 +534,42 @@ def stage_e1(run: Run):
                             "subsample_clicks": int(len(s["clicks"])), "subsample_inviews": int(len(s["views"])),
                             **_task_meta(task)}
         _unit(run, f"e1_{traffic}", sub)
+
+
+def gate_from_checkpoint(store: Store, prereg: dict, seeds: list[int]) -> dict:
+    """e1_base 체크포인트만으로 재현 게이트를 계산한다(부트스트랩 없음).
+
+    리포트가 쓰는 값과 같은 식이다: 요청별 지표를 seed 평균한 뒤 요청 평균(MetricBank.summary의 "mean"). 판정은
+    cold_verdicts.reproduction_gate 하나가 한다.
+    """
+    g = prereg["reproduction_gate"]
+    metric = prereg["statistics"]["metric"]
+    key = cell_key(g["cell"]["traffic"], g["cell"]["pool"])
+    arrays, _ = store.load_arrays("e1_base")
+    bank = _bank(arrays, f"{key}|", [g["arm"]], seeds, n_boot=0)
+    methods = {}
+    if g["arm"] in bank.runs:
+        methods[g["arm"]] = {metric: {"mean": float(np.nanmean(bank.seed_mean(g["arm"])[metric]))}}
+    return reproduction_gate({"e1": {"cells": {key: {"methods": methods}}}}, prereg)
+
+
+def enforce_reproduction_gate(run: Run) -> dict:
+    """e1의 기준 칸이 나오자마자 재현 게이트를 본다.
+
+    게이트 실패는 사전 등록(A2.9)상 실행 무효다. 그 판단에 필요한 값은 e1_base에 다 있으므로, 남은 단계에 예산을 쓰기
+    전에 여기서 멈춘다. 증거 등급 조건을 만족하지 않는 실행(demo)은 어차피 판정에 쓰지 않으므로 기록만 하고 계속 돈다.
+    """
+    gate = gate_from_checkpoint(run.store, run.prereg, run.seeds)
+    grade = evidence_grade(run.store.progress["config"], run.args.n_boot, run.prereg)["grade"]
+    record = {**gate, "evidence_grade": grade, "enforced": grade == EVIDENCE_GRADE, "checked_after": "e1_base"}
+    run.store.write_json(GATE_JSON, record)
+    log.info("reproduction gate: %s (%s nDCG@10 seed mean=%s, within=%s, enforced=%s)", gate["status"], gate["arm"],
+             gate["mean"], gate["within"], record["enforced"])
+    if record["enforced"] and gate["status"] == "fail":
+        raise ReproductionGateFailed(
+            f"재현 게이트 실패: {gate['arm']} nDCG@10 seed 평균 {gate['mean']}가 {gate['within']} 밖입니다. 이 실행은 무효입니다"
+            f"(사전 등록 A2.9). 남은 단계를 돌리지 않습니다. 기록: {run.store.dir / GATE_JSON}")
+    return record
 
 
 # --- E2 ----------------------------------------------------------------------------------------
@@ -967,7 +1023,11 @@ def main(argv=None) -> int:
         if stage == "assemble":
             stage_assemble(store, prereg, args, store.progress["config"], store.progress.get("bench_info"))
         else:
-            STAGE_FUNCS[stage](run)
+            try:
+                STAGE_FUNCS[stage](run)
+            except ReproductionGateFailed as e:
+                log.error("%s", e)
+                return EXIT_GATE_FAILED
         log.info("stage %s finished %.0fs", stage, time.time() - t0)
     return 0
 

@@ -3,7 +3,9 @@
 EB-NeRD 없이 돈다. demo 데이터가 있는 로컬에서는 맨 아래 테스트가 같은 경로를 실데이터 스키마로 한 번 더 돈다.
 여기서 나오는 수치는 전부 합성 데이터의 것이라 해석하지 않는다(배선만 본다).
 """
+import copy
 import json
+import shutil
 
 import numpy as np
 import pandas as pd
@@ -215,6 +217,98 @@ def test_stored_model_predicts_exactly_like_the_model_that_was_saved(full_run, s
     assert m.best_iteration == m.info["best_iteration"] and m.booster.num_trees() >= m.best_iteration
     assert m.features == m.info["features"] and SHRUNK_COLUMN not in m.features
     assert SHRUNK_COLUMN in store.load_model("poolneg_shrunk_a20", 0).features
+
+
+# --- 재현 게이트를 e1의 첫 단위 직후에 본다 ----------------------------------------------------
+
+def _prereg_with_gate(lo: float, hi: float) -> dict:
+    d = copy.deepcopy(PREREG)
+    d["reproduction_gate"]["ndcg10_seed_mean_within"] = [lo, hi]
+    return d
+
+
+def _copy_up_to_the_base_cell(src, dst):
+    """끝난 실행의 체크포인트에서 e1의 서브샘플 단위와 리포트를 지운 사본: "e1_base까지 돈 실행"이다."""
+    shutil.copytree(src, dst)
+    progress = json.loads((dst / "progress.json").read_text())
+    for unit in [u for u in progress["units"] if u.startswith("e1_sub")]:
+        for f in progress["units"].pop(unit)["files"]:
+            (dst / f).unlink()
+    (dst / "progress.json").write_text(json.dumps(progress))
+    for name in (run_cold.REPORT_JSON, run_cold.REPORT_MD, run_cold.GATE_JSON):
+        (dst / name).unlink()
+    return dst
+
+
+def test_early_gate_is_the_number_the_report_judges(full_run):
+    """e1 직후에 본 게이트와 리포트의 게이트가 다른 값이면 "먼저 본다"가 규칙을 바꾸는 것이 된다."""
+    out, d = full_run
+    early = run_cold.gate_from_checkpoint(run_cold.Store.open_existing(out), PREREG, [0])
+    assert early == d["verdicts"]["gate"] and early["mean"] is not None
+    assert early["mean"] == d["e1"]["cells"]["orig|full"]["methods"]["poolneg"]["ndcg@10"]["mean"]
+    record = json.loads((out / run_cold.GATE_JSON).read_text())
+    assert {k: record[k] for k in early} == early
+    # 합성 데이터 실행은 demo 등급이라 게이트 값과 무관하게 끝까지 돈다(full_run이 종료 코드 0으로 끝났다)
+    assert record["enforced"] is False and record["evidence_grade"] == DEMO_GRADE
+
+
+def test_early_gate_averages_seeds_per_request_like_the_report(tmp_path):
+    """손으로 만든 배열: 게이트 값은 요청별로 seed 평균을 낸 뒤의 요청 평균이고, 등록한 칸(orig·전체 풀)의 arm만 본다."""
+    row = lambda *ndcg: np.array([ndcg, (0,) * len(ndcg), (0,) * len(ndcg)], dtype=np.float32)   # noqa: E731
+    arrays = {"clusters": np.array([0, 0, 1], dtype=np.int32),
+              "orig|full|poolneg|0": row(0.2, 0.4, np.nan), "orig|full|poolneg|1": row(0.4, 0.0, 0.3),
+              "orig|40|poolneg|0": row(0.9, 0.9, 0.9), "pop0|full|poolneg|0": row(0.0, 0.0, 0.0),
+              "orig|full|poolneg_mask0|0": row(0.8, 0.8, 0.8)}
+    store = run_cold.Store(tmp_path / "s", {"hand": "made"}, resume=False)
+    store.save_arrays("e1_base", arrays, {"n_requests": 3}, 0.0)
+    gate = run_cold.gate_from_checkpoint(store, _prereg_with_gate(0.26, 0.27), [0, 1])
+    assert gate["mean"] == pytest.approx((0.3 + 0.2 + 0.3) / 3, abs=1e-6) and gate["status"] == "pass"
+    report_mean = run_cold._bank(arrays, "orig|full|", ["poolneg"], [0, 1], 10).summary("poolneg")["ndcg@10"]["mean"]
+    assert gate["mean"] == report_mean
+    assert run_cold.gate_from_checkpoint(store, _prereg_with_gate(0.27, 0.28), [0, 1])["status"] == "fail"
+    # 기준 arm의 값이 없으면 실패가 아니라 미측정이다
+    empty = run_cold.Store(tmp_path / "e", {"hand": "made"}, resume=False)
+    empty.save_arrays("e1_base", {"clusters": np.zeros(0, dtype=np.int32)}, {"n_requests": 0}, 0.0)
+    assert run_cold.gate_from_checkpoint(empty, PREREG, [0, 1]) == {
+        "arm": "poolneg", "within": PREREG["reproduction_gate"]["ndcg10_seed_mean_within"], "mean": None,
+        "status": "unmeasured"}
+
+
+def test_gate_failure_stops_a_judged_run_right_after_the_base_cell(full_run, synth_root, tmp_path, monkeypatch):
+    """판정용(증거 등급) 실행에서 게이트가 실패하면 나머지 예산을 쓰기 전에 멈춘다. 게이트 실패는 등록상 실행 무효다."""
+    out = _copy_up_to_the_base_cell(full_run[0], tmp_path / "gate")
+    monkeypatch.setattr(run_cold, "evidence_grade", lambda *a, **k: {"grade": EVIDENCE_GRADE, "reasons": []})
+    monkeypatch.setattr(run_cold, "load_prereg", lambda: _prereg_with_gate(2.0, 3.0))      # nDCG로는 닿을 수 없는 구간
+    assert run_cold.main(_args(synth_root, out, "--stage", "e1", "--resume")) == run_cold.EXIT_GATE_FAILED
+    units = json.loads((out / "progress.json").read_text())["units"]
+    assert "e1_base" in units and not any(u.startswith("e1_sub") for u in units)   # 서브샘플 칸을 계산하지 않았다
+    record = json.loads((out / run_cold.GATE_JSON).read_text())
+    assert record["status"] == "fail" and record["enforced"] is True and record["within"] == [2.0, 3.0]
+    # 사슬 전체를 한 번에 돌리는 경로에서도 뒤 단계로 넘어가지 않고 리포트를 만들지 않는다
+    assert run_cold.main(_args(synth_root, out, "--stage", "all", "--resume")) == run_cold.EXIT_GATE_FAILED
+    assert not (out / run_cold.REPORT_JSON).exists()
+    assert not any(u.startswith("e1_sub") for u in json.loads((out / "progress.json").read_text())["units"])
+
+
+def test_gate_pass_lets_a_judged_run_continue(full_run, synth_root, tmp_path, monkeypatch):
+    out = _copy_up_to_the_base_cell(full_run[0], tmp_path / "gate")
+    mean = full_run[1]["verdicts"]["gate"]["mean"]
+    monkeypatch.setattr(run_cold, "evidence_grade", lambda *a, **k: {"grade": EVIDENCE_GRADE, "reasons": []})
+    monkeypatch.setattr(run_cold, "load_prereg", lambda: _prereg_with_gate(mean, mean))    # 경계 포함(lo <= mean <= hi)
+    assert run_cold.main(_args(synth_root, out, "--stage", "e1", "--resume")) == 0
+    units = json.loads((out / "progress.json").read_text())["units"]
+    assert all(f"e1_{t}" in units for t in PREREG["conditions"]["subsample_fractions"])
+    record = json.loads((out / run_cold.GATE_JSON).read_text())
+    assert record["status"] == "pass" and record["enforced"] is True
+
+
+def test_gate_failure_does_not_stop_a_demo_run(full_run, synth_root, tmp_path, monkeypatch):
+    """demo 등급 실행은 판정에 쓰지 않으므로 게이트로 멈추지 않는다(배선 확인이 끝까지 가야 한다)."""
+    out = _copy_up_to_the_base_cell(full_run[0], tmp_path / "gate")
+    monkeypatch.setattr(run_cold, "load_prereg", lambda: _prereg_with_gate(2.0, 3.0))
+    assert run_cold.main(_args(synth_root, out, "--stage", "e1", "--resume")) == 0
+    record = json.loads((out / run_cold.GATE_JSON).read_text())
+    assert record["status"] == "fail" and record["enforced"] is False
 
 
 # --- 조건별 입력이 등록한 순서로 만들어지는지 ---------------------------------------------------

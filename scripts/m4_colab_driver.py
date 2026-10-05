@@ -25,6 +25,8 @@
 - 세션이 끊겨 프로세스가 죽은 경우에는 같은 명령으로 다시 실행하면 끝난 단계·단위를 건너뛰고 이어서 돈다
   (설정 해시가 같을 때만. 다르면 거부). 단계가 0이 아닌 코드로 끝난 경우는 실행이 무효라서 FAILED 마커를 남기고,
   마커가 있는 동안은 --fresh 없이 다시 돌지 않는다(통과할 때까지 조용히 재시도하는 길을 막는다).
+- 재현 게이트는 run_cold가 e1의 기준 칸 직후에 본다. 판정용 실행에서 실패면 e1이 종료 코드 4로 끝나고, 드라이버는
+  마커에 reason=reproduction_gate를 적은 채 멈춘다(뒤 단계와 assemble을 돌리지 않는다).
 - 단계를 시작하기 전에 `rate x 누적 벽시계 시간`으로 CU를 추정한다. 경고선 이상이면 서술용 단계를 건너뛰고, 상한
   이상이면 남은 단계를 돌리지 않는다. 건너뛴 단계는 리포트에 "미측정"으로 남는다. assemble은 항상 돈다.
   이 규칙은 rate가 있어야 적용되므로 --synthetic이 아닌 실행은 --cu-rate 없이 시작하지 않는다. CU로 과금하지 않는
@@ -75,6 +77,8 @@ REGISTERED_INPUTS = ("train/behaviors.parquet", "train/history.parquet", "valida
 
 EXIT_OK, EXIT_SHA_MISMATCH, EXIT_CONFIG_MISMATCH, EXIT_FAILED_MARKER, EXIT_STAGE_FAILED = 0, 2, 3, 4, 5
 EXIT_DOWNLOAD, EXIT_INSTALL, EXIT_USAGE = 6, 7, 64
+# run_cold가 재현 게이트 실패로 끝날 때의 종료 코드와 그 기록 파일(run_cold.EXIT_GATE_FAILED, GATE_JSON과 같은 값)
+RUN_COLD_EXIT_GATE, GATE_JSON = 4, "reproduction_gate.json"
 
 
 class DriverError(RuntimeError):
@@ -436,9 +440,15 @@ def run_stages(workdir: Path, state: dict, state_path: Path, run_args: dict, *, 
         if code != 0:
             st.update(status="failed", returncode=code)
             beat()
-            write_json(out_dir / "FAILED", {"stage": stage, "returncode": code,
-                                            "rule": "단계 실패는 실행 무효다. 원인을 고친 뒤 새 SHA로 사슬 전체를 다시 돌린다."})
-            log(f"stage {stage}: 실패(returncode {code}) — FAILED 마커를 남겼다")
+            if code == RUN_COLD_EXIT_GATE:
+                reason, what = "reproduction_gate", "재현 게이트 실패"
+                rule = (f"재현 게이트 실패는 실행 무효다. 남은 단계를 돌리지 않았다. out/{GATE_JSON}의 값과 사유를 ADR 0013 "
+                        "A2.10에 '폐기'로 적고, 원인을 고친 뒤 새 SHA로 사슬 전체를 다시 돌린다.")
+            else:
+                reason, what = "stage_failed", "실패"
+                rule = "단계 실패는 실행 무효다. 원인을 고친 뒤 새 SHA로 사슬 전체를 다시 돌린다."
+            write_json(out_dir / "FAILED", {"stage": stage, "returncode": code, "reason": reason, "rule": rule})
+            log(f"stage {stage}: {what}(returncode {code}) — FAILED 마커를 남겼다")
             return EXIT_STAGE_FAILED
         st.update(status="done")
         ran_any = True

@@ -278,6 +278,26 @@ def test_failed_stage_invalidates_the_run(env):
     assert drv.main(env.argv(), runner=again, opener=env.opener) == drv.EXIT_FAILED_MARKER and again.calls == []
 
 
+def test_reproduction_gate_failure_stops_the_chain_and_is_recorded_as_such(env):
+    """run_cold는 e1의 기준 칸 직후에 재현 게이트를 보고, 판정용 실행에서 실패면 전용 종료 코드로 끝난다. 드라이버는 그
+    실행을 무효로 남기고 뒤 단계(assemble 포함)를 돌리지 않는다."""
+    from evaluation.recsys.ebnerd import run_cold
+
+    assert drv.RUN_COLD_EXIT_GATE == run_cold.EXIT_GATE_FAILED and drv.GATE_JSON == run_cold.GATE_JSON
+    runner = Runner(fail={"e1": drv.RUN_COLD_EXIT_GATE})
+    assert drv.main(env.argv(), runner=runner, opener=env.opener) == drv.EXIT_STAGE_FAILED
+    assert runner.calls == ["fit", "e1"]
+    failed = json.loads((env.out / "FAILED").read_text())
+    assert failed["stage"] == "e1" and failed["reason"] == "reproduction_gate" and drv.GATE_JSON in failed["rule"]
+    assert "재현 게이트 실패" in (env.out / "run.log").read_text()
+    again = Runner()
+    assert drv.main(env.argv(), runner=again, opener=env.opener) == drv.EXIT_FAILED_MARKER and again.calls == []
+    # 다른 실패 코드는 게이트 실패로 적지 않는다
+    other = Runner(fail={"e1": 137})
+    assert drv.main(env.argv("--fresh"), runner=other, opener=env.opener) == drv.EXIT_STAGE_FAILED
+    assert json.loads((env.out / "FAILED").read_text())["reason"] == "stage_failed"
+
+
 def test_changed_inputs_refuse_to_resume(env):
     with pytest.raises(KeyboardInterrupt):
         drv.main(env.argv(), runner=Runner(die="e1"), opener=env.opener)
