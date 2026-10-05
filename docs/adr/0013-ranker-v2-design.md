@@ -930,3 +930,12 @@ python -m evaluation.recsys.ebnerd.run_neural --stage assemble --out-dir <풀어
   A\*가 trial 0을 고른 경우 증강을 뺀 A\*와 A의 P2 요청별 지표가 같다(차이 0).
   이 실행 뒤에 규칙·임계값·표본·시드를 바꾸지 않았다. 실제 원격 런타임에서는 아직 한 번도 돌리지 않았다 — 드라이버의 원격 동작
   (설치, torch 확인, 분리 실행의 생존, 내려받기, CU/h, GPU에서의 결정론 게이트)은 S0·S1에서 먼저 확인해야 한다.
+- **2026-10-06 — Linux CI에서의 확인 (판정용 아님, 규칙 변경 없음)**
+  E15의 torch 테스트를 도는 CI job(`.github/workflows/ebnerd-neural.yml`)의 첫 실행(run 37389323657, 커밋 `8dc6b59`):
+  GitHub 호스티드 러너(Linux x86_64), Python 3.13.16, torch 2.11.0+cpu, lightgbm 4.7.0, numpy 2.4.6, pandas 3.0.6 —
+  `requirements-colab-gpu.txt`의 핀을 그대로 설치하고 torch만 같은 버전의 CPU wheel로 받았다. 105개 통과, 1개 건너뜀
+  (EB-NeRD demo 데이터가 없어서), 138초. 여기에는 합성 데이터로 두 과제의 전 단계를 한 프로세스에서 도는 테스트와 드라이버의
+  s0 경로(서브프로세스 21단계)가 들어 있다. 즉 이 Linux 조합에서는 `stack`·`cold`·`narrative`가 LightGBM과 torch(2스레드)를
+  한 프로세스에서 번갈아 써도 멈추지 않았다. 원격 GPU 런타임의 wheel(+cu128)과 장치에서의 동작은 여전히 S0·S1에서 확인한다.
+  같은 push에서 기본 CI의 테스트 하나가 실패했다(torch가 없는 환경에서 다른 테스트가 넣어 둔 가짜 torch 모듈 때문에 드라이버의
+  실제 드라이 런 테스트가 건너뛰어지지 않음). 테스트의 건너뛰기 조건만 고쳤고 실험 코드는 바꾸지 않았다.
