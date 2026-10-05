@@ -77,16 +77,14 @@ jobs:
       - name: Install recommend_engine package (no deps, editable)
         run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace/recommend_engine
 
-      # sim/: the contract test runs the driver against the real backend routers (auth needs
-      # python-jose and passlib; bcrypt is pinned as in backend/requirements.txt because
-      # passlib 1.7.4 raises ValueError on bcrypt 5), and the headless Locust smoke test needs
-      # locust + uvicorn. fastapi and httpx are in the list above.
+      # sim/: the contract test runs the driver against the real backend routers. Its API and auth
+      # dependencies (fastapi, httpx, python-jose, passlib, and bcrypt pinned because passlib 1.7.4
+      # raises ValueError on bcrypt 5) are installed by the backend-pinned step above. This step
+      # adds what the headless Locust smoke test needs: locust + uvicorn (uvicorn is already
+      # pinned through evaluation/requirements.txt, so only locust is new here).
       - name: Install simulator test dependencies
         run: |
           uv pip install --python .venv/bin/python \
-            python-jose \
-            passlib \
-            "bcrypt==3.2.2" \
             locust \
             uvicorn
 
