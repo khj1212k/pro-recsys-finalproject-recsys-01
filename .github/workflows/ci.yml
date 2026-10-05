@@ -212,12 +212,13 @@ jobs:
   # Dockerfile이 깨지지 않게 linux/amd64로 이미지를 빌드만 한다(푸시 없음). 배포 대상(Oracle A1)은
   # arm64지만 GitHub 호스티드 러너에서 arm64 에뮬레이션 빌드는 느려서 amd64로 문법/의존성만 검증하고,
   # arm64 빌드는 로컬 colima(Apple Silicon)에서 확인한다(docs/adr/0006).
+  # ingest는 Tier 0(OCI E2.1.Micro, amd64)의 수집 전용 이미지다(docs/adr/0026).
   docker-build:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        image: [api, worker]
+        image: [api, worker, ingest]
 
     steps:
       - name: Checkout
@@ -231,6 +232,8 @@ jobs:
         run: |
           docker compose config -q
           docker compose --profile tools config -q
+          # Tier 0 오버레이(docs/runbook-hosting.md 4절의 COMPOSE_FILE과 같은 조합)
+          docker compose -f docker-compose.yml -f docker/compose.micro.yaml config -q
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -242,8 +245,8 @@ jobs:
           file: docker/${{ matrix.image }}.Dockerfile
           platforms: linux/amd64
           push: false
-          # API 이미지만 러너의 docker로 불러와 아래 스모크에서 실행한다(worker는 torch 때문에 크다).
-          load: ${{ matrix.image == 'api' }}
+          # api·ingest 이미지만 러너의 docker로 불러와 아래 스모크에서 실행한다(worker는 torch 때문에 크다).
+          load: ${{ matrix.image != 'worker' }}
           tags: newsletter-recsys/${{ matrix.image }}:ci
           build-args: GIT_SHA=${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.image }}
@@ -272,4 +275,29 @@ jobs:
 
 
           asyncio.run(boot())
+          PY
+
+      # 수집 전용 이미지는 worker 이미지에서 torch·hdbscan·lightgbm·LLM SDK를 뺀 것이라, Tier 0가 도는 잡
+      # (migrate, ingest --stages rss,extract, popularity, daily_report)이 임포트하는 모듈에 그런 의존성이
+      # 새로 끼어들면 VM에서 잡이 뜰 때에야 ImportError가 난다. 잡 함수가 실행 시점에 임포트하는
+      # 모듈까지 이미지 안에서 임포트해 본다. DB 접속은 하지 않는다.
+      - name: Smoke-test ingest image (import Tier 0 job modules, no DB)
+        if: matrix.image == 'ingest'
+        run: |
+          docker run --rm -i --entrypoint python \
+            -e DATABASE_URL=postgresql://ci:ci@127.0.0.1:1/ci \
+            newsletter-recsys/ingest:ci - <<'PY'
+          import importlib
+
+          MODULES = (
+              "jobs.run", "jobs.migrate", "jobs.notify",
+              "jobs.tasks.ingest", "jobs.tasks.popularity", "jobs.tasks.daily_report",
+              "db.connection", "db.schema", "config.settings", "config.sources",
+              "crawler.rss_collector", "crawler.content_extractor", "crawler.policy_briefing",
+              "scheduler.calculate_ranking", "app.models",
+              "alembic.command", "alembic.config",
+          )
+          for name in MODULES:
+              importlib.import_module(name)
+          print(f"ingest image: {len(MODULES)} Tier 0 job modules imported")
           PY
