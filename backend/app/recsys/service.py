@@ -203,7 +203,12 @@ class RecommendationService:
 
     # ----------------------------------------------------------------- private
     def _count(self, rec: Recommendation) -> Recommendation:
+        """응답으로 나가는 Recommendation만 여기를 지난다. 시간 예산을 넘긴 워커가 뒤늦게 끝낸 화면은
+        아무에게도 나가지 않았으므로 세지 않는다(explore.*를 requests·impressions.logged와 비율로 읽는다)."""
         self.counters.inc(f"source.{rec.source}")
+        if rec.policy_version == POLICY_EPS_UNIFORM:
+            self.counters.inc("explore.requests")
+            self.counters.inc("explore.slots", len(rec.explore_positions))
         return rec
 
     def _realtime(self, user_id: int, now: datetime, deadline: Deadline) -> Recommendation:
@@ -222,11 +227,7 @@ class RecommendationService:
                 self.cache.put(key, det)
         # 탐색은 캐시 뒤에서 요청마다 한다: 60초 안의 재요청도 탐색 칸은 독립이다(ADR 0025).
         request_id = str(uuid.uuid4())
-        rec = build_recommendation(det, self.cfg, request_id, self.rng_factory(request_id), cache_hit)
-        if rec.policy_version == POLICY_EPS_UNIFORM:
-            self.counters.inc("explore.requests")
-            self.counters.inc("explore.slots", len(rec.explore_positions))
-        return rec
+        return build_recommendation(det, self.cfg, request_id, self.rng_factory(request_id), cache_hit)
 
     def _fallback(
         self,

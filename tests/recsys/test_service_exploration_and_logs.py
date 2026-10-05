@@ -3,6 +3,7 @@
 메커니즘과 식 자체는 test_exploration_slots.py가 본다. 여기서는 그것이 요청 경로에 맞게 붙었는지 -
 캐시가 탐색을 얼리지 않는지, 로그에 남는 값이 화면과 일치하는지 - 를 메모리 저장소로 확인한다.
 """
+import time
 from collections import Counter
 from contextlib import contextmanager
 from dataclasses import replace
@@ -147,6 +148,44 @@ def test_exploration_marginals_hold_over_many_service_requests():
     # 결정론 아이템마다 놓일 수 있는 위치는 m+1 = 3곳: Σ_칸 1/propensity의 기대값은 18 x 3
     sums = np.asarray(det_weight_sums)
     assert abs(sums.mean() - 18 * 3) < 4 * sums.std(ddof=1) / np.sqrt(n)
+
+
+class SlowScorer(HeuristicScorer):
+    """마지막 시간 예산 확인(스코어링 직전)을 통과한 뒤에 느려진다: 요청은 시간 초과 폴백으로 응답하고,
+    워커는 중단되지 않은 채 결정론 목록과 화면을 끝까지 만든다."""
+
+    def __init__(self, delay_s):
+        super().__init__()
+        self.delay_s = delay_s
+
+    def score(self, state, items, now):
+        time.sleep(self.delay_s)
+        return super().score(state, items, now)
+
+
+def test_exploration_counters_count_served_slates_not_the_ones_a_timed_out_worker_finished_later():
+    """explore.requests / explore.slots는 /recsys/stats에서 requests·impressions.logged와 비율로 읽는 값이다.
+    시간 예산을 넘겨 폴백으로 응답한 요청의 화면은 아무에게도 나가지 않았으므로 세면 안 된다."""
+    repo = _repo()
+    service = _service(
+        repo, RecsysConfig(time_budget_ms=250, workers=1), scorer=SlowScorer(0.6), rng_factory=_seeded(12)
+    )
+
+    timed_out = service.recommend(WARM, fallback_repo=repo)
+    # 워커가 하나뿐이라 빈 작업은 느린 워커가 화면을 다 만든 뒤에야 돈다
+    service._executor.submit(lambda: None).result(timeout=5)
+
+    assert (timed_out.source, timed_out.fallback_reason, timed_out.policy_version) == (SOURCE_POPULAR, "timeout", "none")
+    assert service.cache.get((WARM, None)) is not None  # 워커는 끝까지 계산해 캐시에 남겼다
+    assert service.counters.get("explore.requests") == 0
+    assert service.counters.get("explore.slots") == 0
+
+    served = service.recommend(WARM, fallback_repo=repo)  # 캐시 적중: 스코어러를 다시 부르지 않는다
+
+    assert (served.source, served.cache_hit, len(served.explore_positions)) == (SOURCE_REALTIME, True, 2)
+    assert service.counters.get("explore.requests") == 1
+    assert service.counters.get("explore.slots") == 2
+    assert service.counters.get("requests") == 2
 
 
 # ----------------------------------------------------------------------------- 로그 행
