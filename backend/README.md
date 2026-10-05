@@ -10,6 +10,7 @@
   - **models/**: DB 스키마 정의
   - **api/**: REST API 라우터 End point 정의
   - **crud/**: DB CRUD(Create, Read, Update, Delete) 쿼리 함수
+  - **recsys/**: GET /newsletters/today의 요청 시점 추천(후보·스코어·MMR·폴백, docs/adr/0015)
 - **alembic/**: DB 마이그레이션
 - **scheduler/**: 주기적인 배치 작업
 
@@ -27,6 +28,10 @@ source .venv/bin/activate
 
 # 의존성 패키지 설치
 pip install -r requirements.txt
+
+# 요청 시점 추천(app/recsys)이 재사용하는 MMR 모듈(recommend_engine의 src.core, numpy만 사용)
+# - 의존성(pandas/scikit-learn/lightgbm)은 받지 않고 패키지 경로만 등록한다
+pip install --no-deps -e ../ai_workspace/recommend_engine
 ```
 
 #### 2. 환경 변수 설정 (.env)

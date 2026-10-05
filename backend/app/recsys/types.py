@@ -18,7 +18,7 @@ SOURCE_EMPTY = "empty"
 
 @dataclass(frozen=True)
 class NewsletterMeta:
-    """compute_scores(backend/scheduler/calculate_ranking.py)가 요구하는 속성 이름 그대로."""
+    """compute_scores(app/recsys/popularity.py)가 요구하는 속성 이름 그대로."""
 
     news_letter_id: int
     news_letter_created_at: datetime

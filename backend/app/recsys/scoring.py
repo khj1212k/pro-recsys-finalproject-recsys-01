@@ -45,7 +45,7 @@ class HeuristicWeights:
     이상은 클릭 한 번에 80~90%로 뒤집혔다. 0.45:0.35는 클릭 1/2/3회에 평균 15/29/39%로
     근거가 쌓일수록 늘어난다 - 실수 클릭 한 번에 피드가 장악되지 않으면서 반응은 한다.
     신선도/인기는 코사인이 비슷할 때의 동점 깨기 역할이라 작게 두고, 식은 배치 인기 랭킹
-    (scheduler/calculate_ranking.compute_scores)과 같은 척도를 쓴다.
+    (app/recsys/popularity.compute_scores)과 같은 척도를 쓴다.
     """
 
     long_term: float = 0.45

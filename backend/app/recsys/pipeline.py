@@ -20,9 +20,12 @@ from app.recsys.types import (
     Recommendation,
     UserState,
 )
-from scheduler.calculate_ranking import compute_scores
+from app.recsys.popularity import compute_scores
 # 성승우님이 recommend_engine(배치 LightGBM 경로)에 구현한 MMR을 그대로 쓴다 -
 # 요청 시점 경로와 배치 경로가 같은 다양성 규칙(선호 카테고리 수별 λ)을 공유하도록.
+# src.core는 numpy만 쓰는 패키지라 API 이미지에는 이 디렉터리만 복사한다
+# (docker/api.Dockerfile). 저장소에서 직접 띄울 때는
+# `pip install --no-deps -e ai_workspace/recommend_engine`이 필요하다.
 from src.core.reranker import CategoryBasedMMRReranker
 
 POPULARITY_MODEL_VERSION = "popularity-v1"

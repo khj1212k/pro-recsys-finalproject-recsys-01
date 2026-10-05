@@ -212,6 +212,34 @@ jobs:
           file: docker/${{ matrix.image }}.Dockerfile
           platforms: linux/amd64
           push: false
+          # API 이미지만 러너의 docker로 불러와 아래 스모크에서 실행한다(worker는 torch 때문에 크다).
+          load: ${{ matrix.image == 'api' }}
+          tags: newsletter-recsys/${{ matrix.image }}:ci
           build-args: GIT_SHA=${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+      # 빌드 성공만으로는 "이미지에 복사하지 않은 모듈을 임포트한다"를 잡지 못한다(컨테이너가 뜰 때
+      # ModuleNotFoundError). 이미지 안에서 앱을 임포트하고 lifespan(추천 서비스 조립)까지 돌려 본다.
+      # 엔진은 접속을 미루므로 DB 없이 된다.
+      - name: Smoke-test API image (import app + run lifespan, no DB)
+        if: matrix.image == 'api'
+        run: |
+          docker run --rm -i \
+            -e DATABASE_URL=postgresql://ci:ci@127.0.0.1:1/ci \
+            -e SECRET_KEY=ci-only-not-a-secret \
+            -e ALGORITHM=HS256 \
+            -e ACCESS_TOKEN_EXPIRE_MINUTES=30 \
+            newsletter-recsys/api:ci python - <<'PY'
+          import asyncio
+
+          from app.main import app
+
+
+          async def boot():
+              async with app.router.lifespan_context(app):
+                  print("api image: app imported and lifespan ran")
+
+
+          asyncio.run(boot())
+          PY
