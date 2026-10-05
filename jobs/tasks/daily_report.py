@@ -1,4 +1,4 @@
-"""daily_report: 최근 24시간 잡 실행/수집 현황 요약을 로그(+Slack 웹훅)로 남긴다(읽기 전용)."""
+"""daily_report: 최근 24시간 잡 실행/수집/추천 응답 현황 요약을 로그(+Slack 웹훅)로 남긴다(읽기 전용)."""
 from typing import Any, Dict, List
 
 WINDOW_HOURS = 24
@@ -24,7 +24,35 @@ def format_report(report: Dict[str, Any]) -> str:
         f"- 누적 기사 {totals['news_raw']}건 / 임베딩 {totals['embedded']}건 / "
         f"최근 {WINDOW_HOURS}시간 뉴스레터 {totals['newsletters_24h']}건"
     )
+    recsys = report.get("recsys_24h")
+    if recsys is not None:
+        by_source = sorted(recsys["by_source"].items(), key=lambda kv: (-kv[1]["responses"], kv[0]))
+        total = sum(v["responses"] for _, v in by_source)
+        if total:
+            detail = ", ".join(f"{source} {v['responses']}" for source, v in by_source)
+            lines.append(f"- 추천 응답 {total}건 (노출 로그 기준: {detail})")
+        else:
+            lines.append("- 추천 응답 0건 (노출 로그 기준)")
     return "\n".join(lines)
+
+
+def impression_sources(cur, window: str) -> Dict[str, Dict[str, int]]:
+    """노출 로그에서 출처(X-Rec-Source)별 응답 수와 노출 항목 수를 센다.
+
+    GET /recsys/stats의 카운터는 프로세스 안의 값이라 재시작하면 사라지고 워커마다 따로다.
+    기간별 출처 분포(실시간 계산이 얼마나 폴백으로 떨어졌는지)는 이 로그에서 본다. 다만 항목을
+    하나 이상 보여 주고 로그 쓰기까지 성공한 응답만 여기 잡힌다 - 빈 응답과 유실된 쓰기는 없다.
+    """
+    cur.execute(
+        """
+        SELECT source, COUNT(DISTINCT request_id), COUNT(*)
+        FROM recommendation_impression_log
+        WHERE created_at >= now() - %s::interval
+        GROUP BY source
+        """,
+        (window,),
+    )
+    return {source: {"responses": responses, "items": items} for source, responses, items in cur.fetchall()}
 
 
 def run(ctx) -> Dict[str, Any]:
@@ -76,11 +104,13 @@ def run(ctx) -> Dict[str, Any]:
             (window,),
         )
         total, embedded, newsletters = cur.fetchone()
+        recsys_by_source = impression_sources(cur, window)
 
     report = {
         "job_runs": job_runs,
         "news_raw_24h": news_24h,
         "totals": {"news_raw": total, "embedded": embedded, "newsletters_24h": newsletters},
+        "recsys_24h": {"by_source": recsys_by_source},
     }
     text = format_report(report)
     print(text)

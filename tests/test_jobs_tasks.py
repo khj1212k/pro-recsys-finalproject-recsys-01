@@ -163,6 +163,40 @@ def test_daily_report_text_flags_a_silent_scheduler():
     assert "실행된 잡 없음" in format_report(report)
 
 
+def test_daily_report_lists_recommendation_responses_by_source_largest_first():
+    from jobs.tasks.daily_report import format_report
+
+    report = {
+        "job_runs": {"popularity": {"success": 24}},
+        "news_raw_24h": {"total": 0, "ok": 0, "dropped": 0, "empty": 0, "fetch_failed": 0, "error": 0, "duplicate": 0,
+                         "embedded": 0, "per_press": {}},
+        "totals": {"news_raw": 10, "embedded": 8, "newsletters_24h": 0},
+        "recsys_24h": {"by_source": {
+            "popular": {"responses": 3, "items": 60},
+            "realtime": {"responses": 90, "items": 1800},
+            "cold_start_popular": {"responses": 7, "items": 140},
+        }},
+    }
+
+    text = format_report(report)
+
+    assert "추천 응답 100건 (노출 로그 기준: realtime 90, cold_start_popular 7, popular 3)" in text
+
+
+def test_daily_report_says_so_when_no_recommendation_was_logged():
+    from jobs.tasks.daily_report import format_report
+
+    report = {
+        "job_runs": {"popularity": {"success": 24}},
+        "news_raw_24h": {"total": 0, "ok": 0, "dropped": 0, "empty": 0, "fetch_failed": 0, "error": 0, "duplicate": 0,
+                         "embedded": 0, "per_press": {}},
+        "totals": {"news_raw": 10, "embedded": 8, "newsletters_24h": 0},
+        "recsys_24h": {"by_source": {}},
+    }
+
+    assert "추천 응답 0건 (노출 로그 기준)" in format_report(report)
+
+
 def test_embed_job_passes_budget_and_limit_and_fails_when_nothing_could_be_saved(monkeypatch):
     from jobs.tasks import embed
 

@@ -564,3 +564,23 @@ def test_one_request_needs_only_one_app_pool_connection(api_client, database_url
         )
         logged = [r[0] for r in cur.fetchall()]
     assert logged == shown
+
+
+def test_daily_report_counts_responses_and_items_per_source_from_the_impression_log(engine, seeded, pg_conn):
+    from app.recsys.sql_repository import SqlImpressionWriter
+    from jobs.tasks.daily_report import impression_sources
+
+    uid = seeded.add_user()
+    source = f"t-{uuid.uuid4().hex[:8]}"  # 다른 테스트가 남긴 행과 섞이지 않는 출처 이름
+    first, second = str(uuid.uuid4()), str(uuid.uuid4())
+    row = {"user_id": uid, "score": None, "source": source, "model_version": "none"}
+    SqlImpressionWriter(engine)([
+        {**row, "request_id": first, "news_letter_id": seeded.by_topic[0][0], "position": 0},
+        {**row, "request_id": first, "news_letter_id": seeded.by_topic[0][1], "position": 1},
+        {**row, "request_id": second, "news_letter_id": seeded.by_topic[1][0], "position": 0},
+    ])
+
+    with pg_conn.cursor() as cur:
+        counted = impression_sources(cur, "24 hours")
+
+    assert counted[source] == {"responses": 2, "items": 3}
