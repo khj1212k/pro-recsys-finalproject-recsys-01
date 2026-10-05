@@ -586,3 +586,21 @@ def test_shuffle_noise_is_compared_with_the_gap_it_would_have_to_overturn(tmp_pa
         x["shuffled_iter1_as_evaluated_ndcg5"] = x["iter1_tie_expected_ndcg5"] + 0.012  # 잡음이 차이에 견줄 만한 경우
     noisy = _section(_render(tmp_path / "b", monkeypatch, data), "### 4-1.", "### 4-2.")
     assert "뒤집을 크기는 아니다" not in noisy and "달라질 수 있는 크기다" in noisy
+
+
+def test_importing_report_generator_does_not_move_harness_dir_to_front_of_sys_path():
+    """리포트 생성기는 테스트 실행 중에 처음 import된다. 그때 하네스 디렉터리를 sys.path 맨 앞으로 다시 올리면
+    그 디렉터리의 pipeline.py가 ai_workspace의 pipeline 패키지를 가려, 뒤에 도는 다른 테스트
+    (tests/test_stage5_run_id.py의 `from pipeline.stages import ...`)가 깨진다(CI에서 실제로 깨졌다)."""
+    import importlib
+
+    import make_report_v2
+
+    marker = str(REPO_ROOT / "ai_workspace")
+    sys.path.insert(0, marker)
+    try:
+        importlib.reload(make_report_v2)
+        assert sys.path[0] == marker
+        assert str(TEAM_REPRO_DIR) in sys.path
+    finally:
+        sys.path.remove(marker)

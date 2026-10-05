@@ -22,7 +22,10 @@ TEAM_REPRO_DIR = Path(__file__).resolve().parent
 WORKTREE_ROOT = Path(__file__).resolve().parents[3]
 REPORT_DIR = WORKTREE_ROOT / "reports" / "recsys"
 
-sys.path.insert(0, str(TEAM_REPRO_DIR))
+# 이미 경로에 있으면 다시 맨 앞으로 올리지 않는다. 이 디렉터리에는 pipeline.py가 있어서, 실행 중에 맨 앞으로
+# 올라가면 그 뒤에 `pipeline` 패키지(ai_workspace/pipeline)를 import하는 코드가 이 파일을 대신 잡는다.
+if str(TEAM_REPRO_DIR) not in sys.path:
+    sys.path.insert(0, str(TEAM_REPRO_DIR))
 from metrics import ci_verdict  # noqa: E402
 
 TEAM_0897 = (
