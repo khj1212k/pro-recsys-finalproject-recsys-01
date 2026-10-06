@@ -10,6 +10,7 @@
   `core/{reconstruction/*,tone_converter,faithfulness,llm_metrics}.py`, `core/llm/*`, `core/clustering/hdbscan_clusterer.py`, `db/batch_manager.py`,
   `config/{settings.py,llm_pricing.yaml}`, `jobs/tasks/{generate,cluster,daily_report}.py`, `evaluation/llm/*`, `docker/crontab*`, ADR 0005·0006·0009·0010·0013·0023·0026,
   `docs/eval/labeling-guide.md`, `docs/runbook-hosting.md`, `origin/exp/generation-warmup`(미병합).
+- 2026-10-06 덧붙임(WP1): 2.3절이 0035로 예상한 데이터 경로 ADR은 [ADR 0036](../adr/0036-experiment-data-path-frozen-export-file-stand-ins.md)이다(0035는 LLM 지출 상한 ADR이 쓴다). 2.6절의 개정은 [ADR 0023](../adr/0023-data-sources-copyright-retention.md) 맨 아래에 있다. 본문의 번호·수치는 고치지 않았다.
 - 직접 확인한 실측(2026-10-06 13:06 KST, Tier 0 VM에 읽기 전용 세션으로 집계만 조회 — `SET default_transaction_read_only = on`, 본문·제목은 읽지 않음)은 2.1절에 있다.
 - 증거 라벨은 설계와 같다: `[코드]` 저장소에서 확인, `[KR-ops]` VM 실측, `[문서]` 공식 문서, `[추정]` 가정치. E0 전의 LLM 수치는 전부 `[추정]`이다.
 
