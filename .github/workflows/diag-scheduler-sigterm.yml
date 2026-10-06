@@ -13,6 +13,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -40,5 +42,10 @@ jobs:
 
       - name: Reproduce
         env:
-          REPRO_SET: gap
+          REPRO_SET: final
         run: .venv/bin/python diag/scheduler_sigterm_repro.py
+
+      - name: Loop the committed test
+        run: |
+          uv pip install --python .venv/bin/python pytest
+          sh diag/loop_committed_test.sh

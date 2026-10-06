@@ -21,6 +21,7 @@
 
 REPRO_SET=doubles : 가짜 supercronic 판별 비교(첫 라운드)
 REPRO_SET=resched : resched 대역으로 지금 순서와 바꾼 순서 비교
+REPRO_SET=final   : 수정한 엔트리포인트(이 체크아웃의 docker/scheduler-entrypoint.sh 그대로)로 old·resched·진짜 supercronic
 REPRO_SET=gap     : 진짜 supercronic에서, 잡 뒤에 뜬 프로세스가 많아 "잡에 신호 -> supercronic에 신호" 사이가 길 때
 REPRO_SET=order   : 신호 순서 비교. 가짜 old/new와, REAL_SUPERCRONIC_DIR에 둔 진짜 supercronic(매초 실행 crontab)
 """
@@ -414,7 +415,22 @@ def main():
         for path in (inst, reordered):
             subprocess.run(["sh", "-n", path], check=True)
         print(f"== 반복 실행 ({which}) ==", flush=True)
-        if which == "gap":
+        if which == "final":
+            conditions = (
+                ("", 300, {}),
+                (" +300 procs", 200, {"sleepers": 300}),
+                (" +1000 procs", 150, {"sleepers": 1000}),
+                (" cpu load", 200, {"cpu_load": True}),
+            )
+            arms = [
+                ("supercronic/committed", "real", ENTRYPOINT, n(50), {}),
+                ("supercronic/committed, 1000 procs after job", "real", ENTRYPOINT, n(40), {"late_sleepers": 1000}),
+            ] + [
+                (f"{double}/committed{suffix}", double, ENTRYPOINT, n(count), kw)
+                for double in ("resched", "old")
+                for suffix, count, kw in conditions
+            ]
+        elif which == "gap":
             arms = [
                 ("supercronic/real, 1000 procs after job", "real", ENTRYPOINT, n(40), {"late_sleepers": 1000}),
                 ("supercronic/reordered, 1000 procs after job", "real", reordered, n(40), {"late_sleepers": 1000}),
