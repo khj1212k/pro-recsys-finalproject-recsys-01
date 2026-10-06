@@ -45,7 +45,7 @@
 > 실행마다 업로드·실행 뒤 해제**하는 조건으로 허용했다(저장소·공개 데이터셋·영구 사본 금지는 그대로). 노트북은 무거운 계산을 하지 않는다.
 > 같은 날 2차: 1차 E15 사전 등록(`0366ca6`)의 반대 검토(blocker 2·major 14·minor 8·nit 4)를 반영해 §4.1을 **최종 사전 등록**으로 고쳤다 — 판정 기준을
 > 같은 예산으로 튠한 GBDT(A\*)로, 스태킹 OOF를 시간 전진으로, P1 판정을 seen 제외판으로, 콜드 조건·g 입력·seed 규칙·Colab 실행 절차(드라이버·체크포인트·재개·핀)를
-> 고정했다. M4의 Colab 실행은 선택이 아니라 필수이며(운영 결정 3), E15 통과의 결과는 "shadow 자격"이고 등록은 조건부 M8b다.
+> 고정했다. M4의 Colab 실행은 선택이 아니라 필수이며(운영 결정: MacBook은 무거운 계산을 하지 않는다), E15 통과의 결과는 "shadow 자격"이고 등록은 조건부 M8b다.
 
 ---
 
@@ -730,7 +730,7 @@ DOI 10.1145/3687151.3687160), 리더보드 AUC는 우리 split·정답 창과 �
 - **해제**: 커널 안에서 `shutil.rmtree("/content/data")`·`/content/out` 정리 후 **삭제 뒤 디렉터리 목록을 로그**에 남기고(`colab rm`은 Jupyter Contents DELETE라 비어 있지 않은
   디렉터리를 거부하거나 VM 휴지통으로 옮길 뿐이다) → `colab stop` → `colab sessions`가 비어 있는지 확인 → `colab usage`. 실질적 보장은 VM 해제다.
 - **무엇을 어디서**: Mac = 코드·단위 테스트(`ebnerd_demo --fake-dim 16`, CPU, 수 초)·판정(지표 배열)·`make_report`. Colab = 나머지 전부. **M4 콜드 사슬 E1–E8도 Colab 필수**
-  (운영 결정 3: MacBook은 무거운 계산을 하지 않는다 — "옮길 수 있다"가 아니다): CPU 런타임, `--high-mem` 여부는 S1 피크(v1 피크 10.1 GB 기준 필요할 가능성 높음), 같은 드라이버·
+  (운영 결정: MacBook은 무거운 계산을 하지 않는다 — "옮길 수 있다"가 아니다): CPU 런타임, `--high-mem` 여부는 S1 피크(v1 피크 10.1 GB 기준 필요할 가능성 높음), 같은 드라이버·
   업로드·검증·해제 절차, CU 추정·상한은 §5 M4. M4·M4b가 Colab에서 도는 동안 Mac은 `caffeinate` 상태로 온라인을 유지하며 M5·M6 코드 작업을 한다.
 
 **스모크 실측**(2026-09-26 13:00–13:01 UTC; 스크립트 `docs/design/e15_colab_smoke.py`, 결과 `docs/design/e15_colab_smoke_result.json`). EB-NeRD는 업로드하지 않았고 ebnerd_demo 형태의

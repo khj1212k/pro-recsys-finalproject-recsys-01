@@ -15,6 +15,8 @@
 | wt-5 | `feat/user-simulator-loadtest` | PR #14 (ADR 0019) |
 | wt-69a | `eval/team-baseline-repro-v1` | PR #11 (ADR 0007) |
 
+본문의 `PR-N`(하이픈, 예: "플랜 PR-18")은 당시 작업 계획 문서("플랜", 저장소 밖)의 작업 항목 번호다. 이 상자가 쓰는 GitHub PR 번호(`#N`)와 무관하다.
+
 **로드맵(5절) 가운데 main에 들어간 것 — PR #8–#19**
 
 - R0: 수집 런타임(PR #8), 팀 베이스라인 재현 v2(PR #11, ADR 0007은 2026-10-06 개정), P9의 문체 변환 키·상수 피처·README 정리(PR #15). 생성 워밍업 완주 기록은 main에 없다.
