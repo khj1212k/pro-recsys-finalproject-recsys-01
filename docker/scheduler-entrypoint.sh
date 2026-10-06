@@ -14,9 +14,9 @@ SUPERCRONIC_PID=$!
 forward() {
   interrupted=1
   sig=$1
-  # supercronic에 먼저 보낸다: 신호를 받은 supercronic은 새 잡을 띄우지 않고 돌고 있는 잡만 기다린다.
-  # 잡에 먼저 보내면 아래 스캔이 끝날 때까지 supercronic은 스케줄을 계속하므로, 그 사이 띄운 잡은
-  # 신호를 받지 못해 유예 시간이 지나 SIGKILL로 죽는다.
+  # supercronic에 먼저 보낸다: 신호를 처리한 supercronic은 새 잡을 띄우지 않고 돌고 있는 잡만 기다린다.
+  # 잡에 먼저 보내면 아래 순회가 끝날 때까지 supercronic이 스케줄을 계속하고, 그 사이 띄운 잡은 순회 목록에
+  # 없어 신호를 받지 못한다(유예 시간 뒤 SIGKILL). 먼저 보내도 supercronic이 신호를 처리하기 전의 짧은 틈은 남는다.
   kill "-$sig" "$SUPERCRONIC_PID" 2>/dev/null
   for stat_file in /proc/[0-9]*/stat; do
     # read는 내장 명령이라 fork하지 않는다(프로세스가 많으면 스캔이 길어진다).
