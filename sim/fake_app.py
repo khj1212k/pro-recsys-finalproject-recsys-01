@@ -24,6 +24,10 @@ metrics then report the fallback rate as unknown (None) rather than 0.
 Like the request-time API, /today also sends `X-Request-Id`, and the click route
 accepts the optional `request_id` / `position` / `event` / `dwell_ms` fields of
 logging v2 (ADR 0025). The ids are a counter, so a seeded run stays reproducible.
+
+/today is answered through `FakeBackend.respond_today`, so a subclass can put another
+recommender behind the same routes (sim.serving_app wires in the real backend/app/recsys
+service for the ADR 0025 experiments). The toy policies above do not change with it.
 """
 
 import itertools
@@ -33,7 +37,7 @@ import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -54,11 +58,24 @@ class _User:
     onboarding_ids: List[int] = field(default_factory=list)
 
 
+@dataclass
+class TodayAnswer:
+    """One /newsletters/today response: the ids in display order and the two headers.
+    `after_response` runs once the response has been sent (the real route's BackgroundTasks)."""
+
+    ids: List[int]
+    source: str
+    request_id: str
+    after_response: Optional[Callable[[], None]] = None
+
+
 class FakeBackend:
+    policies: Tuple[str, ...] = POLICIES
+
     def __init__(self, catalog: Catalog, policy: str = "reactive", clock=None, seed: int = 0,
                  today_size: int = 20, expose_press: bool = False):
-        if policy not in POLICIES:
-            raise ValueError(f"unknown policy {policy!r}; choose from {POLICIES}")
+        if policy not in self.policies:
+            raise ValueError(f"unknown policy {policy!r}; choose from {self.policies}")
         self.catalog = catalog
         self.policy = policy
         self.clock = clock
@@ -145,8 +162,9 @@ class FakeBackend:
             kw.update({k: decay for k in it.keywords})
         return affinity, kw, {nid for nid, _ in mine}
 
-    def personalized(self, u: _User) -> Optional[List[int]]:
-        """Toy content-based scorer; None when the user has no signal at all."""
+    def toy_scorer(self, u: _User) -> Optional[Tuple[Callable[[Item], float], Set[int]]]:
+        """The toy content-based score of the `reactive` policy as (score function, clicked ids);
+        None when the user has no signal at all."""
         signals = self._affinity(u)
         if signals is None:
             return None
@@ -161,6 +179,14 @@ class FakeBackend:
             return (affinity.get(it.category_id, 0.0) / top_aff + 0.8 * kw_s
                     + 0.3 * math.exp(-age_h / 24) + 0.05 * math.log1p(it.raw_news_count))
 
+        return score, clicked
+
+    def personalized(self, u: _User) -> Optional[List[int]]:
+        """Toy content-based ranking; None when the user has no signal at all."""
+        scorer = self.toy_scorer(u)
+        if scorer is None:
+            return None
+        score, clicked = scorer
         ranked = sorted((it for it in self.candidates() if it.news_letter_id not in clicked),
                         key=lambda it: (-score(it), it.news_letter_id))
         return [it.news_letter_id for it in ranked[: self.today_size]]
@@ -212,6 +238,14 @@ class FakeBackend:
     def next_request_id(self) -> str:
         return str(uuid.UUID(int=next(self._rid)))
 
+    def respond_today(self, u: _User) -> TodayAnswer:
+        ids, source = self.feed(u)
+        return TodayAnswer(ids, source, self.next_request_id())
+
+    def day_end(self) -> None:
+        """What runs at the end of a virtual day (the nightly job analogue of this backend)."""
+        self.rebuild_batches()
+
     def record_click(self, u: _User, nid: int, request_id: Optional[str] = None,
                      position: Optional[int] = None) -> int:
         with self.lock:
@@ -223,7 +257,7 @@ class FakeBackend:
 
 
 def create_fake_app(backend: FakeBackend):
-    from fastapi import FastAPI, Header, HTTPException, Query, Response
+    from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, Response
     from pydantic import BaseModel, Field
 
     class SignupBody(BaseModel):
@@ -304,12 +338,15 @@ def create_fake_app(backend: FakeBackend):
         return {"message": "Newsletters updated successfully", "updated_newsletters": body.news_letter_ids}
 
     @app.get("/newsletters/today")
-    async def today(response: Response, authorization: Optional[str] = Header(None)):
+    async def today(response: Response, background_tasks: BackgroundTasks,
+                    authorization: Optional[str] = Header(None)):
         u = require_user(authorization)
-        ids, source = backend.feed(u)
-        response.headers[REC_SOURCE_HEADER] = source
-        response.headers[REQUEST_ID_HEADER] = backend.next_request_id()
-        return [backend.catalog.by_id[i].to_api(include_press=backend.expose_press) for i in ids]
+        answer = backend.respond_today(u)
+        response.headers[REC_SOURCE_HEADER] = answer.source
+        response.headers[REQUEST_ID_HEADER] = answer.request_id
+        if answer.after_response is not None:
+            background_tasks.add_task(answer.after_response)
+        return [backend.catalog.by_id[i].to_api(include_press=backend.expose_press) for i in answer.ids]
 
     @app.get("/newsletters/{news_letter_id}")
     async def detail(news_letter_id: int):
@@ -330,7 +367,7 @@ def create_fake_app(backend: FakeBackend):
 
     @app.post("/__sim__/day_end")
     async def day_end():
-        backend.rebuild_batches()
+        backend.day_end()
         return {"batches": len(backend.batches)}
 
     return app
