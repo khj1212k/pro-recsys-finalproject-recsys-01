@@ -6,6 +6,18 @@
 `parity_v1.json`은 CI 실행 **37389722931**(커밋 `30f6553`, GitHub 호스티드 러너, PostgreSQL 16 + pgvector)의
 integration 잡이 쓴 파일을 **그대로 옮긴 것**이다. 손으로 고친 값이 없다. 로컬에서는 DB를 띄우지 않는다.
 
+| 항목 | 값 |
+|---|---|
+| 실행 명령 | `RECSYS_PARITY_REPORT=parity_v1.json python -m pytest -q -s -m integration tests/integration/test_feature_parity.py` (CI의 "Write parity gate report" 스텝) |
+| 코드 | `30f655320f9877e9b436be9dd8c7a970b74430dc` (JSON의 `meta.commit`) |
+| 실행 | 2026-10-05T23:40:41Z, GitHub Actions 실행 37389722931 (`meta.ci_run_id`) |
+| 데이터 | 합성. 테스트가 CI의 빈 테스트 DB에 시드한 뉴스레터 348개·클릭 585건·노출 6,500행(재생 중에 쌓인 것 포함). 실제 사용자·기사 없음 |
+| 표본 | 재생한 요청 200건 중 어댑터 피처가 남은 198건, 화면 칸 3,960개, 요청 사용자 6명 |
+| 불확실성 | 없음(구간을 내지 않는다). 시드 하나의 재생 한 번이고, 값은 추정이 아니라 두 계산의 차이다. 같은 테스트가 push마다 다시 돈다 |
+
+파일 이름에 실행 번호가 없는 것은 설계 문서가 정한 이름(`reports/recsys/parity_v1.json`)을 따랐기 때문이다.
+실행 번호는 위 표와 JSON 안에 있다.
+
 ## 어떻게 만들어지는가
 1. `tests/integration/test_feature_parity.py`가 테스트 DB에 뉴스레터 348개, 사용자 11명, 과거 클릭·노출을 시드한다.
    과거 클릭은 클릭 API를 거치지 않은 행이라 `rebuild_user_state` 잡의 함수로 장기 프로필 상태에 채운다.
