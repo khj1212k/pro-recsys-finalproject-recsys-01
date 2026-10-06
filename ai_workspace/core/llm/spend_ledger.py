@@ -200,7 +200,7 @@ class _State:
         self.committed_by_day: Dict[str, int] = {}
         self.committed_by_run: Dict[str, int] = {}
         self.carried_total = 0
-        self.last_day: Optional[str] = None  # 마지막으로 지출이 귀속된 날(워터마크의 일 누계용)
+        self.last_day: Optional[str] = None  # 마지막으로 예약·지출이 귀속된 날(워터마크의 일 사용액용)
         self.corrupt_lines = 0
         # 해석 못 한 줄: 바이트 오프셋 -> 길이. torn/repair 줄이 인정하면 빠진다. 남아 있으면 호출 거부.
         self.unacked: Dict[int, int] = {}
@@ -221,10 +221,11 @@ class _State:
         elif kind == "reserve":
             rid = _text(ev, "id")
             _nusd(ev["nusd"])
-            _text(ev, "day")
+            day = _text(ev, "day")
             _text(ev, "run_id")
             if rid not in self.settled:
                 self.open[rid] = ev
+                self.last_day = day  # 그날 정산이 아직 없어도 열린 예약이 그날의 일 사용액이다
         elif kind in ("commit", "expire"):
             self._settle(ev)
         elif kind == "reset_day":

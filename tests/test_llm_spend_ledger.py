@@ -705,6 +705,22 @@ def test_adopting_counts_reservations_that_were_open_when_the_ledger_was_lost(tm
     assert isinstance(refusal, Refusal) and refusal.scope == "total"
 
 
+def test_adopting_keeps_the_day_window_even_when_that_day_had_only_open_reservations(tmp_path):
+    """날이 바뀐 뒤 첫 호출들이 아직 나가 있을 때 원장이 사라진 경우: 그날의 일 사용액은 열린 예약뿐이다."""
+    ledger = _ledger(tmp_path)
+    caps = _caps(run=100_000, day=6_000, total=100_000)
+    _spend(ledger, 2_000, caps=caps, key=_key(day="2026-10-05"))
+    assert isinstance(ledger.reserve(caps=caps, key=_key(), nusd=5_000), Reservation)
+    os.remove(ledger.path)
+    SpendLedger(ledger.path).init()
+
+    result = SpendLedger(ledger.path).adopt()
+
+    assert (result["carried_nusd"], result["day"], result["carried_day_nusd"]) == (7_000, DAY, 5_000)
+    refusal = SpendLedger(ledger.path).reserve(caps=caps, key=_key(run_id="run-b"), nusd=1_001)
+    assert isinstance(refusal, Refusal) and refusal.scope == "day"
+
+
 def test_adopt_on_a_healthy_ledger_changes_nothing(tmp_path):
     ledger = _ledger(tmp_path)
     _spend(ledger, 5_000)
