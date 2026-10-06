@@ -315,6 +315,26 @@ ssh -F .ops/micro/ssh_config micro 'chmod 600 ~/backups/*.dump; sha256sum ~/back
 Tier 0 자체가 회수될 수 있으므로 이것만으로 충분하지는 않다 - 외장 디스크 등 세 번째 위치가 있으면 거기에도 둔다.
 6.4의 리허설처럼 VM에 올린 덤프를 지우는 절차를 돌릴 때는 `~/backups/`는 남긴다.
 
+**덤프에도 본문 30일이 걸린다**([ADR 0023](adr/0023-data-sources-copyright-retention.md) 개정 2026-10-06). 덤프는 DB 전체의 본문을
+담고 행 단위로 지울 수 없으므로, **덤프 안에서 가장 오래된 본문의 수집 시각 + 30일**에 파일을 통째로 지운다.
+
+- 만료일을 파일 이름에 적는다. 덤프를 뜨기 직전에 가장 오래된 본문의 수집 시각을 읽는다(건수·시각만 읽는 조회다):
+
+  ```bash
+  ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -At -U newsletter -d newsletter \
+    -c \"SELECT (min(n.raw_news_crawled_at) + interval '30 days')::date FROM news_raw n JOIN press p USING (press_id) \
+    WHERE n.raw_news_content <> '' AND p.press_name <> '정책브리핑'\""
+  # 그 날짜를 넣어: data/backups/tier0-micro-<시각>.expires-<YYYY-MM-DD>.dump
+  ```
+- 최신 1개만 둔다. 새 덤프가 위의 확인(목차, 행 수)을 통과하면 앞의 덤프를 지운다. 권한은 0600(`umask 077`).
+- 두 번째 사본(위의 VM `~/backups/`, 외장 디스크)도 같은 만료일에 지운다. 사본을 만들 때 만료일을 `.ops/micro/README.txt`에 해시와 함께 적는다.
+- 지금 있는 두 개: `mac-compose-2026-09-26.dump`는 **2026-10-25**, `tier0-micro-2026-09-26T2218.dump`는 **2026-10-26**이 만료일이다.
+  2026-10-06 현재 둘 다 그대로 있고 `mac-compose-…dump`의 권한은 0644다(`chmod 600`). Mac 덤프의 임베딩 845개는 본문 없이 따로
+  남길 수 있다(임베딩은 보존 대상이 아니다) - 남길지와 지우는 날은 사용자 결정이다.
+- VM의 본문 보존 잡이 아직 없어서(ADR 0023 TODO) VM에서 뜨는 덤프는 언제 떠도 2026-10-26에 만료된다. 보존 잡이 날마다 돌기 시작하면
+  전체 덤프는 뜬 지 하루 안에 만료된다 - 그때의 백업 주기와 방식은 정해지지 않았다(ADR 0023 개정의 "남는 위험", ADR 0026 결정 6).
+- 덤프를 복원한 DB에는 만료된 본문이 되살아날 수 있다. 복원한 뒤에는 보존 잡을 먼저 돌린다(잡이 생긴 뒤).
+
 ### 6.6 ingest가 1시간을 넘겨 다음 회차가 건너뛰어질 때
 
 스케줄러(supercronic)는 같은 잡의 앞 실행이 끝나지 않았으면 다음 실행을 시작하지 않고, 건너뛴 회차는
@@ -348,3 +368,122 @@ oci compute instance terminate --instance-id $INSTANCE --preserve-boot-volume fa
 uv pip compile docker/requirements-ingest.in --universal --python-version 3.11 \
   -c docker/requirements-worker.txt -o docker/requirements-ingest.txt
 ```
+
+## 9. LLM 실험용 동결 반출 (읽기 전용) — 누가, 언제, 확인, 정리
+
+실험(E0 등)은 운영 DB에 쓰지 않고, Tier 0 `news_raw`에서 실험 창만 읽기 전용으로 뽑은 파일에서 돈다. 결정과 근거는
+[ADR 0036](adr/0036-experiment-data-path-frozen-export-file-stand-ins.md), 본문 사본의 위치와 30일 규칙은
+[ADR 0023](adr/0023-data-sources-copyright-retention.md) 개정(2026-10-06)이다.
+
+**2026-10-06 현재 이 절차는 한 번도 돌리지 않았다.** 도구는 CI의 Postgres(합성 행)에서만 검증됐다. 걸리는 시간과 반출 중 VM 여유
+메모리는 첫 실행에서 재서 ADR 0036의 증거에 적는다.
+
+### 9.0 하기 전에 — 하나라도 아니면 돌리지 않는다
+- ADR 0023 개정(2026-10-06)이 main에 있고, 사용자가 이 반출을 승인했다.
+- **누가**: 사람이 Mac의 터미널에서 직접 돌린다. 예약 작업이나 상주 프로세스로 돌리지 않는다. 한 번의 반출은 한 번의 `ssh` 명령이다.
+- **어디서**: 메인 체크아웃(워크트리가 아니다). HEAD가 main에 있는 커밋이고 `git status --porcelain`이 비어 있다 - 매니페스트에 코드 SHA와
+  작업 트리가 깨끗했는지가 적힌다. E0의 반출이면 HEAD의 코드 경로가 `code_sha`(러너 PR의 병합 커밋)와 같아야 한다(ADR 0009 A8.2).
+- **`data/`가 백업·동기화 대상이 아니다**: `tmutil isexcluded data`(Time Machine을 쓴다면), iCloud·Dropbox 폴더 안이 아닌지. 대상이라면
+  그쪽 사본은 도구가 지우지 못한다 - 제외한 뒤에 반출한다.
+- **언제**: 매시 :20~:50(정시 ingest 사이). 도구가 분을 확인하고 그 밖이면 거절한다.
+
+### 9.1 창 정하기
+E0의 창은 T0 직전에 완결된 KST 날짜들의 06:00 KST를 의사 시각으로 하는 24시간 창이다(ADR 0009 A8.1). 손으로 계산하지 않는다:
+
+```bash
+python scripts/export_news_raw.py plan-window --t0-kst "$(date +%Y-%m-%dT%H:%M)" --days 3   # 후보가 모자라면 5 (A8.1의 연장)
+# start_utc, end_utc를 아래에 넣는다. day_windows_utc는 러너가 쓰는 창과 같은 함수의 출력이다
+```
+
+창은 최대 120시간이다. 그보다 길면 도구가 거절한다.
+
+### 9.2 VM 상태 확인 (읽기만)
+
+```bash
+ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -At -U newsletter -d newsletter \
+  -c \"SELECT job, status, started_at FROM job_runs WHERE status = 'running'\" \
+  -c \"SELECT count(*) FROM news_raw n WHERE n.raw_news_extract_status = 'ok' AND n.raw_news_content <> '' \
+       AND n.raw_news_crawled_at >= TIMESTAMP '<start_utc>' AND n.raw_news_crawled_at < TIMESTAMP '<end_utc>'\" \
+  -c \"SELECT count(*), count(*) FILTER (WHERE news_letter_id IS NOT NULL) FROM news_raw\""
+ssh -F .ops/micro/ssh_config micro 'grep MemAvailable /proc/meminfo'
+```
+
+- 돌고 있는 `ingest`가 있으면(1시간을 넘긴 회차, 6.6) 끝날 때까지 기다린다.
+- MemAvailable이 400 MiB 아래면 다음 시간대로 미룬다. 근거: 10일 관측의 p5가 389 MiB, 중앙값이 629 MiB다(ADR 0026 증거 8) - 평소보다
+  낮은 상태에 새 부하를 얹지 않는다는 뜻이다. 반출이 실제로 쓰는 메모리는 아직 재지 않았다.
+- 둘째 줄의 건수가 반출될 행 수다. 2026-10-06 기준 3개 창 2,595행, 5개 창 5,633행(행당 평균 4.2 KB로 약 11 MB / 23 MB 추정).
+
+### 9.3 반출
+
+다른 터미널에서 메모리를 지켜본다(첫 실행의 증거가 된다):
+
+```bash
+ssh -F .ops/micro/ssh_config micro 'for i in $(seq 1 40); do date +%T; grep -E "MemAvailable|SwapFree" /proc/meminfo; sleep 3; done'
+```
+
+```bash
+time python scripts/export_news_raw.py export --start-utc <start_utc> --end-utc <end_utc> \
+  --psql-command "ssh -F .ops/micro/ssh_config micro 'cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -U newsletter -d newsletter'"
+```
+
+- 도구가 psql의 표준입력으로 보내는 것은 스크립트 하나다: `BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY` →
+  `SET LOCAL statement_timeout = '120s'`(락 5초, 유휴 60초) → `COPY ... TO STDOUT` 세 번 → `ROLLBACK`. DB 비밀번호는 쓰지 않는다
+  (컨테이너 안의 로컬 접속). VM에는 파일을 만들지 않는다.
+- 성공하면 요약 JSON이 나온다: `dir`, `identity_sha256`, `rows`, `window_utc`, `snapshot_at_utc`(= T0), `alembic_revision`, `code_sha`,
+  `code_dirty`, `by_press`, `db_hash_check`, `body_expires_at_utc`, `articles_sha256`. **본문·제목·URL은 출력되지 않는다.**
+  파일은 `<메인 체크아웃>/data/exports/<T0>/`에 `articles.jsonl`(본문)과 `manifest.json`으로 놓인다(디렉터리 0700, 파일 0600).
+- 실패하면 아무것도 쓰지 않는다.
+
+  | 메시지 | 뜻 | 할 일 |
+  |---|---|---|
+  | `:20~:50 밖이다` | 정시 ingest와 겹칠 수 있다 | 기다렸다가 다시 |
+  | `psql 명령이 종료 코드 …` + `statement timeout` | 한 문장이 120초를 넘겼다 | VM 상태(9.2)를 다시 보고, 그래도 넘으면 `--statement-timeout-s`를 올리되 값을 ADR 0036에 적는다 |
+  | `꼬리말이 없다` / `행 수가 맞지 않는다` | 출력이 중간에 끊겼다(SSH) | 다시 돌린다. 읽기만 했으므로 VM에 남은 것은 없다 |
+  | `읽기 전용 스냅숏 … 확인해 주지 않았다` | 서버가 읽기 전용 트랜잭션임을 돌려주지 않았다 | 돌리지 않는다. psql 명령이 스크립트를 그대로 전달하는지 조사 |
+  | `git이 추적할 수 있는 곳이다` / `data/exports 아래에만 둔다` | 쓰는 곳이 허용 위치가 아니다 | 메인 체크아웃에서 `--root` 없이 돌린다 |
+  | `이미 반출본이 있다` | 같은 T0 디렉터리가 있다 | 덮어쓰지 않는다. 새 반출은 새 T0다 |
+
+### 9.4 확인
+
+```bash
+python scripts/export_news_raw.py verify --dir data/exports/<T0>      # 파일을 다시 읽어 해시를 대조한다. identity_sha256이 9.3과 같아야 한다
+ls -ld data/exports/<T0> && ls -l data/exports/<T0>                   # drwx------ / -rw-------
+git status --porcelain                                                # 비어 있어야 한다
+git check-ignore -v data/exports/<T0>/articles.jsonl                  # .gitignore의 /data/ 규칙이 나와야 한다
+```
+
+- `rows`가 9.2의 건수와 같은가. 다르면 9.2와 반출 사이에 추출이 `ok`로 끝난 행이 창 안에 생긴 것이다(늘어난 쪽만 정상) - 차이를 적는다.
+- `db_hash_check`의 `mismatch`·`missing`이 0인가. 0이 아니어도 반출은 유효하지만(해시는 받은 본문에서 다시 계산한다) DB의 해시 열이 본문과
+  다르다는 뜻이므로 건수를 적고 따로 조사한다.
+- `alembic_revision`이 VM의 리비전(`d48994e9d26e`)인가, `code_dirty`가 false인가.
+- VM이 그대로인가: 9.2의 셋째 조회를 다시 돌린다. 수집이 계속되므로 전체 행 수는 늘 수 있다. `news_letter_id`가 채워진 행은 0이어야 한다.
+- `identity_sha256`, `rows`, `snapshot_at_utc`, `body_expires_at_utc`를 실험의 실행 전 기록(E0이면 ADR 0009 A8.10과 yaml의
+  `pre_run_record`)에 옮겨 적고, 만료일을 `.ops/RUNNING.md`에도 적는다.
+
+### 9.5 임베딩 팩 대조
+임베딩 잡(Colab)은 다음 PR이다. 잡이 돌려준 팩을 `data/exports/<T0>/embeddings/`에 받은 뒤:
+
+```bash
+python scripts/import_embeddings.py --export-dir data/exports/<T0> --pack-dir data/exports/<T0>/embeddings
+```
+
+통과하면 행 수·차원·dtype·벡터 파일 sha256이 나온다(실행 전 기록의 `embeddings_sha256`). 어긋나면 사유 코드(`ids`, `content_sha256`,
+`dim`, `norm`, `export_identity`, `model`, `file_sha256` …)와 함께 종료 코드 2로 끝난다 - 그 팩은 쓰지 않는다.
+
+### 9.6 정리 — 본문 30일
+- 본문 만료는 행마다 `crawled_at` + 30일이다. 요약의 `body_expires_at_utc`가 가장 이른 만료, `last_body_expiry_utc`가 마지막 만료다.
+- 반출본을 여는 도구(`verify`, `import_embeddings.py`, 실험 러너)는 열 때마다 만료된 본문을 디스크에서 지운다. 만료된 본문은 어떤 경우에도
+  도구 밖으로 나오지 않는다. 해시·길이·제목·URL과 `identity_sha256`은 남는다.
+- 아무 도구도 돌리지 않는 날을 위해, 가장 이른 만료일에 사람이 돌린다:
+
+  ```bash
+  python scripts/export_news_raw.py purge --all                              # data/exports 아래 전부, 만료된 본문만
+  python scripts/export_news_raw.py purge --dir data/exports/<T0> --everything   # 할 일이 끝났으면 만료 전이라도 전부
+  ```
+
+  출력의 `rows_with_body`가 남은 본문 수다. `--everything` 뒤에는 0이어야 한다. `purge --all`이 종료 코드 1이면 읽을 수 없는 반출본이
+  있다는 뜻이다(출력의 `error`) - 그 디렉터리는 본문이 남아 있을 수 있으니 직접 확인하고 지운다.
+- 디렉터리를 통째로 지우지 않고 본문만 지우는 이유: 매니페스트와 해시가 남아야 실험의 실행 전 기록에 적은 sha256을 나중에도 대조할 수 있다.
+- 한 실험이 끝나면(라벨 리포트가 커밋되면) 만료 전이라도 그 반출본의 본문을 지운다.
+- 지우는 것은 파일의 내용이다. 저장 장치 수준의 복구 불가능성은 보장하지 않는다(ADR 0023 개정 "남는 위험").
+
