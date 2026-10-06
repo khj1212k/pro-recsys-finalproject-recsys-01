@@ -212,6 +212,9 @@ class NaverHyperCLOVAClient(BaseLLMClient):
                             purpose=purpose, input_tokens=0, output_tokens=0,
                             latency_seconds=latency, success=False
                         )
+                        # HTTP 200 안의 서버 오류 코드도 프로바이더 장애다 - 브레이커가 세게 한다
+                        # (연속 실패 임계에 닿으면 여기서 LLMCircuitOpen).
+                        spend.settle("body_5xx")
                         time.sleep(backoff)
                         backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                         continue
@@ -289,7 +292,10 @@ class OpenAIClient(BaseLLMClient):
         if not api_key:
             raise ValueError("OPENAI_API_KEY 환경변수를 설정하세요")
 
-        self.client = OpenAI(api_key=api_key)
+        # SDK 기본값은 max_retries=2, 읽기 타임아웃 600초다. SDK가 안에서 다시 보내면 지출 원장의
+        # 예약 1건에 HTTP 요청이 3건까지 나가고(docs/adr/0035 "시도마다 예약"이 깨진다), 그 실패들은
+        # 서킷브레이커에도 한 번으로만 보인다. 재시도는 아래 루프만 한다(어댑터와 같은 설정).
+        self.client = OpenAI(api_key=api_key, max_retries=0, timeout=Settings.LLM_REQUEST_TIMEOUT_S)
         self.rate_limiter = SimpleRateLimiter(
             float(os.getenv("OPENAI_LLM_MIN_INTERVAL", os.getenv("LLM_MIN_INTERVAL", "0.3")))
         )
@@ -325,8 +331,8 @@ class OpenAIClient(BaseLLMClient):
         for attempt in range(MAX_RETRIES):
             attempt_start = time.time()  # 실패/재시도 메트릭 기록용
             self.rate_limiter.wait()
-            # 최악 비용 예약(상한을 넘으면 요청 전에 예외). 이 클라이언트는 실패 원인을 문자열로만
-            # 구분하므로 실패한 시도는 전부 finally에서 예약액 그대로 지출로 닫는다.
+            # 최악 비용 예약(상한을 넘으면 요청 전에 예외). 실패한 시도는 SDK 예외 종류로 정산한다
+            # (HTTP 상태, 타임아웃, 연결 오류) - 그래야 브레이커가 연속 장애를 센다.
             spend = guard.begin_attempt(
                 provider="openai", model=self.model, purpose=purpose,
                 messages=messages, schema=None, max_tokens=max_tokens,
@@ -357,14 +363,16 @@ class OpenAIClient(BaseLLMClient):
 
             except Exception as e:
                 last_error = str(e)
-                error_str = str(e).lower()
+                outcome, retryable = _classify_openai_error(e)
 
                 get_metrics_collector().record_call(
                     purpose=purpose, input_tokens=0, output_tokens=0,
                     latency_seconds=time.time() - attempt_start, success=False
                 )
+                # 5xx·타임아웃·연결 오류가 연속 실패 임계에 닿거나 402면 여기서 LLMCircuitOpen이 난다.
+                spend.settle(outcome)
 
-                if "rate_limit" in error_str or "429" in error_str or "500" in error_str or "503" in error_str:
+                if retryable:
                     logger.warning("OpenAI API error. Retrying %s/%s...", attempt + 1, MAX_RETRIES)
                     time.sleep(backoff)
                     backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
@@ -378,6 +386,22 @@ class OpenAIClient(BaseLLMClient):
 
         logger.error("Max retries (%s) exhausted. Last error: %s", MAX_RETRIES, last_error)
         return None
+
+
+def _classify_openai_error(error: Exception) -> Tuple[str, bool]:
+    """(지출 정산·브레이커용 시도 결과, 다시 시도할지). 결과 이름은 core/llm/budget.py의 규칙을 따른다."""
+    import openai
+
+    if isinstance(error, openai.APIStatusError):
+        status = error.status_code
+        return f"http_{status}", status == 429 or status >= 500
+    if isinstance(error, openai.APITimeoutError):  # APIConnectionError의 하위 클래스라 먼저 본다
+        return "timeout", True
+    if isinstance(error, openai.APIConnectionError):
+        return "connection", True
+    # SDK 예외가 아닌 경우: 예전처럼 메시지로만 재시도 여부를 정한다(과금 여부는 알 수 없음 = 예약액)
+    text = str(error).lower()
+    return "error", any(token in text for token in ("rate_limit", "429", "500", "503"))
 
 
 def get_llm_client(provider: Optional[str] = None) -> BaseLLMClient:

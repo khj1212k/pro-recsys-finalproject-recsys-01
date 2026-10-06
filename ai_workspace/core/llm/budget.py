@@ -307,7 +307,7 @@ def billing_basis(outcome: str, provider: str, usage: Optional[LLMUsage]) -> str
         return "actual" if billable_tokens(usage) is not None else "reserved"
     if outcome.startswith("http_"):
         return "not_billed" if provider in HTTP_ERROR_NOT_BILLED_PROVIDERS else "reserved"
-    return "reserved"  # timeout, connection, error, unsettled: 요청이 처리됐는지 모른다
+    return "reserved"  # timeout, connection, body_5xx, error, unsettled: 요청이 처리됐는지 모른다
 
 
 def _http_status(outcome: str) -> Optional[int]:
@@ -328,7 +328,7 @@ def breaker_effect(outcome: str) -> str:
         return "fatal"  # 선불 잔액 소진 - 같은 런 안에서는 회복되지 않는다
     if status is not None and status >= 500:
         return "failure"
-    if outcome in ("timeout", "connection"):
+    if outcome in ("timeout", "connection", "body_5xx"):  # body_5xx: HTTP 200 본문의 서버 오류 코드(HyperCLOVA)
         return "failure"
     return "neutral"  # 429, 그 밖의 4xx, 분류 못 한 오류
 

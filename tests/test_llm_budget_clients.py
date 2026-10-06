@@ -13,6 +13,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import httpx2
 import openai
 import pytest
 import requests
@@ -35,7 +36,7 @@ import core.llm_client as legacy_module  # noqa: E402
 from config.settings import Settings  # noqa: E402
 from core.llm import budget  # noqa: E402
 from core.llm.adapters import HyperCLOVALLMClient, OpenAICompatLLMClient  # noqa: E402
-from core.llm.budget import LLMBudgetExceeded, LLMUnpricedModel  # noqa: E402
+from core.llm.budget import LLMBudgetExceeded, LLMCircuitOpen, LLMUnpricedModel  # noqa: E402
 from core.llm.schemas import ClusterEval  # noqa: E402
 from core.llm_client import NaverHyperCLOVAClient, OpenAIClient  # noqa: E402
 from core.llm_metrics import LLMMetricsCollector  # noqa: E402
@@ -553,6 +554,23 @@ def test_legacy_hyperclova_failed_attempts_are_charged_at_the_worst_case(naver, 
     ]
 
 
+def test_legacy_hyperclova_server_error_in_the_response_body_counts_toward_the_breaker(naver, monkeypatch, tmp_path):
+    """HTTP 200 본문의 5xx 코드: 정산 없이 재시도하면 브레이커가 보지 못해 재시도 상한(10)까지 돈다."""
+    monkeypatch.setenv("LLM_BUDGET_FALLBACK_INPUT_PER_1M", "5")
+    monkeypatch.setenv("LLM_BUDGET_FALLBACK_OUTPUT_PER_1M", "20")
+    overloaded = MagicMock(status_code=200, headers={})
+    overloaded.json.return_value = {"status": {"code": "50000", "message": "internal error"}}
+
+    with patch("core.llm_client.requests.post", return_value=overloaded) as post:
+        with pytest.raises(LLMCircuitOpen) as exc:
+            naver.chat_completion(MESSAGES, max_tokens=1000, purpose="cluster_eval")
+
+    commits = [e for e in _events(tmp_path) if e["ev"] == "commit"]
+    assert post.call_count == len(commits) == 5  # 기본 임계
+    assert {(c["outcome"], c["basis"]) for c in commits} == {("body_5xx", "reserved")}
+    assert exc.value.details["last_outcome"] == "body_5xx"
+
+
 def test_hyperclova_adapter_path_is_covered_by_the_same_guard(naver, monkeypatch):
     """role을 naver로 돌렸을 때의 경로: 어댑터 -> 레거시 클라이언트. 상한이 차면 요청이 나가지 않는다."""
     monkeypatch.setenv("LLM_BUDGET_FALLBACK_INPUT_PER_1M", "5")
@@ -597,6 +615,91 @@ def test_legacy_openai_commits_actual_usage_and_charges_failed_attempts(legacy_o
 
     events = _events(tmp_path)
     assert [e["ev"] for e in events] == ["reserve", "commit", "reserve", "commit"]
-    assert (events[1]["outcome"], events[1]["basis"]) == ("unsettled", "reserved")
+    assert (events[1]["outcome"], events[1]["basis"]) == ("error", "reserved")  # SDK 예외가 아닌 실패: 과금 여부를 모른다
     assert (events[3]["basis"], events[3]["nusd"]) == ("actual", 400 * 150 + 120 * 600)
     assert events[0]["role"] == "tone"
+
+
+# 레거시 OpenAIClient가 만든 SDK 객체를 그대로 두고(재시도·타임아웃 설정 포함) HTTP 전송 계층만 바꾼다.
+# 여기서 세는 것은 SDK 메서드 호출이 아니라 실제로 나가는 HTTP 요청 수다.
+
+_CHAT_OK = {
+    "id": "chatcmpl-test", "object": "chat.completion", "created": 0, "model": "gpt-4o-mini",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 400, "completion_tokens": 120, "total_tokens": 520},
+}
+
+
+@pytest.fixture
+def legacy_openai_http(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-dummy")
+    monkeypatch.setenv("OPENAI_LLM_MIN_INTERVAL", "0")
+    client = OpenAIClient(model="gpt-4o-mini")
+    sent = []
+
+    def install(respond):
+        def handler(request):
+            sent.append(request.url.path)
+            return respond(len(sent))
+
+        client.client = client.client.with_options(http_client=httpx2.Client(transport=httpx2.MockTransport(handler)))
+        return client, sent
+
+    return install
+
+
+def test_legacy_openai_sdk_does_not_retry_behind_the_ledger(legacy_openai_http):
+    """SDK 기본값(max_retries=2, 읽기 타임아웃 600초)이면 예약 1건에 HTTP 요청이 3건까지 나간다."""
+    client, _ = legacy_openai_http(lambda n: httpx2.Response(200, json=_CHAT_OK))
+
+    assert client.client.max_retries == 0
+    assert client.client.timeout == Settings.LLM_REQUEST_TIMEOUT_S
+
+
+def test_legacy_openai_sends_one_http_request_per_reservation_and_opens_the_breaker(legacy_openai_http, tmp_path):
+    client, sent = legacy_openai_http(lambda n: httpx2.Response(500, json={"error": {"message": "boom"}}))
+
+    with pytest.raises(LLMCircuitOpen) as exc:
+        client.chat_completion(MESSAGES, max_tokens=1000, purpose="cluster_eval")
+
+    events = _events(tmp_path)
+    reserves = [e for e in events if e["ev"] == "reserve"]
+    commits = [e for e in events if e["ev"] == "commit"]
+    assert len(sent) == len(reserves) == len(commits) == 5  # 요청 수 == 예약 수, 연속 5회에서 멈춘다
+    assert {c["outcome"] for c in commits} == {"http_500"}
+    assert (exc.value.details["consecutive_failures"], exc.value.details["last_outcome"]) == (5, "http_500")
+    assert budget.run_stop().code == "llm_circuit_open"
+
+
+def test_legacy_openai_timeout_is_settled_as_a_timeout_and_retried_once_per_reservation(legacy_openai_http, tmp_path):
+    def respond(n):
+        if n == 1:
+            raise httpx2.ReadTimeout("read timed out")
+        return httpx2.Response(200, json=_CHAT_OK)
+
+    client, sent = legacy_openai_http(respond)
+
+    assert client.chat_completion(MESSAGES, max_tokens=1000, purpose="cluster_eval") == "ok"
+
+    commits = [e for e in _events(tmp_path) if e["ev"] == "commit"]
+    assert len(sent) == 2
+    assert [(c["outcome"], c["basis"]) for c in commits] == [("timeout", "reserved"), ("ok", "actual")]
+
+
+def test_legacy_openai_payment_required_stops_the_run_at_once(legacy_openai_http, tmp_path):
+    client, sent = legacy_openai_http(lambda n: httpx2.Response(402, json={"error": {"message": "prepay"}}))
+
+    with pytest.raises(LLMCircuitOpen) as exc:
+        client.chat_completion(MESSAGES, max_tokens=1000, purpose="cluster_eval")
+
+    assert len(sent) == 1 and exc.value.details["http_status"] == 402
+
+
+def test_legacy_openai_client_error_is_not_retried(legacy_openai_http, tmp_path):
+    client, sent = legacy_openai_http(lambda n: httpx2.Response(401, json={"error": {"message": "bad key"}}))
+
+    assert client.chat_completion(MESSAGES, max_tokens=1000, purpose="cluster_eval") is None
+
+    commits = [e for e in _events(tmp_path) if e["ev"] == "commit"]
+    assert len(sent) == 1 and [c["outcome"] for c in commits] == ["http_401"]
+    assert budget.run_stop() is None
