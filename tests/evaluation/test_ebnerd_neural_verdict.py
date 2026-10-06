@@ -181,17 +181,39 @@ def test_registered_rule_tables_are_internally_consistent():
     assert STATS["seed_rule"]["n_seeds"] == len(PREREG["run"]["seeds"]) == 3
 
 
-def test_recorded_preregistration_commit_holds_the_same_yaml_bytes():
-    """yaml 옆 .commit에 적힌 커밋의 yaml이 지금 파일과 바이트로 같다(등록 뒤 고치지 않았다)."""
+def _at_recorded_commit(rel: str) -> bytes:
+    """.commit에 적힌 사전 등록 커밋에서 파일을 읽는다. 이력이 없으면(얕은 체크아웃) 건너뛴다."""
     import subprocess
     from evaluation.recsys.ebnerd.neural.report import PREREG_PATH
 
     sha = prereg_commit()
     assert sha and len(sha) == 40
-    repo = PREREG_PATH.parents[4]
-    rel = PREREG_PATH.relative_to(repo).as_posix()
     try:
-        blob = subprocess.run(["git", "show", f"{sha}:{rel}"], cwd=repo, capture_output=True, check=True).stdout
+        return subprocess.run(["git", "show", f"{sha}:{rel}"], cwd=PREREG_PATH.parents[4], capture_output=True, check=True).stdout
     except (subprocess.CalledProcessError, FileNotFoundError):
         pytest.skip("git 이력에서 사전 등록 커밋을 읽을 수 없다(얕은 체크아웃)")
-    assert blob == PREREG_PATH.read_bytes()
+
+
+def _registered_adr_section(text: bytes) -> bytes:
+    """ADR에서 등록 문장 구간: "## A3 사전 등록" 제목부터 변경 기록(A3.12) 제목 앞까지."""
+    s = text.decode("utf-8")
+    start = s.index("\n## A3 사전 등록")
+    return s[start:s.index("\n### A3.12 ", start)].encode("utf-8")
+
+
+def test_recorded_preregistration_commit_holds_the_same_yaml_bytes():
+    """yaml 옆 .commit에 적힌 커밋의 yaml이 지금 파일과 바이트로 같다(등록 뒤 고치지 않았다)."""
+    from evaluation.recsys.ebnerd.neural.report import PREREG_PATH
+
+    rel = PREREG_PATH.relative_to(PREREG_PATH.parents[4]).as_posix()
+    assert _at_recorded_commit(rel) == PREREG_PATH.read_bytes()
+
+
+def test_recorded_preregistration_commit_holds_the_same_adr_rule_text():
+    """ADR의 등록 문장(A3.0–A3.11)도 그 커밋의 것과 바이트로 같다. 등록 뒤의 기록은 변경 기록(A3.12)에만 늘어난다."""
+    from evaluation.recsys.ebnerd.neural.report import PREREG_PATH
+
+    repo = PREREG_PATH.parents[4]
+    registered = _registered_adr_section(_at_recorded_commit(PREREG["adr"]))
+    assert all(f"\n### A3.{i} ".encode("utf-8") in registered for i in range(12))       # 구간이 비어 있거나 잘리지 않았다
+    assert _registered_adr_section((repo / PREREG["adr"]).read_bytes()) == registered

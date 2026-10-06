@@ -16,6 +16,7 @@ on:
       - "scripts/e15_colab_driver.py"
       - "scripts/m4_colab_driver.py"
       - "requirements-colab-gpu.txt"
+      - "docs/adr/0013-ranker-v2-design.md"
       - "tests/evaluation/conftest.py"
       - "tests/evaluation/test_ebnerd_neural_*.py"
       - "tests/evaluation/test_ebnerd_run_neural.py"
@@ -29,6 +30,7 @@ on:
       - "scripts/e15_colab_driver.py"
       - "scripts/m4_colab_driver.py"
       - "requirements-colab-gpu.txt"
+      - "docs/adr/0013-ranker-v2-design.md"
       - "tests/evaluation/conftest.py"
       - "tests/evaluation/test_ebnerd_neural_*.py"
       - "tests/evaluation/test_ebnerd_run_neural.py"
@@ -41,7 +43,8 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      # 사전 등록 커밋의 yaml과 지금 파일을 바이트로 비교하는 테스트가 이력을 읽는다(얕은 체크아웃이면 건너뛴다).
+      # 사전 등록 커밋의 yaml·ADR 등록 문장(A3.0–A3.11)과 지금 파일을 바이트로 비교하는 테스트가 이력을 읽는다
+      # (얕은 체크아웃이면 건너뛴다). ADR 0013만 고친 push에서도 이 비교가 돌도록 그 파일을 경로에 넣었다.
       - name: Checkout (full history)
         uses: actions/checkout@v4
         with:
