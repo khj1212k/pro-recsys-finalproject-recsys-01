@@ -128,6 +128,7 @@ cd frontend && npm install && npm run dev
 ## 문서
 
 - [설계 결정 기록(ADR)](docs/adr/README.md) — 컨텍스트, 검토한 대안, 결정, 증거, 한계.
+- [설계 문서](docs/design/README.md) — ADR로 옮기기 전 단계의 아키텍처 리뷰와 추천·LLM 생성 v2 설계 사양(2026-09-26). 문서마다 지금 상태를 적어 두었고, 효력이 있는 것은 ADR이다.
 - [2026-07 셀프 리뷰 수정 로그](docs/fix-log-2026-07.md)
 - [운영 런북](docs/runbook.md) — compose 잡 런타임 띄우기, 상태 확인, 킬 스위치.
 - [평가 리포트](reports/README.md)
