@@ -1,22 +1,38 @@
-# [SIM] ADR 0025의 E9(탐색 칸 로그로 한 오프폴리시 추정의 검증)와 E10(노출 피로 규칙: log 대 enforce)을
-# 사전 등록한 구성(300명 x 7일 x seed 3개)으로 돌린다. 개발 Mac에서는 부하가 되는 실행을 하지 않으므로
-# 러너에서 돌리고 결과 JSON·리포트를 아티팩트로 올린다. 데이터는 전부 시뮬레이터의 합성 데이터다.
+# [SIM] ADR 0025의 E9(탐색 칸 로그로 한 오프폴리시 추정의 검증)와 E10(노출 피로 규칙: log 대 enforce)의 실행기를
+# 등록한 크기(300명 x 7일 x seed 3개)로 러너에서 돌린다. 개발 Mac에서는 부하가 되는 실행을 하지 않는다.
+# 데이터는 전부 시뮬레이터의 합성 데이터다.
 #
-# 이 워크플로는 오류에서만 실패한다. 판정이 "실패"로 나와도 성공으로 끝난다(판정은 결과다).
-# reports/sim/ope_validation.*, reports/sim/fatigue_v1.*는 이 워크플로의 아티팩트를 그대로 옮긴 것이다.
+# 판정용 실행은 이미 끝났다: 실행 37400003072(코드 커밋 0ccd59f)가 사전 등록한 구성의 유일한 실행이고,
+# reports/sim/ope_validation.*, reports/sim/fatigue_v1.*는 그 실행의 아티팩트를 그대로 옮긴 것이다.
+# 그 실행 뒤로 자동 실행(push)을 껐다. ADR 0025 A1.5가 허용한 재실행은 둘뿐이어서(실행이 오류로 끝남,
+# 하네스가 등록한 정의와 다르게 동작한 버그) 코드를 push할 때마다 등록한 크기의 실행이 새로 생기면 안 된다.
+#
+# 지금 이 워크플로가 돌리는 코드는 그때와 서빙 경로가 다르다(ADR 0033 뒤의 저장소 계약 - sim/serving_app.py).
+# ADR 0025 A1.1에 등록한 세계가 아니므로 여기서 나오는 리포트는 어느 사유로 돌리든 판정용이 아니고, 머리말에
+# 그렇게 찍힌다. reports/sim/의 파일을 이 워크플로의 출력으로 바꾸지 않는다.
+#
+# 이 워크플로는 오류에서만 실패한다. 판정 표가 "실패"로 나와도 성공으로 끝난다(판정은 결과다).
 name: sim-ope-validation
 
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - "sim/ope_validation.py"
-      - "sim/fatigue_comparison.py"
-      - "sim/ope_report.py"
-      - "sim/serving_app.py"
-      - "sim/serving_runs.py"
-      - "sim/sim_embeddings.py"
-      - ".github/workflows/sim-ope-validation.yml"
+    inputs:
+      reason:
+        description: "왜 돌리는가 - 리포트에 남는다 (replication: 재현 실행, error: 앞 실행이 오류로 끝남, harness-bug: 하네스 버그 수정 뒤)"
+        type: choice
+        required: true
+        default: replication
+        options:
+          - replication
+          - error
+          - harness-bug
+      discards_run:
+        description: "error·harness-bug일 때 필수: 이 실행이 버리는 실행의 ID"
+        type: string
+        required: false
+
+permissions:
+  contents: read
 
 concurrency:
   group: sim-ope-validation-${{ github.ref }}
@@ -26,12 +42,27 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      REASON: ${{ inputs.reason }}
+      DISCARDS_RUN: ${{ inputs.discards_run }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0 # 사전 등록 커밋을 이력에서 찾는다
+
+      # 앞 실행을 대신하는 실행은 버리는 실행의 ID를 적어야 한다(ADR 0025 A1.5).
+      - name: Check the reason for this run
+        run: |
+          case "$REASON" in
+            replication) ;;
+            error|harness-bug)
+              if ! printf '%s' "$DISCARDS_RUN" | grep -Eq '^[0-9]+$'; then
+                echo "reason '$REASON' needs discards_run (the id of the run this one replaces)"; exit 1
+              fi ;;
+            *) echo "unknown reason '$REASON'"; exit 1 ;;
+          esac
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -43,48 +74,63 @@ jobs:
         run: uv venv --python 3.11 .venv
 
       # 실험이 임포트하는 것만 넣는다: sim/(numpy, kiwipiepy, 프로세스 내 앱의 fastapi·httpx),
-      # backend/app/recsys(numpy), recommend_engine의 MMR(numpy). numpy·kiwipiepy는 단위 테스트 잡과 같은 버전이다.
+      # backend/app/recsys와 recsys_core(numpy), recommend_engine의 MMR(numpy). numpy·kiwipiepy는 단위 테스트
+      # 잡과 같은 버전이고, httpx는 판정용 실행(37400003072)이 받은 버전이다.
       - name: Install dependencies
         run: |
           uv pip install --python .venv/bin/python \
             "numpy==2.4.6" \
             "kiwipiepy==0.23.2" \
             "fastapi==0.117.1" \
-            httpx
+            "httpx==0.28.1"
           uv pip install --python .venv/bin/python --no-deps -e ai_workspace/recommend_engine
 
-      # 사전 등록(ADR 0025 보완 A1)이 실행기보다 먼저 커밋됐는지를 이력으로 확인한다. 브랜치를 다시 쌓으면
-      # 해시가 바뀌므로 제목으로 찾는다.
-      - name: Locate the pre-registration commit
+      # 사전 등록(ADR 0025 보완 A1)이 실행기보다 먼저 커밋됐는지를 이력으로 확인하고, 등록한 문장("사전 등록"
+      # 절부터 A1.5 끝까지)이 그 커밋의 것과 바이트로 같은지 대조한다. 브랜치를 다시 쌓으면 해시가 바뀌므로
+      # 커밋은 제목으로 찾는다.
+      - name: Locate the pre-registration commit and compare the registered text
         run: |
+          ADR=docs/adr/0025-logging-v2-exploration-and-ope.md
           PREREG=$(git log --format=%H --reverse \
             --grep='ADR 0025 사전 등록 보완 A1 — E9·E10의 실행 세부' \
-            -- docs/adr/0025-logging-v2-exploration-and-ope.md | head -1)
+            -- "$ADR" | head -1)
           if [ -z "$PREREG" ]; then echo "pre-registration commit not found"; exit 1; fi
           if git cat-file -e "$PREREG:sim/ope_validation.py" 2>/dev/null; then
             echo "the experiment runner already existed at the pre-registration commit $PREREG"; exit 1
           fi
           git merge-base --is-ancestor "$PREREG" HEAD
+          registered() { awk '/^## 사전 등록 \(/{on=1} /^### A1\.6 변경 기록/{on=0} on'; }
+          git show "$PREREG:$ADR" | registered > /tmp/registered_then.md
+          registered < "$ADR" > /tmp/registered_now.md
+          if [ ! -s /tmp/registered_then.md ]; then echo "the registered text was not found at $PREREG"; exit 1; fi
+          if ! cmp /tmp/registered_then.md /tmp/registered_now.md; then
+            echo "the registered text differs from the pre-registration commit $PREREG"
+            diff /tmp/registered_then.md /tmp/registered_now.md || true
+            exit 1
+          fi
+          sha256sum /tmp/registered_now.md
           echo "PREREG=$PREREG" >> "$GITHUB_ENV"
           echo "pre-registration commit: $PREREG"
 
-      - name: E9 - OPE validation (registered configuration)
+      - name: E9 - OPE validation (registered size)
         run: |
           .venv/bin/python -m sim.ope_validation \
             --runs-dir out/runs --out out/ope_validation.json \
-            --workers 4 --prereg-commit "$PREREG"
+            --workers 4 --prereg-commit "$PREREG" \
+            --reason "$REASON" ${DISCARDS_RUN:+--discards-run "$DISCARDS_RUN"}
 
-      - name: E10 - fatigue rule, log vs enforce (registered configuration)
+      - name: E10 - fatigue rule, log vs enforce (registered size)
         run: |
           .venv/bin/python -m sim.fatigue_comparison \
             --runs-dir out/runs --out out/fatigue_v1.json \
-            --workers 4 --prereg-commit "$PREREG"
+            --workers 4 --prereg-commit "$PREREG" \
+            --reason "$REASON" ${DISCARDS_RUN:+--discards-run "$DISCARDS_RUN"}
 
       - name: Render reports from the result JSON
         run: |
           .venv/bin/python -m sim.ope_report \
             --ope out/ope_validation.json --fatigue out/fatigue_v1.json --out-dir out/reports
-          sha256sum out/ope_validation.json out/fatigue_v1.json out/reports/*
+          sha256sum out/ope_validation.json out/fatigue_v1.json out/reports/* out/runs/*.npz
 
       - name: Upload results
         uses: actions/upload-artifact@v4
@@ -98,10 +144,11 @@ jobs:
           if-no-files-found: error
 
       # 실행별 표(요청·칸·클릭 직후 쌍). 리포트의 수치를 다시 계산해 볼 수 있게 올려 둔다. 저장소에는 넣지 않는다.
+      # 표마다 만든 코드 커밋과 플랫폼이 들어 있다(meta의 code·platform). 보존은 아티팩트 최대 기간이다.
       - name: Upload per-run tables
         uses: actions/upload-artifact@v4
         with:
           name: sim-ope-validation-runs
           path: out/runs/*.npz
-          retention-days: 30
+          retention-days: 90
           if-no-files-found: error

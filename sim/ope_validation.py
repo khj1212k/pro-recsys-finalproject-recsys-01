@@ -38,6 +38,7 @@ from sim.serving_app import TARGET_POLICIES
 from sim.serving_runs import (
     SLATE,
     RunData,
+    add_run_arguments,
     bootstrap_ratio,
     experiment_meta,
     per_user_sums,
@@ -341,6 +342,7 @@ def main(argv=None) -> int:
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--prereg-commit", default=None, help="commit of ADR 0025 A1 (recorded in the report)")
     p.add_argument("--git-sha", default=None, help="code commit when not running in GitHub Actions")
+    add_run_arguments(p)
     args = p.parse_args(argv)
     result = run_experiment(args)
     args.out.parent.mkdir(parents=True, exist_ok=True)

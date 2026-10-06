@@ -163,6 +163,32 @@ def test_expected_click_rate_of_the_shown_slates_matches_the_probe(tiny_runs):
 # -------------------------------------------------------------------- E9: the verdict rule
 
 
+def test_each_seed_s_log_is_compared_with_the_same_seed_s_measurement(tiny_runs):
+    """ADR 0025 A1.3: V̂_s from policy A's seed-s log against V_s measured in the seed-s world. Mixing the
+    seeds up would still produce a full table, so the pairing is pinned here."""
+    run_a = tiny_runs["a"]
+    measured = {name: {seed: {"ctr": 0.01 * (k + 1) * (seed + 2), "tag": (name, seed)} for seed in (0, 1)}
+                for k, name in enumerate(TARGET_POLICIES)}
+    stage = e9.analyze_stage({1: run_a, 0: run_a}, measured, explore_slots=2)
+    assert list(stage["policy_a"]) == ["0", "1"]
+    for name in TARGET_POLICIES:
+        rows = stage["targets"][name]["per_seed"]
+        assert [row["seed"] for row in rows] == [0, 1]
+        for row in rows:
+            truth = measured[name][row["seed"]]
+            assert row["measured"] is truth
+            assert row["state_shift_rel"] == pytest.approx(
+                abs(row["same_context_expected_ctr"] - truth["ctr"]) / truth["ctr"])
+            for est in row["estimators"].values():
+                if est["value"] is not None:
+                    assert est["rel_err"] == pytest.approx(abs(est["value"] - truth["ctr"]) / truth["ctr"])
+        # the same log against two different measurements: the two seeds' errors differ
+        fallback = [row["estimators"][e9.FALLBACK]["rel_err"] for row in rows]
+        assert fallback[0] != fallback[1]
+        assert stage["targets"][name]["verdict"]["rel_err_by_seed"] == [
+            row["estimators"][stage["targets"][name]["verdict"]["verdict_estimator"]]["rel_err"] for row in rows]
+
+
 def _seed_row(primary_cov, values):
     """values: estimator -> (rel_err, ess_ratio)."""
     def est(name):
@@ -441,13 +467,151 @@ def test_inside_github_actions_the_report_records_the_runner_s_commit_and_run(mo
                                "embeddings": "keyword/category hash, 64d (sim.sim_embeddings)"}
 
 
-def test_registered_reports_carry_no_smoke_banner():
-    meta = {"label": "[SIM]", "registered_config": True, "preregistration": "p", "preregistration_commit": "c",
-            "git_sha": "s", "github_run_id": "123", "github_run_attempt": "1", "github_repository": "o/r",
-            "github_ref": "b", "started_utc": "t0", "finished_utc": "t1", "command": "cmd",
-            "config": {"catalog": "synthetic", "preset": "default", "embeddings": "e", "n_users": 300, "n_days": 7,
-                       "seeds": [0, 1, 2]},
-            "runner": {"python": "3", "numpy": "2", "kiwipiepy": "0", "platform": "linux"}}
+REGISTERED_META = {"label": "[SIM]", "registered_config": True, "preregistration": "p", "preregistration_commit": "c",
+                   "git_sha": "s", "github_run_id": "123", "github_run_attempt": "1", "github_repository": "o/r",
+                   "github_ref": "b", "started_utc": "t0", "finished_utc": "t1", "command": "cmd",
+                   "config": {"catalog": "synthetic", "preset": "default", "embeddings": "e", "n_users": 300,
+                              "n_days": 7, "seeds": [0, 1, 2]},
+                   "runner": {"python": "3", "numpy": "2", "kiwipiepy": "0", "platform": "linux"}}
+
+
+def test_only_the_registered_run_s_report_carries_no_banner():
+    """The registered run's JSON: registered configuration, a GitHub run id, and no `serving_path` (it was
+    made before the harness wrote that key). Anything else says on its first lines that it decides nothing."""
+    meta = REGISTERED_META
+    assert ope_report.not_for_verdict(meta) is None
     lines = "\n".join(ope_report.header(meta, "title", "u"))
-    assert "스모크" not in lines and "GitHub Actions 실행 `123`(시도 1)" in lines and "`o/r`" in lines
+    assert "판정용" not in lines and "스모크" not in lines and "실행 사유" not in lines and "서빙 경로" not in lines
+    assert "GitHub Actions 실행 `123`(시도 1)" in lines and "`o/r`" in lines
+
     assert "스모크" in "\n".join(ope_report.header({**meta, "registered_config": False}, "title", "u"))
+    off_runner = "\n".join(ope_report.header({**meta, "github_run_id": None}, "title", "u"))
+    assert "러너 밖" in off_runner and "판정용이 아니고" in off_runner
+    # what this harness writes now: registered size, on a runner - and still another world than A1.1's
+    today = {**meta, "serving_path": "adr-0033: x", "run_reason": "replication"}
+    rendered = "\n".join(ope_report.header(today, "title", "u"))
+    assert "판정용이 아니다" in rendered and "37400003072" in rendered
+    assert "- 실행 사유: `replication`" in rendered and "- 서빙 경로: adr-0033: x" in rendered
+    replaced = "\n".join(ope_report.header({**today, "run_reason": "error", "discards_run": "77"}, "title", "u"))
+    assert "- 실행 사유: `error`, 버리는 실행 `77`" in replaced and "판정용이 아니다" in replaced
+
+
+def test_reports_written_by_this_harness_name_their_serving_path_and_reason(monkeypatch):
+    from argparse import Namespace
+
+    from sim.serving_app import SERVING_PATH
+    from sim.serving_runs import add_run_arguments, experiment_meta
+
+    for name in GITHUB_ENV:
+        monkeypatch.delenv(name, raising=False)
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    add_run_arguments(parser)
+    assert vars(parser.parse_args([])) == {"reason": None, "discards_run": None}
+    typed = parser.parse_args(["--reason", "harness-bug", "--discards-run", "42"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--reason", "because"])
+    args = Namespace(users=300, days=7, seeds=[0, 1, 2], prereg_commit="p", git_sha="g", **vars(typed))
+    meta = experiment_meta(args, "E", "sim.x", "prereg", True)
+    assert (meta["serving_path"], meta["run_reason"], meta["discards_run"]) == (SERVING_PATH, "harness-bug", "42")
+    # registered size, typed by hand on a laptop: the report still says it is not for the verdict
+    assert ope_report.not_for_verdict({**meta, "label": "[SIM]"}).startswith("GitHub Actions 러너 밖")
+    monkeypatch.setenv("GITHUB_RUN_ID", "9")
+    on_runner = experiment_meta(args, "E", "sim.x", "prereg", True)
+    assert "다른 서빙 경로" in ope_report.not_for_verdict({**on_runner, "label": "[SIM]"})
+
+
+def test_committed_reports_are_the_registered_run_rendered_from_its_json():
+    """reports/sim/*.md are rendered from the JSON next to them and nothing else. Changing the renderer in
+    a way that would rewrite the registered run's report has to fail here."""
+    from pathlib import Path
+
+    reports = Path(__file__).resolve().parents[2] / "reports" / "sim"
+    for name, render in ope_report.RENDERERS.items():
+        result = json.loads((reports / f"{name}.json").read_text(encoding="utf-8"))
+        assert result["meta"]["github_run_id"] == "37400003072" and result["meta"]["registered_config"] is True
+        assert "serving_path" not in result["meta"] and ope_report.not_for_verdict(result["meta"]) is None
+        assert render(result) == (reports / f"{name}.md").read_text(encoding="utf-8"), name
+    ope = json.loads((reports / "ope_validation.json").read_text(encoding="utf-8"))
+    assert ope["verdict"]["e9"] == "fail" and ope["verdict"]["adr_status"] == "제안됨"
+    assert ope["explore_slots_2"]["passed"] is False and ope["explore_slots_4_retry"]["passed"] is False
+    fatigue = json.loads((reports / "fatigue_v1.json").read_text(encoding="utf-8"))
+    assert fatigue["verdict"]["enforce_condition_met"] is False
+
+
+# ADR 0025, from the heading "## 사전 등록 (" up to (not including) "### A1.6 변경 기록": the registered text.
+# sha256 of those 188 lines at the pre-registration commit (e813c4f before the branch was rebased, the
+# commit titled "ADR 0025 사전 등록 보완 A1 — E9·E10의 실행 세부…" after). Corrections go to A1.6 with a date.
+REGISTERED_TEXT_SHA256 = "ae92dbbeacae2cd672dee586267be92133baa0ebb97df580988950baaddb347f"
+
+
+def test_the_registered_text_of_adr_0025_is_byte_for_byte_what_was_registered():
+    from pathlib import Path
+
+    adr = Path(__file__).resolve().parents[2] / "docs" / "adr" / "0025-logging-v2-exploration-and-ope.md"
+    lines = adr.read_text(encoding="utf-8").splitlines(keepends=True)
+    start = next(i for i, line in enumerate(lines) if line.startswith("## 사전 등록 ("))
+    end = next(i for i, line in enumerate(lines) if line.startswith("### A1.6 변경 기록"))
+    registered = "".join(lines[start:end])
+    assert end - start == 188 and "### A1.5 실행과 산출물 (고정)" in registered
+    assert hashlib.sha256(registered.encode("utf-8")).hexdigest() == REGISTERED_TEXT_SHA256
+    # the thresholds the code judges with are the ones in that text
+    assert (e9.REL_ERR_MAX, e9.ESS_RATIO_MIN, e9.COVERAGE_MIN) == (0.15, 0.05, 0.9)
+    assert (e9.FIRST_EXPLORE_SLOTS, e9.RETRY_EXPLORE_SLOTS) == (2, 4) and e9.REGISTERED == e10.REGISTERED == {
+        "n_users": 300, "n_days": 7, "seeds": [0, 1, 2]}
+
+
+# ------------------------------------------------------------- what made a table, and the cache
+
+
+def test_a_table_records_the_code_and_platform_that_made_it(tiny_runs, monkeypatch):
+    import platform
+
+    from sim import serving_runs
+    from sim.serving_app import SERVING_PATH
+
+    meta = tiny_runs["a"].meta
+    assert meta["code"] == serving_runs.code_identity() and meta["serving_path"] == SERVING_PATH
+    assert meta["platform"] == {"python": platform.python_version(), "numpy": np.__version__,
+                                "platform": platform.platform(), "machine": platform.machine()}
+    # in GitHub Actions the commit is the runner's
+    serving_runs.code_identity.cache_clear()
+    monkeypatch.setenv("GITHUB_SHA", "runner-commit")
+    try:
+        assert serving_runs.code_identity() == "runner-commit"
+    finally:
+        serving_runs.code_identity.cache_clear()
+
+
+def test_a_cached_table_is_reused_only_when_the_same_code_made_it(tiny_runs, tmp_path, monkeypatch):
+    from sim import serving_runs
+
+    spec = policy_a(0, USERS, DAYS)
+    path = tmp_path / f"{spec.name}.npz"
+    calls = []
+
+    def fake_run_world(s):
+        calls.append(s.name)
+        made = tiny_runs["a"]
+        return RunData(made.spec, {**made.meta, "code": serving_runs.code_identity()}, made.arrays)
+
+    monkeypatch.setattr(serving_runs, "run_world", fake_run_world)
+    monkeypatch.setattr(serving_runs, "code_identity", lambda: "commit-1")
+    assert not serving_runs.cached_run_is_usable(path)
+    serving_runs.run_all([spec], tmp_path)
+    serving_runs.run_all([spec], tmp_path)
+    assert calls == [spec.name] and serving_runs.cached_run_is_usable(path)  # second call read the file
+
+    monkeypatch.setattr(serving_runs, "code_identity", lambda: "commit-2")
+    assert not serving_runs.cached_run_is_usable(path)
+    loaded = serving_runs.run_all([spec], tmp_path)[spec.name]
+    assert calls == [spec.name, spec.name] and loaded.meta["code"] == "commit-2"  # run again and replaced
+
+    # without a commit to compare, nothing on disk is trusted
+    monkeypatch.setattr(serving_runs, "code_identity", lambda: "unknown")
+    serving_runs.run_all([spec], tmp_path)
+    serving_runs.run_all([spec], tmp_path)
+    assert len(calls) == 4
+    path.write_bytes(b"not an npz")
+    assert not serving_runs.cached_run_is_usable(path)

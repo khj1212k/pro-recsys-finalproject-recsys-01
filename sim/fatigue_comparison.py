@@ -33,6 +33,7 @@ from sim.serving_runs import (
     REACTIVITY_K,
     SLATE,
     RunData,
+    add_run_arguments,
     experiment_meta,
     per_user_sums,
     policy_a,
@@ -265,6 +266,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--workers", type=int, default=1)
     p.add_argument("--prereg-commit", default=None, help="commit of ADR 0025 A1 (recorded in the report)")
     p.add_argument("--git-sha", default=None, help="code commit when not running in GitHub Actions")
+    add_run_arguments(p)
     args = p.parse_args(argv)
     result = run_experiment(args)
     args.out.parent.mkdir(parents=True, exist_ok=True)

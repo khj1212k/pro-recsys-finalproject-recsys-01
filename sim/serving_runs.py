@@ -4,19 +4,30 @@
 
     RunSpec  -> run_world() -> RunData  (arrays + a small meta dict; saved as <name>.npz)
 
-A run is fully determined by its spec (seed, population, policy, exploration slots, fatigue mode),
-so finished runs are cached on disk by name and the two experiments (E9 sim.ope_validation, E10
-sim.fatigue_comparison) share the policy-A run instead of repeating it.
+A run is determined by its spec (seed, population, policy, exploration slots, fatigue mode) and by
+the code and platform that ran it. Finished runs are cached on disk by name, and the two experiments
+(E9 sim.ope_validation, E10 sim.fatigue_comparison) share the policy-A run instead of repeating it.
+
+What "determined" covers. On one machine the same spec gives the same tables byte for byte (a test
+checks it; PYTHONHASHSEED does not matter). Across platforms it does not: the registered policy-A
+run of seed 0 answered 8,087 requests on the GitHub runner (Linux x86_64, numpy 2.4.6) and 8,057 on
+a macOS arm64 machine with the same numpy version and the same commit. A last-bit difference in a
+transcendental function is enough - one click drawn differently changes the rest of that user's
+week. Such a rerun is another draw at seed-noise level, not a reproduction. Every table therefore
+carries the code and the platform that made it (meta["code"], meta["platform"]), and a cached table
+made by other code is run again instead of being reused.
 """
 
 import json
 import os
 import platform
+import subprocess
 import sys
 import time
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence
@@ -29,11 +40,12 @@ from sim.driver import ApiClient, SimulationConfig, SimulationLog, VirtualClock,
 from sim.metrics import after_click_pairs, compute_metrics
 from sim.personas import PopulationConfig, SimUser, generate_population
 from sim.reference import REFERENCE_START
-from sim.serving_app import TARGET_POLICIES, ProbedClickModel, ServingBackend, serving_config
+from sim.serving_app import SERVING_PATH, TARGET_POLICIES, ProbedClickModel, ServingBackend, serving_config
 
 SLATE = 20
 REACTIVITY_K = 10  # ADR 0019's k for after_click_jaccard and similar_share_lift
 POLICY_CODES = {"none": 0, "deterministic": 1, "eps-uniform-v1": 2}
+RUN_REASONS = ("replication", "error", "harness-bug")
 FATIGUE_HOURS = 48
 FATIGUE_MIN_IMPRESSIONS = 3
 
@@ -68,6 +80,36 @@ def policy_a(seed: int, n_users: int, n_days: int, explore_slots: int = 2, fatig
 def policy_b(name: str, seed: int, n_users: int, n_days: int) -> RunSpec:
     """A target policy run for real: its ranking, no exploration, everything else as policy A."""
     return RunSpec(seed, n_users, n_days, 0, "log", name, False)
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+# What a run's tables depend on besides the spec. A change anywhere else cannot move a number.
+CODE_PATHS = ("sim", "backend/app/recsys", "recsys_core", "ai_workspace/recommend_engine/src")
+
+
+@lru_cache(maxsize=1)
+def code_identity() -> str:
+    """Which code is running: the runner's commit in GitHub Actions, otherwise the checkout's HEAD
+    (with "+dirty" when the files a run depends on differ from it), otherwise "unknown"."""
+    sha = os.environ.get("GITHUB_SHA")
+    if sha:
+        return sha
+
+    def git(*args: str) -> str:
+        return subprocess.run(["git", "-C", str(_REPO_ROOT), *args], check=True, capture_output=True,
+                              text=True, timeout=30).stdout.strip()
+
+    try:
+        head = git("rev-parse", "HEAD")
+        dirty = git("status", "--porcelain", "--", *CODE_PATHS)
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    return f"{head}+dirty" if dirty else head
+
+
+def platform_identity() -> dict:
+    return {"python": sys.version.split()[0], "numpy": np.__version__, "platform": platform.platform(),
+            "machine": platform.machine()}
 
 
 @dataclass
@@ -283,14 +325,31 @@ def run_world(spec: RunSpec) -> RunData:
         "catalog_items": len(catalog.items),
         "category_codes": list(CATEGORY_CODES),
         "wall_seconds": round(time.perf_counter() - started, 1),
+        "code": code_identity(),
+        "serving_path": SERVING_PATH,
+        "platform": platform_identity(),
     }
     return RunData(asdict(spec), meta, a)
+
+
+def cached_run_is_usable(path: Path) -> bool:
+    """A table on disk is reused only when this very code made it. "unknown" never matches: without a
+    commit to compare there is no telling what made the file."""
+    if not path.exists():
+        return False
+    try:
+        made_by = RunData.load(path).meta.get("code")
+    except Exception:  # a truncated or foreign file is not a cached run
+        return False
+    return made_by is not None and made_by != "unknown" and made_by == code_identity()
 
 
 def _run_cached(job) -> str:
     spec, runs_dir = job
     path = Path(runs_dir) / f"{spec.name}.npz"
-    if not path.exists():
+    if not cached_run_is_usable(path):
+        if path.exists():
+            print(f"{spec.name}: the table on disk was made by other code; running it again", file=sys.stderr)
         run_world(spec).save(path)
     return str(path)
 
@@ -307,6 +366,16 @@ def run_all(specs: Sequence[RunSpec], runs_dir: Path, workers: int = 1) -> Dict[
     return {spec.name: RunData.load(Path(p)) for spec, p in zip(specs, paths)}
 
 
+def add_run_arguments(parser) -> None:
+    """Why a run was started, for the report. ADR 0025 A1.5 allows the registered configuration to be
+    run again in two cases only (the run ended in an error; the harness did not do what A1 says), and
+    whatever replaces a run has to name the run it discards."""
+    parser.add_argument("--reason", choices=RUN_REASONS, default=None,
+                        help="why this run exists (recorded in the report); omit for a local smoke run")
+    parser.add_argument("--discards-run", default=None,
+                        help="id of the run this one replaces (with --reason error or harness-bug)")
+
+
 def experiment_meta(args, experiment: str, module: str, preregistration: str, registered: bool) -> dict:
     """What every report says about how it was produced. In GitHub Actions the run id and the commit
     come from the runner's environment; elsewhere the commit is whatever --git-sha says."""
@@ -317,6 +386,10 @@ def experiment_meta(args, experiment: str, module: str, preregistration: str, re
         "preregistration": preregistration,
         "preregistration_commit": args.prereg_commit,
         "registered_config": registered,
+        # the serving code behind /today in this run; the registered results predate this key (see SERVING_PATH)
+        "serving_path": SERVING_PATH,
+        "run_reason": getattr(args, "reason", None),
+        "discards_run": getattr(args, "discards_run", None),
         "config": {"n_users": args.users, "n_days": args.days, "seeds": list(args.seeds), "preset": "default",
                    "catalog": "synthetic", "embeddings": "keyword/category hash, 64d (sim.sim_embeddings)"},
         "git_sha": os.environ.get("GITHUB_SHA") or args.git_sha,

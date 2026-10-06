@@ -68,6 +68,24 @@ def yes(flag: Optional[bool]) -> str:
     return "-" if flag is None else ("예" if flag else "아니오")
 
 
+def not_for_verdict(meta: dict) -> Optional[str]:
+    """Why the numbers of a report decide nothing - or None for the run that carries the registered verdict.
+
+    The verdicts of ADR 0025 belong to one run: the registered configuration, on a GitHub runner, in the
+    world A1.1 registered (run 37400003072, code commit 0ccd59f; its JSON has no `serving_path`). The
+    harness has since followed the serving code to the repository contract of ADR 0033, so anything it
+    produces now is a run of another world, whatever its size and wherever it runs."""
+    if not meta["registered_config"]:
+        return "사전 등록한 구성이 아니다(스모크). 이 파일의 수치는 어디에도 쓰지 않는다."
+    if not meta.get("github_run_id"):
+        return ("GitHub Actions 러너 밖에서 돌린 실행이다. 판정용이 아니고(ADR 0025 A1.5), 이 파일의 수치는 "
+                "어디에도 쓰지 않는다.")
+    if meta.get("serving_path"):
+        return ("ADR 0025 A1.1에 등록한 세계와 다른 서빙 경로에서 돌린 실행이다. 판정용이 아니다. 등록한 판정은 "
+                "실행 37400003072(코드 커밋 0ccd59f)의 것이고 이 실행으로 바뀌지 않는다(ADR 0025 A1.6).")
+    return None
+
+
 def header(meta: dict, title: str, uncertainty: str) -> List[str]:
     cfg, runner = meta["config"], meta["runner"]
     run = meta.get("github_run_id")
@@ -75,11 +93,20 @@ def header(meta: dict, title: str, uncertainty: str) -> List[str]:
              f"저장소 `{meta.get('github_repository')}`, 브랜치 `{meta.get('github_ref')}`"
              if run else "GitHub Actions 밖(로컬)")
     lines = [f"# {title}", "", f"> {meta['label']}", ""]
-    if not meta["registered_config"]:
-        lines += ["> **사전 등록한 구성이 아니다(스모크). 이 파일의 수치는 어디에도 쓰지 않는다.**", ""]
+    banner = not_for_verdict(meta)
+    if banner:
+        lines += [f"> **{banner}**", ""]
     lines += [
         f"- 사전 등록: {meta['preregistration']} (커밋 `{meta.get('preregistration_commit')}`)",
         f"- 실행: {where}",
+    ]
+    # keys the registered run's JSON does not have: nothing is printed for it, so its report renders as it did
+    if meta.get("run_reason"):
+        discards = f", 버리는 실행 `{meta['discards_run']}`" if meta.get("discards_run") else ""
+        lines.append(f"- 실행 사유: `{meta['run_reason']}`{discards}")
+    if meta.get("serving_path"):
+        lines.append(f"- 서빙 경로: {meta['serving_path']}")
+    lines += [
         f"- 코드 커밋: `{meta.get('git_sha')}`",
         f"- 실행 시각(UTC): {meta.get('started_utc')} ~ {meta.get('finished_utc')}",
         f"- 명령: `{meta['command']}`",

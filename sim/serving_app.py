@@ -63,6 +63,10 @@ from sim.fake_app import FakeBackend, TodayAnswer, _User  # noqa: E402
 from sim.sim_embeddings import catalog_embeddings  # noqa: E402
 
 TARGET_POLICIES = ("random", "reactive", "shadow_recency")
+# Names the serving code behind /today in the tables and reports this harness writes. The registered
+# E9/E10 results carry no such key: they were made before ADR 0033 by the harness at commit 0ccd59f
+# (nightly long-term vector). A report that carries this value is not a run of the registered world.
+SERVING_PATH = "adr-0033: incremental long-term profile, clicks strictly before the request, in-path shadow"
 SHADOW_VERSION = "heuristic-recency-sim"
 # ADR 0025 A1.2: the shadow-ranker stand-in. Same four terms as the active heuristic, other weights.
 SHADOW_WEIGHTS = HeuristicWeights(long_term=0.10, short_term=0.10, recency=0.60, popularity=0.20,
