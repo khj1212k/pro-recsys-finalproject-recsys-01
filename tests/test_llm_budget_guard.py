@@ -353,10 +353,19 @@ def test_thinking_tokens_missing_from_completion_are_billed_at_the_output_price(
     assert billable_tokens(usage) == (400, 300)
 
 
-def test_thinking_tokens_already_inside_completion_are_not_double_counted():
-    usage = LLMUsage(input_tokens=400, output_tokens=300, total_tokens=700, thinking_tokens=180)
+def test_thinking_tokens_reported_outside_both_completion_and_total_are_still_billed():
+    """completion과 total 양쪽에서 thinking을 빼고 reasoning_tokens로만 보고하는 경우: 빠뜨리면 그만큼 적게 잡힌다."""
+    usage = LLMUsage(input_tokens=400, output_tokens=120, total_tokens=520, thinking_tokens=180)
 
     assert billable_tokens(usage) == (400, 300)
+
+
+def test_thinking_tokens_already_inside_completion_are_counted_again_until_reporting_is_verified():
+    """OpenAI식 보고(completion에 thinking 포함)에서는 thinking만큼 많이 잡힌다. 프로바이더가 어느 방식으로
+    보고하는지 확인하기 전까지는 적게 잡는 쪽보다 이쪽을 택한다."""
+    usage = LLMUsage(input_tokens=400, output_tokens=300, total_tokens=700, thinking_tokens=180)
+
+    assert billable_tokens(usage) == (400, 480)
 
 
 def test_thinking_tokens_are_added_when_no_total_is_reported():

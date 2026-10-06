@@ -270,18 +270,19 @@ def token_cost_nusd(tokens: int, usd_per_1m: Decimal) -> int:
 def billable_tokens(usage: Optional[LLMUsage]) -> Optional[Tuple[int, int]]:
     """응답 usage에서 과금 대상 (입력, 출력) 토큰을 구한다. usage가 비었으면 None(= 알 수 없음).
 
-    출력은 thinking 토큰까지다. total이 prompt+completion보다 크면 그 차이를 출력으로 센다
-    (completion에 thinking을 넣지 않고 total에만 넣는 프로바이더). total이 없는데 thinking만
-    있으면 completion에 포함됐는지 알 수 없으므로 더한다. 캐시된 입력은 할인 단가를 적용하지
-    않고 전부 정가로 센다(단가표에 캐시 단가가 없다) - 둘 다 과대 계상 쪽이다.
+    출력은 thinking 토큰까지다. 프로바이더가 thinking을 어디에 넣어 보고하는지는 세 가지가 있다:
+      (1) completion에 포함(OpenAI)            -> completion
+      (2) completion에는 없고 total에만 포함   -> total - prompt
+      (3) 둘 다에 없고 reasoning_tokens로만    -> completion + thinking
+    어느 방식인지 모르므로 셋 중 가장 큰 값을 쓴다. (1)이면 thinking만큼 많이 잡힌다 - Gemini 호환 계층이
+    어느 쪽인지는 첫 유료 응답으로 확인한 뒤 프로바이더별로 좁힌다(docs/adr/0035 한계). 캐시된 입력은
+    할인 단가를 적용하지 않고 전부 정가로 센다(단가표에 캐시 단가가 없다). 둘 다 과대 계상 쪽이다.
     """
     if usage is None or (not usage.input_tokens and not usage.output_tokens):
         return None
-    output = usage.output_tokens
+    output = usage.output_tokens + (usage.thinking_tokens or 0)
     if usage.total_tokens is not None:
         output = max(output, usage.total_tokens - usage.input_tokens)
-    elif usage.thinking_tokens:
-        output += usage.thinking_tokens
     return usage.input_tokens, output
 
 
