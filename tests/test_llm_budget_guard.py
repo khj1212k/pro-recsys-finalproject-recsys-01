@@ -150,6 +150,47 @@ def test_malformed_config_refuses_the_call_before_anything_is_reserved(monkeypat
     assert _ledger_events(tmp_path) == []
 
 
+def test_relative_ledger_path_is_a_config_error(monkeypatch, tmp_path):
+    """상대 경로는 실행한 디렉터리를 따라간다: 저장소 루트에서 도는 잡과 ai_workspace/에서 도는 main.py·CLI가
+    서로 다른 원장을 쓰면 전체 상한이 두 배가 된다. 해석하지 않고 거부한다."""
+    monkeypatch.setenv("LLM_SPEND_LEDGER_FILE", ".ops/llm_spend_ledger.jsonl")
+    seen = []
+    for cwd in ("cwd1", "cwd2"):
+        (tmp_path / cwd).mkdir()
+        monkeypatch.chdir(tmp_path / cwd)
+        with pytest.raises(BudgetConfigError, match="절대 경로"):
+            BudgetConfig.from_env()
+        budget.begin_run()
+        with pytest.raises(LLMBudgetUnavailable, match="절대 경로"):
+            _begin()
+        seen += os.listdir(tmp_path / cwd)
+
+    assert seen == []  # 어느 디렉터리에도 원장이 생기지 않았다
+    assert "절대 경로" in budget.preflight_problem()
+
+
+def test_relative_state_directory_is_a_config_error(monkeypatch):
+    monkeypatch.setenv("LLM_SPEND_STATE_DIR", "state")
+
+    with pytest.raises(BudgetConfigError, match="LLM_SPEND_STATE_DIR"):
+        BudgetConfig.from_env()
+
+
+def test_one_ledger_object_serves_every_spelling_of_the_same_file(monkeypatch, tmp_path):
+    """심볼릭 링크로 같은 원장을 가리키는 경로: 원장 객체와 누계 기록이 하나여야 상한이 하나다."""
+    link = tmp_path / "link-to-ledger.jsonl"
+    os.symlink(tmp_path / "ledger.jsonl", link)
+    direct = budget._ledger_for(BudgetConfig.from_env())
+
+    monkeypatch.setenv("LLM_SPEND_LEDGER_FILE", str(link))
+
+    assert budget._ledger_for(BudgetConfig.from_env()) is direct
+    _cap_env(monkeypatch, run=str(ONE_CALL_USD))
+    _begin()
+    with pytest.raises(LLMBudgetExceeded):
+        _begin()
+
+
 def test_unwritable_ledger_refuses_the_call(monkeypatch, tmp_path):
     blocker = tmp_path / "file-not-dir"
     blocker.write_text("x")

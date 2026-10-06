@@ -193,10 +193,23 @@ class BudgetConfig:
                 _decimal("LLM_BUDGET_FALLBACK_OUTPUT_PER_1M", fb_out, minimum=floor),
             )
 
+        # 상대 경로는 실행한 디렉터리를 따라간다. 이 저장소는 jobs.run을 저장소 루트에서, main.py와
+        # spend_cli를 ai_workspace/에서 돌리므로 원장이 둘로 갈려 전체 상한이 두 배가 되고 CLI는 다른
+        # 원장을 보여준다. 어느 쪽으로도 해석하지 않고 거부한다.
+        ledger_path = os.getenv("LLM_SPEND_LEDGER_FILE", "").strip() or Settings.LLM_SPEND_LEDGER_FILE_DEFAULT
+        if not os.path.isabs(ledger_path):
+            raise BudgetConfigError(
+                f"LLM_SPEND_LEDGER_FILE={ledger_path!r}: 절대 경로여야 합니다(상대 경로는 실행한 디렉터리마다 "
+                "다른 원장이 되어 상한이 갈립니다)"
+            )
+        state_dir = default_state_dir()
+        if not os.path.isabs(state_dir):
+            raise BudgetConfigError(f"LLM_SPEND_STATE_DIR={state_dir!r}: 절대 경로여야 합니다")
+
         return cls(
             caps=caps,
-            ledger_path=os.getenv("LLM_SPEND_LEDGER_FILE", "").strip() or Settings.LLM_SPEND_LEDGER_FILE_DEFAULT,
-            state_dir=default_state_dir(),
+            ledger_path=ledger_path,
+            state_dir=state_dir,
             day_tz=day_tz,
             reservation_ttl_s=float(_decimal(
                 "LLM_BUDGET_RESERVATION_TTL_S", _setting("LLM_BUDGET_RESERVATION_TTL_S"),

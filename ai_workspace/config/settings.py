@@ -19,8 +19,9 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 def shared_ops_root(repo_root: Path) -> Path:
     """git 워크트리에서 실행 중이면 메인 체크아웃의 루트를, 아니면 repo_root를 돌려준다.
 
-    LLM 지출 원장(docs/adr/0035)의 기본 위치를 정하는 데만 쓴다. 워크트리마다 `.ops/`가 따로면
-    원장도 따로 생겨 전체 상한이 워크트리 수만큼 늘어난다. 워크트리의 `.git`은 디렉터리가
+    LLM 지출 원장(docs/adr/0035)과 킬 스위치 파일(docs/adr/0005 부록)의 기본 위치를 정하는 데 쓴다.
+    워크트리마다 `.ops/`가 따로면 원장도 따로 생겨 전체 상한이 워크트리 수만큼 늘어나고, 메인
+    체크아웃에 켜 둔 킬 스위치를 워크트리의 실험이 보지 못한다. 워크트리의 `.git`은 디렉터리가
     아니라 `gitdir: <메인>/.git/worktrees/<이름>` 한 줄짜리 파일이고, 그 디렉터리의 `commondir`가
     공용 `.git`을 가리킨다 - git을 실행하지 않고 그 두 파일만 읽는다.
     """
@@ -41,6 +42,24 @@ def shared_ops_root(repo_root: Path) -> Path:
         return common.parent if common.name == ".git" else repo_root
     except OSError:
         return repo_root
+
+
+def resolve_kill_switch_file(raw, repo_root: Path) -> str:
+    """LLM_KILL_SWITCH_FILE 값을 실제 경로로 바꾼다.
+
+    - 지정하지 않으면(None) `<메인 체크아웃>/.ops/LLM_KILL_SWITCH`. 워크트리에서도 같은 파일이다.
+    - 상대 경로는 실행한 디렉터리가 아니라 메인 체크아웃 기준이다. 이 저장소는 잡을 저장소
+      루트에서, main.py를 ai_workspace/에서 실행한다 - CWD 기준이면 서로 다른 파일을 본다.
+    - 절대 경로는 그대로. 빈 문자열은 그대로 빈 문자열이다(파일 킬 스위치를 보지 않는 기존 동작).
+    """
+    root = shared_ops_root(repo_root)
+    if raw is None:
+        return str(root / ".ops" / "LLM_KILL_SWITCH")
+    raw = raw.strip()
+    if not raw:
+        return ""
+    path = Path(raw)
+    return str(path if path.is_absolute() else root / path)
 
 
 class Environment:
@@ -163,12 +182,10 @@ class BaseSettings:
     # 예정된 비용 가드(cron)가 실제 Google Cloud 과금이 시작되면 이 파일을 만들어
     # 킬 스위치를 켠다. env LLM_KILL_SWITCH("1"/"true"/"yes")는
     # core/llm/kill_switch.py가 호출마다 직접 os.getenv로 읽는다(여기 캐싱하면
-    # 테스트/런타임에서 즉시 반영되지 않음). 파일 경로만 저장소 루트 기준 기본값으로
-    # 여기서 정의한다 - CWD가 pipeline 실행 위치에 따라 달라져도 항상 같은 파일을
-    # 가리켜야 하기 때문.
-    LLM_KILL_SWITCH_FILE: str = os.getenv(
-        "LLM_KILL_SWITCH_FILE", str(_REPO_ROOT / ".ops" / "LLM_KILL_SWITCH")
-    )
+    # 테스트/런타임에서 즉시 반영되지 않음). 파일 경로만 여기서 정의한다 - CWD가 pipeline
+    # 실행 위치에 따라 달라져도, git 워크트리에서 실행해도 항상 같은 파일(메인 체크아웃의
+    # .ops/LLM_KILL_SWITCH)을 가리켜야 하기 때문(resolve_kill_switch_file, 지출 원장과 같은 위치).
+    LLM_KILL_SWITCH_FILE: str = resolve_kill_switch_file(os.getenv("LLM_KILL_SWITCH_FILE"), _REPO_ROOT)
 
     # ========== LLM 지출 상한 (docs/adr/0035) ==========
     # 아래는 같은 이름(_DEFAULT 뺀)의 환경변수가 없을 때 쓰는 기본값이다. 환경변수는

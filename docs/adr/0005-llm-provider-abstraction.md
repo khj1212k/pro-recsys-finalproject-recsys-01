@@ -127,3 +127,23 @@
 - 재시도 횟수만 제한하고 전체 대기 시간은 제한하지 않았다. 호출 1건의 전체 제한 시간 `LLM_CALL_DEADLINE_S`(기본 180초)를 두어, 다음 대기가 이를 넘으면 `call deadline reached` 오류로 종료한다.
 
 같은 계열(gemini) 모델을 generator와 judge에 함께 쓰는 것은 여전히 임시다. 최종 선택은 bake-off ADR(0009)에서 한다.
+
+## 부록: 2026-10-06 킬 스위치 파일의 기본 위치와 지출 가드가 켠 파일
+
+지출 상한(ADR 0035)을 넣으면서 이 ADR의 킬 스위치 동작 두 가지가 바뀌었다. "닫은 갭 1"의 본문은 그때의 기록으로 둔다.
+
+1. **기본 경로는 메인 체크아웃의 `.ops/LLM_KILL_SWITCH`다.** 전에는 코드가 있는 체크아웃의 `.ops/`였고, git
+   워크트리마다 다른 파일이었다. 그래서 저장소 밖 감시가 메인 체크아웃에 켠 킬 스위치를 워크트리에서 돌리는 유료
+   실험이 보지 못했고, 워크트리에서 켜진 킬 스위치를 메인에서 돌린 `spend_cli summary`는 꺼짐으로 보여 줬다.
+   지출 원장과 같은 규칙(`config/settings.py::shared_ops_root`)으로 맞췄다. `LLM_KILL_SWITCH_FILE`을 지정하면 그
+   값이 우선이고, **상대 경로는 실행한 디렉터리가 아니라 메인 체크아웃 기준**으로 읽는다(전에는 CWD 기준이라
+   저장소 루트에서 도는 잡과 `ai_workspace/`에서 도는 `main.py`가 서로 다른 파일을 봤다). compose는 지금처럼
+   절대 경로 `/ops/LLM_KILL_SWITCH`를 준다. 근거: `tests/test_llm_kill_switch.py`의 경로 테스트 3건.
+2. **지출 가드가 켠 파일은 "kill_switch" 결과가 아니라 런 중단이다.** 파일 내용이
+   `{"engaged_by": "llm_spend_cap", ...}`이면 클라이언트는 `LLMResult(error="kill_switch")`를 돌려주지 않고
+   `LLMBudgetExceeded`를 낸다(ADR 0035 결정 6). 위 "닫은 갭 1"이 적은 경로(judge FAIL, 생성기 로컬 초안, 문체
+   softener)는 **뉴스레터를 저장하지 않고 끝난다고 적었지만 문체 단계에 이미 들어온 글에는 성립하지 않는다** -
+   게이트를 통과한 초안이 규칙 기반 변환본과 함께 저장된다(리뷰에서 `ToneConverter`가 "kill_switch" 결과 세 번에
+   폴백 dict를 돌려주는 것을 확인). 일 상한에 닿을 때마다 킬 스위치가 켜지므로 그 경로가 자주 실행될 뻔했다.
+   환경변수 `LLM_KILL_SWITCH`와 다른 주체가 만든 파일(내용 없음 포함)은 이 ADR의 동작 그대로이고, 위의 한계도
+   그대로 남아 있다.
