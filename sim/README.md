@@ -20,6 +20,8 @@
 | `fake_app.py` | 프로세스 내 가짜 FastAPI 앱과 장난감 정책 5종(지표 검증용 테스트 더블) |
 | `metrics.py` | 행동 지표(콜드 스타트, 클릭 반응성, drift 적응, 폴백·빈 응답, 오류·지연) |
 | `run.py`, `experiments.py`, `prereg.py` | 단일 실행, 지표 타당성 격자, ADR 0019 사전 등록 판정 |
+| `serving_app.py`, `sim_embeddings.py`, `serving_runs.py` | 같은 라우트 뒤에 **실제 요청 시점 추천 서비스**(`backend/app/recsys`: 탐색 칸, 로그 v2)를 붙인 프로세스 내 앱, 임베딩 대역, 한 실행을 표로 줄이기 |
+| `ope_validation.py`, `fatigue_comparison.py`, `ope_report.py` | ADR 0025의 E9(오프폴리시 추정기 검증)·E10(노출 피로 규칙 비교) 실행기와 사전 등록 판정, 리포트 |
 | `load.py`, `locustfile.py`, `loadtest.py` | Locust 부하 시나리오와 5/20/50 RPS 단계 실행기 |
 | `seed.py` | 부하 테스트용 **일회용** DB 시드(합성 뉴스레터, 밤 배치 대역) |
 
@@ -49,6 +51,35 @@ python -m sim.calibration --ebnerd-dir data/benchmarks/ebnerd/ebnerd_small \
   들어온다. 이 카탈로그의 격자 결과는 내부 일관성으로만 읽는다(ADR 0019 "등록 후 보완").
 - 개발 Mac에서는 `nice -n 19 env OMP_NUM_THREADS=2`와 `--workers 2`로 돌렸다(격자 G1 30회 약 5분).
 - EB-NeRD와 `data/team_archive`는 이 Mac 밖으로 나가지 않는다. 리포트에는 집계 수치만 싣는다.
+
+## 1.1 실제 서빙 경로를 붙인 실험 — E9·E10 (ADR 0025)
+
+가짜 앱의 장난감 정책 대신 `backend/app/recsys`의 `RecommendationService`가 `/newsletters/today`에 답한다
+(`sim/serving_app.py`). 후보 생성·제외·피로 규칙·스코어러 묶음·MMR·결과 캐시·탐색 칸·로그 v2가 운영 코드이고,
+운영 코드가 아닌 것은 저장소(메모리 구현), 라우트, 가상 시계, 임베딩(키워드·카테고리 해시 대역 — BGE-M3가
+아니다)이다. 서버도 DB도 띄우지 않는다.
+
+```bash
+# 사전 등록한 구성(300명 x 7일 x seed 0·1·2)은 GitHub Actions에서 돈다: .github/workflows/sim-ope-validation.yml
+# 로컬에서는 하네스가 도는지 보는 스모크만 돌린다(수치는 쓰지 않는다. 리포트 머리말에 "스모크"가 찍힌다).
+python -m sim.ope_validation     --runs-dir out/runs --out out/ope_validation.json --users 20 --days 2 --seeds 0 1
+python -m sim.fatigue_comparison --runs-dir out/runs --out out/fatigue_v1.json     --users 20 --days 2 --seeds 0 1
+python -m sim.ope_report --ope out/ope_validation.json --fatigue out/fatigue_v1.json --out-dir out/reports
+```
+
+- **E9**: 정책 A(활성 휴리스틱 + MMR + 탐색 칸)의 로그에 `evaluation/recsys/ope.py`의 추정기를 적용해 타깃 정책
+  셋(random, reactive, shadow 랭커 대역)의 칸당 클릭률을 추정하고, 같은 seed의 같은 세계에서 그 정책을 실제로
+  돌린 값과 비교한다. 등록한 기준에 못 미치면 탐색 4칸으로 한 번 다시 돌려 둘 다 적는다.
+- **E10**: 노출 피로 규칙을 세기만 한 실행(`log`)과 적용한 실행(`enforce`)의 반복 노출 비율과 반응성 지표를
+  (seed, 사용자) 군집의 쌍체 부트스트랩으로 비교한다. `log` 팔은 E9의 정책 A 실행을 그대로 쓴다(`--runs-dir`
+  공유).
+- 규칙·임계값·타깃·지표 정의는 ADR 0025의 "사전 등록" 2·4번과 "보완 A1"에 있고, 실행기를 쓰기 전에
+  커밋했다. 두 실행기는 판정이 무엇이든 0으로 끝난다(오류일 때만 실패한다).
+- 결과: [reports/sim/ope_validation.md](../reports/sim/ope_validation.md),
+  [reports/sim/fatigue_v1.md](../reports/sim/fatigue_v1.md). 워크플로 아티팩트의 JSON을 그대로 옮기고 md는 그
+  JSON만으로 만든다(`sim.ope_report`).
+- **[SIM]**: 여기서 나오는 클릭률과 정책 간 차이는 시뮬레이터의 성질이다. 클릭 모델은 손으로 쓴 가정이고 임베딩
+  대역은 클릭 모델이 읽는 필드로 만들었다. 추천 정확도나 서비스 클릭률의 근거로 쓰지 않는다.
 
 ## 2. 행동 시뮬레이션 — 실제 스택
 

@@ -1,0 +1,107 @@
+# [SIM] ADR 0025의 E9(탐색 칸 로그로 한 오프폴리시 추정의 검증)와 E10(노출 피로 규칙: log 대 enforce)을
+# 사전 등록한 구성(300명 x 7일 x seed 3개)으로 돌린다. 개발 Mac에서는 부하가 되는 실행을 하지 않으므로
+# 러너에서 돌리고 결과 JSON·리포트를 아티팩트로 올린다. 데이터는 전부 시뮬레이터의 합성 데이터다.
+#
+# 이 워크플로는 오류에서만 실패한다. 판정이 "실패"로 나와도 성공으로 끝난다(판정은 결과다).
+# reports/sim/ope_validation.*, reports/sim/fatigue_v1.*는 이 워크플로의 아티팩트를 그대로 옮긴 것이다.
+name: sim-ope-validation
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "sim/ope_validation.py"
+      - "sim/fatigue_comparison.py"
+      - "sim/ope_report.py"
+      - "sim/serving_app.py"
+      - "sim/serving_runs.py"
+      - "sim/sim_embeddings.py"
+      - ".github/workflows/sim-ope-validation.yml"
+
+concurrency:
+  group: sim-ope-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 사전 등록 커밋을 이력에서 찾는다
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Python 3.11
+        run: uv python install 3.11
+
+      - name: Create virtualenv
+        run: uv venv --python 3.11 .venv
+
+      # 실험이 임포트하는 것만 넣는다: sim/(numpy, kiwipiepy, 프로세스 내 앱의 fastapi·httpx),
+      # backend/app/recsys(numpy), recommend_engine의 MMR(numpy). numpy·kiwipiepy는 단위 테스트 잡과 같은 버전이다.
+      - name: Install dependencies
+        run: |
+          uv pip install --python .venv/bin/python \
+            "numpy==2.4.6" \
+            "kiwipiepy==0.23.2" \
+            "fastapi==0.117.1" \
+            httpx
+          uv pip install --python .venv/bin/python --no-deps -e ai_workspace/recommend_engine
+
+      # 사전 등록(ADR 0025 보완 A1)이 실행기보다 먼저 커밋됐는지를 이력으로 확인한다. 브랜치를 다시 쌓으면
+      # 해시가 바뀌므로 제목으로 찾는다.
+      - name: Locate the pre-registration commit
+        run: |
+          PREREG=$(git log --format=%H --reverse \
+            --grep='ADR 0025 사전 등록 보완 A1 — E9·E10의 실행 세부' \
+            -- docs/adr/0025-logging-v2-exploration-and-ope.md | head -1)
+          if [ -z "$PREREG" ]; then echo "pre-registration commit not found"; exit 1; fi
+          if git cat-file -e "$PREREG:sim/ope_validation.py" 2>/dev/null; then
+            echo "the experiment runner already existed at the pre-registration commit $PREREG"; exit 1
+          fi
+          git merge-base --is-ancestor "$PREREG" HEAD
+          echo "PREREG=$PREREG" >> "$GITHUB_ENV"
+          echo "pre-registration commit: $PREREG"
+
+      - name: E9 - OPE validation (registered configuration)
+        run: |
+          .venv/bin/python -m sim.ope_validation \
+            --runs-dir out/runs --out out/ope_validation.json \
+            --workers 4 --prereg-commit "$PREREG"
+
+      - name: E10 - fatigue rule, log vs enforce (registered configuration)
+        run: |
+          .venv/bin/python -m sim.fatigue_comparison \
+            --runs-dir out/runs --out out/fatigue_v1.json \
+            --workers 4 --prereg-commit "$PREREG"
+
+      - name: Render reports from the result JSON
+        run: |
+          .venv/bin/python -m sim.ope_report \
+            --ope out/ope_validation.json --fatigue out/fatigue_v1.json --out-dir out/reports
+          sha256sum out/ope_validation.json out/fatigue_v1.json out/reports/*
+
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-ope-validation
+          path: |
+            out/reports/ope_validation.json
+            out/reports/ope_validation.md
+            out/reports/fatigue_v1.json
+            out/reports/fatigue_v1.md
+          if-no-files-found: error
+
+      # 실행별 표(요청·칸·클릭 직후 쌍). 리포트의 수치를 다시 계산해 볼 수 있게 올려 둔다. 저장소에는 넣지 않는다.
+      - name: Upload per-run tables
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-ope-validation-runs
+          path: out/runs/*.npz
+          retention-days: 30
+          if-no-files-found: error
