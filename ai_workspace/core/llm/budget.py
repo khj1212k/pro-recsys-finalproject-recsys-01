@@ -393,6 +393,12 @@ def _latch(stop: LLMRunStop) -> None:
             _run_stop = stop
 
 
+def latch_run_stop(stop: LLMRunStop) -> None:
+    """런을 멈춘 것으로 표시한다(이미 멈췄으면 첫 사유를 유지). 가드 밖에서 중단을 받은 쪽
+    (Stage5의 클러스터 루프)이 다른 워커에게 알릴 때 쓴다."""
+    _latch(stop)
+
+
 def _ledger_for(cfg: BudgetConfig) -> SpendLedger:
     with _state_lock:
         ledger = _ledgers.get(cfg.ledger_path)

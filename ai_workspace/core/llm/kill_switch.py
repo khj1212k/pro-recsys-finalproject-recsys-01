@@ -1,6 +1,8 @@
 # LLM 킬 스위치
 # - 예정된 비용 가드(cron)가 실제 Google Cloud 과금이 시작되는 걸 감지하면 이
 #   스위치를 켠다(env LLM_KILL_SWITCH 또는 Settings.LLM_KILL_SWITCH_FILE 파일 생성).
+# - 클라이언트 안의 지출 가드(core/llm/budget.py, docs/adr/0035)도 일·전체 상한에 닿으면 같은
+#   파일을 만든다. 그 경우 파일 내용은 {"engaged_by": "llm_spend_cap", ...} JSON이다.
 # - core/llm/adapters.py의 모든 LLMClient.complete() 구현체는 실제 프로바이더에
 #   네트워크 요청을 보내기 전에 반드시 check_kill_switch()를 제일 먼저 호출해야 한다.
 

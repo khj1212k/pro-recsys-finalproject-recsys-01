@@ -30,6 +30,23 @@ class JobSkipped(Exception):
         self.stats = stats or {}
 
 
+# 잡이 가드에 의해 멈춘 경우의 종료 코드. 실패(1)·잘못된 인자(2)와 구분한다
+# (ai_workspace/pipeline/stages.py의 PIPELINE_STOPPED_EXIT_CODE와 같은 값, docs/adr/0035).
+EXIT_STOPPED = 3
+
+
+class JobStopped(Exception):
+    """잡이 하던 일을 스스로 멈췄다(예: LLM 지출 상한, 서킷브레이커). 크래시는 아니지만 일을
+    끝내지 못했으므로 job_runs에는 'failed'로 남기고 알림을 보낸다. stats에는 멈추기 전까지의
+    결과와 사유를 싣는다."""
+
+    def __init__(self, reason: str, stats: Optional[Dict[str, Any]] = None, detail: str = ""):
+        super().__init__(reason)
+        self.reason = reason
+        self.stats = stats or {}
+        self.detail = detail
+
+
 class JobTerminated(BaseException):
     """jobs.run이 SIGTERM/SIGINT를 받으면 메인 스레드에서 던진다.
 
@@ -203,6 +220,8 @@ def _write_checkpoint(store, ctx: JobContext) -> None:
 def _execute(job, fn, ctx: JobContext, store, notify) -> JobResult:
     started = time.monotonic()
     error = None
+    exit_code = 1
+    alert = "🚨 job 실패"
     try:
         returned = fn(ctx)
         if returned:
@@ -219,6 +238,15 @@ def _execute(job, fn, ctx: JobContext, store, notify) -> JobResult:
         ctx.stats["reason"] = skip.reason
         status = "skipped"
         logger.warning(f"job={job}: 건너뜀 ({skip.reason})")
+    except JobStopped as stop:
+        ctx.stats.update(stop.stats)
+        ctx.stats["reason"] = stop.reason
+        status = "failed"
+        exit_code = EXIT_STOPPED
+        alert = "⛔ job 중단"
+        error = _short(f"stopped: {stop.reason} - {stop.detail}" if stop.detail else f"stopped: {stop.reason}", 2000)
+        logger.error(f"job={job}: 중단 ({stop.reason}) {stop.detail}")
+        failure_summary = _short(error)
     except Exception as e:
         status = "failed"
         error = traceback.format_exc()[-_ERROR_TEXT_LIMIT:]
@@ -232,8 +260,8 @@ def _execute(job, fn, ctx: JobContext, store, notify) -> JobResult:
     store.finish(ctx.run_id, status, stats, error)
 
     if status == "failed":
-        notify(f"🚨 job 실패: job={job}, run_id={ctx.run_id}, error={failure_summary}")
-        return JobResult(status=status, exit_code=1, run_id=ctx.run_id, stats=stats, error=error)
+        notify(f"{alert}: job={job}, run_id={ctx.run_id}, error={failure_summary}")
+        return JobResult(status=status, exit_code=exit_code, run_id=ctx.run_id, stats=stats, error=error)
     if ctx.warnings:
         notify(f"⚠️ job 경고: job={job}, run_id={ctx.run_id}, status={status} - " + " / ".join(ctx.warnings))
     return JobResult(status=status, exit_code=0, run_id=ctx.run_id, stats=stats, error=None)
