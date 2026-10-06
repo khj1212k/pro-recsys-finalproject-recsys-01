@@ -12,7 +12,7 @@ import pytest
 from evaluation.recsys.ebnerd import models
 from evaluation.recsys.service_logs import LogBench, epoch_us
 from recsys_core import schema
-from recsys_core.profile import HistState
+from recsys_core.profile import HistState, apply_event
 from recsys_core.serving import (
     FEATURE_NAMES,
     FEATURE_SCHEMA_VERSION,
@@ -257,6 +257,40 @@ def test_a_same_second_click_missing_from_the_long_term_state_is_noticed():
 
     with pytest.raises(FeatureInputsMissing, match="뒤처져"):
         features(state, items, now)
+
+
+def test_a_click_missing_from_the_state_is_noticed_only_while_it_is_the_newest_one():
+    """알고 있는 한계(ADR 0033)를 고정해 둔다. 어댑터가 "상태가 로그보다 뒤처졌다"를 아는 근거는 시각 하나다:
+    최근 클릭 중 상태의 마지막 클릭보다 늦은 것이 있는가. 클릭 시점에 뉴스레터의 임베딩이 없어 상태에 들어가지
+    못한 클릭(임베딩은 나중에 채워져 로그 재계산에는 들어간다)이 그 예다.
+    - 빠진 클릭이 가장 최근이면: 알아채고 값을 내지 않는다(그 사용자는 재구축 전까지 계속 그렇다).
+    - 그 뒤에 다른 클릭이 반영되면: 시각으로는 빠진 것이 보이지 않아 값이 로그 재계산과 어긋난 채 나간다.
+      이것을 찾는 것은 `rebuild_user_state --check`다."""
+    world = make_world(5)
+    user = 2
+    base = T0 + timedelta(days=12, hours=3)
+    cands = sorted(world.items)[:8]
+    items = [world.items[i] for i in cands]
+    skipped = _same_second_click(world, user, base, 100_000)          # 상태에 들어가지 못한 클릭
+    without_skipped = _hist_read_at(world, user, skipped)             # 그 클릭 직전까지의 상태
+
+    soon = skipped + timedelta(seconds=30)
+    with pytest.raises(FeatureInputsMissing, match="뒤처져"):
+        features(_state(world, user, soon, cands, **without_skipped), items, soon)
+
+    # 그 뒤의 클릭 하나가 정상적으로 반영된다: 상태 = (빠진 클릭 없는 상태) + 새 클릭
+    later = skipped + timedelta(seconds=60)
+    nid = next(i for i in sorted(world.items) if i not in {n for u, n, _ in world.clicks if u == user})
+    world.clicks.append((user, nid, later))
+    item = world.items[nid]
+    hist = apply_event(without_skipped["hist"], epoch_seconds(later), item.embedding, item.category_id or 0)
+    now = later + timedelta(seconds=30)
+    stale = _state(world, user, now, cands, hist=hist, hist_last_event_at=later)
+
+    serving = features(stale, items, now)  # 알아채지 못한다
+    offline = LogBench(world.logs()).request_features(user, epoch_us(now), cands)
+    assert serving[0, COL["hist_len"]] == offline[0, COL["hist_len"]] - 1
+    assert np.abs(serving[:, COL["hist_cos"]] - offline[:, COL["hist_cos"]]).max() > 1e-3
 
 
 def test_a_long_term_state_without_a_matching_last_event_time_is_not_usable():
