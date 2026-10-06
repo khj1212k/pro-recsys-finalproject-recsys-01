@@ -16,7 +16,11 @@
          stderr로 남기는 줄만 끼운 사본(내장 명령만 써서 fork가 없다)
   reordered : supercronic에 신호를 보내는 줄을 /proc 순회 앞으로 옮긴 사본(supercronic 먼저, 잡은 그 다음)
 
+  resched : new와 같되 "종료 신호를 받기 전에 잡이 끝났는지"를 남긴다. 진짜 supercronic이라면 그때 다음 실행을
+            띄웠을 상황이다(그 실행은 엔트리포인트의 신호를 받지 못한다).
+
 REPRO_SET=doubles : 가짜 supercronic 판별 비교(첫 라운드)
+REPRO_SET=resched : resched 대역으로 지금 순서와 바꾼 순서 비교
 REPRO_SET=order   : 신호 순서 비교. 가짜 old/new와, REAL_SUPERCRONIC_DIR에 둔 진짜 supercronic(매초 실행 crontab)
 """
 import collections
@@ -61,6 +65,19 @@ DOUBLES = {
         signal.signal(signal.SIGTERM, lambda *a: None)
         child = subprocess.Popen([{job!r}], process_group=0)
         child.wait()
+        os._exit(0)
+    """,
+    "resched": """
+        import os, signal, subprocess
+        stopping = False
+        def on_term(signum, frame):
+            global stopping
+            stopping = True
+        signal.signal(signal.SIGTERM, on_term)
+        child = subprocess.Popen([{job!r}], process_group=0)
+        child.wait()
+        if not stopping:
+            open({rescheduled!r}, "w").close()
         os._exit(0)
     """,
     "held": """
@@ -210,12 +227,14 @@ def kill_quietly(pid):
 
 def run_once(double, entrypoint, timeout):
     with tempfile.TemporaryDirectory(prefix="sigterm-repro-") as tmp:
-        ready, outcome, window = (os.path.join(tmp, name) for name in ("ready", "outcome", "window"))
+        ready, outcome, window, rescheduled = (
+            os.path.join(tmp, name) for name in ("ready", "outcome", "window", "rescheduled")
+        )
         job = os.path.join(tmp, "job.py")
         write_executable(job, JOB.format(ready=ready, outcome=outcome))
         bin_dir = os.path.join(tmp, "bin")
         os.mkdir(bin_dir)
-        write_executable(os.path.join(bin_dir, "supercronic"), DOUBLES[double].format(job=job, window=window))
+        write_executable(os.path.join(bin_dir, "supercronic"), DOUBLES[double].format(job=job, window=window, rescheduled=rescheduled))
         env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
         err_path = os.path.join(tmp, "stderr")
         with open(err_path, "wb") as err:
@@ -241,6 +260,8 @@ def run_once(double, entrypoint, timeout):
         with open(err_path, errors="replace") as f:
             stderr = f.read()
         outcome_text = open(outcome).read() if os.path.exists(outcome) else None
+        if os.path.exists(rescheduled):
+            outcome_text = f"{outcome_text} + job ended before supercronic got SIGTERM"
     state = handler = None
     for line in stderr.splitlines():
         parts = line.split()
@@ -385,7 +406,18 @@ def main():
         for path in (inst, reordered):
             subprocess.run(["sh", "-n", path], check=True)
         print(f"== 반복 실행 ({which}) ==", flush=True)
-        if which == "doubles":
+        if which == "resched":
+            arms = [
+                (f"resched/{label}{suffix}", "resched", entry, n(count), kw)
+                for suffix, count, kw in (
+                    ("", 300, {}),
+                    (" +300 procs", 200, {"sleepers": 300}),
+                    (" +1000 procs", 150, {"sleepers": 1000}),
+                    (" cpu load", 200, {"cpu_load": True}),
+                )
+                for label, entry in (("real", ENTRYPOINT), ("reordered", reordered))
+            ]
+        elif which == "doubles":
             arms = [
                 # 고정 재현: 종료 정리 구간에 들어가 있는 old에 신호가 온다
                 ("held/inst", "held", inst, n(30), {}),

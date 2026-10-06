@@ -40,5 +40,5 @@ jobs:
 
       - name: Reproduce
         env:
-          REPRO_SET: order
+          REPRO_SET: resched
         run: .venv/bin/python diag/scheduler_sigterm_repro.py
