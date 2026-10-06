@@ -453,6 +453,31 @@ def test_generate_job_skips_before_clustering_when_the_day_cap_is_already_spent(
     assert exc.value.stats["llm_budget"]["scope"] == "day"
 
 
+@pytest.mark.parametrize("breakage", ["unwritable_ledger", "malformed_cap"])
+def test_generate_job_stops_before_clustering_when_no_call_could_be_allowed(monkeypatch, tmp_path, breakage):
+    """읽기 전용 마운트(컨테이너 기본)나 잘못된 상한 설정: 어차피 첫 호출이 거부되므로 클러스터링 전에 끝낸다."""
+    import pipeline.stages as stages
+    from jobs.tasks import generate
+
+    class ExplodingStage:
+        def __init__(self, *a, **k):
+            raise AssertionError("호출이 전부 거부될 설정이면 클러스터링/생성 단계에 들어가면 안 된다")
+
+    monkeypatch.setattr(stages, "Stage5_NewsletterGeneration", ExplodingStage)
+    if breakage == "unwritable_ledger":
+        blocker = tmp_path / "read-only-mount"
+        blocker.write_text("x")
+        monkeypatch.setenv("LLM_SPEND_LEDGER_FILE", str(blocker / "llm_spend_ledger.jsonl"))
+    else:
+        monkeypatch.setenv("LLM_BUDGET_TOTAL_USD", "three dollars")
+
+    with pytest.raises(JobStopped) as exc:
+        generate.run(_generate_ctx())
+
+    assert exc.value.reason == "llm_budget_unavailable"
+    assert exc.value.stats["llm_budget"]["problem"] == exc.value.detail
+
+
 def test_generate_job_reports_spend_in_its_stats_on_success(monkeypatch):
     import pipeline.stages as stages
     from jobs.tasks import generate

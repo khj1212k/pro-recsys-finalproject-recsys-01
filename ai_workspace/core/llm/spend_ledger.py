@@ -234,6 +234,16 @@ class SpendLedger:
                           "cleared_nusd": cleared, "note": note, "pid": os.getpid()})
             return cleared
 
+    def probe(self) -> None:
+        """원장에 쓸 수 있는지 확인한다(잠금 획득, 추가 모드로 열기). 줄은 쓰지 않는다.
+
+        쓸 수 없으면 LedgerError. 잡이 클러스터링 같은 준비 작업을 하기 전에 부른다 - 읽기 전용
+        마운트에서는 첫 LLM 호출이 어차피 거부된다.
+        """
+        with self._locked():
+            self._refresh()
+            os.close(os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600))
+
     # ------------------------------------------------------------------ 읽기 경로
 
     def totals(self, *, run_id: str, day: str) -> Totals:

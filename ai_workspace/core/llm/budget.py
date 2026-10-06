@@ -670,6 +670,18 @@ def spend_snapshot() -> Dict[str, Any]:
     }
 
 
+def preflight_problem() -> Optional[str]:
+    """지금 설정으로는 어떤 LLM 호출도 거부될 이유(설정 오류, 단가표·원장을 읽고 쓸 수 없음)가
+    있으면 그 설명을, 없으면 None을 돌려준다. 지출은 기록하지 않는다."""
+    try:
+        cfg = BudgetConfig.from_env()
+        _pricing()
+        _ledger_for(cfg).probe()
+    except Exception as e:  # noqa: BLE001 - begin_attempt가 거부할 모든 경우를 같은 범위로 잡는다
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
 def exhausted_scope() -> Optional[Dict[str, Any]]:
     """일·전체 상한이 이미 찼으면(1 nUSD도 더 못 쓰면) 그 범위와 수치를, 아니면 None.
 

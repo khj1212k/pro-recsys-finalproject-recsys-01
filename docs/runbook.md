@@ -182,6 +182,31 @@ Mac이 잠자기에 들어가면 VM도 멈추고, 그동안 예정된 실행은 
 docker compose run --rm worker generate   # 킬 스위치가 켜져 있으면 status=skipped
 ```
 
+### LLM 지출 상한 (ADR 0035)
+
+킬 스위치를 켜는 주체가 하나 더 있다. LLM 클라이언트는 요청마다 최악 비용을 지출 원장에 예약하고, 런·일·전체 상한 중
+하나를 넘으면 요청을 보내지 않고 멈춘다. 일·전체 상한이면 킬 스위치 파일도 만든다(파일 내용이
+`{"engaged_by": "llm_spend_cap", ...}`이면 이 가드가 켠 것이다).
+
+- 원장은 `<OPS_DIR>/llm_spend_ledger.jsonl`이다(compose가 `LLM_SPEND_LEDGER_FILE=/ops/llm_spend_ledger.jsonl`로 준다).
+  호스트에서 직접 돌리는 실행의 기본 원장도 메인 체크아웃의 `.ops/llm_spend_ledger.jsonl`이라 같은 파일을 쓴다.
+- `/ops`는 기본이 읽기 전용이다. 그 상태에서는 원장을 쓸 수 없어 **컨테이너 안의 LLM 호출이 전부 거부되고**,
+  `generate`는 클러스터링 전에 `failed`(종료 코드 3, `stats.reason=llm_budget_unavailable`)로 끝난다.
+  generate를 켤 때 `.env`에 `OPS_MOUNT_MODE=rw`를 넣는다 - 그러면 컨테이너가 `.ops/`의 다른 파일도 고칠 수 있게 된다.
+- Mac(colima)에서 호스트와 컨테이너가 같은 원장을 **동시에** 쓰지 않는다. 바인드 마운트를 건너는 파일 잠금은
+  보장되지 않는다(Linux 호스트는 같은 커널이라 문제없다).
+
+```bash
+docker compose run --rm --entrypoint python worker -m core.llm.spend_cli summary          # 오늘·전체 사용액과 상한
+docker compose run --rm --entrypoint python worker -m core.llm.spend_cli estimate --plan generator:15:17000:8192
+# 일 상한에 닿아 멈춘 뒤, 콘솔 청구액을 확인하고 그날 창만 비울 때(전체 누계는 그대로):
+docker compose run --rm --entrypoint python worker -m core.llm.spend_cli reset-day --yes --clear-kill-switch --note "사유"
+```
+
+상한에 닿은 `generate`는 그때까지 만든 뉴스레터를 남기고 `failed`(종료 코드 3)로 끝나며, `job_runs.stats`의
+`reason`·`llm_stop`·`llm_spend`에 사유와 사용액이 남는다. 상한 값은 `ai_workspace/.env.example`의
+`LLM_BUDGET_*_USD`를 본다(기본 런 $0.20 / 일 $0.30 / 전체 $3.00).
+
 ## 7. 비밀번호를 잃어버렸을 때
 
 컨테이너 안 로컬 소켓 접속은 비밀번호가 필요 없다.
@@ -204,7 +229,9 @@ docker compose exec -T db pg_dump -U newsletter -d newsletter -Fc > backup_$(dat
 
 1. `docker/crontab`에서 해당 줄의 주석을 푼다.
 2. `.env`에 `AI_ENV_FILE=<LLM 키가 든 파일 경로>`를 넣는다(키는 generate에만 필요).
-3. `GIT_SHA=$(git rev-parse HEAD) docker compose up -d --build scheduler`
+3. `.env`에 `OPS_MOUNT_MODE=rw`를 넣는다 - LLM 지출 원장을 쓸 수 있어야 호출이 허용된다(6절 "LLM 지출 상한").
+   상한(`LLM_BUDGET_RUN_USD`·`LLM_BUDGET_DAY_USD`·`LLM_BUDGET_TOTAL_USD`)을 기본값과 다르게 쓰려면 `AI_ENV_FILE`에 넣는다.
+4. `GIT_SHA=$(git rev-parse HEAD) docker compose up -d --build scheduler`
 
 ## 9-1. 랭커 모델과 장기 프로필 상태 (ADR 0033)
 
