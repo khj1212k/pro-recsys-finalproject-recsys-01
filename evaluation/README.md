@@ -88,6 +88,9 @@ python -m evaluation.clustering.metrics \
 | `calibration.py` | Cohen's κ·Spearman, 클러스터 단위 2-fold 임계값 선택, 자기선호 DiD, ClusterEvaluator ROC |
 | `bakeoff_analysis.py` | 사전 등록 규칙을 기계적으로 적용해 승자·judge·게이트 결정 |
 | `gate_probe.py` | 결정론적 게이트의 오탐/검출 프로브(LLM·DB 호출 없음) |
+| `frozen_export.py` | 실험 입력의 동결 반출: `news_raw`의 시간 창을 읽기 전용 트랜잭션 하나로 `data/exports/<T0>/`에 뽑고, 매니페스트·본문 30일 정리를 맡는다. CLI는 `scripts/export_news_raw.py` ([ADR 0036](../docs/adr/0036-experiment-data-path-frozen-export-file-stand-ins.md), 절차는 [런북 9절](../docs/runbook-hosting.md)) |
+| `embedding_pack.py` | 원격 임베딩 잡이 돌려주는 팩(ids·벡터·본문 해시·매니페스트)의 형식과 반출본 대조. CLI는 `scripts/import_embeddings.py` |
+| `e0_store.py` | 운영 코드를 고치지 않고 DB 없이 클러스터링·생성 경로를 돌리는 파일 대역(로더·저장·기록 전용 임베더)과 운영 함수 계약 검사. E0 러너가 쓴다(러너는 아직 없다) |
 
 전체 흐름 (실제 LLM 호출 단계는 비용이 든다 - `config/llm_pricing.yaml` 단가, 킬 스위치를 존중한다):
 
