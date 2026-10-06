@@ -10,10 +10,42 @@ from typing import Dict, List, Optional, Type
 from pydantic import BaseModel
 
 
+def _token_count(value) -> Optional[int]:
+    """프로바이더 usage 필드를 정수로. 숫자가 아니면(없음, 목 객체 등) None."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
+
+
+def _field(obj, name):
+    if obj is None:
+        return None
+    if isinstance(obj, dict):
+        return obj.get(name)
+    return getattr(obj, name, None)
+
+
 @dataclass
 class LLMUsage:
     input_tokens: int = 0
     output_tokens: int = 0
+    # 아래 셋은 프로바이더가 보고할 때만 채운다(없으면 None). 지출 원장(core/llm/budget.py)이
+    # 실제 비용을 계산할 때 쓴다 - thinking 토큰이 output_tokens에 들어 있는지는 프로바이더마다
+    # 다르고 Gemini 호환 계층은 문서화하지 않았다(docs/adr/0035).
+    thinking_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+
+    @classmethod
+    def from_openai(cls, usage) -> "LLMUsage":
+        """OpenAI Chat Completions 형식의 usage 객체(또는 dict)에서 읽는다. None이면 빈 값."""
+        return cls(
+            input_tokens=_token_count(_field(usage, "prompt_tokens")) or 0,
+            output_tokens=_token_count(_field(usage, "completion_tokens")) or 0,
+            thinking_tokens=_token_count(_field(_field(usage, "completion_tokens_details"), "reasoning_tokens")),
+            cached_tokens=_token_count(_field(_field(usage, "prompt_tokens_details"), "cached_tokens")),
+            total_tokens=_token_count(_field(usage, "total_tokens")),
+        )
 
 
 @dataclass
