@@ -130,6 +130,7 @@ def test_default_ledger_path_comes_from_settings(monkeypatch):
     ("LLM_BUDGET_DAY_TZ", "Mars/Olympus"),
     ("LLM_CIRCUIT_BREAKER_THRESHOLD", "many"),
     ("LLM_BUDGET_FALLBACK_INPUT_PER_1M", "1.0"),  # 출력 단가 없이 입력만
+    ("LLM_BUDGET_RESERVATION_TTL_S", "0"),
 ])
 def test_malformed_config_is_an_error_not_a_silent_default(monkeypatch, name, value):
     monkeypatch.setenv(name, value)
@@ -412,6 +413,63 @@ def test_unknown_model_is_allowed_only_with_an_explicit_fallback_price(monkeypat
 
     assert attempt.reservation.nusd == 1_020 * 5_000 + 1_000 * 20_000
     assert _ledger_events(tmp_path)[0]["price_source"] == "fallback_override"
+
+
+@pytest.mark.parametrize("fb_in,fb_out", [("0", "20"), ("5", "0"), ("0.0003", "0.0025"), ("5", "0.0025")])
+def test_fallback_price_of_zero_or_in_per_thousand_units_is_a_config_error(monkeypatch, fb_in, fb_out):
+    """대체 단가도 단가표와 같은 검증을 받는다: 0원이면 예약이 0이고, 1K 단위로 적으면 1000배 적게 잡힌다."""
+    monkeypatch.setenv("LLM_BUDGET_FALLBACK_INPUT_PER_1M", fb_in)
+    monkeypatch.setenv("LLM_BUDGET_FALLBACK_OUTPUT_PER_1M", fb_out)
+
+    with pytest.raises(BudgetConfigError):
+        BudgetConfig.from_env()
+    with pytest.raises(LLMBudgetUnavailable):
+        _begin(model="model-not-in-the-price-table")
+
+
+def _use_price_table(monkeypatch, tmp_path, body):
+    path = tmp_path / "llm_pricing.yaml"
+    path.write_text(body, encoding="utf-8")
+    monkeypatch.setattr(budget, "DEFAULT_PRICING_PATH", path)
+    budget.reset_run_state()  # 단가표 캐시를 비운다(원장은 그대로다)
+
+
+_PRICE_ENTRY = """
+      - input_per_1m: {inp}
+        output_per_1m: {out}
+        source: https://example.com/pricing
+        accessed: "2026-10-06"
+"""
+
+
+@pytest.mark.parametrize("currency,inp,out,extra,fragment", [
+    ("USD", "0", "0", "", "0보다 큰"),             # 예약 0 nUSD로 무제한 허용되던 경우
+    ("USD", "0.0003", "0.0025", "", "1K 토큰당"),  # 1K 단위: 1000배 과소 계상
+    ("KRW", "0.30", "2.50", "", "USD"),            # 통화 불일치
+    ("USD", "0.30", "2.50", _PRICE_ENTRY.format(inp="0.60", out="5.00"), "겹치는"),  # 겹치는 항목
+])
+def test_implausible_price_table_refuses_every_call(monkeypatch, tmp_path, currency, inp, out, extra, fragment):
+    """단가표의 설정 실수가 상한을 무력화하지 못한다: 표를 못 믿으면 호출을 거부한다."""
+    _use_price_table(monkeypatch, tmp_path,
+                     f"currency: {currency}\nmodels:\n  {MODEL}:\n    provider: gemini\n    prices:"
+                     + _PRICE_ENTRY.format(inp=inp, out=out) + extra)
+    _cap_env(monkeypatch, run="0.000001")  # 1,000 nUSD
+
+    for _ in range(3):
+        budget.begin_run()
+        with pytest.raises(LLMBudgetUnavailable) as exc:
+            _begin()
+        assert fragment in str(exc.value)
+    assert _ledger_events(tmp_path) == []
+    assert fragment in budget.preflight_problem()
+
+
+def test_replacement_price_table_is_used_once_it_is_valid(monkeypatch, tmp_path):
+    _use_price_table(monkeypatch, tmp_path,
+                     f"currency: USD\nmodels:\n  {MODEL}:\n    provider: gemini\n    prices:"
+                     + _PRICE_ENTRY.format(inp="0.60", out="5.00"))
+
+    assert _begin(max_tokens=1000).reservation.nusd == 1_020 * 600 + 1_000 * 5_000
 
 
 def test_fallback_price_does_not_replace_a_known_table_price(monkeypatch, tmp_path):

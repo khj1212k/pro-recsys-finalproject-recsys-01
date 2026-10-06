@@ -41,7 +41,7 @@ from zoneinfo import ZoneInfo
 
 from config.settings import Settings
 from core.llm.client import LLMUsage
-from core.llm.pricing import DEFAULT_PRICING_PATH, PriceTable, load_pricing
+from core.llm.pricing import CURRENCY, DEFAULT_PRICING_PATH, MIN_PLAUSIBLE_PER_1M, PriceTable, load_pricing
 from core.llm.spend_ledger import (
     NUSD_PER_USD,
     CallKey,
@@ -186,9 +186,11 @@ class BudgetConfig:
                 raise BudgetConfigError(
                     "LLM_BUDGET_FALLBACK_INPUT_PER_1M과 LLM_BUDGET_FALLBACK_OUTPUT_PER_1M은 둘 다 있어야 합니다"
                 )
+            # 단가표와 같은 하한: 0이면 예약이 0원이고, 1K 토큰당 단가를 적으면 1000배 적게 잡힌다.
+            floor = Decimal(str(MIN_PLAUSIBLE_PER_1M))
             fallback = (
-                _decimal("LLM_BUDGET_FALLBACK_INPUT_PER_1M", fb_in, minimum=Decimal(0), exclusive=True),
-                _decimal("LLM_BUDGET_FALLBACK_OUTPUT_PER_1M", fb_out, minimum=Decimal(0), exclusive=True),
+                _decimal("LLM_BUDGET_FALLBACK_INPUT_PER_1M", fb_in, minimum=floor),
+                _decimal("LLM_BUDGET_FALLBACK_OUTPUT_PER_1M", fb_out, minimum=floor),
             )
 
         return cls(
@@ -427,7 +429,10 @@ def _pricing() -> PriceTable:
     mtime = os.stat(DEFAULT_PRICING_PATH).st_mtime
     with _state_lock:
         if _pricing_cache is None or _pricing_cache[0] != mtime:
-            _pricing_cache = (mtime, load_pricing())
+            table = load_pricing(DEFAULT_PRICING_PATH)  # 0·음수·하한 미만 단가, 겹치는 항목, 다른 통화는 여기서 거부된다
+            if table.currency != CURRENCY:
+                raise BudgetConfigError(f"단가표의 통화가 {CURRENCY}가 아닙니다: {table.currency!r}")
+            _pricing_cache = (mtime, table)
         return _pricing_cache[1]
 
 
