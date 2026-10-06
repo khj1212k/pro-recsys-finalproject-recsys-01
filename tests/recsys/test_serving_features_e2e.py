@@ -185,6 +185,35 @@ def test_a_state_that_lags_the_click_log_is_not_used_for_features():
     assert service.counters.get("features.inputs_missing") == 1
 
 
+@pytest.mark.parametrize("offset_us, logged_schema", [(-1, ADAPTER_FEATURE_SCHEMA), (0, HEURISTIC_FEATURE_SCHEMA),
+                                                     (250_000, HEURISTIC_FEATURE_SCHEMA)])
+def test_a_click_landing_in_the_request_second_is_used_only_if_it_precedes_the_request(offset_us, logged_schema):
+    """요청 시각과 상태 조회 사이에 같은 사용자의 클릭이 커밋된 경우. 저장소의 장기 상태에는 그 클릭이 들어 있고,
+    최근 클릭 조회(요청 시각 미만)에는 없다. 요청과 같은 초 안이라 초 단위의 기준 시각으로는 보이지 않는다 -
+    어댑터가 마이크로초 시각(ProfileState.last_event_at)으로 알아채고 그 요청의 어댑터 피처를 남기지 않는다."""
+    repo, log, source = _world(), LogRecorder(), FakeSource()
+    _publish(source, "v1")
+    assert NOW.microsecond == 0
+    repo.click(USER, 17, NOW + timedelta(microseconds=offset_us))
+    service = _service(repo, source, log)
+    try:
+        rec = service.recommend(USER, fallback_repo=repo)
+        service.log_impressions(USER, rec, rec.news_letter_ids)
+    finally:
+        service.shutdown()
+
+    (request,) = log.requests
+    assert rec.source == SOURCE_REALTIME  # 응답은 어느 쪽이든 나간다
+    assert request["feature_schema_version"] == logged_schema
+    if logged_schema == ADAPTER_FEATURE_SCHEMA:
+        decoded = np.stack([decode_features(s["features"]) for s in log.slots])
+        assert (decoded[:, serving.FEATURE_NAMES.index("hist_len")] == 10).all()  # 방금 한 클릭까지 10건
+        assert service.counters.get("features.inputs_missing") == 0
+    else:
+        assert request["shadow_versions"] is None and all(s["scores_shadow"] is None for s in log.slots)
+        assert service.counters.get("features.inputs_missing") == 1 and service.counters.get("features.error") == 0
+
+
 def test_an_active_model_reads_popularity_on_the_request_path_and_its_features_are_computed_once():
     repo, log, source = _world(), LogRecorder(), FakeSource()
     _publish(source, "a1", role="active")

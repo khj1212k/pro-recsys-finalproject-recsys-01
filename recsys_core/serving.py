@@ -17,6 +17,9 @@
 입력(state가 들고 있어야 하는 것 - 덕 타이핑):
 - category_ids: 온보딩에서 고른 선호 카테고리 ID들
 - hist: recsys_core.profile.HistState - now 이전의 클릭이 전부 반영된 증분 상태(없으면 빈 상태)
+- hist_last_event_at: hist에 반영된 클릭 중 가장 늦은 것의 시각(마이크로초, tz-aware). hist가 비어 있지 않으면
+  있어야 한다. HistState의 기준 시각은 정수 초라, "요청과 같은 초 안에서 요청 이후에 커밋된 클릭이 상태에 들어
+  있는가"는 이 값으로만 가려진다(check_inputs).
 - recent_clicks: [ClickEvent] - [T - 24h, now) 구간의 최근 SHORT_MAX_EVENTS개 클릭.
   "최근 N개"는 (초 단위로 내린 시각, 뉴스레터 ID) 순으로 가장 뒤의 N개다(latest_events). 같은 초 안의 순서를
   마이크로초로 가르지 않는 이유: 피처의 시각이 정수 초라서, 이벤트 로그에서 다시 계산하는 쪽은 같은 초의
@@ -165,21 +168,29 @@ def check_inputs(state, now: datetime) -> None:
 
     어긋난 입력으로 계산한 피처는 로그로 다시 계산한 값과 다르다. 조용히 다른 값을 남기느니 그 요청의 피처를
     만들지 않는다.
+
+    시각 비교는 전부 마이크로초다. 유저 이벤트의 경계가 "now보다 엄격히 이전"(마이크로초)이므로 초 단위로 비교하면
+    요청과 같은 초 안의 어긋남이 빠진다: 요청 시각 뒤에 커밋된 같은 초의 클릭이 장기 상태에 들어 있어도
+    기준 초는 요청 초보다 작다.
     """
     if getattr(state, "popularity", None) is None:
         raise FeatureInputsMissing("state.popularity가 없습니다(후보의 인기도 창 집계를 읽지 않았다)")
     hist: HistState = getattr(state, "hist", None) or HistState()
     clicks: Sequence[ClickEvent] = getattr(state, "recent_clicks", None) or ()
-    t_req = request_second(now)
-    if not hist.empty and int(hist.anchor_s) >= t_req:
-        raise FeatureInputsMissing("장기 상태에 요청 시각 이후의 클릭이 반영돼 있습니다")
+    last_at: Optional[datetime] = None
+    if not hist.empty:
+        last_at = getattr(state, "hist_last_event_at", None)
+        if last_at is None:
+            raise FeatureInputsMissing("state.hist_last_event_at이 없습니다(장기 상태에 반영된 마지막 클릭의 시각)")
+        if epoch_seconds(last_at) != int(hist.anchor_s):
+            raise FeatureInputsMissing("state.hist_last_event_at이 장기 상태의 기준 시각과 다른 초입니다")
+        if not last_at < now:
+            raise FeatureInputsMissing("장기 상태에 요청 시각 이후의 클릭이 반영돼 있습니다")
     for c in clicks:
         if not c.at < now:
             raise FeatureInputsMissing("recent_clicks에 요청 시각 이후의 클릭이 있습니다")
-    if clicks:
-        newest = max(epoch_seconds(c.at) for c in clicks)
-        if hist.empty or int(hist.anchor_s) < newest:
-            raise FeatureInputsMissing("장기 상태가 클릭 로그보다 뒤처져 있습니다(재구축 필요)")
+    if clicks and (last_at is None or last_at < max(c.at for c in clicks)):
+        raise FeatureInputsMissing("장기 상태가 클릭 로그보다 뒤처져 있습니다(재구축 필요)")
 
 
 def build_context(state, items: Sequence, now: datetime) -> Tuple[FeatureContext, Requests]:

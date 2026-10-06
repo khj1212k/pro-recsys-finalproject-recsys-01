@@ -170,6 +170,11 @@ def _state(world, user, now, cands, **overrides):
     return WorldState(**{**s.__dict__, **overrides})
 
 
+def _hist_read_at(world, user, read_at):
+    """read_at에 읽은 장기 상태(그때까지 커밋된 클릭이 전부 들어 있다)와 그 마지막 클릭 시각."""
+    return {"hist": world.hist(user, read_at), "hist_last_event_at": world.hist_last_event_at(user, read_at)}
+
+
 def test_missing_or_inconsistent_inputs_raise_instead_of_producing_features():
     world = make_world(5)
     user, now = 2, T0 + timedelta(days=12, seconds=1)
@@ -179,21 +184,96 @@ def test_missing_or_inconsistent_inputs_raise_instead_of_producing_features():
         features(_state(world, user, now, cands, popularity=None), items, now)
 
     # 장기 상태가 요청 시각보다 앞서 있다(요청 뒤의 클릭이 이미 반영됨)
-    late = now + timedelta(seconds=5)
+    at = max(c[2] for c in world.clicks if c[0] == user)
+    early = at - timedelta(seconds=5)
+    ahead = _state(world, user, early, cands, **_hist_read_at(world, user, now + timedelta(days=1)))
     with pytest.raises(FeatureInputsMissing, match="이후의 클릭이 반영"):
-        features(_state(world, user, now, cands, hist=world.hist(user, late + timedelta(days=1))), items,
-                 max(c[2] for c in world.clicks if c[0] == user) - timedelta(seconds=5))
+        features(ahead, items, early)
 
     # 최근 클릭은 있는데 장기 상태가 비어 있다(상태가 로그보다 뒤처짐)
-    at = max(c[2] for c in world.clicks if c[0] == user)
     soon = at + timedelta(seconds=10)
-    behind = _state(world, user, soon, cands, hist=HistState())
+    behind = _state(world, user, soon, cands, hist=HistState(), hist_last_event_at=None)
     with pytest.raises(FeatureInputsMissing, match="뒤처져"):
         features(behind, items, soon)
 
-    # 요청 시각 이후의 클릭이 최근 클릭 목록에 들어 있다
+    # 요청 시각 이후의 클릭이 최근 클릭 목록에 들어 있다(장기 상태는 요청 시각의 것)
     with pytest.raises(FeatureInputsMissing, match="recent_clicks"):
-        features(world.state(user, soon, cands), items, at)
+        features(_state(world, user, soon, cands, **_hist_read_at(world, user, at)), items, at)
+
+
+def _same_second_click(world, user, now, offset_us):
+    """now와 같은 초 안에서 offset_us만큼 떨어진 시각에 그 사용자의 클릭 하나를 로그에 더한다."""
+    at = now + timedelta(microseconds=offset_us)
+    assert epoch_seconds(at) == epoch_seconds(now)
+    clicked = {nid for u, nid, _ in world.clicks if u == user}
+    nid = next(i for i in sorted(world.items) if i not in clicked)
+    world.clicks.append((user, nid, at))
+    return at
+
+
+@pytest.mark.parametrize("offset_us", [0, 1, 300_000])
+def test_a_click_at_or_after_the_request_time_in_the_same_second_is_noticed_in_the_long_term_state(offset_us):
+    """요청 시각 now와 장기 상태를 읽는 사이에 같은 사용자의 클릭이 커밋된 경우. 그 클릭이 now와 같은 초 안이면
+    초 단위 비교(상태의 기준 초 >= 요청 초)로는 보이지 않는다: 상태에는 요청 이후의 클릭이 들어 있고 최근 클릭
+    목록(now 미만)에는 없어, hist_cos·cat_share·hist_len이 로그 재계산과 조용히 어긋난다. 마이크로초로 봐야 잡힌다."""
+    world = make_world(5)
+    user = 2
+    now = T0 + timedelta(days=12, hours=2, microseconds=200_000)
+    cands = sorted(world.items)[:8]
+    items = [world.items[i] for i in cands]
+    before = world.state(user, now, cands)
+    post = _same_second_click(world, user, now, offset_us)
+
+    # 그 클릭이 커밋된 뒤에 읽은 상태: 초 단위의 기준 시각은 요청 초보다 앞이라 예전 검사는 지나갔다
+    racy = _state(world, user, now, cands, **_hist_read_at(world, user, post + timedelta(microseconds=1)))
+    assert racy.hist.hist_len == before.hist.hist_len + 1 and racy.hist.anchor_s < request_second(now)
+    assert [c.news_letter_id for c in racy.recent_clicks] == [c.news_letter_id for c in before.recent_clicks]
+
+    with pytest.raises(FeatureInputsMissing, match="이후의 클릭이 반영"):
+        features(racy, items, now)
+
+    # 그 클릭이 반영되기 전에 읽은 상태는 로그 재계산(그 클릭은 now 이후라 세지 않는다)과 같은 값을 낸다
+    serving = features(before, items, now)
+    offline = LogBench(world.logs()).request_features(user, epoch_us(now), cands)
+    assert np.allclose(serving, offline, atol=1e-6, equal_nan=True)
+    assert serving[0, COL["hist_len"]] == before.hist.hist_len
+
+
+def test_a_same_second_click_missing_from_the_long_term_state_is_noticed():
+    """반대 방향: 요청 이전의 클릭이 최근 클릭 목록에는 있는데 장기 상태에는 아직 없다(상태를 읽은 뒤에 커밋됨).
+    그 클릭이 상태의 마지막 클릭과 같은 초면 초 단위 비교로는 뒤처진 것이 보이지 않는다."""
+    world = make_world(5)
+    user = 2
+    base = T0 + timedelta(days=12, hours=2, microseconds=100_000)
+    earlier = _same_second_click(world, user, base, 0)
+    now = base + timedelta(microseconds=600_000)
+    cands = sorted(world.items)[:8]
+    items = [world.items[i] for i in cands]
+    stale = _hist_read_at(world, user, earlier + timedelta(microseconds=1))
+    later = _same_second_click(world, user, base, 250_000)   # earlier와 같은 초, now 이전
+
+    state = _state(world, user, now, cands, **stale)
+    assert state.hist.anchor_s == epoch_seconds(later) and later in [c.at for c in state.recent_clicks]
+
+    with pytest.raises(FeatureInputsMissing, match="뒤처져"):
+        features(state, items, now)
+
+
+def test_a_long_term_state_without_a_matching_last_event_time_is_not_usable():
+    """마이크로초 비교의 근거(hist_last_event_at)가 없거나 상태의 기준 초와 다르면 값을 내지 않는다."""
+    world = make_world(5)
+    user, now = 2, T0 + timedelta(days=12, seconds=1)
+    cands = sorted(world.items)[:5]
+    items = [world.items[i] for i in cands]
+    good = world.state(user, now, cands)
+    assert not good.hist.empty and epoch_seconds(good.hist_last_event_at) == good.hist.anchor_s
+
+    with pytest.raises(FeatureInputsMissing, match="hist_last_event_at"):
+        features(_state(world, user, now, cands, hist_last_event_at=None), items, now)
+    with pytest.raises(FeatureInputsMissing, match="hist_last_event_at"):
+        features(_state(world, user, now, cands, hist_last_event_at=good.hist_last_event_at - timedelta(seconds=2)),
+                 items, now)
+    assert features(good, items, now).shape == (5, 22)
 
 
 def test_no_candidates_and_a_user_with_nothing():

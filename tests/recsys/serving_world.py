@@ -40,6 +40,8 @@ class WorldState:
     hist: HistState
     recent_clicks: List[ClickEvent]
     popularity: Optional[Dict[int, WindowCounts]]
+    # 장기 상태에 반영된 클릭 중 가장 늦은 것의 시각(마이크로초). 클릭이 없으면 None
+    hist_last_event_at: Optional[datetime] = None
 
 
 @dataclass
@@ -58,6 +60,10 @@ class World:
             state = apply_event(state, epoch_seconds(at), item.embedding,
                                 NO_CATEGORY if item.category_id is None else item.category_id)
         return state
+
+    def hist_last_event_at(self, user: int, now: datetime) -> Optional[datetime]:
+        """now에 읽은 장기 상태에 반영된 마지막 클릭의 시각(저장소의 user_profile_state.hist_anchor_ts)."""
+        return max((at for u, _, at in self.clicks if u == user and at < now), default=None)
 
     def recent_clicks(self, user: int, now: datetime) -> List[ClickEvent]:
         since = short_window_start(now)
@@ -83,6 +89,7 @@ class World:
             hist=self.hist(user, now),
             recent_clicks=self.recent_clicks(user, now),
             popularity=self.popularity(candidate_ids, now),
+            hist_last_event_at=self.hist_last_event_at(user, now),
         )
 
     # --- 로그 재계산 경로의 입력

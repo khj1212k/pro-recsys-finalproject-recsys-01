@@ -45,8 +45,10 @@ class Item:
 class ProfileState:
     """user_profile_state 한 행: 클릭마다 갱신되는 장기 프로필의 증분 상태(ADR 0033).
 
-    last_event_at은 반영된 클릭 중 가장 늦은 것의 시각(마이크로초)이다. 요청 시각보다 늦으면 이 상태는
-    그 요청의 피처 입력으로 쓸 수 없다(recsys_core.serving.check_inputs)."""
+    last_event_at은 반영된 클릭 중 가장 늦은 것의 시각(마이크로초)이다. 요청 시각 이후(같은 시각 포함)이면 이
+    상태는 그 요청의 피처 입력으로 쓸 수 없고, 최근 클릭 조회의 가장 늦은 클릭보다 이르면 상태가 로그보다
+    뒤처진 것이다. 둘 다 recsys_core.serving.check_inputs가 마이크로초로 비교한다 - hist의 기준 시각은 정수
+    초라 요청과 같은 초 안의 어긋남은 이 값으로만 보인다."""
 
     hist: HistState = field(default_factory=HistState)
     last_event_at: Optional[datetime] = None
@@ -66,6 +68,7 @@ class UserState:
     profile_source: str = "none"
     # --- recsys_core 서빙 어댑터의 입력(ADR 0033). 휴리스틱 스코어러는 읽지 않는다.
     hist: Optional[HistState] = None
+    # hist에 반영된 마지막 클릭의 시각(ProfileState.last_event_at). 어댑터가 요청 시각·최근 클릭과 비교한다.
     hist_last_event_at: Optional[datetime] = None
     recent_clicks: List[ClickEvent] = field(default_factory=list)
     # 후보 아이템의 인기도 창 집계. None은 "아직 읽지 않음"이다(어댑터가 값을 내지 않는다).
