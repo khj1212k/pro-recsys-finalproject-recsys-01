@@ -375,8 +375,9 @@ uv pip compile docker/requirements-ingest.in --universal --python-version 3.11 \
 [ADR 0036](adr/0036-experiment-data-path-frozen-export-file-stand-ins.md), 본문 사본의 위치와 30일 규칙은
 [ADR 0023](adr/0023-data-sources-copyright-retention.md) 개정(2026-10-06)이다.
 
-**2026-10-06 현재 이 절차는 한 번도 돌리지 않았다.** 도구는 CI의 Postgres(합성 행)에서만 검증됐다. 걸리는 시간과 반출 중 VM 여유
-메모리는 첫 실행에서 재서 ADR 0036의 증거에 적는다.
+**2026-10-06 현재 이 절차로 기사를 반출한 적은 없다.** 도구는 CI의 Postgres(합성 행)에서 검증됐고, VM에서는 빈 창(행 0건)으로 9.3의
+경로만 확인했다(2.46초, 머리말이 읽기 전용 스냅숏을 확인 — ADR 0036 증거 6). 행을 읽을 때 걸리는 시간과 반출 중 VM 여유 메모리는 첫 실행에서
+재서 ADR 0036의 증거에 적는다.
 
 ### 9.0 하기 전에 — 하나라도 아니면 돌리지 않는다
 - ADR 0023 개정(2026-10-06)이 main에 있고, 사용자가 이 반출을 승인했다.
