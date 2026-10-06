@@ -1,13 +1,20 @@
 """LLM 지출 원장 CLI (docs/adr/0035).
 
+  python -m core.llm.spend_cli init [--note 사유]
+      원장을 만든다. 가드는 원장을 만들지 않는다 - 원장이 없으면 모든 LLM 호출이 거부된다.
   python -m core.llm.spend_cli summary [--days N] [--json]
-      일·모델·역할별 호출 수, 토큰, 금액(USD와 가정 환율의 KRW), 상한 대비 사용액.
+      일·모델·역할별 호출 수, 토큰, 금액(USD와 가정 환율의 KRW), 상한 대비 사용액, 원장 무결성.
   python -m core.llm.spend_cli reset-day [YYYY-MM-DD] --yes [--note 사유] [--clear-kill-switch]
       그날의 일 상한 창을 비운다. 전체 상한과 지출 기록은 그대로다.
   python -m core.llm.spend_cli estimate --plan MODEL:CALLS:PROMPT:MAX_OUTPUT_TOKENS [--plan ...]
       계획한 호출의 최악 비용(가드가 예약할 금액)을 미리 계산하고 남은 상한과 비교한다.
       MODEL 자리에 generator/judge/tone을 쓰면 지금 설정된 모델로 바꾼다.
       PROMPT는 문자 수(한글 기준 글자당 3바이트로 환산)이고, 끝에 t를 붙이면 토큰 수다(예: 16000t).
+  python -m core.llm.spend_cli repair [--yes] [--note 사유]
+      해석할 수 없는 줄을 확인했다고 원장에 적는다(그 전에는 호출이 거부된다). --yes 없이는 보여주기만 한다.
+  python -m core.llm.spend_cli adopt [--yes] [--note 사유]
+      원장이 사라졌다 새로 만들어졌거나 줄었을 때, 원장 밖에 둔 누계 기록의 금액을 지금 원장에 이어받고
+      지금 원장을 기준으로 삼는다. 누계는 내려가지 않는다. --yes 없이는 무엇을 할지만 보여준다.
 
 ai_workspace/를 임포트 경로에 둔 상태로 실행한다(가상환경에 editable 설치했거나 ai_workspace/에서 실행).
 원장 위치와 상한은 환경변수(LLM_SPEND_LEDGER_FILE, LLM_BUDGET_*_USD)를 따른다. --ledger로 다른 원장을 볼 수 있다.
@@ -61,6 +68,7 @@ def summarize(events) -> Dict[str, Any]:
     settled: Dict[str, int] = {}
     refusals: Counter = Counter()
     resets: List[Dict[str, Any]] = []
+    adoptions: List[Dict[str, Any]] = []
     expired = 0
     last_run_id: Optional[str] = None
 
@@ -101,6 +109,10 @@ def summarize(events) -> Dict[str, Any]:
             refusals[ev.get("scope") or "?"] += 1
         elif kind == "reset_day":
             resets.append({"day": ev.get("day"), "cleared_nusd": int(ev.get("cleared_nusd", 0)), "note": ev.get("note") or ""})
+        elif kind == "adopt":
+            adoptions.append({"reason": ev.get("reason"), "carried_nusd": int(ev.get("carried_nusd", 0)),
+                              "day": ev.get("day"), "carried_day_nusd": int(ev.get("carried_day_nusd", 0)),
+                              "watermark": ev.get("watermark"), "note": ev.get("note") or ""})
 
     return {
         "rows": [rows[k] for k in sorted(rows)],
@@ -108,6 +120,7 @@ def summarize(events) -> Dict[str, Any]:
         "refusals": dict(refusals),
         "expired": expired,
         "resets": resets,
+        "adoptions": adoptions,
         "last_run_id": last_run_id,
     }
 
@@ -119,7 +132,8 @@ def _krw(nusd: int, rate: Decimal) -> float:
 def _caps_view(cfg: BudgetConfig, ledger: SpendLedger, run_id: Optional[str] = None) -> Tuple[Dict[str, Any], Totals]:
     run_id = run_id or budget.current_run_id()
     day = cfg.day_of(time.time())
-    totals = ledger.totals(run_id=run_id, day=day)
+    # 보여주기용이라 무결성 문제가 있어도 읽히는 만큼 읽는다(문제는 integrity로 따로 싣는다).
+    totals = ledger.totals(run_id=run_id, day=day, strict=False)
     view: Dict[str, Any] = {}
     for scope in ("run", "day", "total"):
         cap, used = cfg.caps.for_scope(scope), totals.used(scope)
@@ -161,8 +175,22 @@ def build_summary(cfg: BudgetConfig, ledger: SpendLedger, days: Optional[int] = 
         "expired_reservations": agg["expired"],
         "refusals": agg["refusals"],
         "day_resets": [{"day": r["day"], "cleared_usd": usd(r["cleared_nusd"]), "note": r["note"]} for r in agg["resets"]],
+        # adopt로 이어받은 금액: 위 표(이 원장에 기록된 호출)에는 없고 상한 대비 사용액에는 들어 있다.
+        "adoptions": [{"reason": a["reason"], "carried_usd": usd(a["carried_nusd"]), "day": a["day"],
+                       "carried_day_usd": usd(a["carried_day_nusd"]), "watermark": a["watermark"], "note": a["note"]}
+                      for a in agg["adoptions"]],
         "corrupt_ledger_lines": totals.corrupt_lines,
+        "integrity": _integrity_view(ledger),
         "kill_switch": _kill_switch_state(),
+    }
+
+
+def _integrity_view(ledger: SpendLedger) -> Dict[str, Any]:
+    state = ledger.inspect()
+    return {
+        "ok": state["ok"], "code": state["code"], "problem": state["problem"], "ledger_id": state["ledger_id"],
+        "unacknowledged_corrupt_lines": len(state["unacknowledged_corrupt_lines"]),
+        "watermark_file": state["watermark_file"],
     }
 
 
@@ -199,7 +227,14 @@ def _basis_text(basis: Dict[str, int]) -> str:
 
 
 def render_summary(data: Dict[str, Any]) -> str:
-    lines = [f"LLM 지출 원장: {data['ledger']}", f"날짜 기준 시간대: {data['day_tz']}", _rate_note(data["krw_per_usd"]), ""]
+    lines = [f"LLM 지출 원장: {data['ledger']}", f"날짜 기준 시간대: {data['day_tz']}", _rate_note(data["krw_per_usd"])]
+    integrity = data["integrity"]
+    if integrity["ok"]:
+        lines.append(f"무결성: 정상 (원장 id {integrity['ledger_id'][:8]}, 누계 기록 {integrity['watermark_file']})")
+    else:
+        lines.append(f"무결성: LLM 호출 거부 중 [{integrity['code']}] - {integrity['problem']}")
+        lines.append("  아래 수치는 읽히는 만큼만 읽은 것이다.")
+    lines.append("")
     if not data["rows"] and not data["open_reservations"]["count"]:
         lines.append("기록 없음")
     else:
@@ -233,6 +268,9 @@ def render_summary(data: Dict[str, Any]) -> str:
                  + f" · 해석 못 한 줄 {data['corrupt_ledger_lines']}")
     for r in data["day_resets"]:
         lines.append(f"일 창 초기화: {r['day']} (${r['cleared_usd']:.6f} 비움) {r['note']}".rstrip())
+    for a in data["adoptions"]:
+        lines.append(f"누계 이어받음({a['reason']}): ${a['carried_usd']:.6f} - 표에는 없고 상한 대비 사용액에 들어 있다 "
+                     f"{a['note']}".rstrip())
     ks = data["kill_switch"]
     if ks["env"] or ks["file_exists"]:
         owner = (ks.get("payload") or {}).get("engaged_by", "알 수 없음(내용 없음)") if ks["file_exists"] else "env"
@@ -305,6 +343,7 @@ def build_estimate(cfg: BudgetConfig, ledger: SpendLedger, plans: List[Plan], *,
         "total": caps["total"]["cap_nusd"] - caps["total"]["used_nusd"],
     }
     return {
+        "ledger_problem": ledger.inspect()["problem"],
         "plans": out,
         "worst_case_usd": usd(total_nusd),
         "worst_case_krw": _krw(total_nusd, cfg.krw_per_usd),
@@ -337,6 +376,8 @@ def render_estimate(data: Dict[str, Any]) -> str:
                      "그 상한에서 멈출 수 있습니다(LLM_BUDGET_*_USD로 명시적으로 올리거나 호출 수를 줄이세요).")
     else:
         lines.append("최악의 경우에도 남은 상한 안입니다(재시도는 --attempts-per-call로 반영).")
+    if data["ledger_problem"]:
+        lines.append(f"주의: 지금은 LLM 호출이 거부됩니다 - {data['ledger_problem']}")
     return "\n".join(lines)
 
 
@@ -385,6 +426,81 @@ def cmd_reset_day(args, cfg: BudgetConfig, ledger: SpendLedger) -> int:
 
 
 # ---------------------------------------------------------------------------
+# init / repair / adopt - 사람만 하는 일
+# ---------------------------------------------------------------------------
+
+def cmd_init(args, ledger: SpendLedger) -> int:
+    info = ledger.init(note=args.note or "")
+    print(f"지출 원장을 만들었습니다: {info['ledger']} (id {info['ledger_id'][:8]})")
+    print(f"누계 기록(원장 디렉터리 밖): {info['watermark']}")
+    if info["prior"] is not None:
+        print(f"이 경로에는 이전 원장(id {info['prior']['ledger_id'][:8]})의 누계 기록이 남아 있습니다: 정산 누계 "
+              f"${usd(info['prior']['committed_total_nusd']):.6f}. 새 원장은 그 누계를 이어받기 전까지 호출을 거부합니다 - "
+              f"`python -m core.llm.spend_cli adopt --yes`")
+    elif info["prior_unreadable"]:
+        print("이 경로의 누계 기록을 읽을 수 없습니다. `python -m core.llm.spend_cli adopt --yes` 전까지 호출이 거부됩니다.")
+    return 0
+
+
+def cmd_repair(args, ledger: SpendLedger) -> int:
+    state = ledger.inspect()
+    corrupt = state["unacknowledged_corrupt_lines"]
+    if state["ledger_id"] is None:
+        print(f"오류: {state['problem']}", file=sys.stderr)
+        return 1
+    if not corrupt:
+        print("인정할 줄이 없습니다(해석할 수 없는 줄이 없거나 이미 인정됐습니다).")
+        if state["problem"]:
+            print(f"남은 문제: {state['problem']}")
+        return 0
+    # 줄 내용은 찍지 않는다 - 위치와 길이만. 원장에는 수치와 식별자뿐이지만 깨진 줄에 무엇이 들었는지는 모른다.
+    print(f"해석할 수 없는 줄 {len(corrupt)}개 (바이트 오프셋:길이): "
+          + ", ".join(f"{at}:{length}" for at, length in list(corrupt.items())[:20])
+          + (" ..." if len(corrupt) > 20 else ""))
+    if not args.yes:
+        print("이 줄들의 지출은 알 수 없습니다. 확인했으면 --yes를 붙이세요. 아무것도 바꾸지 않았습니다.")
+        return 2
+    result = ledger.repair(note=args.note or "")
+    print(f"{len(result['acknowledged'])}개 줄을 인정했습니다(줄은 지우지 않고 repair 줄을 붙였습니다).")
+    if result["problem"]:
+        print(f"남은 문제: {result['problem']}")
+    else:
+        print("원장이 다시 정상입니다.")
+    return 0
+
+
+def cmd_adopt(args, ledger: SpendLedger) -> int:
+    plan = ledger.adopt(dry_run=True)
+    if plan["was"] is None:
+        print("원장이 정상입니다. 이어받을 것이 없습니다.")
+        return 0
+    print(f"지금 상태 [{plan['was']}]: {plan['was_message']}")
+    if plan["blocked"]:
+        print("오류: 이 상태는 adopt로 풀 수 없습니다(위 안내를 먼저 따르세요).", file=sys.stderr)
+        return 1
+    if plan["watermark_known"]:
+        print(f"누계 기록: 정산 누계 ${usd(plan['prev_committed_total_nusd']):.6f} + 그때 열려 있던 예약 "
+              f"${usd(plan['prev_open_nusd']):.6f}(과금 여부를 몰라 최악 비용으로 칩니다). 지금 원장: 정산 "
+              f"${usd(plan['committed_total_nusd']):.6f} + 열린 예약 ${usd(plan['open_nusd']):.6f} "
+              f"-> 이어받을 금액 ${usd(plan['carried_nusd']):.6f}"
+              + (f" ({plan['day']} 일 사용액 ${usd(plan['carried_day_nusd']):.6f})" if plan["day"] else ""))
+    else:
+        print("누계 기록이 없거나 읽을 수 없어 이어받을 금액을 알 수 없습니다(0으로 둡니다). 실제로 더 썼다면 "
+              "LLM_BUDGET_TOTAL_USD를 그만큼 낮춰 쓰세요.")
+    if not args.yes:
+        print("진행하려면 --yes를 붙이세요. 아무것도 바꾸지 않았습니다.")
+        return 2
+    result = ledger.adopt(note=args.note or "")
+    print(f"이어받았습니다: 전체 누계 +${usd(result['carried_nusd']):.6f}"
+          + (f", {result['day']} 일 누계 +${usd(result['carried_day_nusd']):.6f}" if result["day"] else "")
+          + ". 지금 원장을 기준으로 누계 기록을 다시 썼습니다.")
+    if result["problem"]:
+        print(f"남은 문제: {result['problem']}")
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # 진입점
 # ---------------------------------------------------------------------------
 
@@ -395,6 +511,9 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--ledger", help="원장 파일 경로 (기본: LLM_SPEND_LEDGER_FILE 또는 "
                                          "<메인 체크아웃>/.ops/llm_spend_ledger.jsonl)")
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_init = sub.add_parser("init", parents=[common], help="원장을 만든다(가드는 원장을 만들지 않는다)")
+    p_init.add_argument("--note", default="", help="원장 첫 줄에 남길 메모")
 
     p_sum = sub.add_parser("summary", parents=[common], help="일·모델·역할별 지출과 상한 대비 사용액")
     p_sum.add_argument("--days", type=int, default=None, help="기록이 있는 날 중 최근 N일만 표에 싣는다(상한 계산은 항상 전체)")
@@ -413,6 +532,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_est.add_argument("--bytes-per-char", type=float, default=DEFAULT_BYTES_PER_CHAR,
                        help="문자 수를 바이트로 바꾸는 가정(한글 3, 영문 1). 기본 3")
     p_est.add_argument("--json", action="store_true")
+
+    p_repair = sub.add_parser("repair", parents=[common], help="해석할 수 없는 줄을 확인했다고 적는다")
+    p_repair.add_argument("--yes", action="store_true", help="실제로 적는다. 없으면 해당 줄의 위치만 보여준다")
+    p_repair.add_argument("--note", default="", help="원장에 남길 사유")
+
+    p_adopt = sub.add_parser("adopt", parents=[common], help="사라지거나 줄어든 원장의 누계를 지금 원장에 이어받는다")
+    p_adopt.add_argument("--yes", action="store_true", help="실제로 이어받는다. 없으면 무엇을 할지만 보여준다")
+    p_adopt.add_argument("--note", default="", help="원장에 남길 사유")
     return parser
 
 
@@ -420,7 +547,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         cfg = BudgetConfig.from_env()
-        ledger = SpendLedger(args.ledger or cfg.ledger_path, reservation_ttl_s=cfg.reservation_ttl_s)
+        ledger = SpendLedger(args.ledger or cfg.ledger_path, state_dir=cfg.state_dir,
+                             reservation_ttl_s=cfg.reservation_ttl_s)
+        if args.cmd == "init":
+            return cmd_init(args, ledger)
+        if args.cmd == "repair":
+            return cmd_repair(args, ledger)
+        if args.cmd == "adopt":
+            return cmd_adopt(args, ledger)
         if args.cmd == "summary":
             data = build_summary(cfg, ledger, days=args.days)
             print(json.dumps(data, ensure_ascii=False, indent=2) if args.json else render_summary(data))

@@ -1,8 +1,10 @@
 # 지출 원장 CLI(python -m core.llm.spend_cli) 테스트 - docs/adr/0035.
 #
-# summary: 일·모델·역할별 사용량과 금액(USD, 가정 환율의 KRW), 상한 대비 사용액
+# init: 원장을 만든다(가드는 만들지 않는다)
+# summary: 일·모델·역할별 사용량과 금액(USD, 가정 환율의 KRW), 상한 대비 사용액, 원장 무결성
 # reset-day: 하루 창을 명시적으로 비운다(--yes 없이는 아무것도 바꾸지 않는다)
 # estimate: 계획한 호출 수로 최악 비용을 미리 계산한다(원장을 쓰지 않는다)
+# repair / adopt: 깨진 줄을 인정하고, 사라지거나 줄어든 원장의 누계를 이어받는다(--yes 없이는 보여주기만)
 import json
 import os
 import subprocess
@@ -25,12 +27,12 @@ MESSAGES = [{"role": "user", "content": "x" * 936}]
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch, tmp_path):
+def _env(monkeypatch, tmp_path, llm_ledger_init):
     for name in ("LLM_BUDGET_FALLBACK_INPUT_PER_1M", "LLM_BUDGET_FALLBACK_OUTPUT_PER_1M", "LLM_BUDGET_KRW_PER_USD",
                  "LLM_BUDGET_DAY_TZ", "LLM_BUDGET_BYTES_PER_TOKEN", "LLM_RUN_ID",
                  "GEN_PROVIDER", "GEN_MODEL", "JUDGE_PROVIDER", "JUDGE_MODEL", "TONE_PROVIDER", "TONE_MODEL"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("LLM_SPEND_LEDGER_FILE", str(tmp_path / "ledger.jsonl"))
+    monkeypatch.setenv("LLM_SPEND_LEDGER_FILE", llm_ledger_init(str(tmp_path / "ledger.jsonl")))
     monkeypatch.setenv("LLM_BUDGET_RUN_USD", "0.20")
     monkeypatch.setenv("LLM_BUDGET_DAY_USD", "0.30")
     monkeypatch.setenv("LLM_BUDGET_TOTAL_USD", "3.00")
@@ -158,12 +160,26 @@ def test_summary_counts_refusals_and_expired_reservations(capsys, tmp_path, monk
     assert gen["basis"] == {"actual": 2, "reserved": 1}  # 만료된 예약이 예약액 그대로 잡혔다
 
 
-def test_summary_of_a_missing_ledger_is_empty_not_an_error(capsys, tmp_path):
+def test_summary_of_a_missing_ledger_says_calls_are_refused_and_creates_nothing(capsys, tmp_path):
     code, out, _ = _run(capsys, "summary", "--ledger", str(tmp_path / "nope.jsonl"))
 
     assert code == 0
     assert "기록 없음" in out
+    assert "LLM 호출 거부 중 [missing]" in out and "spend_cli init" in out
     assert not (tmp_path / "nope.jsonl").exists()
+    data = json.loads(_run(capsys, "summary", "--json", "--ledger", str(tmp_path / "nope.jsonl"))[1])
+    assert (data["integrity"]["ok"], data["integrity"]["code"]) == (False, "missing")
+
+
+def test_summary_of_a_healthy_ledger_reports_its_integrity(capsys):
+    _seed()
+
+    code, out, _ = _run(capsys, "summary")
+    data = json.loads(_run(capsys, "summary", "--json")[1])
+
+    assert code == 0 and "무결성: 정상" in out
+    assert data["integrity"]["ok"] is True and data["integrity"]["unacknowledged_corrupt_lines"] == 0
+    assert os.environ["LLM_SPEND_STATE_DIR"] in data["integrity"]["watermark_file"]
 
 
 def test_summary_can_be_limited_to_recent_days(capsys, tmp_path):
@@ -271,7 +287,8 @@ def test_estimate_multiplies_the_worst_case_per_call_by_the_planned_calls(capsys
     assert data["worst_case_usd"] == pytest.approx(gen["worst_case_usd"] + judge["worst_case_usd"])
     assert data["worst_case_krw"] == pytest.approx(data["worst_case_usd"] * 1400)
     assert data["krw_is_assumed_rate"] is True
-    assert not (tmp_path / "ledger.jsonl").exists()  # 추정은 원장을 쓰지 않는다
+    assert data["ledger_problem"] is None
+    assert len((tmp_path / "ledger.jsonl").read_text(encoding="utf-8").splitlines()) == 1  # 추정은 원장을 쓰지 않는다(헤더뿐)
 
 
 def test_estimate_from_characters_uses_the_same_byte_bound_as_the_guard(capsys):
@@ -333,6 +350,138 @@ def test_estimate_rejects_a_malformed_plan(capsys, plan):
 
     assert exc.value.code == 2
     assert "MODEL:CALLS:PROMPT:MAX_OUTPUT_TOKENS" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# init / repair / adopt
+# ---------------------------------------------------------------------------
+
+def test_init_creates_the_ledger_and_calls_are_allowed_only_after_it(capsys, tmp_path, monkeypatch):
+    path = tmp_path / "fresh" / "ledger.jsonl"
+    monkeypatch.setenv("LLM_SPEND_LEDGER_FILE", str(path))
+    budget.reset_run_state()
+    with pytest.raises(budget.LLMBudgetUnavailable, match="spend_cli init"):
+        _call(GEN, "tone_convert")
+    assert not path.exists()  # 가드는 원장을 만들지 않는다
+
+    code, out, _ = _run(capsys, "init", "--note", "첫 유료 실험")
+
+    assert code == 0 and str(path) in out
+    assert json.loads(path.read_text(encoding="utf-8").splitlines()[0])["note"] == "첫 유료 실험"
+    budget.begin_run("after-init")
+    _call(GEN, "tone_convert", LLMUsage(input_tokens=10, output_tokens=10))
+
+
+def test_init_refuses_to_replace_an_existing_ledger(capsys, tmp_path):
+    _seed()
+    before = (tmp_path / "ledger.jsonl").read_bytes()
+
+    code, _, err = _run(capsys, "init")
+
+    assert code == 1 and "이미 파일이" in err
+    assert (tmp_path / "ledger.jsonl").read_bytes() == before
+
+
+def test_deleted_ledger_comes_back_with_its_total_only_through_init_then_adopt(capsys, tmp_path):
+    """.ops/가 통째로 지워진 뒤의 절차: init만으로는 호출이 풀리지 않고, adopt --yes가 이전 누계를 이어받는다."""
+    _seed()
+    before = json.loads(_run(capsys, "summary", "--json")[1])
+    settled = before["totals"]["usd"]
+    os.remove(tmp_path / "ledger.jsonl")
+    budget.reset_run_state()
+
+    code, out, _ = _run(capsys, "init")
+    assert code == 0 and "adopt --yes" in out
+    with pytest.raises(budget.LLMBudgetUnavailable, match="adopt --yes"):
+        _call(GEN, "tone_convert")
+
+    budget.reset_run_state()
+    code, out, _ = _run(capsys, "adopt")
+    assert code == 2 and "--yes" in out and f"${settled:.6f}" in out
+    with pytest.raises(budget.LLMBudgetUnavailable):
+        _call(GEN, "tone_convert")  # --yes 없이는 아무것도 바뀌지 않았다
+
+    budget.reset_run_state()
+    code, out, _ = _run(capsys, "adopt", "--yes", "--note", "git clean")
+    assert code == 0 and "이어받았습니다" in out
+
+    after = json.loads(_run(capsys, "summary", "--json")[1])
+    assert after["integrity"]["ok"] is True
+    # 정산 누계와, 원장과 함께 사라진 열린 예약(최악 비용)까지 그대로 이어진다
+    assert after["caps"]["total"]["used_usd"] == pytest.approx(before["caps"]["total"]["used_usd"])
+    assert after["caps"]["day"]["used_usd"] == pytest.approx(before["caps"]["day"]["used_usd"])
+    assert after["rows"] == []
+    assert after["adoptions"][0]["carried_usd"] == pytest.approx(settled + before["open_reservations"]["usd"])
+    assert after["adoptions"][0]["note"] == "git clean"
+    assert "누계 이어받음(replaced)" in _run(capsys, "summary")[1]
+    _call(GEN, "tone_convert", LLMUsage(input_tokens=10, output_tokens=10))
+
+
+def test_adopt_on_a_healthy_ledger_does_nothing(capsys, tmp_path):
+    _seed()
+    before = (tmp_path / "ledger.jsonl").read_bytes()
+
+    code, out, _ = _run(capsys, "adopt", "--yes")
+
+    assert code == 0 and "정상" in out
+    assert (tmp_path / "ledger.jsonl").read_bytes() == before
+
+
+def test_repair_shows_positions_only_and_needs_yes(capsys, tmp_path):
+    _seed()
+    path = tmp_path / "ledger.jsonl"
+    lines = path.read_bytes().splitlines(keepends=True)
+    path.write_bytes(lines[0] + lines[1] + b"#" + lines[2][1:] + b"".join(lines[3:]))  # 한 줄(정산)을 깨뜨린다
+    broken = path.read_bytes()
+    budget.reset_run_state()
+
+    code, out, _ = _run(capsys, "repair")
+
+    assert code == 2 and "--yes" in out
+    assert f"{len(lines[0]) + len(lines[1])}:{len(lines[2]) - 1}" in out  # 바이트 오프셋:길이
+    assert "gemini" not in out and "run_id" not in out  # 줄 내용은 찍지 않는다
+    assert path.read_bytes() == broken
+    with pytest.raises(budget.LLMBudgetUnavailable, match="repair --yes"):
+        _call(GEN, "tone_convert")
+
+
+def test_repair_then_adopt_brings_a_corrupted_ledger_back_without_lowering_the_total(capsys, tmp_path):
+    _seed()
+    before = json.loads(_run(capsys, "summary", "--json")[1])
+    path = tmp_path / "ledger.jsonl"
+    lines = path.read_bytes().splitlines(keepends=True)
+    path.write_bytes(lines[0] + lines[1] + b"#" + lines[2][1:] + b"".join(lines[3:]))
+    budget.reset_run_state()
+
+    code, out, _ = _run(capsys, "repair", "--yes", "--note", "편집기 사고")
+    assert code == 0 and "1개 줄을 인정" in out and "adopt --yes" in out  # 정산 줄이 사라져 누계가 내려갔다
+    code, out, _ = _run(capsys, "adopt", "--yes")
+    assert code == 0
+
+    after = json.loads(_run(capsys, "summary", "--json")[1])
+    assert after["integrity"]["ok"] is True
+    # 깨진 정산 줄의 금액은 누계 기록에서 이어받고, 그 예약은 열린 채(최악 비용) 남는다 - 상한 쪽으로만 틀린다
+    assert after["caps"]["total"]["used_usd"] >= before["caps"]["total"]["used_usd"]
+    assert after["open_reservations"]["count"] == before["open_reservations"]["count"] + 1
+
+
+def test_repair_without_corrupt_lines_does_nothing(capsys, tmp_path):
+    _seed()
+    before = (tmp_path / "ledger.jsonl").read_bytes()
+
+    code, out, _ = _run(capsys, "repair", "--yes")
+
+    assert code == 0 and "인정할 줄이 없습니다" in out
+    assert (tmp_path / "ledger.jsonl").read_bytes() == before
+
+
+def test_reset_day_is_refused_on_a_ledger_that_cannot_prove_its_spend(capsys, tmp_path):
+    _seed()
+    os.remove(tmp_path / "ledger.jsonl")
+
+    code, _, err = _run(capsys, "reset-day", "--yes")
+
+    assert code == 1 and "spend_cli init" in err
 
 
 # ---------------------------------------------------------------------------

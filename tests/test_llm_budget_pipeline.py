@@ -45,12 +45,12 @@ JUDGE = "gemini-3.1-flash-lite"
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch, tmp_path):
+def _env(monkeypatch, tmp_path, llm_ledger_init):
     for name in ("GEN_PROVIDER", "GEN_MODEL", "JUDGE_PROVIDER", "JUDGE_MODEL", "TONE_PROVIDER", "TONE_MODEL",
                  "LLM_RUN_ID", "LLM_CIRCUIT_BREAKER_THRESHOLD"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
-    monkeypatch.setenv("LLM_SPEND_LEDGER_FILE", str(tmp_path / "ledger.jsonl"))
+    monkeypatch.setenv("LLM_SPEND_LEDGER_FILE", llm_ledger_init(str(tmp_path / "ledger.jsonl")))
     monkeypatch.delenv("LLM_KILL_SWITCH", raising=False)
     monkeypatch.setattr(Settings, "LLM_KILL_SWITCH_FILE", str(tmp_path / "LLM_KILL_SWITCH"))
     monkeypatch.setattr(adapters_module.time, "sleep", lambda *_a, **_k: None)

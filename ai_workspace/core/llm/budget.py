@@ -16,8 +16,10 @@
 # (core/llm/spend_ledger.py)에 예약한다. 런·일·전체 상한 중 하나라도 넘으면 네트워크 요청 전에
 # LLMBudgetExceeded를 낸다. 일·전체 상한이면 킬 스위치 파일도 만든다(다른 프로세스도 멈추게).
 #
-# 닫힌 쪽으로 실패한다: 단가표에 없는 모델, 숫자로 읽히지 않는 설정, 쓸 수 없는 원장은 전부
-# "호출 거부"다. 끄는 스위치는 없다 - 상한을 올리는 것만 가능하다.
+# 닫힌 쪽으로 실패한다: 단가표에 없는 모델, 숫자로 읽히지 않는 설정, 쓸 수 없는 원장, 그리고
+# 지금까지의 지출을 증명하지 못하는 원장(없음, 헤더 없음, 해석 못 할 줄, 원장 밖 누계 기록보다 작음)은
+# 전부 "호출 거부"다. 가드는 원장을 만들지 않는다 - 사람이 `spend_cli init`으로 만든다.
+# 상한을 올리는 것 말고 가드를 끄는 설정은 없다.
 #
 # 중단 예외(LLMRunStop)는 BaseException이다. 이 파이프라인에는 LLM 실패를 `except Exception`으로
 # 받아 로컬 초안이나 원문 그대로를 대신 쓰는 곳이 여럿 있다(문체 변환 노드, 레거시 클라이언트,
@@ -48,6 +50,7 @@ from core.llm.spend_ledger import (
     Refusal,
     Reservation,
     SpendLedger,
+    default_state_dir,
     usd,
 )
 from core.llm_metrics import get_metrics_collector
@@ -144,6 +147,8 @@ def _cap_nusd(name: str) -> int:
 class BudgetConfig:
     caps: Caps
     ledger_path: str
+    # 원장의 누계 기록(워터마크)을 두는 디렉터리. 원장 디렉터리 밖이어야 한다(spend_ledger.py).
+    state_dir: str
     day_tz: str
     reservation_ttl_s: float
     bytes_per_token: float
@@ -189,6 +194,7 @@ class BudgetConfig:
         return cls(
             caps=caps,
             ledger_path=os.getenv("LLM_SPEND_LEDGER_FILE", "").strip() or Settings.LLM_SPEND_LEDGER_FILE_DEFAULT,
+            state_dir=default_state_dir(),
             day_tz=day_tz,
             reservation_ttl_s=float(_decimal(
                 "LLM_BUDGET_RESERVATION_TTL_S", _setting("LLM_BUDGET_RESERVATION_TTL_S"),
@@ -333,7 +339,7 @@ _state_lock = threading.RLock()
 _run_label: Optional[str] = None
 _run_stop: Optional[LLMRunStop] = None
 _consecutive_failures = 0
-_ledgers: Dict[str, SpendLedger] = {}
+_ledgers: Dict[Tuple[str, str], SpendLedger] = {}
 _pricing_cache: Optional[Tuple[float, PriceTable]] = None
 
 
@@ -402,10 +408,12 @@ def latch_run_stop(stop: LLMRunStop) -> None:
 
 
 def _ledger_for(cfg: BudgetConfig) -> SpendLedger:
+    # 같은 파일을 다른 철자(심볼릭 링크 등)로 가리켜도 원장 객체는 하나다.
+    cache_key = (os.path.realpath(cfg.ledger_path), os.path.realpath(cfg.state_dir))
     with _state_lock:
-        ledger = _ledgers.get(cfg.ledger_path)
+        ledger = _ledgers.get(cache_key)
         if ledger is None:
-            ledger = _ledgers[cfg.ledger_path] = SpendLedger(cfg.ledger_path)
+            ledger = _ledgers[cache_key] = SpendLedger(cfg.ledger_path, state_dir=cfg.state_dir)
         ledger.reservation_ttl_s = cfg.reservation_ttl_s
         return ledger
 
@@ -651,7 +659,10 @@ def get_budget_guard() -> BudgetGuard:
 # ---------------------------------------------------------------------------
 
 def spend_snapshot() -> Dict[str, Any]:
-    """현재 런·오늘·전체의 사용액(정산 + 열린 예약)과 상한. 읽기만 한다. 실패해도 예외를 내지 않는다."""
+    """현재 런·오늘·전체의 사용액(정산 + 열린 예약)과 상한. 읽기만 한다. 실패해도 예외를 내지 않는다.
+
+    원장이 없거나 무결성 문제가 있으면 수치 대신 {"error": ...}다 - 믿을 수 없는 합계를 싣지 않는다.
+    """
     try:
         cfg = BudgetConfig.from_env()
         run_id = current_run_id()
@@ -673,8 +684,8 @@ def spend_snapshot() -> Dict[str, Any]:
 
 
 def preflight_problem() -> Optional[str]:
-    """지금 설정으로는 어떤 LLM 호출도 거부될 이유(설정 오류, 단가표·원장을 읽고 쓸 수 없음)가
-    있으면 그 설명을, 없으면 None을 돌려준다. 지출은 기록하지 않는다."""
+    """지금 설정으로는 어떤 LLM 호출도 거부될 이유(설정 오류, 단가표를 읽을 수 없음, 원장이 없거나
+    쓸 수 없거나 무결성 문제가 있음)가 있으면 그 설명을, 없으면 None을 돌려준다. 지출은 기록하지 않는다."""
     try:
         cfg = BudgetConfig.from_env()
         _pricing()

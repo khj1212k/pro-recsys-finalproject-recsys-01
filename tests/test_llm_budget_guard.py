@@ -33,6 +33,7 @@ from core.llm.budget import (  # noqa: E402
 )
 from core.llm.client import LLMUsage  # noqa: E402
 from core.llm.schemas import ClusterEval  # noqa: E402
+from core.llm.spend_ledger import SpendLedger  # noqa: E402
 from core.llm_metrics import LLMMetricsCollector  # noqa: E402
 
 BUDGET_ENV = (
@@ -46,11 +47,11 @@ MODEL = "gemini-3.5-flash-lite"  # 단가표: 입력 $0.30, 출력 $2.50 / 1M �
 
 
 @pytest.fixture(autouse=True)
-def _guard_env(monkeypatch, tmp_path):
+def _guard_env(monkeypatch, tmp_path, llm_ledger_init):
     """상한 관련 환경변수를 모두 지우고(= 코드 기본값) 원장과 킬 스위치만 임시 경로로 돌린다."""
     for name in BUDGET_ENV:
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("LLM_SPEND_LEDGER_FILE", str(tmp_path / "ledger.jsonl"))
+    monkeypatch.setenv("LLM_SPEND_LEDGER_FILE", llm_ledger_init(str(tmp_path / "ledger.jsonl")))
     monkeypatch.delenv("LLM_KILL_SWITCH", raising=False)
     monkeypatch.setattr(Settings, "LLM_KILL_SWITCH_FILE", str(tmp_path / "LLM_KILL_SWITCH"))
     budget.reset_run_state()
@@ -67,10 +68,12 @@ def _begin(model=MODEL, provider="gemini", purpose="newsletter_content_gen", mes
 
 
 def _ledger_events(tmp_path):
+    """init 헤더를 뺀 원장 줄."""
     path = tmp_path / "ledger.jsonl"
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [e for e in events if e["ev"] != "init"]
 
 
 def _snapshot():
@@ -153,6 +156,66 @@ def test_unwritable_ledger_refuses_the_call(monkeypatch, tmp_path):
 
     with pytest.raises(LLMBudgetUnavailable):
         _begin()
+
+
+def test_missing_ledger_refuses_the_call_and_is_never_created_by_the_guard(tmp_path):
+    """원장은 사람이 `spend_cli init`으로만 만든다. 가드가 만들면 지워진 원장이 0부터 다시 시작한다."""
+    os.remove(tmp_path / "ledger.jsonl")
+
+    with pytest.raises(LLMBudgetUnavailable) as exc:
+        _begin()
+
+    assert "spend_cli init" in str(exc.value)
+    assert not (tmp_path / "ledger.jsonl").exists()
+    assert "spend_cli init" in budget.preflight_problem()
+    assert "spend_cli init" in _snapshot()["error"]  # 믿을 수 없는 합계 대신 사유
+    assert budget.exhausted_scope() is None  # 판단하지 않는다 - 사전 점검과 첫 호출이 거부한다
+
+
+def test_total_cap_does_not_restart_when_the_ledger_and_kill_switch_are_deleted(monkeypatch, tmp_path):
+    """`.ops/`가 통째로 지워진 상황(git clean -fdx): 원장과 킬 스위치 파일이 함께 사라져도 상한이 0부터
+    다시 시작하지 않는다. 사람이 원장을 다시 만들고 이전 누계를 이어받으면, 여전히 그 상한에 닿아 있다."""
+    _cap_env(monkeypatch, total=str(ONE_CALL_USD))
+    _begin().settle("timeout")  # 예약액 그대로 정산 - 전체 상한이 찼다
+    with pytest.raises(LLMBudgetExceeded):
+        _begin()
+    os.remove(tmp_path / "ledger.jsonl")
+    os.remove(tmp_path / "LLM_KILL_SWITCH")
+
+    budget.begin_run("after-clean")
+    with pytest.raises(LLMBudgetUnavailable, match="spend_cli init"):
+        _begin()
+    assert not (tmp_path / "ledger.jsonl").exists()
+
+    SpendLedger(tmp_path / "ledger.jsonl").init()
+    budget.begin_run("after-init")
+    with pytest.raises(LLMBudgetUnavailable, match="adopt --yes"):
+        _begin()
+
+    SpendLedger(tmp_path / "ledger.jsonl").adopt()
+    budget.begin_run("after-adopt")
+    with pytest.raises(LLMBudgetExceeded) as exc:
+        _begin()
+    assert exc.value.details["scope"] == "total"
+    assert exc.value.details["spent_usd"] == pytest.approx(float(ONE_CALL_USD))
+
+
+@pytest.mark.parametrize("damage", ["truncate", "corrupt"])
+def test_damaged_ledger_refuses_the_call(tmp_path, damage):
+    _begin().settle("ok", LLMUsage(input_tokens=400, output_tokens=120))
+    path = tmp_path / "ledger.jsonl"
+    if damage == "truncate":
+        path.write_bytes(b"")
+    else:
+        lines = path.read_bytes().splitlines(keepends=True)
+        path.write_bytes(lines[0] + b"".join(b"#" + line[1:] for line in lines[1:]))
+
+    budget.reset_run_state()  # 다음 프로세스: 메모리에 남은 합계 없이 파일만 읽는다
+    with pytest.raises(LLMBudgetUnavailable):
+        _begin()
+
+    assert budget.preflight_problem() is not None
+    assert "error" in _snapshot()
 
 
 def test_call_without_an_output_token_limit_is_refused():

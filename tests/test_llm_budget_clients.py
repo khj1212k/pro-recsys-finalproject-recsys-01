@@ -46,11 +46,11 @@ SCHEMA_BYTES = len(json.dumps(ClusterEval.model_json_schema(), ensure_ascii=Fals
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch, tmp_path):
+def _env(monkeypatch, tmp_path, llm_ledger_init):
     for name in ("LLM_BUDGET_FALLBACK_INPUT_PER_1M", "LLM_BUDGET_FALLBACK_OUTPUT_PER_1M",
                  "LLM_BUDGET_BYTES_PER_TOKEN", "LLM_CIRCUIT_BREAKER_THRESHOLD", "LLM_RUN_ID"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setenv("LLM_SPEND_LEDGER_FILE", str(tmp_path / "ledger.jsonl"))
+    monkeypatch.setenv("LLM_SPEND_LEDGER_FILE", llm_ledger_init(str(tmp_path / "ledger.jsonl")))
     monkeypatch.delenv("LLM_KILL_SWITCH", raising=False)
     monkeypatch.setattr(Settings, "LLM_KILL_SWITCH_FILE", str(tmp_path / "LLM_KILL_SWITCH"))
     monkeypatch.setattr(adapters_module.time, "sleep", lambda *_a, **_k: None)
@@ -68,10 +68,12 @@ def _caps(monkeypatch, run="100", day="100", total="100"):
 
 
 def _events(tmp_path):
+    """init 헤더를 뺀 원장 줄."""
     path = tmp_path / "ledger.jsonl"
     if not path.exists():
         return []
-    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return [e for e in events if e["ev"] != "init"]
 
 
 def _usage(prompt=400, completion=120, total=None, reasoning=None, cached=None):
