@@ -1,0 +1,298 @@
+# 사전 등록(pre-registration) - docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md Addendum A8
+# E0: main의 뉴스레터 생성 파이프라인을 지금 코드 그대로 실제 수집 기사에 돌려 재는 기술 통계 기준선.
+# 가설·결정 규칙 없음. 짝지은 전/후 비교가 아니다(뒤 실험은 다른 표본에서 돈다).
+# 사람이 읽는 원본은 A8이고, 둘이 다르면 A8이 옳다.
+# 결과 파일이 없는 상태에서 커밋됐다(reports/llm/ 없음, 생성 완주 기록 없음). 실행 전 변경은 아래
+# amendments(changed_keys 포함)와 A8.x에 같은 내용으로 적는다. 실행이 시작된 뒤의 변경은 새 id
+# (e0-baseline-v2)로 파일을 따로 만든다.
+id: e0-baseline-v1
+registered_at: "2026-10-06"
+adr: docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md#A8
+plan: docs/design/2026-10-06-llm-v2-execution-plan.md
+kind: descriptive_baseline  # 가설 없음, 결정 규칙 없음
+amendments: []              # 항목 형식: {date, reason, results_viewed, changed_keys: [...]}
+
+# A8.0 순서: 러너 PR 병합(code_sha) -> ADR 0023 개정 확인 -> 반출·임베딩·스냅숏·표본(LLM 호출 없음)
+#            -> 이 블록을 채우는 문서 전용 커밋(A8.10) -> pre-flight -> warmup -> eval -> 리포트 -> 라벨
+# 실행 전에 채운다(결과 열람 전). void_runs 말고 하나라도 비어 있으면 러너는 시작하지 않는다.
+pre_run_record:
+  code_sha: null                 # E0 러너 PR의 main 병합 커밋. 이 블록을 담는 커밋의 해시가 아니다
+  ai_workspace_diff_since_b64da14: null   # git diff --stat b64da14 <code_sha> -- ai_workspace 요약
+  adr_0023_amendment_commit: null         # 실험용 DB 밖 본문 사본 규칙이 main에 들어간 커밋
+  export_t0_kst: null            # Tier 0 VM 읽기 전용 COPY 시각
+  export_rows: null
+  export_manifest_sha256: null
+  export_body_expires_at: null   # 반출 행 중 가장 이른 crawled_at + 30일 (ADR 0023)
+  embeddings_sha256: null        # emb.f16.npy
+  embeddings_fp16_vs_fp32_cos: {p10: null, min: null, n: 100}
+  colab_cu_used: null
+  day_windows_utc: null          # [[start, end), ...] 실제로 쓴 창(3~5개)
+  snapshot_sha256: null          # {run1: ..., run2: ..., run3: ...} 날짜 창별 멤버십(ids) 스냅숏
+  sample_manifest_sha256: null   # evaluation/llm/evalsets/e0-baseline-v1.jsonl (order 포함)
+  bucket_allocation: null        # {"3-4": n, "5-9": n, "10+": n} 실제 배분
+  user_decisions:
+    newsletter_embedder: null    # "record_only_mac" | "real_colab_cpu"
+    label_subset: null           # "full" | "reduced_first10"
+  void_runs: []                  # {date, reason, cost_usd}
+
+code_identity:                   # A8.2. 러너는 전부 참일 때만 시작한다
+  head_is_ancestor_of: origin/main      # 직전에 git fetch
+  clean_tree: true
+  code_paths: [ai_workspace, evaluation, scripts, jobs]
+  code_paths_exclude: [evaluation/llm/preregistration, evaluation/llm/evalsets]
+  check: "git diff --quiet <code_sha> HEAD -- <code_paths> ':(exclude)<code_paths_exclude>'"
+  may_differ_after_code_sha: [docs/, reports/README.md, "this file: pre_run_record, amendments", sample_manifest]
+  prereg_rule_keys_changed_only_via: amendments.changed_keys
+  run_manifest_records: [python_version, pip_freeze_sha256, openai, httpx, langgraph, pydantic, hdbscan, kiwipiepy, rapidfuzz]
+
+sample:
+  frame: frozen_export_of_tier0_news_raw   # extract_status=ok, 본문 비어 있지 않음, 아래 창(최대 5개)의 합집합만 반출
+  embedding: {code: core.embedder.NewsEmbedder, device: colab_t4_cuda_fp16, max_length: 8192}
+  clustering:
+    code: NewsClusterer.cluster_news       # 운영 코드 그대로. 입력 행만 러너가 파일에서 준다
+    min_cluster_size: 3
+    min_samples: 2
+    lookback_hours: 24
+    pseudo_now_kst: "06:00"                # T0 직전 완결된 KST 날짜 D1<D2<D3 각각 06:00 KST(UTC로 변환해 비교)
+    window: "t_k - 24h <= crawled_at < t_k"   # 상한은 러너가 건다(운영 SQL은 하한만). 창끼리 겹치지 않는다
+    days: 3
+    extend_days_if_short: {max_days: 5, need_eval_plus_warmup: 17, void_if_eval_below: 9}   # 9~14면 그 n으로 진행
+  candidates: "기사 수 >= 3. split_v2=yes 클러스터는 층으로 유지, 쪼개진 뒤 1~2건 조각만 제외"
+  stratified_sample:
+    function: evaluation.llm.evalset.stratified_sample
+    n: 15
+    seed: 20261006
+    hard_fraction: 0.0                     # 운영 FAIL 기록이 없어 어려운 사례를 정의할 수 없다
+    warmup: 2                              # 설정 오류 확인용 스모크, 집계 제외
+    min_size: 3
+    size_buckets: [[3, 4], [5, 9], [10, null]]   # 균등 배분. 후보가 충분하면 5·5·5
+    short_bucket: reallocate_as_coded      # _equal_allocation 그대로. 실제 배분을 pre_run_record와 리포트에 기록
+  processing_order:
+    eval: "sort by (run_k, cluster_id) then random.Random(20261007).shuffle"
+    warmup_first: true
+    recorded_in: sample_manifest.order     # 실행 전에 고정
+  manifest_path: evaluation/llm/evalsets/e0-baseline-v1.jsonl   # id·URL·언론사·sha256·길이·order만 커밋
+  later_evalsets:
+    exclude_e0_article_ids_from: [e4_prime, arch_ab]   # 아직 등록되지 않은 실험. 각 사전 등록에 규칙으로 적는다
+    bakeoff_v1: report_overlap_count_only  # bake-off v1의 표본 프레임에는 규칙을 더하지 않는다
+
+pipeline:
+  roles:
+    generator: {provider: gemini, model: gemini-3.5-flash-lite}
+    judge: {provider: gemini, model: gemini-3.1-flash-lite}
+    tone: {provider: gemini, model: gemini-3.5-flash-lite}
+  settings:                                # ai_workspace/config/settings.py 기본값. 러너가 읽어 다르면 시작하지 않음
+    FAITHFULNESS_GATE_MODE: enforce
+    FAITHFULNESS_BLOCKING_TYPES: "numbers,quotes"
+    TONE_DRIFT_GATE_MODE: enforce
+    TONE_DRIFT_BLOCKING_TYPES: "numbers,dates,entities_added"
+    MAX_RETRY_TONE_DRIFT: 1
+    JUDGE_GATE_MODE: shadow
+    JUDGE_MIN_CRITERION_SCORE: 3
+    JUDGE_MAX_UNSUPPORTED_CLAIMS: 0
+    MAX_RETRY_CLUSTER_EVAL: 2
+    MAX_RETRY_NEWSLETTER_EVAL: 3
+    MAX_RETRY_TONE_VALIDATION: 2
+    MAX_LLM_CALL_RETRIES: 10
+    LLM_REQUEST_TIMEOUT_S: 60
+    LLM_CALL_DEADLINE_S: 180
+    NEWSLETTER_WORKERS: 3
+    HDBSCAN_MIN_CLUSTER_SIZE: 3
+    HDBSCAN_MIN_SAMPLES: 2
+    CLUSTER_LOOKBACK_HOURS: 24
+  effective_values_outside_settings:       # Settings를 거치지 않고 직접 읽는 값(registry.py:99,113,128, kill_switch.py)
+    resolve_role_config_equals_roles: true # GEN_/JUDGE_/TONE_ PROVIDER·MODEL env가 없거나 같은 값
+    gemini_rate_limiter_min_interval_s: 0.0   # GEMINI_LLM_MIN_INTERVAL, LLM_MIN_INTERVAL 미설정
+    LLM_KILL_SWITCH: unset
+    kill_switch_file: absent
+  call_params_as_in_code:                  # 코드 값, 바꾸지 않음 (temperature / max_tokens)
+    cluster_eval: {temperature: 0.1, max_tokens: 2048}
+    newsletter_content_gen: {temperature: 0.2, max_tokens: 8192}
+    newsletter_meta_gen: {temperature: 0.2, max_tokens: 1024}
+    newsletter_eval: {temperature: 0.1, max_tokens: 2048}
+    tone_convert: {temperature: 0.4, max_tokens: 4096}
+  reasoning_effort: unset                  # 코드에 없다(C7). 프로바이더 기본값
+  concurrency: {function: pipeline.stages.run_clusters_bounded, max_workers: 3, fill: [], min_target: 0}
+  declared_deviations:                     # A8.2. 번호는 A8과 같다
+    - {id: 1, store: harness_file_stand_ins,
+       patched: [NewsClusterer._load_data_from_db, workflow.nodes.get_connection,
+                 workflow.nodes.release_connection, workflow.nodes.save_news_letter],
+       production_code_changed: false}
+    - {id: 2, cluster_selection: stratified_sample_in_registered_order}   # Stage5는 id 역순 + limit
+    - {id: 3, bypass: Stage5.execute}      # cluster_history 배치·min_target 채움·metrics.save_summary 없음
+    - {id: 4, graph_run: app.stream}       # invoke는 stream을 감싼 것. 러너 PR 테스트가 호출 순서 동일 확인
+    - {id: 5, article_embedding: colab_t4_fp16}
+    - {id: 6, newsletter_embedder: record_only}   # 벡터 대신 형식체 sha256 기록 후 None(하류 노드가 읽지 않음)
+    - {id: 7, window: [upper_bound_by_runner, extracted_after_t_k_rows_reported, no_cross_run_newsletter_exclusion]}
+    - {id: 8, instrumentation: [complete_wrapper, httpx_request_response_hooks, tone_local_fallback_flag],
+       unchanged: [prompts, temperature, max_tokens, retry_logic, timeouts]}
+
+metrics:                                   # 정의는 A8.3. 모든 비율에 Wilson 95% CI, 분모 명시, 가설 검정 없음
+  denominator: processed_eval_clusters     # 자연 종료(completed/skipped/failed/error) 수 n_p. 중단·미시작은 빼고 따로 보고
+  list:
+    - completion_distribution              # outcome별 건수, 완주율 = completed / n_p
+    - first_try_schema_pass_rate           # bake-off G3 정의, purpose별
+    - retries                              # attempts, http_attempts, schema_failures, 상태 코드별, 429 비율, 그래프 수준 재시도
+    - latency                              # 전체 값·중앙값·최댓값(p95 없음), 클러스터·저장본 벽시계, 단일 패스 근사
+    - tokens_cost                          # HTTP 시도 단위. hidden, cost, 문자/토큰 비율, 응답 모델 버전
+    - faithfulness_checker_rates           # numbers/quotes 차단, entities 참고, number_total, 필드별, 첫 초안·최종 초안
+    - tone_drift_rates                     # 차단 유형별, 형식체 폴백, 로컬 폴백, 저장 sentence 오프라인 검사(C4)
+    - judge_v2_shadow                      # 기준별 점수, unsupported_claims, PASS/FAIL, judge_unavailable, 위치 추적률(C17)
+    - cluster_evaluator                    # 노드 갱신마다 decision/confidence(parsed=False 분리), outlier, sub_groups, C15 건수
+    - link_integrity                       # 제외됐는데 연결된 기사 수(C2)
+    - style_rules_shadow
+    - input_stats                          # 기사 수·언론사 수·길이·절단율·near-dup
+    - failure_taxonomy
+  ratio_429: "HTTP attempts with status 429 / HTTP attempts sent"
+  cost_formula: "prompt_tokens * input_price + (completion_tokens + hidden_tokens) * output_price"
+  hidden_tokens: "max(0, total_tokens - prompt_tokens - completion_tokens)"
+  style_rules_shadow:
+    applied_to: [first_draft, saved_formal_draft]
+    raw_distributions: [content_chars, paragraph_count, title_chars, sentence_chars,
+                        parsed_keyword_count, parsed_invalid_category_count]
+    paragraph_count: "줄바꿈으로 나눈 비어 있지 않은 블록 수"
+    current_prompt_rules:                  # 주 지표. prompts.py의 현행 규칙
+      content_chars: [1000, 1500]
+      min_paragraphs: 4
+      title_max_chars: 15
+      banned_expressions: ["충격", "경악", "논란", "파문", "결국", "드디어", "급기야"]   # prompts.py:61 그대로, 부분 문자열
+      banned_scope: [title, sentence, content]
+      min_parsed_keywords: 5               # 미만이면 validator가 제목·요약 토큰으로 채운다
+      allowed_categories: ["정치", "경제", "사회", "세계", "IT/과학", "생활/문화", "스포츠"]
+    v2_rules_reference_only:               # 참고. 설계 3.5의 프롬프트 v2 규칙
+      content_chars: [600, 900]
+      paragraphs: 3
+      title_max_chars: 20
+      sentence_chars: [30, 45]
+      banned_first_words: ["최근", "요즘", "오늘날", "현재", "지금"]
+      emotive_words: ["충격", "경악", "논란", "파문", "결국", "드디어", "급기야", "벼락"]
+      max_emoji: 3
+    not_counted: news_literal_filler       # generator.py:174-175의 "뉴스" 필러는 폴백 메타 전용, 저장본에서 구조적으로 0
+  failure_taxonomy:
+    outcome: [completed, skipped, "failed:<failure_reason>", error, aborted_budget, aborted_infra, interrupted, not_started]
+    root_cause_first_match:                # 위에서부터 먼저 맞는 것 하나
+      - aborted_infra                      # 401/402/403/404·킬 스위치·키 없음, 또는 인프라 중단 뒤 요청 거부
+      - aborted_budget                     # 예산 가드가 이 클러스터의 요청을 거부
+      - interrupted                        # 시작했으나 프로세스가 죽어 끝나지 않음. 다시 돌리지 않는다
+      - exception
+      - save_error
+      - transport                          # 그래프를 끝낸 단계의 마지막 호출: 429/5xx/timeout/connection 소진 또는 deadline
+      - length
+      - content_filter
+      - schema
+      - faithfulness_block
+      - judge_fail
+      - cluster_eval_fail                  # 파싱된 FAIL 판정
+      - generator_fallback
+      - judge_unavailable
+      - none                               # completed
+    also: per_cluster_event_counts_by_type
+
+records:                                   # A8.4. data/experiments/e0/<run>/ (저장소 밖)
+  http_attempt_fields:                     # http_attempts.jsonl - httpx 요청/응답 훅, 보낸 요청마다 1행
+    [run, cluster_id, run_k, graph_attempt, purpose, call_seq, attempt_seq, provider, model_requested,
+     model_responded, system_fingerprint, status, transport_error, finish_reason, prompt_chars, max_tokens,
+     prompt_tokens, completion_tokens, total_tokens, reasoning_tokens_reported, hidden_tokens, cost_usd,
+     cost_kind, latency_s, started_at]
+  call_fields:                             # calls.jsonl - complete() 단위, get_client 자리의 래퍼
+    [run, cluster_id, run_k, graph_attempt, purpose, call_seq, provider, model, prompt_sha12, prompt_chars,
+     temperature, max_tokens, attempts, http_attempts, schema_failures, parsed, responded, first_try_schema_pass,
+     error, http_status, latency_s, wall_s, cost_usd, parsed_keyword_count, parsed_invalid_category_count, started_at]
+  node_updates: nodes.jsonl                # app.stream의 노드별 갱신에서 숫자·id·sha만
+  clusters: clusters.jsonl                 # 클러스터별 시작 행과 종료 행
+  ledger: ledger.jsonl                     # 추가만 하는 비용 원장, run을 넘어 이어진다
+  attribution: thread_local                # 워커 3개. 훅은 요청을 보낸 스레드에서 불린다
+  never_recorded: [prompt_text, response_text]
+  draft_text_only_in: newsletters.jsonl    # 시도별 형식체 초안·변환본·저장본(라벨링 입력). 리포트에는 sha256·길이만
+  console: progress_counts_and_cost_only
+
+budget:
+  cap_usd_valid_run: 1.00                  # pre-flight 5호출 + warmup 2 + eval 15
+  cap_usd_e0_cumulative: 1.50              # warmup 재실행·void 실행 포함. 올리려면 A8.x 개정
+  expected_usd: 0.54                       # [추정] 가정에 따라 0.46~1.01 (실행 계획 2.5)
+  ledger_cost_per_http_attempt:
+    usage_present: observed                # 2xx 전부. 스키마 검증 실패·length·content_filter 응답 포함
+    no_response_or_2xx_without_usage: worst_case   # prompt_chars * 1.5 * input_price + max_tokens * output_price
+    error_response_4xx_5xx: zero_counted   # 과금되지 않는다는 가정(미확인). 잔액 대조로 검증
+  worst_case_tokens_per_char: 1.5
+  guard: {level: per_http_attempt, rule: "ledger_sum + in_flight_worst_case_sum + this_worst_case <= cap"}
+  after_stop_flag: {send_requests: false, unstarted_clusters: not_started,
+                    refused_clusters: "aborted_budget | aborted_infra (집계·라벨 제외)"}
+  budget_stop: partial_run_not_void
+  stop_on_infra: [401, 402, 403, 404, kill_switch, missing_api_key]
+  void_if_processed_eval_clusters_below: 8   # 인프라 실패일 때만
+  wall_clock_cap_hours: 2                  # eval 시작부터, 재개 구간 합산. 넘으면 새 클러스터를 시작하지 않는다
+  rate_limit_429: measure_only
+  resume:
+    allowed_when: process_died             # 크래시·절전·네트워크 단절·운영자 중지
+    started_without_terminal_row: interrupted_never_rerun
+    remaining: continue_in_registered_order
+    report: [count, timestamps, reasons]
+  preflight:
+    schemas: [ClusterEval, NewsletterContent, NewsletterMeta, NewsletterEvalV2, ToneResult]
+    input: synthetic
+    calls: 5
+    at: code_sha_first_step_of_run
+    on_infra_failure: stop_before_warmup   # 실행 시작 전이라 void 아님
+    on_model_failure: record_and_proceed
+  warmup_fixable_closed_list:
+    [api_key_or_permission_401_403, model_id_404, file_path_or_permission, instrumentation_bug, runner_bug_outside_pipeline_code]
+  warmup_code_change: new_pr_new_code_sha_rerecord_and_rerun_warmup
+  warmup_not_fixable: [prompts, settings, models, retries, sample, order, model_quality_failures]
+  valid_runs: 1                            # 숫자를 좋게 하려는 재실행 없음. 부분 실행도 유효. 다시 돌리려면 e0-baseline-v2
+  void_reasons: [code_identity, settings_mismatch, sha_mismatch, infra_below_8, calls_outside_runner, frame_too_small]
+
+report:
+  json: reports/llm/e0_baseline_v1.json
+  md: reports/llm/e0_baseline_v1.md
+  header: [command, code_sha, head_sha, run_at, export_t0, day_windows, embeddings_sha256, n_eval, n_warmup, n_processed,
+           n_aborted_or_not_started, bucket_allocation, seed, processing_order, cost_usd, billing_fx, cost_krw, colab_cu,
+           label_hours_actual, resume_count, results_viewed, declared_deviations]
+  balance_reconciliation:
+    read: [prepaid_balance_before_run, prepaid_balance_24h_after_last_call]   # ₩, 읽은 시각. AI Studio 결제 화면
+    compare: "balance_delta / billing_fx vs ledger_sum_usd"
+    mismatch_if_abs_diff_above: "max(0.10 USD, 15% of ledger_sum)"   # "원장 불일치"로 표기, 비용 수치 신뢰 불가. void 아님
+    unknowns: [balance_display_unit, reflection_delay, vat_inclusion]
+    other_gemini_calls_in_period: mark_not_reconcilable
+  text_allowed: false                      # 기사·뉴스레터 텍스트 금지(ADR 0023). id·sha256·건수·비율만
+  also_update: [reports/README.md, "docs/adr/0010 증거(첫 실제 차단율, 날짜와 함께)"]
+
+human_labels:                              # docs/eval/labeling-guide.md 정의 그대로. 가이드는 고치지 않음
+  clusters: all_eval_15                    # 파이프라인이 떨어뜨렸거나 실패한 것 포함
+  outputs:
+    - first_formal_draft_of_clusters_that_reached_generation   # <=15. 없거나 _fallback이면 빼고 건수 보고
+    - saved_formal_draft_if_sha_differs_from_first             # 예상 합계 ~20, 상한 30
+  tone_drift_only_for: saved_with_converted_text
+  why_not_saved_only: "enforce 게이트를 통과한 저장본은 blocking.numbers = blocking.quotes = 0이라 검사기 양성 표본이 없다"
+  order: clusters_first_then_blind_outputs # 불투명 id·무작위 순서. 첫 초안/저장본 구분과 게이트·judge 결과는 숨김
+  cluster_labels: [single_event, outlier_ids, key_facts]
+  output_labels: [fact_errors, key_facts_covered, style, publishable, tone_drift]
+  relabel:                                 # E0 내보내기는 이 키를 읽는다(bake-off export_blind의 human_reliability.* 기본값 30/10이 아님)
+    outputs: 5
+    clusters: 3
+    min_hours_between_rounds: 48
+    report: [agreement_rate, disagreement_ids]
+    kappa: reference_only_if_defined
+  minutes_per_item_by_size_bucket: {"3-4": 3, "5-9": 5, "10+": 10}
+  hours_estimate: {clusters: 1.5, outputs: 2.0, outputs_upper: 3.0, relabel: 0.8, expected_total: 4.3,
+                   range: [2.2, 5.3], session_max_hours: 1}
+  reduced_option:                          # 사용자 결정. pre_run_record.user_decisions.label_subset
+    clusters: all_eval_15
+    outputs: first_10_clusters_in_processing_order
+    relabel: {outputs: 3, clusters: 2}
+    hours_estimate: {expected_total: 3.3, range: [1.7, 4.0]}
+  deadline_rule: oldest_sample_article_crawled_at_plus_30_days   # ADR 0023
+  uses:
+    publishable_rate_primary: "saved with publishable=Y / n_p (저장되지 않은 처리 완료 클러스터 = N)"
+    publishable_rate_secondary: [saved_only_denominator, first_draft_denominator]
+    outcome_by_single_event_table: true    # saved/skipped/failed x 사람 single_event Y/N
+    checker_vs_human:
+      on: first_draft
+      match: same_field_character_range_overlap
+      precision: "checker items overlapping any human fact_error span / checker items"
+      recall: "human spans (type number, type quote 각각) overlapping a checker item / human spans"
+      draft_level_2x2: true
+      computed_values: counted_as_checker_false_positive_and_reported_separately   # 가이드 2.1
+      on_saved: [gate_miss_count, advisory_entity_precision]
+    judge_shadow_vs_publishable: [table_2x2, agreement_rate]   # κ는 참고
+  decision_rules_triggered: none

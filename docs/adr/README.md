@@ -14,7 +14,7 @@ ADR로 옮기기 전 단계의 리뷰와 설계 사양은 [`docs/design/`](../de
 | [0006](0006-runtime-compose-and-scheduler.md) | 런타임 구성 - docker compose + supercronic(Airflow 제거), Mac 개발 중 임베딩은 호스트 MPS, BGE-M3 max_length 8192 유지(사전 등록 규칙), 본문 해시 중복 제거·잡 종료 신호 전달 | 채택됨 (7일 수집 성공률로 재확인 예정) | 2026-09-26 |
 | [0007](0007-recsys-offline-evaluation-protocol.md) | 추천 시스템 오프라인 평가 프로토콜 | 채택됨 (2026-10-06 개정: 조기 종료 검증 행을 섞어 지표의 동점 순서 아티팩트 제거, 코드 버전도 같은 조건끼리만 비교, 원인은 측정으로 확인한 것만 서술) | 2026-09-25 |
 | [0008](0008-db-layer-pgvector-schema-and-upsert.md) | pgvector 어댑터 등록, news_raw 스키마 정합성(UNIQUE·timestamptz), RSS 수집기 UPSERT | 채택됨 | 2026-09-25 |
-| [0009](0009-llm-eval-protocol-and-preregistered-decision-rule.md) | LLM 평가 프로토콜과 사전 등록한 모델 선정 규칙 (bake-off v1) | 채택됨 (사전 등록, 결과 없음) | 2026-09-25 |
+| [0009](0009-llm-eval-protocol-and-preregistered-decision-rule.md) | LLM 평가 프로토콜과 사전 등록한 모델 선정 규칙 (bake-off v1) | 채택됨 (사전 등록, 결과 없음; 2026-10-06 A8: 현행 파이프라인 기준선 측정 E0을 사전 등록 — 표본·처리 순서·코드 동일성 규칙·설정·지표·HTTP 시도 단위 기록·상한·중단·재개·void·라벨 대상, `evaluation/llm/preregistration/e0-baseline-v1.yaml`) | 2026-09-25 |
 | [0010](0010-faithfulness-gate-and-judge-v2.md) | 결정론적 사실성 게이트, 문체 드리프트 게이트, judge v2 | 채택됨 (차단 유형·judge 임계값·모드는 잠정, ADR 0009로 보정) | 2026-09-26 |
 | [0013](0013-ranker-v2-design.md) | ranker v2 설계 — EB-NeRD 오프라인 벤치마크 프로토콜과 승격 규칙 | 채택됨 (사전 등록 후 R1–R4 통과, 서빙은 shadow부터; 0003의 랭킹 부분 대체; 보충 실험 A2 콜드 regime·A3 신경망 비교 E15는 사전 등록만 있고 결과 대기) | 2026-09-26 |
 | [0015](0015-request-time-recommendation.md) | 요청 시점 추천 - API 프로세스 안에서 후보 합집합·휴리스틱 스코어·MMR을 요청마다 계산, 시간 예산 300ms와 폴백 체인, 실시간 전용 커넥션 풀, 노출 로그 | 채택됨 (추천 품질·대상 장비·HTTP 수준 지연은 미확인, 휴리스틱 가중치는 합성 사전값; 2026-10-06 개정: 캐시는 결정론 목록만, realtime 폴백에서 배치 행 제거, 로그 v2는 0025; 개정 2: 장기 벡터는 증분 상태, 피처 어댑터·요청 경로 밖 shadow는 0033) | 2026-10-06 |
