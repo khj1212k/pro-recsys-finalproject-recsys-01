@@ -1,0 +1,2802 @@
+{
+  "meta": {
+    "experiment": "E9 OPE validation",
+    "preregistration": "docs/adr/0025-logging-v2-exploration-and-ope.md 사전 등록 2, 보완 A1",
+    "preregistration_commit": "e813c4ff2c2554978b8857789fc23d78bda735be",
+    "registered_config": true,
+    "config": {
+      "n_users": 300,
+      "n_days": 7,
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "preset": "default",
+      "catalog": "synthetic",
+      "embeddings": "keyword/category hash, 64d (sim.sim_embeddings)"
+    },
+    "git_sha": "0ccd59f297a9b06a77936d321e48b786b2abc53e",
+    "github_run_id": "37400003072",
+    "github_run_attempt": "1",
+    "github_repository": "khj1212k/pro-recsys-finalproject-recsys-01",
+    "github_ref": "eval/sim-ope-validation",
+    "runner": {
+      "python": "3.11.17",
+      "numpy": "2.4.6",
+      "kiwipiepy": "0.23.2",
+      "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39"
+    },
+    "command": "python -m sim.ope_validation --runs-dir out/runs --out out/ope_validation.json --workers 4 --prereg-commit e813c4ff2c2554978b8857789fc23d78bda735be",
+    "started_utc": "2026-10-06T01:36:32+00:00",
+    "label": "[SIM] 시뮬레이터 안의 값. 추천 정확도나 서비스 클릭률이 아니다 (ADR 0019, ADR 0025 A1)",
+    "rule": {
+      "rel_err_max": 0.15,
+      "ess_ratio_min": 0.05,
+      "coverage_min": 0.9,
+      "primary": "replay_position_based",
+      "fallback": "position_based_slate",
+      "bootstrap": {
+        "n": 1000,
+        "seed": 0,
+        "cluster": "user"
+      }
+    },
+    "finished_utc": "2026-10-06T01:40:43+00:00",
+    "runs": {
+      "A_m2_log_targets_default_u300_d7_s0": {
+        "wall_seconds": 66.9,
+        "requests": 8087,
+        "clicks": 3015,
+        "clicks_unjoined": 0,
+        "sources": {
+          "cold_start_onboarding": 40,
+          "realtime": 8047
+        },
+        "fallbacks": {},
+        "driver_error_rate": 0.0,
+        "click_ack_rate": 1.0,
+        "onboarding_failures": 0
+      },
+      "A_m2_log_targets_default_u300_d7_s1": {
+        "wall_seconds": 67.4,
+        "requests": 8143,
+        "clicks": 3029,
+        "clicks_unjoined": 0,
+        "sources": {
+          "cold_start_onboarding": 47,
+          "realtime": 8096
+        },
+        "fallbacks": {},
+        "driver_error_rate": 0.0,
+        "click_ack_rate": 1.0,
+        "onboarding_failures": 0
+      },
+      "A_m2_log_targets_default_u300_d7_s2": {
+        "wall_seconds": 64.7,
+        "requests": 7826,
+        "clicks": 3009,
+        "clicks_unjoined": 0,
+        "sources": {
+          "cold_start_onboarding": 55,
+          "realtime": 7771
+        },
+        "fallbacks": {},
+        "driver_error_rate": 0.0,
+        "click_ack_rate": 1.0,
+        "onboarding_failures": 0
+      },
+      "A_m4_log_targets_default_u300_d7_s0": {
+        "wall_seconds": 64.7,
+        "requests": 8017,
+        "clicks": 2878,
+        "clicks_unjoined": 0,
+        "sources": {
+          "cold_start_onboarding": 47,
+          "realtime": 7970
+        },
+        "fallbacks": {},
+        "driver_error_rate": 0.0,
+        "click_ack_rate": 1.0,
+        "onboarding_failures": 0
+      },
+      "A_m4_log_targets_default_u300_d7_s1": {
+        "wall_seconds": 65.2,
+        "requests": 8141,
+        "clicks": 2992,
+        "clicks_unjoined": 0,
+        "sources": {
+          "cold_start_onboarding": 48,
+          "realtime": 8093
+        },
+        "fallbacks": {},
+        "driver_error_rate": 0.0,
+        "click_ack_rate": 1.0,
+        "onboarding_failures": 0
+      },
+      "A_m4_log_targets_default_u300_d7_s2": {
+        "wall_seconds": 61.8,
+        "requests": 7737,
+        "clicks": 2855,
+        "clicks_unjoined": 0,
+        "sources": {
+          "cold_start_onboarding": 56,
+          "realtime": 7681
+        },
+        "fallbacks": {},
+        "driver_error_rate": 0.0,
+        "click_ack_rate": 1.0,
+        "onboarding_failures": 0
+      },
+      "random_m0_log_default_u300_d7_s0": {
+        "wall_seconds": 44.6,
+        "requests": 6857,
+        "clicks": 1309,
+        "clicks_unjoined": 0,
+        "sources": {
+          "cold_start_onboarding": 67,
+          "realtime": 6790
+        },
+        "fallbacks": {},
+        "driver_error_rate": 0.0,
+        "click_ack_rate": 1.0,
+        "onboarding_failures": 0
+      },
+      "random_m0_log_default_u300_d7_s1": {
+        "wall_seconds": 41.9,
+        "requests": 6946,
+        "clicks": 1372,
+        "clicks_unjoined": 0,
+        "sources": {
+          "cold_start_onboarding": 55,
+          "realtime": 6891
+        },
+        "fallbacks": {},
+        "driver_error_rate": 0.0,
+        "click_ack_rate": 1.0,
+        "onboarding_failures": 0
+      },
+      "random_m0_log_default_u300_d7_s2": {
+        "wall_seconds": 39.6,
+        "requests": 6647,
+        "clicks": 1322,
+        "clicks_unjoined": 0,
+        "sources": {
+          "cold_start_onboarding": 69,
+          "realtime": 6578
+        },
+        "fallbacks": {},
+        "driver_error_rate": 0.0,
+        "click_ack_rate": 1.0,
+        "onboarding_failures": 0
+      },
+      "reactive_m0_log_default_u300_d7_s0": {
+        "wall_seconds": 55.5,
+        "requests": 8379,
+        "clicks": 3493,
+        "clicks_unjoined": 0,
+        "sources": {
+          "cold_start_onboarding": 48,
+          "realtime": 8331
+        },
+        "fallbacks": {},
+        "driver_error_rate": 0.0,
+        "click_ack_rate": 1.0,
+        "onboarding_failures": 0
+      },
+      "reactive_m0_log_default_u300_d7_s1": {
+        "wall_seconds": 56.6,
+        "requests": 8543,
+        "clicks": 3607,
+        "clicks_unjoined": 0,
+        "sources": {
+          "cold_start_onboarding": 43,
+          "realtime": 8500
+        },
+        "fallbacks": {},
+        "driver_error_rate": 0.0,
+        "click_ack_rate": 1.0,
+        "onboarding_failures": 0
+      },
+      "reactive_m0_log_default_u300_d7_s2": {
+        "wall_seconds": 54.2,
+        "requests": 8081,
+        "clicks": 3410,
+        "clicks_unjoined": 0,
+        "sources": {
+          "cold_start_onboarding": 54,
+          "realtime": 8027
+        },
+        "fallbacks": {},
+        "driver_error_rate": 0.0,
+        "click_ack_rate": 1.0,
+        "onboarding_failures": 0
+      },
+      "shadow_recency_m0_log_default_u300_d7_s0": {
+        "wall_seconds": 55.4,
+        "requests": 8371,
+        "clicks": 3248,
+        "clicks_unjoined": 0,
+        "sources": {
+          "cold_start_onboarding": 51,
+          "realtime": 8320
+        },
+        "fallbacks": {},
+        "driver_error_rate": 0.0,
+        "click_ack_rate": 1.0,
+        "onboarding_failures": 0
+      },
+      "shadow_recency_m0_log_default_u300_d7_s1": {
+        "wall_seconds": 54.0,
+        "requests": 8595,
+        "clicks": 3522,
+        "clicks_unjoined": 0,
+        "sources": {
+          "cold_start_onboarding": 48,
+          "realtime": 8547
+        },
+        "fallbacks": {},
+        "driver_error_rate": 0.0,
+        "click_ack_rate": 1.0,
+        "onboarding_failures": 0
+      },
+      "shadow_recency_m0_log_default_u300_d7_s2": {
+        "wall_seconds": 51.2,
+        "requests": 8117,
+        "clicks": 3277,
+        "clicks_unjoined": 0,
+        "sources": {
+          "cold_start_onboarding": 54,
+          "realtime": 8063
+        },
+        "fallbacks": {},
+        "driver_error_rate": 0.0,
+        "click_ack_rate": 1.0,
+        "onboarding_failures": 0
+      }
+    }
+  },
+  "explore_slots_2": {
+    "explore_slots": 2,
+    "policy_a": {
+      "0": {
+        "requests": 8087,
+        "requests_analyzed": 8087,
+        "requests_excluded": 0,
+        "slots": 161740,
+        "explore_slots": 16174,
+        "requests_by_explore_slots": {
+          "2": 8087
+        },
+        "ctr": 0.018641028811673056,
+        "ctr_explore_slots": 0.005749969086187709,
+        "ctr_deterministic_slots": 0.020073368781171427,
+        "clicks": 3015,
+        "clicks_on_explore_slots": 93,
+        "click_model_expected_ctr": 0.018582845240618893,
+        "eta_hat": 0.752,
+        "simulator_eta": {
+          "request_weighted_mean": 0.9045237305328266,
+          "min": 0.30531731859103217,
+          "max": 2.1746572814703087
+        },
+        "explore_position_clicks": [
+          14,
+          13,
+          11,
+          5,
+          7,
+          6,
+          5,
+          4,
+          4,
+          6,
+          3,
+          3,
+          1,
+          2,
+          0,
+          2,
+          1,
+          1,
+          1,
+          4
+        ],
+        "explore_position_slots": [
+          803,
+          800,
+          789,
+          817,
+          800,
+          824,
+          809,
+          783,
+          865,
+          872,
+          837,
+          801,
+          778,
+          772,
+          796,
+          780,
+          840,
+          845,
+          785,
+          778
+        ],
+        "explore_pool_size": {
+          "mean": 93.74007666625448,
+          "min": 57.0,
+          "max": 112.0
+        },
+        "eligible_count": {
+          "mean": 111.74007666625448,
+          "min": 75.0,
+          "max": 130.0
+        },
+        "cache_hits": 15,
+        "shadow_scored_slot_share": 1.0,
+        "driver": {
+          "error_rate": 0.0,
+          "click_ack_rate": 1.0,
+          "n_users_onboarded": 300,
+          "n_onboarding_failures": 0,
+          "reactivity": {
+            "n_after_click_pairs": 2406,
+            "after_click_jaccard_mean": 0.5476672285385796,
+            "after_click_identical_rate": 0.0,
+            "similar_share_before_click": 0.7845714747522728,
+            "similar_share_after_click": 0.8142560266001663,
+            "similar_share_lift": 0.029684551847893426
+          },
+          "serving": {
+            "n_views": 8087,
+            "empty_rate": 0.0,
+            "source_counts": {
+              "realtime": 8047,
+              "cold_start_onboarding": 40
+            },
+            "fallback_rate": 0.0
+          },
+          "cold_start": {
+            "n_late_joiners": 30,
+            "n_late_joiners_with_views": 30,
+            "first_view_coverage": 1.0,
+            "first_view_onboarding_category_share": 0.8966666666666666,
+            "views_until_nonempty_median": 1.0,
+            "never_nonempty": 0
+          }
+        },
+        "counters": {
+          "cache.hit": 15,
+          "cache.miss": 8072,
+          "explore.requests": 8087,
+          "explore.slots": 16174,
+          "fatigue.items": 130973,
+          "fatigue.requests_with_fatigued": 6838,
+          "impressions.logged": 161740,
+          "requests": 8087,
+          "requests.logged": 8087,
+          "shadow.scored": 8072,
+          "source.cold_start_onboarding": 40,
+          "source.realtime": 8047
+        }
+      },
+      "1": {
+        "requests": 8143,
+        "requests_analyzed": 8143,
+        "requests_excluded": 0,
+        "slots": 162860,
+        "explore_slots": 16286,
+        "requests_by_explore_slots": {
+          "2": 8143
+        },
+        "ctr": 0.01859879651234189,
+        "ctr_explore_slots": 0.007798108805108683,
+        "ctr_deterministic_slots": 0.01979887292425669,
+        "clicks": 3029,
+        "clicks_on_explore_slots": 127,
+        "click_model_expected_ctr": 0.019040424771527134,
+        "eta_hat": 0.765,
+        "simulator_eta": {
+          "request_weighted_mean": 0.9075020463087593,
+          "min": 0.39935008382709586,
+          "max": 2.1428772365076942
+        },
+        "explore_position_clicks": [
+          23,
+          17,
+          14,
+          8,
+          8,
+          3,
+          3,
+          8,
+          6,
+          4,
+          3,
+          1,
+          2,
+          4,
+          8,
+          3,
+          4,
+          3,
+          2,
+          3
+        ],
+        "explore_position_slots": [
+          739,
+          817,
+          836,
+          831,
+          860,
+          801,
+          781,
+          854,
+          835,
+          847,
+          804,
+          806,
+          804,
+          775,
+          852,
+          822,
+          801,
+          778,
+          813,
+          830
+        ],
+        "explore_pool_size": {
+          "mean": 92.94277293380817,
+          "min": 55.0,
+          "max": 108.0
+        },
+        "eligible_count": {
+          "mean": 110.94277293380817,
+          "min": 73.0,
+          "max": 126.0
+        },
+        "cache_hits": 18,
+        "shadow_scored_slot_share": 1.0,
+        "driver": {
+          "error_rate": 0.0,
+          "click_ack_rate": 1.0,
+          "n_users_onboarded": 300,
+          "n_onboarding_failures": 0,
+          "reactivity": {
+            "n_after_click_pairs": 2435,
+            "after_click_jaccard_mean": 0.5485728513255357,
+            "after_click_identical_rate": 0.0,
+            "similar_share_before_click": 0.8033939571721913,
+            "similar_share_after_click": 0.833593429158111,
+            "similar_share_lift": 0.030199471985919657
+          },
+          "serving": {
+            "n_views": 8143,
+            "empty_rate": 0.0,
+            "source_counts": {
+              "realtime": 8096,
+              "cold_start_onboarding": 47
+            },
+            "fallback_rate": 0.0
+          },
+          "cold_start": {
+            "n_late_joiners": 30,
+            "n_late_joiners_with_views": 30,
+            "first_view_coverage": 1.0,
+            "first_view_onboarding_category_share": 0.8866666666666666,
+            "views_until_nonempty_median": 1.0,
+            "never_nonempty": 0
+          }
+        },
+        "counters": {
+          "cache.hit": 18,
+          "cache.miss": 8125,
+          "explore.requests": 8143,
+          "explore.slots": 16286,
+          "fatigue.items": 134457,
+          "fatigue.requests_with_fatigued": 6918,
+          "impressions.logged": 162860,
+          "requests": 8143,
+          "requests.logged": 8143,
+          "shadow.scored": 8125,
+          "source.cold_start_onboarding": 47,
+          "source.realtime": 8096
+        }
+      },
+      "2": {
+        "requests": 7826,
+        "requests_analyzed": 7826,
+        "requests_excluded": 0,
+        "slots": 156520,
+        "explore_slots": 15652,
+        "requests_by_explore_slots": {
+          "2": 7826
+        },
+        "ctr": 0.0192243802708919,
+        "ctr_explore_slots": 0.006900076667518528,
+        "ctr_deterministic_slots": 0.020593747337933385,
+        "clicks": 3009,
+        "clicks_on_explore_slots": 108,
+        "click_model_expected_ctr": 0.018745863490338795,
+        "eta_hat": 0.8220000000000001,
+        "simulator_eta": {
+          "request_weighted_mean": 0.8971737398842639,
+          "min": 0.3636474935121178,
+          "max": 2.506095747364743
+        },
+        "explore_position_clicks": [
+          20,
+          17,
+          11,
+          6,
+          13,
+          2,
+          5,
+          4,
+          5,
+          1,
+          1,
+          2,
+          4,
+          2,
+          3,
+          3,
+          2,
+          2,
+          2,
+          3
+        ],
+        "explore_position_slots": [
+          774,
+          826,
+          797,
+          752,
+          777,
+          773,
+          798,
+          712,
+          766,
+          789,
+          802,
+          782,
+          816,
+          746,
+          795,
+          829,
+          779,
+          738,
+          798,
+          803
+        ],
+        "explore_pool_size": {
+          "mean": 92.26565295169947,
+          "min": 57.0,
+          "max": 111.0
+        },
+        "eligible_count": {
+          "mean": 110.26565295169947,
+          "min": 75.0,
+          "max": 129.0
+        },
+        "cache_hits": 13,
+        "shadow_scored_slot_share": 1.0,
+        "driver": {
+          "error_rate": 0.0,
+          "click_ack_rate": 1.0,
+          "n_users_onboarded": 300,
+          "n_onboarding_failures": 0,
+          "reactivity": {
+            "n_after_click_pairs": 2382,
+            "after_click_jaccard_mean": 0.5390694438886764,
+            "after_click_identical_rate": 0.0,
+            "similar_share_before_click": 0.7565659443178334,
+            "similar_share_after_click": 0.7942485306465156,
+            "similar_share_lift": 0.037682586328682155
+          },
+          "serving": {
+            "n_views": 7826,
+            "empty_rate": 0.0,
+            "source_counts": {
+              "realtime": 7771,
+              "cold_start_onboarding": 55
+            },
+            "fallback_rate": 0.0
+          },
+          "cold_start": {
+            "n_late_joiners": 30,
+            "n_late_joiners_with_views": 30,
+            "first_view_coverage": 1.0,
+            "first_view_onboarding_category_share": 0.8866666666666668,
+            "views_until_nonempty_median": 1.0,
+            "never_nonempty": 0
+          }
+        },
+        "counters": {
+          "cache.hit": 13,
+          "cache.miss": 7813,
+          "explore.requests": 7826,
+          "explore.slots": 15652,
+          "fatigue.items": 130584,
+          "fatigue.requests_with_fatigued": 6578,
+          "impressions.logged": 156520,
+          "requests": 7826,
+          "requests.logged": 7826,
+          "shadow.scored": 7813,
+          "source.cold_start_onboarding": 55,
+          "source.realtime": 7771
+        }
+      }
+    },
+    "targets": {
+      "random": {
+        "per_seed": [
+          {
+            "seed": 0,
+            "measured": {
+              "ctr": 0.009544990520635847,
+              "ci95": [
+                0.008835711680127305,
+                0.010228522521631724
+              ],
+              "clicks": 1309,
+              "slots": 137140,
+              "requests": 6857,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.009474398412581757
+            },
+            "same_context_expected_ctr": 0.007574850235074238,
+            "state_shift_rel": 0.20640568278221466,
+            "target_items_in_deterministic_slots_mean": 3.244219117101521,
+            "target_items_in_explore_pool_mean": 16.755780882898478,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.005185212154252261,
+                "ci95": [
+                  0.0023326083438208025,
+                  0.008983340605095811
+                ],
+                "n_slots": 16174,
+                "n_matched": 2973,
+                "ess": 2949.85285891581,
+                "ess_ratio": 0.18238239513514343,
+                "coverage": 0.8551904290837146,
+                "rel_err": 0.45676089011905646,
+                "rel_err_vs_same_context": 0.3154700101867502,
+                "ci_covers_measured": false
+              },
+              "replay_exploration": {
+                "value": 0.014438821077701697,
+                "ci95": [
+                  0.0,
+                  0.03722852246864497
+                ],
+                "n_slots": 16174,
+                "n_matched": 146,
+                "ess": 144.36867308781146,
+                "ess_ratio": 0.008925972121170488,
+                "coverage": 0.8307159638926672,
+                "rel_err": 0.5127119347563107,
+                "rel_err_vs_same_context": 0.9061526802001766,
+                "ci_covers_measured": true
+              },
+              "snips_slate": {
+                "value": 0.014721549796172486,
+                "ci95": [
+                  0.0003931734464265122,
+                  0.03691461013202055
+                ],
+                "n_slots": 161740,
+                "n_matched": 1392,
+                "ess": 152.000195386058,
+                "ess_ratio": 0.0009397811016820701,
+                "coverage": 0.8524686081209712,
+                "rel_err": 0.5423325737563749,
+                "rel_err_vs_same_context": 0.9434773413745527,
+                "ci_covers_measured": true
+              },
+              "position_based_slate": {
+                "value": 0.006382186581025674,
+                "ci95": [
+                  0.004032334438087429,
+                  0.009476494526345868
+                ],
+                "n_slots": 161740,
+                "n_matched": 29209,
+                "ess": 4158.206806618089,
+                "ess_ratio": 0.02570920493766594,
+                "coverage": 1.0174013849387906,
+                "rel_err": 0.33135747309254315,
+                "rel_err_vs_same_context": 0.15745046001386387,
+                "ci_covers_measured": false,
+                "ess_over_explore_slots": 0.2570920493766594
+              }
+            }
+          },
+          {
+            "seed": 1,
+            "measured": {
+              "ctr": 0.009876187733947595,
+              "ci95": [
+                0.009152565267531436,
+                0.010520643978518455
+              ],
+              "clicks": 1372,
+              "slots": 138920,
+              "requests": 6946,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.010030529739173432
+            },
+            "same_context_expected_ctr": 0.007851456744685854,
+            "state_shift_rel": 0.20501139142000077,
+            "target_items_in_deterministic_slots_mean": 3.265504113962913,
+            "target_items_in_explore_pool_mean": 16.734495886037088,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.01037882377610358,
+                "ci95": [
+                  0.00501940818932969,
+                  0.017091004232769883
+                ],
+                "n_slots": 16286,
+                "n_matched": 2913,
+                "ess": 2883.648236853938,
+                "ess_ratio": 0.17706301343816397,
+                "coverage": 0.8226513569937369,
+                "rel_err": 0.05089373103229544,
+                "rel_err_vs_same_context": 0.32189784820865724,
+                "ci_covers_measured": true
+              },
+              "replay_exploration": {
+                "value": 0.006482116983146495,
+                "ci95": [
+                  0.0,
+                  0.020730427768918317
+                ],
+                "n_slots": 16286,
+                "n_matched": 143,
+                "ess": 141.31472567642976,
+                "ess_ratio": 0.008677067768416416,
+                "coverage": 0.8051700847353556,
+                "rel_err": 0.34366203258111433,
+                "rel_err_vs_same_context": 0.1744058212466339,
+                "ci_covers_measured": true
+              },
+              "snips_slate": {
+                "value": 0.006954286446856315,
+                "ci95": [
+                  0.00048320635451087706,
+                  0.020819115771311687
+                ],
+                "n_slots": 162860,
+                "n_matched": 1512,
+                "ess": 149.80883718359172,
+                "ess_ratio": 0.0009198626868696532,
+                "coverage": 0.8291069076802131,
+                "rel_err": 0.2958531536462979,
+                "rel_err_vs_same_context": 0.1142680049070864,
+                "ci_covers_measured": true
+              },
+              "position_based_slate": {
+                "value": 0.011069846758079727,
+                "ci95": [
+                  0.006755940780057313,
+                  0.016506308009603596
+                ],
+                "n_slots": 162860,
+                "n_matched": 29504,
+                "ess": 4124.283287540104,
+                "ess_ratio": 0.025324102219944147,
+                "coverage": 0.9859265626918826,
+                "rel_err": 0.12086232626270828,
+                "rel_err_vs_same_context": 0.4099099209292841,
+                "ci_covers_measured": true,
+                "ess_over_explore_slots": 0.25324102219944145
+              }
+            }
+          },
+          {
+            "seed": 2,
+            "measured": {
+              "ctr": 0.009944335790582218,
+              "ci95": [
+                0.009296146293384972,
+                0.010585962874334966
+              ],
+              "clicks": 1322,
+              "slots": 132940,
+              "requests": 6647,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.00987171840621038
+            },
+            "same_context_expected_ctr": 0.007714633831636959,
+            "state_shift_rel": 0.2242182892754786,
+            "target_items_in_deterministic_slots_mean": 3.2886532072578585,
+            "target_items_in_explore_pool_mean": 16.71134679274214,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.007059310737109134,
+                "ci95": [
+                  0.002387117877359891,
+                  0.013932077918458553
+                ],
+                "n_slots": 15652,
+                "n_matched": 2858,
+                "ess": 2831.0744270834584,
+                "ess_ratio": 0.1808762092437681,
+                "coverage": 0.835644007155635,
+                "rel_err": 0.29011742103533417,
+                "rel_err_vs_same_context": 0.08494545675523951,
+                "ci_covers_measured": true
+              },
+              "replay_exploration": {
+                "value": 0.0,
+                "ci95": [
+                  0.0,
+                  0.0
+                ],
+                "n_slots": 15652,
+                "n_matched": 121,
+                "ess": 119.55890941392164,
+                "ess_ratio": 0.00763857075223113,
+                "coverage": 0.6996549961666241,
+                "rel_err": 1.0,
+                "rel_err_vs_same_context": 1.0,
+                "ci_covers_measured": false
+              },
+              "snips_slate": {
+                "value": 0.00047966553986443554,
+                "ci95": [
+                  0.0002461689850409094,
+                  0.0007644050192709622
+                ],
+                "n_slots": 156520,
+                "n_matched": 1469,
+                "ess": 127.94381603077832,
+                "ess_ratio": 0.0008174279071733857,
+                "coverage": 0.7238610771587201,
+                "rel_err": 0.9517649494178684,
+                "rel_err_vs_same_context": 0.9378239394982851,
+                "ci_covers_measured": false
+              },
+              "position_based_slate": {
+                "value": 0.008268151792955945,
+                "ci95": [
+                  0.0044970056091726525,
+                  0.014089469551680788
+                ],
+                "n_slots": 156520,
+                "n_matched": 28595,
+                "ess": 4037.6573148619086,
+                "ess_ratio": 0.025796430583068672,
+                "coverage": 1.000076667518528,
+                "rel_err": 0.168556657068409,
+                "rel_err_vs_same_context": 0.07174909054647066,
+                "ci_covers_measured": true,
+                "ess_over_explore_slots": 0.25796430583068675
+              }
+            }
+          }
+        ],
+        "verdict": {
+          "primary_coverage_mean": 0.8378285977443621,
+          "explore_support_short": true,
+          "verdict_estimator": "position_based_slate",
+          "rel_err_by_seed": [
+            0.33135747309254315,
+            0.12086232626270828,
+            0.168556657068409
+          ],
+          "rel_err_mean": 0.20692548547455347,
+          "rel_err_ok": false,
+          "ess_ratio_by_seed": [
+            0.02570920493766594,
+            0.025324102219944147,
+            0.025796430583068672
+          ],
+          "ess_ratio_min": 0.025324102219944147,
+          "ess_ok": false,
+          "passed": false,
+          "summary_by_estimator": {
+            "replay_position_based": {
+              "rel_err_mean": 0.2659240140622287,
+              "rel_err_vs_same_context_mean": 0.24077110505021562,
+              "coverage_mean": 0.8378285977443621,
+              "ess_ratio_min": 0.17706301343816397
+            },
+            "replay_exploration": {
+              "rel_err_mean": 0.6187913224458084,
+              "rel_err_vs_same_context_mean": 0.6935195004822701,
+              "coverage_mean": 0.7785136815982155,
+              "ess_ratio_min": 0.00763857075223113
+            },
+            "snips_slate": {
+              "rel_err_mean": 0.596650225606847,
+              "rel_err_vs_same_context_mean": 0.6651897619266415,
+              "coverage_mean": 0.8018121976533016,
+              "ess_ratio_min": 0.0008174279071733857
+            },
+            "position_based_slate": {
+              "rel_err_mean": 0.20692548547455347,
+              "rel_err_vs_same_context_mean": 0.21303649049653953,
+              "coverage_mean": 1.0011348717164004,
+              "ess_ratio_min": 0.025324102219944147
+            }
+          },
+          "state_shift_rel_mean": 0.21187845449256468
+        }
+      },
+      "reactive": {
+        "per_seed": [
+          {
+            "seed": 0,
+            "measured": {
+              "ctr": 0.020843776106934,
+              "ci95": [
+                0.019598898219862722,
+                0.022145913523916615
+              ],
+              "clicks": 3493,
+              "slots": 167580,
+              "requests": 8379,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.020811604961635442
+            },
+            "same_context_expected_ctr": 0.022823525495948134,
+            "state_shift_rel": 0.09498036146893454,
+            "target_items_in_deterministic_slots_mean": 13.575862495362928,
+            "target_items_in_explore_pool_mean": 6.424137504637072,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.005784521607048045,
+                "ci95": [
+                  0.0024711824134053414,
+                  0.009859735940096698
+                ],
+                "n_slots": 16174,
+                "n_matched": 1084,
+                "ess": 1075.4775431484036,
+                "ess_ratio": 0.06649422178486482,
+                "coverage": 0.3109867688883393,
+                "rel_err": 0.7224820695937271,
+                "rel_err_vs_same_context": 0.7465544221870993,
+                "ci_covers_measured": false
+              },
+              "replay_exploration": {
+                "value": 0.0,
+                "ci95": [
+                  0.0,
+                  0.0
+                ],
+                "n_slots": 16174,
+                "n_matched": 72,
+                "ess": 71.34380336514315,
+                "ess_ratio": 0.004411017890759437,
+                "coverage": 0.41684184493631754,
+                "rel_err": 1.0,
+                "rel_err_vs_same_context": 1.0,
+                "ci_covers_measured": false
+              },
+              "snips_slate": {
+                "value": 0.013863054043777948,
+                "ci95": [
+                  0.011482330867073752,
+                  0.016930184166274998
+                ],
+                "n_slots": 161740,
+                "n_matched": 13667,
+                "ess": 160.7576353861844,
+                "ess_ratio": 0.0009939262729453716,
+                "coverage": 0.6276127846124445,
+                "rel_err": 0.33490678595582346,
+                "rel_err_vs_same_context": 0.39259804335491205,
+                "ci_covers_measured": false
+              },
+              "position_based_slate": {
+                "value": 0.02099428639039448,
+                "ci95": [
+                  0.01916290715108165,
+                  0.02299535700168402
+                ],
+                "n_slots": 161740,
+                "n_matched": 110872,
+                "ess": 10408.424899628242,
+                "ess_ratio": 0.06435281871910624,
+                "coverage": 0.9897798936564857,
+                "rel_err": 0.007220874120328454,
+                "rel_err_vs_same_context": 0.0801470879631807,
+                "ci_covers_measured": true,
+                "ess_over_explore_slots": 0.6435281871910623
+              }
+            }
+          },
+          {
+            "seed": 1,
+            "measured": {
+              "ctr": 0.021110850989113895,
+              "ci95": [
+                0.019729770876713685,
+                0.022344343449424285
+              ],
+              "clicks": 3607,
+              "slots": 170860,
+              "requests": 8543,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.020999882482084783
+            },
+            "same_context_expected_ctr": 0.023812888817354615,
+            "state_shift_rel": 0.1279928426207955,
+            "target_items_in_deterministic_slots_mean": 13.567481272258382,
+            "target_items_in_explore_pool_mean": 6.432518727741618,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.008225950043184226,
+                "ci95": [
+                  0.0036192397720994987,
+                  0.01404271561955889
+                ],
+                "n_slots": 16286,
+                "n_matched": 1150,
+                "ess": 1138.4733614856043,
+                "ess_ratio": 0.06990503263450842,
+                "coverage": 0.32339739653690286,
+                "rel_err": 0.6103449336350272,
+                "rel_err_vs_same_context": 0.6545589194877848,
+                "ci_covers_measured": false
+              },
+              "replay_exploration": {
+                "value": 0.016321291032459193,
+                "ci95": [
+                  0.0,
+                  0.05214093232015342
+                ],
+                "n_slots": 16286,
+                "n_matched": 60,
+                "ess": 59.27587457962966,
+                "ess_ratio": 0.003639682830629354,
+                "coverage": 0.33482745916738305,
+                "rel_err": 0.22687668816025017,
+                "rel_err_vs_same_context": 0.31460264407045035,
+                "ci_covers_measured": true
+              },
+              "snips_slate": {
+                "value": 0.025578483640309874,
+                "ci95": [
+                  0.013636902293143505,
+                  0.047031873164712835
+                ],
+                "n_slots": 162860,
+                "n_matched": 14092,
+                "ess": 159.69305933814474,
+                "ess_ratio": 0.0009805542142830943,
+                "coverage": 0.5521170784102768,
+                "rel_err": 0.21162731211071384,
+                "rel_err_vs_same_context": 0.07414450369702767,
+                "ci_covers_measured": true
+              },
+              "position_based_slate": {
+                "value": 0.021876500102707527,
+                "ci95": [
+                  0.019716842494472177,
+                  0.024120867300091123
+                ],
+                "n_slots": 162860,
+                "n_matched": 111630,
+                "ess": 10450.295524048746,
+                "ess_ratio": 0.06416735554493888,
+                "coverage": 1.001771460149822,
+                "rel_err": 0.036268036470365354,
+                "rel_err_vs_same_context": 0.08131683348035734,
+                "ci_covers_measured": true,
+                "ess_over_explore_slots": 0.6416735554493889
+              }
+            }
+          },
+          {
+            "seed": 2,
+            "measured": {
+              "ctr": 0.021098873901744832,
+              "ci95": [
+                0.019794806251138997,
+                0.022321194010646285
+              ],
+              "clicks": 3410,
+              "slots": 161620,
+              "requests": 8081,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.020512746272833646
+            },
+            "same_context_expected_ctr": 0.023488854932883295,
+            "state_shift_rel": 0.11327528863712562,
+            "target_items_in_deterministic_slots_mean": 13.01482238691541,
+            "target_items_in_explore_pool_mean": 6.9851776130845895,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.011596075864464322,
+                "ci95": [
+                  0.006818456558540148,
+                  0.01730084369469209
+                ],
+                "n_slots": 15652,
+                "n_matched": 1231,
+                "ess": 1218.4487099394257,
+                "ess_ratio": 0.0778461992038989,
+                "coverage": 0.35757091745463837,
+                "rel_err": 0.4503936125470018,
+                "rel_err_vs_same_context": 0.5063158294604494,
+                "ci_covers_measured": false
+              },
+              "replay_exploration": {
+                "value": 0.0,
+                "ci95": [
+                  0.0,
+                  0.0
+                ],
+                "n_slots": 15652,
+                "n_matched": 60,
+                "ess": 59.45491325597291,
+                "ess_ratio": 0.003798550553026636,
+                "coverage": 0.3504983388704319,
+                "rel_err": 1.0,
+                "rel_err_vs_same_context": 1.0,
+                "ci_covers_measured": false
+              },
+              "snips_slate": {
+                "value": 0.01871650857693771,
+                "ci95": [
+                  0.014070151923056641,
+                  0.02507361219811187
+                ],
+                "n_slots": 156520,
+                "n_matched": 12502,
+                "ess": 145.6442480193575,
+                "ess_ratio": 0.0009305152569598613,
+                "coverage": 0.551137330393458,
+                "rel_err": 0.11291433542384964,
+                "rel_err_vs_same_context": 0.20317492570761825,
+                "ci_covers_measured": true
+              },
+              "position_based_slate": {
+                "value": 0.024264894372353955,
+                "ci95": [
+                  0.02187900659005578,
+                  0.026513565709535832
+                ],
+                "n_slots": 156520,
+                "n_matched": 103085,
+                "ess": 9319.613303744014,
+                "ess_ratio": 0.05954263546986976,
+                "coverage": 1.0083120368004088,
+                "rel_err": 0.1500563719823597,
+                "rel_err_vs_same_context": 0.033038623708482345,
+                "ci_covers_measured": false,
+                "ess_over_explore_slots": 0.5954263546986975
+              }
+            }
+          }
+        ],
+        "verdict": {
+          "primary_coverage_mean": 0.33065169429329355,
+          "explore_support_short": true,
+          "verdict_estimator": "position_based_slate",
+          "rel_err_by_seed": [
+            0.007220874120328454,
+            0.036268036470365354,
+            0.1500563719823597
+          ],
+          "rel_err_mean": 0.06451509419101782,
+          "rel_err_ok": true,
+          "ess_ratio_by_seed": [
+            0.06435281871910624,
+            0.06416735554493888,
+            0.05954263546986976
+          ],
+          "ess_ratio_min": 0.05954263546986976,
+          "ess_ok": true,
+          "passed": true,
+          "summary_by_estimator": {
+            "replay_position_based": {
+              "rel_err_mean": 0.594406871925252,
+              "rel_err_vs_same_context_mean": 0.6358097237117778,
+              "coverage_mean": 0.33065169429329355,
+              "ess_ratio_min": 0.06649422178486482
+            },
+            "replay_exploration": {
+              "rel_err_mean": 0.7422922293867501,
+              "rel_err_vs_same_context_mean": 0.77153421469015,
+              "coverage_mean": 0.36738921432471083,
+              "ess_ratio_min": 0.003639682830629354
+            },
+            "snips_slate": {
+              "rel_err_mean": 0.21981614449679565,
+              "rel_err_vs_same_context_mean": 0.223305824253186,
+              "coverage_mean": 0.5769557311387264,
+              "ess_ratio_min": 0.0009305152569598613
+            },
+            "position_based_slate": {
+              "rel_err_mean": 0.06451509419101782,
+              "rel_err_vs_same_context_mean": 0.06483418171734014,
+              "coverage_mean": 0.999954463535572,
+              "ess_ratio_min": 0.05954263546986976
+            }
+          },
+          "state_shift_rel_mean": 0.11208283090895188
+        }
+      },
+      "shadow_recency": {
+        "per_seed": [
+          {
+            "seed": 0,
+            "measured": {
+              "ctr": 0.019400310596105603,
+              "ci95": [
+                0.018491900147015856,
+                0.02034281547741638
+              ],
+              "clicks": 3248,
+              "slots": 167420,
+              "requests": 8371,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.01916582039745565
+            },
+            "same_context_expected_ctr": 0.02274103546781856,
+            "state_shift_rel": 0.17219955604131265,
+            "target_items_in_deterministic_slots_mean": 7.075429701990849,
+            "target_items_in_explore_pool_mean": 12.92457029800915,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.007441339213802447,
+                "ci95": [
+                  0.0032152329104711335,
+                  0.01347577420176469
+                ],
+                "n_slots": 16174,
+                "n_matched": 2260,
+                "ess": 2241.4484924524018,
+                "ess_ratio": 0.13858343591272423,
+                "coverage": 0.6508594039816991,
+                "rel_err": 0.6164319546875598,
+                "rel_err_vs_same_context": 0.6727792265953377,
+                "ci_covers_measured": false
+              },
+              "replay_exploration": {
+                "value": 0.009694866823145219,
+                "ci95": [
+                  0.0,
+                  0.032388809178725185
+                ],
+                "n_slots": 16174,
+                "n_matched": 104,
+                "ess": 103.35610021258847,
+                "ess_ratio": 0.006390262162272071,
+                "coverage": 0.6058488932855199,
+                "rel_err": 0.5002725974350454,
+                "rel_err_vs_same_context": 0.5736840199354739,
+                "ci_covers_measured": true
+              },
+              "snips_slate": {
+                "value": 0.015534852629274086,
+                "ci95": [
+                  0.005616678123395326,
+                  0.03620755833168176
+                ],
+                "n_slots": 161740,
+                "n_matched": 4325,
+                "ess": 125.47830237809555,
+                "ess_ratio": 0.0007758025372702829,
+                "coverage": 0.6681557933693714,
+                "rel_err": 0.19924722069178957,
+                "rel_err_vs_same_context": 0.3168801547643745,
+                "ci_covers_measured": true
+              },
+              "position_based_slate": {
+                "value": 0.01929662201167769,
+                "ci95": [
+                  0.016193842272029756,
+                  0.023306067541360696
+                ],
+                "n_slots": 161740,
+                "n_matched": 59479,
+                "ess": 5279.223665041603,
+                "ess_ratio": 0.03264018588501053,
+                "coverage": 1.0046308890812414,
+                "rel_err": 0.005344686824175265,
+                "rel_err_vs_same_context": 0.15146247236697521,
+                "ci_covers_measured": true,
+                "ess_over_explore_slots": 0.3264018588501053
+              }
+            }
+          },
+          {
+            "seed": 1,
+            "measured": {
+              "ctr": 0.020488656195462477,
+              "ci95": [
+                0.019400698996768377,
+                0.02141320141004661
+              ],
+              "clicks": 3522,
+              "slots": 171900,
+              "requests": 8595,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.020001536997795603
+            },
+            "same_context_expected_ctr": 0.023839634072009435,
+            "state_shift_rel": 0.16355283843793927,
+            "target_items_in_deterministic_slots_mean": 7.073437308117401,
+            "target_items_in_explore_pool_mean": 12.926562691882598,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.01041781893340111,
+                "ci95": [
+                  0.006436385289744454,
+                  0.015138876758653967
+                ],
+                "n_slots": 16286,
+                "n_matched": 2312,
+                "ess": 2289.5762120192476,
+                "ess_ratio": 0.1405855466056274,
+                "coverage": 0.6541293135208154,
+                "rel_err": 0.4915323467769304,
+                "rel_err_vs_same_context": 0.5630042431887464,
+                "ci_covers_measured": false
+              },
+              "replay_exploration": {
+                "value": 0.008773584905660377,
+                "ci95": [
+                  0.0,
+                  0.02907719896798664
+                ],
+                "n_slots": 16286,
+                "n_matched": 115,
+                "ess": 113.86160687142029,
+                "ess_ratio": 0.006991379520534219,
+                "coverage": 0.6508657742846616,
+                "rel_err": 0.571783292083186,
+                "rel_err_vs_same_context": 0.6319748499847315,
+                "ci_covers_measured": true
+              },
+              "snips_slate": {
+                "value": 0.015526415708292938,
+                "ci95": [
+                  0.006409928054515855,
+                  0.03450843091489771
+                ],
+                "n_slots": 162860,
+                "n_matched": 4539,
+                "ess": 137.70090604390865,
+                "ess_ratio": 0.0008455170455846042,
+                "coverage": 0.7164513349178001,
+                "rel_err": 0.24219453144362402,
+                "rel_err_vs_same_context": 0.3487141765098317,
+                "ci_covers_measured": true
+              },
+              "position_based_slate": {
+                "value": 0.02236353482715315,
+                "ci95": [
+                  0.01952243120642568,
+                  0.025669958780883233
+                ],
+                "n_slots": 162860,
+                "n_matched": 59911,
+                "ess": 5372.298165476319,
+                "ess_ratio": 0.03298721702981898,
+                "coverage": 1.0078011789266854,
+                "rel_err": 0.09150813083123979,
+                "rel_err_vs_same_context": 0.061917865030881584,
+                "ci_covers_measured": true,
+                "ess_over_explore_slots": 0.32987217029818977
+              }
+            }
+          },
+          {
+            "seed": 2,
+            "measured": {
+              "ctr": 0.020186029321177777,
+              "ci95": [
+                0.019218092217187274,
+                0.02112910548382761
+              ],
+              "clicks": 3277,
+              "slots": 162340,
+              "requests": 8117,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.019404941482511692
+            },
+            "same_context_expected_ctr": 0.02274582867811361,
+            "state_shift_rel": 0.12681044479858503,
+            "target_items_in_deterministic_slots_mean": 7.400460005111168,
+            "target_items_in_explore_pool_mean": 12.599539994888833,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.010164954778336042,
+                "ci95": [
+                  0.005006303016655983,
+                  0.016204679315944444
+                ],
+                "n_slots": 15652,
+                "n_matched": 2146,
+                "ess": 2126.048110013945,
+                "ess_ratio": 0.13583236072156563,
+                "coverage": 0.6285586506516739,
+                "rel_err": 0.49643614320565366,
+                "rel_err_vs_same_context": 0.553106860946468,
+                "ci_covers_measured": false
+              },
+              "replay_exploration": {
+                "value": 0.009567430025445293,
+                "ci95": [
+                  0.0,
+                  0.030267497131606435
+                ],
+                "n_slots": 15652,
+                "n_matched": 107,
+                "ess": 106.04556315399192,
+                "ess_ratio": 0.006775208481599279,
+                "coverage": 0.6277153079478661,
+                "rel_err": 0.5260370490293595,
+                "rel_err_vs_same_context": 0.579376501914339,
+                "ci_covers_measured": true
+              },
+              "snips_slate": {
+                "value": 0.01572304425337644,
+                "ci95": [
+                  0.005894706135677427,
+                  0.03482252621349431
+                ],
+                "n_slots": 156520,
+                "n_matched": 4500,
+                "ess": 129.4595505910356,
+                "ess_ratio": 0.0008271118744635548,
+                "coverage": 0.6942083203975595,
+                "rel_err": 0.2210927665263561,
+                "rel_err_vs_same_context": 0.30875043174375977,
+                "ci_covers_measured": true
+              },
+              "position_based_slate": {
+                "value": 0.022144683767056493,
+                "ci95": [
+                  0.018611076994525126,
+                  0.02563217071673716
+                ],
+                "n_slots": 156520,
+                "n_matched": 60062,
+                "ess": 5298.568822812697,
+                "ess_ratio": 0.03385234361623241,
+                "coverage": 0.9985816509072323,
+                "rel_err": 0.09703019918948759,
+                "rel_err_vs_same_context": 0.026428797981563428,
+                "ci_covers_measured": true,
+                "ess_over_explore_slots": 0.3385234361623241
+              }
+            }
+          }
+        ],
+        "verdict": {
+          "primary_coverage_mean": 0.6445157893847294,
+          "explore_support_short": true,
+          "verdict_estimator": "position_based_slate",
+          "rel_err_by_seed": [
+            0.005344686824175265,
+            0.09150813083123979,
+            0.09703019918948759
+          ],
+          "rel_err_mean": 0.06462767228163423,
+          "rel_err_ok": true,
+          "ess_ratio_by_seed": [
+            0.03264018588501053,
+            0.03298721702981898,
+            0.03385234361623241
+          ],
+          "ess_ratio_min": 0.03264018588501053,
+          "ess_ok": false,
+          "passed": false,
+          "summary_by_estimator": {
+            "replay_position_based": {
+              "rel_err_mean": 0.5348001482233813,
+              "rel_err_vs_same_context_mean": 0.596296776910184,
+              "coverage_mean": 0.6445157893847294,
+              "ess_ratio_min": 0.13583236072156563
+            },
+            "replay_exploration": {
+              "rel_err_mean": 0.5326976461825302,
+              "rel_err_vs_same_context_mean": 0.5950117906115148,
+              "coverage_mean": 0.6281433251726826,
+              "ess_ratio_min": 0.006390262162272071
+            },
+            "snips_slate": {
+              "rel_err_mean": 0.22084483955392323,
+              "rel_err_vs_same_context_mean": 0.32478158767265536,
+              "coverage_mean": 0.6929384828949102,
+              "ess_ratio_min": 0.0007758025372702829
+            },
+            "position_based_slate": {
+              "rel_err_mean": 0.06462767228163423,
+              "rel_err_vs_same_context_mean": 0.07993637845980674,
+              "coverage_mean": 1.0036712396383864,
+              "ess_ratio_min": 0.03264018588501053
+            }
+          },
+          "state_shift_rel_mean": 0.1541876130926123
+        }
+      }
+    },
+    "passed": false
+  },
+  "explore_slots_4_retry": {
+    "explore_slots": 4,
+    "policy_a": {
+      "0": {
+        "requests": 8017,
+        "requests_analyzed": 8017,
+        "requests_excluded": 0,
+        "slots": 160340,
+        "explore_slots": 32068,
+        "requests_by_explore_slots": {
+          "4": 8017
+        },
+        "ctr": 0.017949357615067982,
+        "ctr_explore_slots": 0.005987277036297867,
+        "ctr_deterministic_slots": 0.02093987775976051,
+        "clicks": 2878,
+        "clicks_on_explore_slots": 192,
+        "click_model_expected_ctr": 0.017793836156519062,
+        "eta_hat": 0.9470000000000001,
+        "simulator_eta": {
+          "request_weighted_mean": 0.9021919223505341,
+          "min": 0.30531731859103217,
+          "max": 2.1746572814703087
+        },
+        "explore_position_clicks": [
+          55,
+          18,
+          22,
+          13,
+          8,
+          8,
+          8,
+          3,
+          9,
+          6,
+          5,
+          9,
+          5,
+          3,
+          3,
+          2,
+          2,
+          4,
+          1,
+          8
+        ],
+        "explore_position_slots": [
+          1597,
+          1589,
+          1600,
+          1590,
+          1601,
+          1641,
+          1564,
+          1653,
+          1651,
+          1649,
+          1616,
+          1593,
+          1609,
+          1599,
+          1604,
+          1649,
+          1589,
+          1504,
+          1578,
+          1592
+        ],
+        "explore_pool_size": {
+          "mean": 95.94436821753773,
+          "min": 60.0,
+          "max": 115.0
+        },
+        "eligible_count": {
+          "mean": 111.94436821753773,
+          "min": 76.0,
+          "max": 131.0
+        },
+        "cache_hits": 15,
+        "shadow_scored_slot_share": 1.0,
+        "driver": {
+          "error_rate": 0.0,
+          "click_ack_rate": 1.0,
+          "n_users_onboarded": 300,
+          "n_onboarding_failures": 0,
+          "reactivity": {
+            "n_after_click_pairs": 2336,
+            "after_click_jaccard_mean": 0.43969940087844267,
+            "after_click_identical_rate": 0.0,
+            "similar_share_before_click": 0.7422410102739726,
+            "similar_share_after_click": 0.7794520547945206,
+            "similar_share_lift": 0.03721104452054802
+          },
+          "serving": {
+            "n_views": 8017,
+            "empty_rate": 0.0,
+            "source_counts": {
+              "realtime": 7970,
+              "cold_start_onboarding": 47
+            },
+            "fallback_rate": 0.0
+          },
+          "cold_start": {
+            "n_late_joiners": 30,
+            "n_late_joiners_with_views": 30,
+            "first_view_coverage": 1.0,
+            "first_view_onboarding_category_share": 0.8166666666666668,
+            "views_until_nonempty_median": 1.0,
+            "never_nonempty": 0
+          }
+        },
+        "counters": {
+          "cache.hit": 15,
+          "cache.miss": 8002,
+          "explore.requests": 8017,
+          "explore.slots": 32068,
+          "fatigue.items": 123163,
+          "fatigue.requests_with_fatigued": 6770,
+          "impressions.logged": 160340,
+          "requests": 8017,
+          "requests.logged": 8017,
+          "shadow.scored": 8002,
+          "source.cold_start_onboarding": 47,
+          "source.realtime": 7970
+        }
+      },
+      "1": {
+        "requests": 8141,
+        "requests_analyzed": 8141,
+        "requests_excluded": 0,
+        "slots": 162820,
+        "explore_slots": 32564,
+        "requests_by_explore_slots": {
+          "4": 8141
+        },
+        "ctr": 0.01837612086967203,
+        "ctr_explore_slots": 0.006326004176391107,
+        "ctr_deterministic_slots": 0.02138865004299226,
+        "clicks": 2992,
+        "clicks_on_explore_slots": 206,
+        "click_model_expected_ctr": 0.018184472706880533,
+        "eta_hat": 0.8280000000000001,
+        "simulator_eta": {
+          "request_weighted_mean": 0.9074697980919988,
+          "min": 0.39935008382709586,
+          "max": 2.1428772365076942
+        },
+        "explore_position_clicks": [
+          43,
+          32,
+          21,
+          11,
+          13,
+          8,
+          9,
+          5,
+          2,
+          8,
+          7,
+          5,
+          6,
+          4,
+          8,
+          3,
+          4,
+          5,
+          7,
+          5
+        ],
+        "explore_position_slots": [
+          1585,
+          1697,
+          1673,
+          1547,
+          1709,
+          1634,
+          1612,
+          1624,
+          1713,
+          1571,
+          1605,
+          1563,
+          1658,
+          1673,
+          1611,
+          1582,
+          1636,
+          1622,
+          1666,
+          1583
+        ],
+        "explore_pool_size": {
+          "mean": 94.85751136224052,
+          "min": 59.0,
+          "max": 110.0
+        },
+        "eligible_count": {
+          "mean": 110.85751136224052,
+          "min": 75.0,
+          "max": 126.0
+        },
+        "cache_hits": 19,
+        "shadow_scored_slot_share": 1.0,
+        "driver": {
+          "error_rate": 0.0,
+          "click_ack_rate": 1.0,
+          "n_users_onboarded": 300,
+          "n_onboarding_failures": 0,
+          "reactivity": {
+            "n_after_click_pairs": 2433,
+            "after_click_jaccard_mean": 0.44855594955899214,
+            "after_click_identical_rate": 0.0,
+            "similar_share_before_click": 0.7714660847213252,
+            "similar_share_after_click": 0.8024660912453762,
+            "similar_share_lift": 0.031000006524050994
+          },
+          "serving": {
+            "n_views": 8141,
+            "empty_rate": 0.0,
+            "source_counts": {
+              "realtime": 8093,
+              "cold_start_onboarding": 48
+            },
+            "fallback_rate": 0.0
+          },
+          "cold_start": {
+            "n_late_joiners": 30,
+            "n_late_joiners_with_views": 30,
+            "first_view_coverage": 1.0,
+            "first_view_onboarding_category_share": 0.8666666666666666,
+            "views_until_nonempty_median": 1.0,
+            "never_nonempty": 0
+          }
+        },
+        "counters": {
+          "cache.hit": 19,
+          "cache.miss": 8122,
+          "explore.requests": 8141,
+          "explore.slots": 32564,
+          "fatigue.items": 127238,
+          "fatigue.requests_with_fatigued": 6909,
+          "impressions.logged": 162820,
+          "requests": 8141,
+          "requests.logged": 8141,
+          "shadow.scored": 8122,
+          "source.cold_start_onboarding": 48,
+          "source.realtime": 8093
+        }
+      },
+      "2": {
+        "requests": 7737,
+        "requests_analyzed": 7737,
+        "requests_excluded": 0,
+        "slots": 154740,
+        "explore_slots": 30948,
+        "requests_by_explore_slots": {
+          "4": 7737
+        },
+        "ctr": 0.018450303735297918,
+        "ctr_explore_slots": 0.006591702210158977,
+        "ctr_deterministic_slots": 0.021414954116582653,
+        "clicks": 2855,
+        "clicks_on_explore_slots": 204,
+        "click_model_expected_ctr": 0.01794548844964218,
+        "eta_hat": 0.8200000000000001,
+        "simulator_eta": {
+          "request_weighted_mean": 0.8947881520371936,
+          "min": 0.3636474935121178,
+          "max": 2.506095747364743
+        },
+        "explore_position_clicks": [
+          48,
+          27,
+          13,
+          13,
+          9,
+          12,
+          9,
+          5,
+          4,
+          9,
+          4,
+          7,
+          10,
+          9,
+          9,
+          3,
+          3,
+          5,
+          0,
+          5
+        ],
+        "explore_position_slots": [
+          1536,
+          1585,
+          1511,
+          1528,
+          1561,
+          1588,
+          1509,
+          1546,
+          1520,
+          1565,
+          1582,
+          1545,
+          1582,
+          1537,
+          1519,
+          1534,
+          1558,
+          1533,
+          1549,
+          1560
+        ],
+        "explore_pool_size": {
+          "mean": 94.36680884063591,
+          "min": 59.0,
+          "max": 111.0
+        },
+        "eligible_count": {
+          "mean": 110.36680884063591,
+          "min": 75.0,
+          "max": 127.0
+        },
+        "cache_hits": 13,
+        "shadow_scored_slot_share": 1.0,
+        "driver": {
+          "error_rate": 0.0,
+          "click_ack_rate": 1.0,
+          "n_users_onboarded": 300,
+          "n_onboarding_failures": 0,
+          "reactivity": {
+            "n_after_click_pairs": 2293,
+            "after_click_jaccard_mean": 0.4381245205962106,
+            "after_click_identical_rate": 0.0,
+            "similar_share_before_click": 0.7217314255255816,
+            "similar_share_after_click": 0.7601831661578718,
+            "similar_share_lift": 0.03845174063229029
+          },
+          "serving": {
+            "n_views": 7737,
+            "empty_rate": 0.0,
+            "source_counts": {
+              "realtime": 7681,
+              "cold_start_onboarding": 56
+            },
+            "fallback_rate": 0.0
+          },
+          "cold_start": {
+            "n_late_joiners": 30,
+            "n_late_joiners_with_views": 30,
+            "first_view_coverage": 1.0,
+            "first_view_onboarding_category_share": 0.8300000000000001,
+            "views_until_nonempty_median": 1.0,
+            "never_nonempty": 0
+          }
+        },
+        "counters": {
+          "cache.hit": 13,
+          "cache.miss": 7724,
+          "explore.requests": 7737,
+          "explore.slots": 30948,
+          "fatigue.items": 121999,
+          "fatigue.requests_with_fatigued": 6473,
+          "impressions.logged": 154740,
+          "requests": 7737,
+          "requests.logged": 7737,
+          "shadow.scored": 7724,
+          "source.cold_start_onboarding": 56,
+          "source.realtime": 7681
+        }
+      }
+    },
+    "targets": {
+      "random": {
+        "per_seed": [
+          {
+            "seed": 0,
+            "measured": {
+              "ctr": 0.009544990520635847,
+              "ci95": [
+                0.008835711680127305,
+                0.010228522521631724
+              ],
+              "clicks": 1309,
+              "slots": 137140,
+              "requests": 6857,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.009474398412581757
+            },
+            "same_context_expected_ctr": 0.007594439551188167,
+            "state_shift_rel": 0.204353368945802,
+            "target_items_in_deterministic_slots_mean": 2.8700261943370338,
+            "target_items_in_explore_pool_mean": 17.129973805662967,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.008773645994892288,
+                "ci95": [
+                  0.0038347480482645606,
+                  0.014579862950237806
+                ],
+                "n_slots": 32068,
+                "n_matched": 5785,
+                "ess": 5741.215293443675,
+                "ess_ratio": 0.17903253378581999,
+                "coverage": 0.8597324435574404,
+                "rel_err": 0.08081145016078807,
+                "rel_err_vs_same_context": 0.15527234574138285,
+                "ci_covers_measured": true
+              },
+              "replay_exploration": {
+                "value": 0.007896485672960401,
+                "ci95": [
+                  0.0,
+                  0.020645537863895384
+                ],
+                "n_slots": 32068,
+                "n_matched": 269,
+                "ess": 266.72300713081864,
+                "ess_ratio": 0.008317419456493036,
+                "coverage": 0.7977111138829986,
+                "rel_err": 0.17270890359832744,
+                "rel_err_vs_same_context": 0.039772009473033235,
+                "ci_covers_measured": true
+              },
+              "snips_slate": {
+                "value": 0.008696780611874044,
+                "ci95": [
+                  0.0005051897806548808,
+                  0.021023540955212954
+                ],
+                "n_slots": 160340,
+                "n_matched": 1398,
+                "ess": 289.01544237056135,
+                "ess_ratio": 0.0018025161679590953,
+                "coverage": 0.8309709050275971,
+                "rel_err": 0.08886440556729841,
+                "rel_err_vs_same_context": 0.1451510744480695,
+                "ci_covers_measured": true
+              },
+              "position_based_slate": {
+                "value": 0.009963016207537737,
+                "ci95": [
+                  0.005676001374662655,
+                  0.014990703057154586
+                ],
+                "n_slots": 160340,
+                "n_matched": 28794,
+                "ess": 7763.773043718459,
+                "ess_ratio": 0.04842068756217076,
+                "coverage": 1.003233753274292,
+                "rel_err": 0.04379529618160827,
+                "rel_err_vs_same_context": 0.31188300866507007,
+                "ci_covers_measured": true,
+                "ess_over_explore_slots": 0.24210343781085378
+              }
+            }
+          },
+          {
+            "seed": 1,
+            "measured": {
+              "ctr": 0.009876187733947595,
+              "ci95": [
+                0.009152565267531436,
+                0.010520643978518455
+              ],
+              "clicks": 1372,
+              "slots": 138920,
+              "requests": 6946,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.010030529739173432
+            },
+            "same_context_expected_ctr": 0.007899606324528088,
+            "state_shift_rel": 0.20013607098874484,
+            "target_items_in_deterministic_slots_mean": 2.913401302051345,
+            "target_items_in_explore_pool_mean": 17.086598697948656,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.005410183578875958,
+                "ci95": [
+                  0.003133443418231647,
+                  0.007863122095410085
+                ],
+                "n_slots": 32564,
+                "n_matched": 5998,
+                "ess": 5940.731260768637,
+                "ess_ratio": 0.18243247944873595,
+                "coverage": 0.8658887114605085,
+                "rel_err": 0.45219919622634974,
+                "rel_err_vs_same_context": 0.3151325070367788,
+                "ci_covers_measured": false
+              },
+              "replay_exploration": {
+                "value": 0.0035452279827301765,
+                "ci95": [
+                  0.0,
+                  0.010870245490201245
+                ],
+                "n_slots": 32564,
+                "n_matched": 302,
+                "ess": 299.46419021706845,
+                "ess_ratio": 0.009196173388314348,
+                "coverage": 0.8748618105883798,
+                "rel_err": 0.6410327468215189,
+                "rel_err_vs_same_context": 0.5512146001855398,
+                "ci_covers_measured": true
+              },
+              "snips_slate": {
+                "value": 0.004103926282597086,
+                "ci95": [
+                  0.0003747425380086168,
+                  0.011168571805591297
+                ],
+                "n_slots": 162820,
+                "n_matched": 1505,
+                "ess": 322.3672460408672,
+                "ess_ratio": 0.001979899558044879,
+                "coverage": 0.9093460724168715,
+                "rel_err": 0.5844625078874729,
+                "rel_err_vs_same_context": 0.48048977202136095,
+                "ci_covers_measured": true
+              },
+              "position_based_slate": {
+                "value": 0.006777806115102381,
+                "ci95": [
+                  0.004818154758505738,
+                  0.00890143467802613
+                ],
+                "n_slots": 162820,
+                "n_matched": 29716,
+                "ess": 8050.63599381662,
+                "ess_ratio": 0.049445006717950005,
+                "coverage": 1.0115587765630758,
+                "rel_err": 0.3137224303862808,
+                "rel_err_vs_same_context": 0.1420071030555719,
+                "ci_covers_measured": false,
+                "ess_over_explore_slots": 0.24722503358975
+              }
+            }
+          },
+          {
+            "seed": 2,
+            "measured": {
+              "ctr": 0.009944335790582218,
+              "ci95": [
+                0.009296146293384972,
+                0.010585962874334966
+              ],
+              "clicks": 1322,
+              "slots": 132940,
+              "requests": 6647,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.00987171840621038
+            },
+            "same_context_expected_ctr": 0.007750628723938437,
+            "state_shift_rel": 0.22059865161847525,
+            "target_items_in_deterministic_slots_mean": 2.9055189349877213,
+            "target_items_in_explore_pool_mean": 17.09448106501228,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.00533838151977983,
+                "ci95": [
+                  0.0018528624681195174,
+                  0.01024101754750142
+                ],
+                "n_slots": 30948,
+                "n_matched": 5672,
+                "ess": 5621.822751120012,
+                "ess_ratio": 0.18165383065529314,
+                "coverage": 0.8590474344061005,
+                "rel_err": 0.4631736465661645,
+                "rel_err_vs_same_context": 0.3112324548211409,
+                "ci_covers_measured": true
+              },
+              "replay_exploration": {
+                "value": 0.0,
+                "ci95": [
+                  0.0,
+                  0.0
+                ],
+                "n_slots": 30948,
+                "n_matched": 286,
+                "ess": 283.5065251574492,
+                "ess_ratio": 0.00916073817879828,
+                "coverage": 0.8674227736848907,
+                "rel_err": 1.0,
+                "rel_err_vs_same_context": 1.0,
+                "ci_covers_measured": false
+              },
+              "snips_slate": {
+                "value": 0.0003880666195961277,
+                "ci95": [
+                  0.00016241736245572541,
+                  0.0007032393840479909
+                ],
+                "n_slots": 154740,
+                "n_matched": 1443,
+                "ess": 309.23970302010406,
+                "ess_ratio": 0.0019984470920260053,
+                "coverage": 0.9094095246104261,
+                "rel_err": 0.9609761146678448,
+                "rel_err_vs_same_context": 0.9499309496792753,
+                "ci_covers_measured": false
+              },
+              "position_based_slate": {
+                "value": 0.006804875991931634,
+                "ci95": [
+                  0.003792267936510874,
+                  0.01105226592923544
+                ],
+                "n_slots": 154740,
+                "n_matched": 28152,
+                "ess": 7629.480016390206,
+                "ess_ratio": 0.04930515714353242,
+                "coverage": 1.0043233811554866,
+                "rel_err": 0.3157033174225481,
+                "rel_err_vs_same_context": 0.12202271140736876,
+                "ci_covers_measured": true,
+                "ess_over_explore_slots": 0.2465257857176621
+              }
+            }
+          }
+        ],
+        "verdict": {
+          "primary_coverage_mean": 0.8615561964746833,
+          "explore_support_short": true,
+          "verdict_estimator": "position_based_slate",
+          "rel_err_by_seed": [
+            0.04379529618160827,
+            0.3137224303862808,
+            0.3157033174225481
+          ],
+          "rel_err_mean": 0.22440701466347904,
+          "rel_err_ok": false,
+          "ess_ratio_by_seed": [
+            0.04842068756217076,
+            0.049445006717950005,
+            0.04930515714353242
+          ],
+          "ess_ratio_min": 0.04842068756217076,
+          "ess_ok": false,
+          "passed": false,
+          "summary_by_estimator": {
+            "replay_position_based": {
+              "rel_err_mean": 0.3320614309844341,
+              "rel_err_vs_same_context_mean": 0.2605457691997675,
+              "coverage_mean": 0.8615561964746833,
+              "ess_ratio_min": 0.17903253378581999
+            },
+            "replay_exploration": {
+              "rel_err_mean": 0.6045805501399487,
+              "rel_err_vs_same_context_mean": 0.530328869886191,
+              "coverage_mean": 0.8466652327187564,
+              "ess_ratio_min": 0.008317419456493036
+            },
+            "snips_slate": {
+              "rel_err_mean": 0.5447676760408721,
+              "rel_err_vs_same_context_mean": 0.5251905987162352,
+              "coverage_mean": 0.8832421673516316,
+              "ess_ratio_min": 0.0018025161679590953
+            },
+            "position_based_slate": {
+              "rel_err_mean": 0.22440701466347904,
+              "rel_err_vs_same_context_mean": 0.19197094104267023,
+              "coverage_mean": 1.0063719703309515,
+              "ess_ratio_min": 0.04842068756217076
+            }
+          },
+          "state_shift_rel_mean": 0.20836269718434072
+        }
+      },
+      "reactive": {
+        "per_seed": [
+          {
+            "seed": 0,
+            "measured": {
+              "ctr": 0.020843776106934,
+              "ci95": [
+                0.019598898219862722,
+                0.022145913523916615
+              ],
+              "clicks": 3493,
+              "slots": 167580,
+              "requests": 8379,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.020811604961635442
+            },
+            "same_context_expected_ctr": 0.023548151617587307,
+            "state_shift_rel": 0.1297449894289382,
+            "target_items_in_deterministic_slots_mean": 12.559685667955595,
+            "target_items_in_explore_pool_mean": 7.440314332044405,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.01083352330400998,
+                "ci95": [
+                  0.006481872402934422,
+                  0.0165142663157489
+                ],
+                "n_slots": 32068,
+                "n_matched": 2459,
+                "ess": 2440.73716139862,
+                "ess_ratio": 0.07611129978167083,
+                "coverage": 0.3640529499812898,
+                "rel_err": 0.48025140701803826,
+                "rel_err_vs_same_context": 0.5399416701598442,
+                "ci_covers_measured": false
+              },
+              "replay_exploration": {
+                "value": 0.01846069066862601,
+                "ci95": [
+                  0.0,
+                  0.04683908694191735
+                ],
+                "n_slots": 32068,
+                "n_matched": 116,
+                "ess": 115.01415889709236,
+                "ess_ratio": 0.0035865710021545576,
+                "coverage": 0.33952850193339157,
+                "rel_err": 0.11433079237092846,
+                "rel_err_vs_same_context": 0.2160450226234167,
+                "ci_covers_measured": true
+              },
+              "snips_slate": {
+                "value": 0.024606620867684118,
+                "ci95": [
+                  0.013738504241877062,
+                  0.0404510105483
+                ],
+                "n_slots": 160340,
+                "n_matched": 11532,
+                "ess": 342.2505142709417,
+                "ess_ratio": 0.0021345298382870258,
+                "coverage": 0.6048237057444055,
+                "rel_err": 0.18052605926324208,
+                "rel_err_vs_same_context": 0.04494914366468901,
+                "ci_covers_measured": true
+              },
+              "position_based_slate": {
+                "value": 0.02521695868603493,
+                "ci95": [
+                  0.02284115154429406,
+                  0.027997245083195132
+                ],
+                "n_slots": 160340,
+                "n_matched": 103150,
+                "ess": 16904.469786578386,
+                "ess_ratio": 0.10542889975413737,
+                "coverage": 0.9920372333790695,
+                "rel_err": 0.20980759708151558,
+                "rel_err_vs_same_context": 0.07086785814650731,
+                "ci_covers_measured": false,
+                "ess_over_explore_slots": 0.5271444987706868
+              }
+            }
+          },
+          {
+            "seed": 1,
+            "measured": {
+              "ctr": 0.021110850989113895,
+              "ci95": [
+                0.019729770876713685,
+                0.022344343449424285
+              ],
+              "clicks": 3607,
+              "slots": 170860,
+              "requests": 8543,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.020999882482084783
+            },
+            "same_context_expected_ctr": 0.023967476432263646,
+            "state_shift_rel": 0.13531550408000179,
+            "target_items_in_deterministic_slots_mean": 12.716128239773983,
+            "target_items_in_explore_pool_mean": 7.283871760226017,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.010253557280686724,
+                "ci95": [
+                  0.00685812890063241,
+                  0.014097674160662994
+                ],
+                "n_slots": 32564,
+                "n_matched": 2492,
+                "ess": 2466.4605579479025,
+                "ess_ratio": 0.07574194073049695,
+                "coverage": 0.3583343569586046,
+                "rel_err": 0.514299196845541,
+                "rel_err_vs_same_context": 0.5721886987282494,
+                "ci_covers_measured": false
+              },
+              "replay_exploration": {
+                "value": 0.007626693426994481,
+                "ci95": [
+                  0.0,
+                  0.025569639802004947
+                ],
+                "n_slots": 32564,
+                "n_matched": 106,
+                "ess": 105.10279413336777,
+                "ess_ratio": 0.003227576284650773,
+                "coverage": 0.30601277484338535,
+                "rel_err": 0.6387311231116504,
+                "rel_err_vs_same_context": 0.6817898851992669,
+                "ci_covers_measured": true
+              },
+              "snips_slate": {
+                "value": 0.019865897074128832,
+                "ci95": [
+                  0.014171904813446433,
+                  0.029719917691734307
+                ],
+                "n_slots": 162820,
+                "n_matched": 12020,
+                "ess": 338.63006491080404,
+                "ess_ratio": 0.002079781752308095,
+                "coverage": 0.5914919593183934,
+                "rel_err": 0.05897222786646741,
+                "rel_err_vs_same_context": 0.17113104793183412,
+                "ci_covers_measured": true
+              },
+              "position_based_slate": {
+                "value": 0.024117422915709858,
+                "ci95": [
+                  0.02168262813858796,
+                  0.02633168312345844
+                ],
+                "n_slots": 162820,
+                "n_matched": 106014,
+                "ess": 17659.600291208208,
+                "ess_ratio": 0.1084608788306609,
+                "coverage": 0.9941407689473037,
+                "rel_err": 0.14241831976107186,
+                "rel_err_vs_same_context": 0.006256248290052025,
+                "ci_covers_measured": false,
+                "ess_over_explore_slots": 0.5423043941533044
+              }
+            }
+          },
+          {
+            "seed": 2,
+            "measured": {
+              "ctr": 0.021098873901744832,
+              "ci95": [
+                0.019794806251138997,
+                0.022321194010646285
+              ],
+              "clicks": 3410,
+              "slots": 161620,
+              "requests": 8081,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.020512746272833646
+            },
+            "same_context_expected_ctr": 0.0234913377355142,
+            "state_shift_rel": 0.1133929632885059,
+            "target_items_in_deterministic_slots_mean": 12.163112317435699,
+            "target_items_in_explore_pool_mean": 7.836887682564301,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.011473217429845042,
+                "ci95": [
+                  0.006593829775485406,
+                  0.017755468913836257
+                ],
+                "n_slots": 30948,
+                "n_matched": 2674,
+                "ess": 2648.1174290454283,
+                "ess_ratio": 0.08556667406764341,
+                "coverage": 0.40222793072250224,
+                "rel_err": 0.45621659794382524,
+                "rel_err_vs_same_context": 0.5115979532957872,
+                "ci_covers_measured": false
+              },
+              "replay_exploration": {
+                "value": 0.015177797051170859,
+                "ci95": [
+                  0.0,
+                  0.04031384698637998
+                ],
+                "n_slots": 30948,
+                "n_matched": 123,
+                "ess": 121.92095276351677,
+                "ess_ratio": 0.003939542224490008,
+                "coverage": 0.37256042393692645,
+                "rel_err": 0.2806347333107817,
+                "rel_err_vs_same_context": 0.3538981380262109,
+                "ci_covers_measured": true
+              },
+              "snips_slate": {
+                "value": 0.02409792378403335,
+                "ci95": [
+                  0.014557977631907616,
+                  0.0384599210892471
+                ],
+                "n_slots": 154740,
+                "n_matched": 10675,
+                "ess": 197.29137273234645,
+                "ess_ratio": 0.0012749862526324574,
+                "coverage": 0.6507451769702157,
+                "rel_err": 0.1421426516057097,
+                "rel_err_vs_same_context": 0.025821690333203678,
+                "ci_covers_measured": true
+              },
+              "position_based_slate": {
+                "value": 0.0242785759056226,
+                "ci95": [
+                  0.02184223775327324,
+                  0.026918083608255344
+                ],
+                "n_slots": 154740,
+                "n_matched": 96780,
+                "ess": 15699.634403494705,
+                "ess_ratio": 0.10145815176098426,
+                "coverage": 1.0103835465942872,
+                "rel_err": 0.15070482048877568,
+                "rel_err_vs_same_context": 0.033511849302573164,
+                "ci_covers_measured": false,
+                "ess_over_explore_slots": 0.5072907588049214
+              }
+            }
+          }
+        ],
+        "verdict": {
+          "primary_coverage_mean": 0.3748717458874655,
+          "explore_support_short": true,
+          "verdict_estimator": "position_based_slate",
+          "rel_err_by_seed": [
+            0.20980759708151558,
+            0.14241831976107186,
+            0.15070482048877568
+          ],
+          "rel_err_mean": 0.16764357911045435,
+          "rel_err_ok": false,
+          "ess_ratio_by_seed": [
+            0.10542889975413737,
+            0.1084608788306609,
+            0.10145815176098426
+          ],
+          "ess_ratio_min": 0.10145815176098426,
+          "ess_ok": true,
+          "passed": false,
+          "summary_by_estimator": {
+            "replay_position_based": {
+              "rel_err_mean": 0.4835890672691348,
+              "rel_err_vs_same_context_mean": 0.5412427740612936,
+              "coverage_mean": 0.3748717458874655,
+              "ess_ratio_min": 0.07574194073049695
+            },
+            "replay_exploration": {
+              "rel_err_mean": 0.34456554959778685,
+              "rel_err_vs_same_context_mean": 0.41724434861629817,
+              "coverage_mean": 0.3393672335712345,
+              "ess_ratio_min": 0.003227576284650773
+            },
+            "snips_slate": {
+              "rel_err_mean": 0.12721364624513973,
+              "rel_err_vs_same_context_mean": 0.08063396064324227,
+              "coverage_mean": 0.6156869473443382,
+              "ess_ratio_min": 0.0012749862526324574
+            },
+            "position_based_slate": {
+              "rel_err_mean": 0.16764357911045435,
+              "rel_err_vs_same_context_mean": 0.03687865191304417,
+              "coverage_mean": 0.9988538496402201,
+              "ess_ratio_min": 0.10145815176098426
+            }
+          },
+          "state_shift_rel_mean": 0.1261511522658153
+        }
+      },
+      "shadow_recency": {
+        "per_seed": [
+          {
+            "seed": 0,
+            "measured": {
+              "ctr": 0.019400310596105603,
+              "ci95": [
+                0.018491900147015856,
+                0.02034281547741638
+              ],
+              "clicks": 3248,
+              "slots": 167420,
+              "requests": 8371,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.01916582039745565
+            },
+            "same_context_expected_ctr": 0.023090689517411164,
+            "state_shift_rel": 0.19022267210744365,
+            "target_items_in_deterministic_slots_mean": 6.4046401397031305,
+            "target_items_in_explore_pool_mean": 13.59535986029687,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.008813649372060308,
+                "ci95": [
+                  0.005042524174483878,
+                  0.013256933382985503
+                ],
+                "n_slots": 32068,
+                "n_matched": 4487,
+                "ess": 4453.976288295106,
+                "ess_ratio": 0.13889161432877342,
+                "coverage": 0.6677684919545965,
+                "rel_err": 0.5456954501630736,
+                "rel_err_vs_same_context": 0.6183028936656692,
+                "ci_covers_measured": false
+              },
+              "replay_exploration": {
+                "value": 0.01677267578635532,
+                "ci95": [
+                  0.003846734508323037,
+                  0.03580146531027036
+                ],
+                "n_slots": 32068,
+                "n_matched": 238,
+                "ess": 236.79742747353993,
+                "ess_ratio": 0.007384228123785079,
+                "coverage": 0.7157914431832356,
+                "rel_err": 0.13544292483017015,
+                "rel_err_vs_same_context": 0.2736173697321532,
+                "ci_covers_measured": true
+              },
+              "snips_slate": {
+                "value": 0.02221412534329067,
+                "ci95": [
+                  0.010325023814504841,
+                  0.038851134922089
+                ],
+                "n_slots": 160340,
+                "n_matched": 3844,
+                "ess": 290.1647066813498,
+                "ess_ratio": 0.0018096838386014082,
+                "coverage": 0.8010841056560309,
+                "rel_err": 0.1450396751766392,
+                "rel_err_vs_same_context": 0.03796180159364808,
+                "ci_covers_measured": true
+              },
+              "position_based_slate": {
+                "value": 0.02335085712423303,
+                "ci95": [
+                  0.020377510236332486,
+                  0.026452549577070626
+                ],
+                "n_slots": 160340,
+                "n_matched": 55833,
+                "ess": 9559.429364939544,
+                "ess_ratio": 0.05961974158001462,
+                "coverage": 0.9880004989397531,
+                "rel_err": 0.2036331587866668,
+                "rel_err_vs_same_context": 0.011267208223716772,
+                "ci_covers_measured": false,
+                "ess_over_explore_slots": 0.2980987079000731
+              }
+            }
+          },
+          {
+            "seed": 1,
+            "measured": {
+              "ctr": 0.020488656195462477,
+              "ci95": [
+                0.019400698996768377,
+                0.02141320141004661
+              ],
+              "clicks": 3522,
+              "slots": 171900,
+              "requests": 8595,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.020001536997795603
+            },
+            "same_context_expected_ctr": 0.02394026451733928,
+            "state_shift_rel": 0.16846435846979618,
+            "target_items_in_deterministic_slots_mean": 6.445031322933301,
+            "target_items_in_explore_pool_mean": 13.5549686770667,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.013565051979855882,
+                "ci95": [
+                  0.008531471342517954,
+                  0.01933690967593602
+                ],
+                "n_slots": 32564,
+                "n_matched": 4661,
+                "ess": 4615.94537407629,
+                "ess_ratio": 0.14174995006990204,
+                "coverage": 0.6733156246161405,
+                "rel_err": 0.3379237832659778,
+                "rel_err_vs_same_context": 0.43337919386683943,
+                "ci_covers_measured": false
+              },
+              "replay_exploration": {
+                "value": 0.017335358770440533,
+                "ci95": [
+                  0.003831890284845589,
+                  0.03631443672397931
+                ],
+                "n_slots": 32564,
+                "n_matched": 239,
+                "ess": 236.4886578860407,
+                "ess_ratio": 0.007262272997360297,
+                "coverage": 0.6873234246407075,
+                "rel_err": 0.1539045506420421,
+                "rel_err_vs_same_context": 0.27589109310446397,
+                "ci_covers_measured": true
+              },
+              "snips_slate": {
+                "value": 0.02248273400608921,
+                "ci95": [
+                  0.009755246687820563,
+                  0.03941241569440835
+                ],
+                "n_slots": 162820,
+                "n_matched": 4219,
+                "ess": 298.1556872681963,
+                "ess_ratio": 0.0018311981775469615,
+                "coverage": 0.7758560604901655,
+                "rel_err": 0.09732594424949897,
+                "rel_err_vs_same_context": 0.060881971884413355,
+                "ci_covers_measured": true
+              },
+              "position_based_slate": {
+                "value": 0.026097506162329493,
+                "ci95": [
+                  0.022235801860933876,
+                  0.03050209337620646
+                ],
+                "n_slots": 162820,
+                "n_matched": 57130,
+                "ess": 9892.354968973614,
+                "ess_ratio": 0.060756387231136307,
+                "coverage": 0.9955671907628055,
+                "rel_err": 0.2737539208700852,
+                "rel_err_vs_same_context": 0.09010934876796302,
+                "ci_covers_measured": false,
+                "ess_over_explore_slots": 0.30378193615568155
+              }
+            }
+          },
+          {
+            "seed": 2,
+            "measured": {
+              "ctr": 0.020186029321177777,
+              "ci95": [
+                0.019218092217187274,
+                0.02112910548382761
+              ],
+              "clicks": 3277,
+              "slots": 162340,
+              "requests": 8117,
+              "requests_excluded": 0,
+              "click_model_expected_ctr": 0.019404941482511692
+            },
+            "same_context_expected_ctr": 0.02303767010337654,
+            "state_shift_rel": 0.14126803923776232,
+            "target_items_in_deterministic_slots_mean": 6.703373400542846,
+            "target_items_in_explore_pool_mean": 13.296626599457154,
+            "estimators": {
+              "replay_position_based": {
+                "value": 0.008656354401327697,
+                "ci95": [
+                  0.005274211818589509,
+                  0.012170919521447327
+                ],
+                "n_slots": 30948,
+                "n_matched": 4378,
+                "ess": 4339.672808463219,
+                "ess_ratio": 0.14022466099467554,
+                "coverage": 0.6637230192581104,
+                "rel_err": 0.5711710181533298,
+                "rel_err_vs_same_context": 0.6242521764360638,
+                "ci_covers_measured": false
+              },
+              "replay_exploration": {
+                "value": 0.004484095473866131,
+                "ci95": [
+                  0.0,
+                  0.015670911559747546
+                ],
+                "n_slots": 30948,
+                "n_matched": 227,
+                "ess": 225.51179477944783,
+                "ess_ratio": 0.0072867970395323715,
+                "coverage": 0.6917732971435957,
+                "rel_err": 0.777861440577532,
+                "rel_err_vs_same_context": 0.8053581176505815,
+                "ci_covers_measured": false
+              },
+              "snips_slate": {
+                "value": 0.01142993117044375,
+                "ci95": [
+                  0.006502921536205279,
+                  0.021668513462220564
+                ],
+                "n_slots": 154740,
+                "n_matched": 4087,
+                "ess": 285.95659250614847,
+                "ess_ratio": 0.0018479810812081457,
+                "coverage": 0.7893881306403925,
+                "rel_err": 0.433770208663461,
+                "rel_err_vs_same_context": 0.5038590656453358,
+                "ci_covers_measured": true
+              },
+              "position_based_slate": {
+                "value": 0.021426320055995315,
+                "ci95": [
+                  0.0187059760054257,
+                  0.024175297803174074
+                ],
+                "n_slots": 154740,
+                "n_matched": 56242,
+                "ess": 9623.891931713706,
+                "ess_ratio": 0.06219395070255723,
+                "coverage": 0.9988916892852527,
+                "rel_err": 0.06144302651519046,
+                "rel_err_vs_same_context": 0.0699441410589978,
+                "ci_covers_measured": true,
+                "ess_over_explore_slots": 0.31096975351278616
+              }
+            }
+          }
+        ],
+        "verdict": {
+          "primary_coverage_mean": 0.6682690452762824,
+          "explore_support_short": true,
+          "verdict_estimator": "position_based_slate",
+          "rel_err_by_seed": [
+            0.2036331587866668,
+            0.2737539208700852,
+            0.06144302651519046
+          ],
+          "rel_err_mean": 0.1796100353906475,
+          "rel_err_ok": false,
+          "ess_ratio_by_seed": [
+            0.05961974158001462,
+            0.060756387231136307,
+            0.06219395070255723
+          ],
+          "ess_ratio_min": 0.05961974158001462,
+          "ess_ok": true,
+          "passed": false,
+          "summary_by_estimator": {
+            "replay_position_based": {
+              "rel_err_mean": 0.4849300838607937,
+              "rel_err_vs_same_context_mean": 0.5586447546561908,
+              "coverage_mean": 0.6682690452762824,
+              "ess_ratio_min": 0.13889161432877342
+            },
+            "replay_exploration": {
+              "rel_err_mean": 0.35573630534991474,
+              "rel_err_vs_same_context_mean": 0.4516221934957329,
+              "coverage_mean": 0.6982960549891796,
+              "ess_ratio_min": 0.007262272997360297
+            },
+            "snips_slate": {
+              "rel_err_mean": 0.22537860936319973,
+              "rel_err_vs_same_context_mean": 0.20090094637446573,
+              "coverage_mean": 0.7887760989288629,
+              "ess_ratio_min": 0.0018096838386014082
+            },
+            "position_based_slate": {
+              "rel_err_mean": 0.1796100353906475,
+              "rel_err_vs_same_context_mean": 0.05710689935022586,
+              "coverage_mean": 0.9941531263292704,
+              "ess_ratio_min": 0.05961974158001462
+            }
+          },
+          "state_shift_rel_mean": 0.16665168993833404
+        }
+      }
+    },
+    "passed": false
+  },
+  "verdict": {
+    "e9": "fail",
+    "passed_at_explore_slots": null,
+    "retry_run": true,
+    "adr_status": "제안됨",
+    "text": "탐색 2칸과 재실험(탐색 4칸) 모두 사전 등록 기준을 통과하지 못했다."
+  }
+}
