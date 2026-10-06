@@ -478,6 +478,45 @@ def test_generate_job_stops_before_clustering_when_no_call_could_be_allowed(monk
     assert exc.value.stats["llm_budget"]["problem"] == exc.value.detail
 
 
+def test_generate_job_stops_before_clustering_when_a_role_model_has_no_price(monkeypatch):
+    """GEN_MODEL이 단가표에 없으면 첫 생성 호출이 거부된다 - 클러스터링과 judge 호출을 쓰기 전에 끝낸다."""
+    import pipeline.stages as stages
+    from jobs.tasks import generate
+
+    class ExplodingStage:
+        def __init__(self, *a, **k):
+            raise AssertionError("단가 없는 모델이 설정돼 있으면 클러스터링/생성 단계에 들어가면 안 된다")
+
+    monkeypatch.setattr(stages, "Stage5_NewsletterGeneration", ExplodingStage)
+    monkeypatch.delenv("LLM_BUDGET_FALLBACK_INPUT_PER_1M")
+    monkeypatch.delenv("LLM_BUDGET_FALLBACK_OUTPUT_PER_1M")
+    monkeypatch.setenv("GEN_MODEL", "gemini-9-not-in-the-price-table")
+
+    with pytest.raises(JobStopped) as exc:
+        generate.run(_generate_ctx())
+
+    assert exc.value.reason == "llm_unpriced_model"
+    assert exc.value.stats["llm_budget"]["unpriced"] == {"generator": "gemini-9-not-in-the-price-table"}
+    assert "generator=gemini-9-not-in-the-price-table" in exc.value.detail
+
+
+def test_generate_job_accepts_an_unpriced_role_model_with_an_explicit_fallback_price(monkeypatch):
+    import pipeline.stages as stages
+    from jobs.tasks import generate
+
+    class OkStage:
+        def __init__(self, settings):
+            pass
+
+        def execute(self, **kwargs):
+            return 1
+
+    monkeypatch.setattr(stages, "Stage5_NewsletterGeneration", OkStage)
+    monkeypatch.setenv("TONE_MODEL", "gemini-9-not-in-the-price-table")  # conftest가 대체 단가를 명시해 둔다
+
+    assert generate.run(_generate_ctx())["newsletters_created"] == 1
+
+
 def test_generate_job_reports_spend_in_its_stats_on_success(monkeypatch):
     import pipeline.stages as stages
     from jobs.tasks import generate

@@ -787,6 +787,23 @@ def preflight_problem() -> Optional[str]:
     return None
 
 
+def unpriced_models(models) -> Dict[str, str]:
+    """주어진 모델 중 단가가 없어 호출이 거부될 모델 -> 사유. 대체 단가가 명시돼 있으면 비어 있다.
+
+    잡이 준비 작업(클러스터링, 배치 행 생성) 전에 지금 설정된 역할별 모델을 확인하는 용도다. 설정이나
+    단가표를 읽을 수 없으면 예외가 난다 - 호출부는 preflight_problem()을 먼저 본다.
+    """
+    cfg = BudgetConfig.from_env()
+    day = cfg.day_of(time.time())
+    missing: Dict[str, str] = {}
+    for model in models:
+        try:
+            BudgetGuard._price(cfg, model, day)
+        except LLMUnpricedModel as e:
+            missing[model] = str(e.details.get("reason") or e)
+    return missing
+
+
 def exhausted_scope() -> Optional[Dict[str, Any]]:
     """일·전체 상한이 이미 찼으면(1 nUSD도 더 못 쓰면) 그 범위와 수치를, 아니면 None.
 
