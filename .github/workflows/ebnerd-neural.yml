@@ -1,0 +1,80 @@
+# E15(신경망 사용자 모델 비교, ADR 0013 A3)의 torch가 필요한 테스트를 CPU에서 돈다.
+# 기본 CI(ci.yml)는 torch를 설치하지 않는다 — 거기서는 torch가 필요한 테스트가 건너뛰어지고, torch 없이 도는 것
+# (입력·판정·튜닝 예산·시간 전진 스태킹 규칙·드라이버)만 매번 돈다. torch wheel을 모든 push마다 내려받지 않으려고
+# 이 job은 E15가 닿는 경로가 바뀔 때만 돈다. 데이터는 전부 합성이고 EB-NeRD는 쓰지 않는다.
+# 설치는 원격 런타임과 같은 핀(requirements-colab-gpu.txt: numpy·pandas·pyarrow·lightgbm·pyyaml·torch)이고,
+# torch만 같은 버전의 CPU wheel로 받는다. 파이썬도 원격 런타임과 같은 3.13이다.
+name: ebnerd-neural
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "evaluation/recsys/ebnerd/**"
+      - "evaluation/recsys/metrics.py"
+      - "recsys_core/**"
+      - "scripts/e15_colab_driver.py"
+      - "scripts/m4_colab_driver.py"
+      - "requirements-colab-gpu.txt"
+      - "docs/adr/0013-ranker-v2-design.md"
+      - "tests/evaluation/conftest.py"
+      - "tests/evaluation/test_ebnerd_neural_*.py"
+      - "tests/evaluation/test_ebnerd_run_neural.py"
+      - "tests/evaluation/test_e15_colab_driver.py"
+      - ".github/workflows/ebnerd-neural.yml"
+  pull_request:
+    paths:
+      - "evaluation/recsys/ebnerd/**"
+      - "evaluation/recsys/metrics.py"
+      - "recsys_core/**"
+      - "scripts/e15_colab_driver.py"
+      - "scripts/m4_colab_driver.py"
+      - "requirements-colab-gpu.txt"
+      - "docs/adr/0013-ranker-v2-design.md"
+      - "tests/evaluation/conftest.py"
+      - "tests/evaluation/test_ebnerd_neural_*.py"
+      - "tests/evaluation/test_ebnerd_run_neural.py"
+      - "tests/evaluation/test_e15_colab_driver.py"
+      - ".github/workflows/ebnerd-neural.yml"
+
+jobs:
+  neural-cpu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # 사전 등록 커밋의 yaml·ADR 등록 문장(A3.0–A3.11)과 지금 파일을 바이트로 비교하는 테스트가 이력을 읽는다
+      # (얕은 체크아웃이면 건너뛴다). ADR 0013만 고친 push에서도 이 비교가 돌도록 그 파일을 경로에 넣었다.
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Create virtualenv (Python 3.13)
+        run: |
+          uv python install 3.13
+          uv venv --python 3.13 .venv
+
+      - name: Install pinned CPU torch
+        run: |
+          TORCH_PIN=$(grep -E '^torch==' requirements-colab-gpu.txt)
+          uv pip install --python .venv/bin/python --index-url https://download.pytorch.org/whl/cpu "$TORCH_PIN"
+
+      - name: Install the remote-runtime pins and pytest
+        run: uv pip install --python .venv/bin/python -r requirements-colab-gpu.txt pytest
+
+      - name: Show versions
+        run: .venv/bin/python -c "import sys, torch, lightgbm, numpy, pandas; print(sys.version.split()[0], torch.__version__, lightgbm.__version__, numpy.__version__, pandas.__version__)"
+
+      - name: Run E15 tests (synthetic data, CPU)
+        run: >-
+          .venv/bin/python -m pytest -q -rs
+          tests/evaluation/test_ebnerd_neural_inputs.py
+          tests/evaluation/test_ebnerd_neural_verdict.py
+          tests/evaluation/test_ebnerd_neural_tune_stack.py
+          tests/evaluation/test_ebnerd_neural_models.py
+          tests/evaluation/test_ebnerd_run_neural.py
+          tests/evaluation/test_e15_colab_driver.py
