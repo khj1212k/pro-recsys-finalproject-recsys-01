@@ -197,6 +197,32 @@ def test_training_lowers_the_listwise_loss(data):
     assert t.loss_curve[2] < t.loss_curve[0] and t.n_params > 0
 
 
+def test_trained_model_records_the_requests_it_was_actually_fitted_on(data, trained, tmp_path):
+    """모델의 기록은 학습 함수가 받은 입력에서 나온다: 요청 수, 후보 쌍 수, 요청 시각의 최솟값·최댓값.
+    시간 전진 스태킹의 누출 확인(neural/stack.py)이 이 기록을 읽는다."""
+    inputs, emb, _ = data
+    fit_in = inputs["fit"]
+    full = trained["nrms"]
+    assert (full.fit_groups, full.fit_pairs) == (fit_in.n_groups, len(fit_in.cand_item))
+    assert (full.fit_time_min, full.fit_time_max) == (int(fit_in.req_time.min()), int(fit_in.req_time.max()))
+    early = np.flatnonzero(fit_in.req_time < np.median(fit_in.req_time))       # 앞쪽 절반의 요청만
+    part = TR.fit(SPECS["nrms"], fit_in.subset(early), emb, seed=0, device=CPU, fixed=FIXED, n_categories=data[2],
+                  max_epochs=1, fixed_epochs=1)
+    assert part.fit_groups == len(early) < full.fit_groups
+    assert part.fit_time_max == int(fit_in.req_time[early].max()) < np.median(fit_in.req_time) <= full.fit_time_max
+    assert {k: part.summary()[k] for k in ("fit_groups", "fit_pairs", "fit_time_min", "fit_time_max")} == {
+        "fit_groups": part.fit_groups, "fit_pairs": part.fit_pairs, "fit_time_min": part.fit_time_min,
+        "fit_time_max": part.fit_time_max}
+    TR.save_trained(tmp_path / "part.pt", part)
+    back, _ = TR.load_trained(tmp_path / "part.pt")
+    assert (back.fit_groups, back.fit_pairs, back.fit_time_min, back.fit_time_max) == (
+        part.fit_groups, part.fit_pairs, part.fit_time_min, part.fit_time_max)
+    # 요청 시각이 없는 입력으로 학습한 모델에는 시각 기록이 없다(그런 모델은 누출 확인을 통과하지 못한다)
+    blind = TR.fit(SPECS["nrms"], dataclasses.replace(fit_in.subset(early), req_time=None), emb, seed=0, device=CPU,
+                   fixed=FIXED, n_categories=data[2], max_epochs=1, fixed_epochs=1)
+    assert blind.fit_time_max is None and blind.fit_groups == len(early)
+
+
 def test_saved_model_reloads_with_its_statistics_and_scores_identically(data, trained, tmp_path):
     inputs, emb, _ = data
     path = tmp_path / "m.pt"

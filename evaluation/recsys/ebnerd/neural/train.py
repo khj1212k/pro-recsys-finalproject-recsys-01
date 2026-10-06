@@ -81,12 +81,29 @@ class TrainedNeural:
     loss_curve: list = field(default_factory=list)
     seconds: float = 0.0
     n_params: int = 0
+    # 학습 함수가 받은 입력에서 적은 기록(계획이 아니라 실제로 받은 것). 시간 전진 스태킹의 누출 확인이 읽는다.
+    fit_groups: int = 0
+    fit_pairs: int = 0
+    fit_time_min: Optional[int] = None
+    fit_time_max: Optional[int] = None
+
+    def fit_record(self) -> dict:
+        return {"fit_groups": self.fit_groups, "fit_pairs": self.fit_pairs, "fit_time_min": self.fit_time_min,
+                "fit_time_max": self.fit_time_max}
 
     def summary(self) -> dict:
         return {"family": self.spec.family, "spec": self.spec.to_dict(), "seed": self.seed, "best_epoch": self.best_epoch,
                 "epochs_run": len(self.loss_curve), "es_curve": [round(float(x), 6) for x in self.es_curve],
                 "best_es_score": max(self.es_curve) if self.es_curve else None, "train_seconds": round(self.seconds, 1),
-                "n_params": self.n_params, "n_cont": self.n_cont, "n_categories": self.n_categories}
+                "n_params": self.n_params, "n_cont": self.n_cont, "n_categories": self.n_categories, **self.fit_record()}
+
+
+def fit_record_of(fit_in: NeuralInputs) -> dict:
+    """학습 입력이 담은 요청 수·후보 쌍 수·요청 시각의 범위. 학습 루프는 이 입력의 그룹만 돈다."""
+    t = fit_in.req_time
+    known = t is not None and len(t) > 0
+    return {"fit_groups": int(fit_in.n_groups), "fit_pairs": int(len(fit_in.cand_item)),
+            "fit_time_min": int(np.min(t)) if known else None, "fit_time_max": int(np.max(t)) if known else None}
 
 
 def build_model(spec: NeuralSpec, emb_dim: int, n_cont: int, n_categories: int, fixed: Mapping) -> NeuralRanker:
@@ -154,7 +171,7 @@ def fit(spec: NeuralSpec, fit_in: NeuralInputs, emb: np.ndarray, *, seed: int, d
         best_epoch = len(loss_curve)
     return TrainedNeural(spec=spec, seed=seed, state=best_state, best_epoch=best_epoch, n_cont=n_cont,
                          n_categories=n_categories, es_curve=es_curve, loss_curve=loss_curve, seconds=time.time() - t0,
-                         n_params=sum(p.numel() for p in model.parameters()))
+                         n_params=sum(p.numel() for p in model.parameters()), **fit_record_of(fit_in))
 
 
 def predict(trained: TrainedNeural, inp: NeuralInputs, emb: np.ndarray, *, device: torch.device, fixed: Mapping,
@@ -197,5 +214,7 @@ def load_trained(path: Path) -> tuple[TrainedNeural, dict]:
     t = TrainedNeural(spec=NeuralSpec(**blob["spec"]), seed=int(blob["seed"]), state=blob["state"],
                       best_epoch=int(blob["best_epoch"]), n_cont=int(blob["n_cont"]), n_categories=int(blob["n_categories"]),
                       es_curve=list(s.get("es_curve", [])), seconds=float(s.get("train_seconds", 0.0)),
-                      n_params=int(s.get("n_params", 0)))
+                      n_params=int(s.get("n_params", 0)), fit_groups=int(s.get("fit_groups", 0)),
+                      fit_pairs=int(s.get("fit_pairs", 0)), fit_time_min=s.get("fit_time_min"),
+                      fit_time_max=s.get("fit_time_max"))
     return t, blob["extra"]

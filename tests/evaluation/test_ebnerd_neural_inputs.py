@@ -269,6 +269,18 @@ def test_subset_keeps_request_alignment(fit):
     assert np.array_equal(sub.cont[sub.cand_ptr[1]:sub.cand_ptr[2]], inp.cont[a:b])
 
 
+def test_inputs_carry_request_times_so_a_model_can_record_what_it_was_fitted_on(fit):
+    """요청 시각이 입력에 붙어 다닌다(부분 집합에서도). 학습 함수가 이 값으로 "무엇으로 학습했는가"를 모델에 적는다."""
+    task, ctx, feats = fit
+    inp = _inputs(task, ctx, feats)
+    assert inp.req_time is task.req.time
+    rows = np.array([3, 10, 11])
+    assert np.array_equal(inp.subset(rows).req_time, task.req.time[rows])
+    x = feature_matrix(feats, task, V2_FEATURES)
+    assert S.standardization_stats(x, V2_FEATURES, SPEC)["n_rows"] == len(x)       # 통계를 계산한 행 수도 통계와 함께 남는다
+    assert S.standardization_stats(x[:7], V2_FEATURES, SPEC)["n_rows"] == 7
+
+
 def test_requests_subset_helper_round_trips_candidates():
     req = Requests(user=[1, 2, 3], time=[10, 20, 30], cand_ptr=[0, 2, 3, 6], cand_item=[5, 6, 7, 8, 9, 4], session=[1, 1, 2])
     sub, pairs = S.subset_requests(req, np.array([0, 2]))

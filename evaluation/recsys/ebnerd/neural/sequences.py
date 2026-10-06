@@ -186,7 +186,7 @@ def standardization_stats(x_raw: np.ndarray, columns: Sequence[str], spec: Scala
             std[j] = sd if sd > 1e-6 else 1.0
     missing = [c for i, c in enumerate(columns) if np.isnan(x_raw[:, i]).any()]
     return {"continuous": list(spec.continuous), "mean": mean.tolist(), "std": std.tolist(), "missing": missing,
-            "columns": list(columns)}
+            "columns": list(columns), "n_rows": int(len(x_raw))}
 
 
 @dataclass

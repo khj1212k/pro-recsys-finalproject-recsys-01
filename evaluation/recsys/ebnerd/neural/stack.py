@@ -4,12 +4,14 @@ fit 창을 시간 블록으로 나누고, 블록 j의 행은 블록 < j의 행�
 스태커 학습에서 빠진다. 유저 단위 폴드를 쓰지 않는 이유: 기사는 모든 유저가 공유하므로 폴드 모델이 그 행 시각 이후의
 기사별 클릭률을 담을 수 있고, 그러면 fit 행 점수에만 미래 정보가 들어간다.
 
-학습과 채점은 호출부가 함수로 넘긴다(신경망 없이 이 규칙만 테스트할 수 있게).
+학습과 채점은 호출부가 함수로 넘긴다(신경망 없이 이 규칙만 테스트할 수 있게). 시간 전진의 확인은 이 모듈이 넘겨준 행 목록
+(계획)이 아니라 **모델이 자기 학습 입력에서 직접 적어 둔 기록**(요청 수, 요청 시각의 최댓값)으로 한다 — 넘겨받은 행을 무시하고
+더 많은 행으로 학습한 모델은 점수에 그 사실이 드러나지 않으므로, 계획만 다시 읽는 확인으로는 잡히지 않는다.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable, Sequence
+from dataclasses import dataclass, field
+from typing import Callable, Mapping, Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -44,18 +46,46 @@ def block_of(times: np.ndarray, edges: np.ndarray) -> np.ndarray:
 class ForwardChain:
     scores: np.ndarray           # [후보 쌍] float32, 점수 없는 행은 NaN
     scored: np.ndarray           # [후보 쌍] bool
-    train_max_time: np.ndarray   # [요청] int64 — 그 요청을 채점한 모델이 학습에 쓴 요청 시각의 최댓값(없으면 -1)
+    train_max_time: np.ndarray   # [요청] int64 — 그 요청을 채점한 모델이 기록한 학습 요청 시각의 최댓값(없으면 -1)
     block: np.ndarray            # [요청] 블록 번호
     models: list                 # 블록 j(2..)를 채점한 모델들의 기록(호출부의 train이 돌려준 것)
+    audit: list = field(default_factory=list)    # 블록 모델마다: 모델이 기록한 학습 요청 수·최대 시각과 채점 대상의 최소 시각
+
+
+def assert_trained_before(record: Mapping, expected_requests: int, target_min_time: int, what: str,
+                          expected_pairs: Optional[int] = None) -> dict:
+    """모델의 기록(observe가 돌려준 것)이 "정해진 요청만으로 학습했고 그 요청이 전부 채점 대상보다 이르다"와 맞는지 본다.
+
+    record: {"n_requests": 학습 입력의 요청 수, "max_time": 그 요청 시각의 최댓값, ["stats_pairs": 표준화 통계를 계산한 행 수]}.
+    기록이 없으면 확인할 수 없으므로 통과가 아니다.
+    """
+    n, t = record.get("n_requests"), record.get("max_time")
+    if n is None or t is None:
+        raise LeakageError(f"{what}: 모델에 학습 입력의 기록(요청 수, 최대 시각)이 없어 시간 전진을 확인할 수 없습니다")
+    if int(n) != int(expected_requests):
+        raise LeakageError(f"{what}: 모델이 기록한 학습 요청 수 {int(n)}가 정해진 {int(expected_requests)}와 다릅니다")
+    if int(t) >= int(target_min_time):
+        raise LeakageError(f"{what}: 모델이 기록한 학습 요청의 최대 시각 {int(t)}가 채점 대상의 최소 시각 "
+                           f"{int(target_min_time)}보다 이르지 않습니다")
+    out = {"train_requests": int(n), "train_max_time": int(t), "target_min_time": int(target_min_time)}
+    if record.get("stats_pairs") is not None:
+        if expected_pairs is not None and int(record["stats_pairs"]) != int(expected_pairs):
+            raise LeakageError(f"{what}: 표준화 통계를 계산한 행 수 {int(record['stats_pairs'])}가 학습 행 수 "
+                               f"{int(expected_pairs)}와 다릅니다")
+        out["stats_pairs"] = int(record["stats_pairs"])
+    return out
 
 
 def forward_chain_scores(req_time: np.ndarray, cand_ptr: np.ndarray, edges: np.ndarray,
                          train: Callable[[np.ndarray], object],
-                         score: Callable[[object, np.ndarray], np.ndarray]) -> ForwardChain:
+                         score: Callable[[object, np.ndarray], np.ndarray],
+                         observe: Callable[[object], Mapping]) -> ForwardChain:
     """블록 j >= 2의 요청을 블록 < j의 요청만으로 학습한 모델로 채점한다.
 
     train(rows) -> model: rows(요청 번호, 오름차순)만으로 학습.
     score(model, rows) -> rows의 후보 쌍 점수(요청 순서, 요청 안에서는 원래 순서).
+    observe(model) -> 모델이 학습 입력에서 직접 적어 둔 기록(assert_trained_before의 record). 채점하기 전에 이 기록이
+    "블록 < j의 요청 전부, 그 최대 시각 < 블록 j의 최소 시각"과 맞는지 보고, 아니면 LeakageError다.
     """
     req_time = np.asarray(req_time, dtype=np.int64)
     cand_ptr = np.asarray(cand_ptr, dtype=np.int64)
@@ -63,27 +93,33 @@ def forward_chain_scores(req_time: np.ndarray, cand_ptr: np.ndarray, edges: np.n
     n_blocks = len(edges) - 1
     scores = np.full(int(cand_ptr[-1]), np.nan, dtype=np.float32)
     train_max = np.full(len(req_time), -1, dtype=np.int64)
-    models = []
+    models, audit = [], []
     for j in range(2, n_blocks + 1):
         target = np.flatnonzero(block == j)
         source = np.flatnonzero((block >= 1) & (block < j))
         if len(target) == 0 or len(source) == 0:
             continue
         model = train(source)
+        train_pairs = int((cand_ptr[source + 1] - cand_ptr[source]).sum())
+        rec = assert_trained_before(observe(model), len(source), int(req_time[target].min()), f"블록 {j} 모델",
+                                    expected_pairs=train_pairs)
         models.append(model)
         s = np.asarray(score(model, target), dtype=np.float32)
         _, pos = expand_ranges(cand_ptr[target], cand_ptr[target + 1])
         if len(s) != len(pos):
             raise ValueError("score가 돌려준 점수의 수가 대상 요청의 후보 수와 다릅니다")
         scores[pos] = s
-        train_max[target] = int(req_time[source].max())
-    chain = ForwardChain(scores=scores, scored=~np.isnan(scores), train_max_time=train_max, block=block, models=models)
+        train_max[target] = rec["train_max_time"]
+        audit.append({"block": j, **rec, "train_pairs": train_pairs, "target_requests": int(len(target))})
+    chain = ForwardChain(scores=scores, scored=~np.isnan(scores), train_max_time=train_max, block=block, models=models,
+                         audit=audit)
     assert_forward_only(chain, req_time, cand_ptr)
     return chain
 
 
 def assert_forward_only(chain: ForwardChain, req_time: np.ndarray, cand_ptr: np.ndarray) -> dict:
-    """모든 채점된 fit 행의 점수가 그 행의 요청 시각보다 이른 요청만으로 학습한 모델에서 나왔는지 본다."""
+    """모든 채점된 fit 행의 점수가 그 행의 요청 시각보다 이른 요청만으로 학습한 모델에서 나왔는지 본다.
+    train_max_time은 forward_chain_scores가 모델의 기록에서 옮겨 적은 값이다."""
     req_time = np.asarray(req_time, dtype=np.int64)
     pair_req = np.repeat(np.arange(len(req_time)), np.diff(cand_ptr))
     scored_req = np.zeros(len(req_time), dtype=bool)

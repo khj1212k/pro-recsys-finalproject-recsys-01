@@ -635,6 +635,12 @@ def _fit_neural(run: Run, env: dict, spec, seed: int, max_epochs: int, rows: Opt
     return t, stats
 
 
+def _training_record(model) -> dict:
+    """(학습된 모델, 표준화 통계) -> 모델이 학습 입력에서 적어 둔 기록. 시간 전진 확인(stack.assert_trained_before)이 읽는다."""
+    trained, stats = model
+    return {"n_requests": trained.fit_groups or None, "max_time": trained.fit_time_max, "stats_pairs": stats.get("n_rows")}
+
+
 def _score_neural(run: Run, env: dict, trained, stats: dict, task: RankTask, feats: pd.DataFrame, seq: Sequences) -> np.ndarray:
     tr, _ = _torch()
     return tr.predict(trained, run.inputs(run.raw_set(task, feats, seq), stats, trained.spec.n_hist), run.emb,
@@ -756,10 +762,15 @@ def stage_stack(run: Run):
                                       device=env["device"], fixed=run.fixed)
 
                 chain = stacking.forward_chain_scores(fit_task.req.time, fit_task.req.cand_ptr, run.edges, fit_block,
-                                                      score_block)
-                audits[seed] = {**stacking.assert_forward_only(chain, fit_task.req.time, fit_task.req.cand_ptr),
-                                "block_models": len(chain.models), "epochs_per_block_model": final.best_epoch}
+                                                      score_block, _training_record)
                 es_task, es_feats = d["es_all"]
+                # es·test·콜드 행을 채점하는 최종 모델도 같은 기록으로 본다: fit 전체로 학습했고 es보다 이르다
+                final_rec = stacking.assert_trained_before(
+                    _training_record((final, stats)), fit_task.req.n, int(es_task.req.time.min()), "최종 sel 모델",
+                    expected_pairs=int(len(fit_task.labels)))
+                audits[seed] = {**stacking.assert_forward_only(chain, fit_task.req.time, fit_task.req.cand_ptr),
+                                "block_models": len(chain.models), "block_model_records": chain.audit,
+                                "final_model_record": final_rec, "epochs_per_block_model": final.best_epoch}
                 es_scores = _score_neural(run, env, final, stats, es_task, es_feats, d["es_seq"])
                 es_ranked = stacking.with_neural_rank(es_feats, es_scores, es_task.req.cand_ptr, run.stack_col)
                 es_set = (es_task, es_ranked)

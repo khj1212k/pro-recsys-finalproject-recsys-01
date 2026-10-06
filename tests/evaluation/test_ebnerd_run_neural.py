@@ -12,6 +12,7 @@ import pytest
 
 from evaluation.recsys.ebnerd import run_neural as R
 from evaluation.recsys.ebnerd.loaders import ebnerd_root
+from evaluation.recsys.ebnerd.neural import stack as K
 from evaluation.recsys.ebnerd.neural.report import DEMO_GRADE, EVIDENCE_GRADE, load_prereg, prereg_sha256
 from evaluation.recsys.ebnerd.neural.sequences import keys_sha256
 from evaluation.recsys.ebnerd.prepare import impressions_in, pool_negative_task, protocol_windows
@@ -100,6 +101,46 @@ def test_stacking_scores_come_from_forward_chained_block_models(full_run):
         assert audit["scored_requests"] + audit["unscored_requests"] == d["meta"]["data"]["impressions"]["fit"]
         assert meta["neural_family"] == d["selection"][t]["family"]
         assert meta["neural_score_rank_gain_share"]["0"] is not None
+
+
+@torch_only
+def test_block_models_recorded_that_they_were_fitted_only_on_earlier_blocks(full_run, synth_bench):
+    """리포트의 감사 기록은 블록 모델이 학습 입력에서 직접 적은 값이다(계획한 행 목록을 다시 읽은 것이 아니다):
+    블록 j 모델의 학습 요청 수 = 블록 < j의 요청 수, 학습 요청의 최대 시각 < 블록 j의 시작."""
+    _, d = full_run
+    W = protocol_windows(synth_bench)
+    times = synth_bench.imps["train"].time[impressions_in(synth_bench.imps["train"], W["fit"])]
+    edges = K.block_edges(W["fit"], PREREG["windows"]["block_hours"])
+    block = K.block_of(times, edges)
+    for t in ("p1", "p2"):
+        audit = d["tasks"][t]["unit_meta"][f"{t}__n__test_D"]["forward_chain"]["0"]
+        records = audit["block_model_records"]
+        assert [r["block"] for r in records] == [2, 3, 4] == list(range(2, PREREG["windows"]["fit_blocks"] + 1))
+        for r in records:
+            j = r["block"]
+            assert r["train_requests"] == int(((block >= 1) & (block < j)).sum()) < len(times)
+            assert r["train_max_time"] == int(times[(block >= 1) & (block < j)].max()) < edges[j - 1] <= r["target_min_time"]
+            assert r["stats_pairs"] == r["train_pairs"] and r["target_requests"] == int((block == j).sum())
+        final = audit["final_model_record"]
+        assert final["train_requests"] == len(times) and final["train_max_time"] == int(times.max()) < W["es"][0]
+        assert final["train_max_time"] < final["target_min_time"]
+
+
+@torch_only
+def test_a_block_model_fitted_on_the_whole_window_stops_the_stack_stage(full_run, synth_root, tmp_path, monkeypatch):
+    """블록 모델이 넘겨받은 행을 무시하고 fit 전체로 학습하면(예: 부분 집합을 빠뜨린 회귀) 스태킹 단계가 멈춘다."""
+    out, _ = full_run
+    copy = tmp_path / "copy"
+    shutil.copytree(out, copy)
+    progress = json.loads((copy / "progress.json").read_text())
+    for unit in ("p1__n__test_D", "model:p1_n_D:s0"):
+        progress["units"].pop(unit)
+    (copy / "progress.json").write_text(json.dumps(progress))
+    real = R._fit_neural
+    monkeypatch.setattr(R, "_fit_neural", lambda run, env, spec, seed, max_epochs, rows=None, fixed_epochs=None:
+                        real(run, env, spec, seed, max_epochs, rows=None, fixed_epochs=fixed_epochs))
+    with pytest.raises(K.LeakageError, match="블록 2 모델"):
+        R.main(_args(synth_root, copy, "--task", "p1", "--stage", "stack"))
 
 
 @torch_only

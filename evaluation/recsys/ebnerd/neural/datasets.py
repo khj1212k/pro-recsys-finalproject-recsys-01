@@ -27,6 +27,7 @@ class NeuralInputs:
     gender: np.ndarray
     seq: Sequences
     aux_neg: Optional[np.ndarray] = None       # [로그 이벤트 수, K] — 보조 손실을 쓰는 학습 입력에만
+    req_time: Optional[np.ndarray] = None      # [요청] — 모델에 넣지 않는다. 학습 함수가 "무엇으로 학습했는가"를 적는 데만 쓴다
 
     @property
     def n_groups(self) -> int:
@@ -43,7 +44,8 @@ class NeuralInputs:
         counts = self.cand_ptr[rows + 1] - self.cand_ptr[rows]
         return NeuralInputs(cand_ptr=np.concatenate([[0], np.cumsum(counts)]), cand_item=self.cand_item[pairs],
                             labels=self.labels[pairs], cont=self.cont[pairs], category=self.category[pairs],
-                            gender=self.gender[pairs], seq=self.seq.subset(rows), aux_neg=self.aux_neg)
+                            gender=self.gender[pairs], seq=self.seq.subset(rows), aux_neg=self.aux_neg,
+                            req_time=None if self.req_time is None else self.req_time[rows])
 
 
 def build_inputs(task: RankTask, block: ScalarBlock, seq: Sequences, aux_neg: Optional[np.ndarray] = None) -> NeuralInputs:
@@ -54,7 +56,7 @@ def build_inputs(task: RankTask, block: ScalarBlock, seq: Sequences, aux_neg: Op
     if len(seq.items) != task.req.n:
         raise ValueError("시퀀스의 행 수가 요청 수와 다릅니다")
     return NeuralInputs(cand_ptr=task.req.cand_ptr, cand_item=task.req.cand_item, labels=task.labels, cont=block.cont,
-                        category=block.category, gender=block.gender, seq=seq, aux_neg=aux_neg)
+                        category=block.category, gender=block.gender, seq=seq, aux_neg=aux_neg, req_time=task.req.time)
 
 
 def group_batches(n_candidates: np.ndarray, batch_groups: int, seed: int, epoch: int,

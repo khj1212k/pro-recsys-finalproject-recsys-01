@@ -134,16 +134,26 @@ def test_fit_window_splits_into_the_registered_four_day_blocks(p1_sets):
     assert K.block_of(t, edges).tolist() == [0, 1, 1, 2, 4, 0]
 
 
+def _observe(model):
+    """모델이 학습 입력에서 직접 적어 둔 기록(요청 수, 요청 시각의 최댓값)."""
+    return {"n_requests": model["n"], "max_time": model["max_time"]}
+
+
+def _zeros(ptr):
+    """학습 시각을 드러내지 않는 채점 함수(진짜 모델의 점수가 그렇다)."""
+    return lambda model, rows: np.concatenate([np.zeros(ptr[r + 1] - ptr[r]) for r in rows])
+
+
 def _chain(times, ptr, edges, log):
     def train(rows):
         log.append(rows.copy())
-        return {"max_time": int(times[rows].max()), "rows": rows.copy()}
+        return {"max_time": int(times[rows].max()), "n": len(rows), "rows": rows.copy()}
 
     def score(model, rows):
         # 점수 = 그 모델이 학습에서 본 가장 늦은 시각. 누출이 있으면 점수가 행의 시각 이상이 된다.
         return np.concatenate([np.full(ptr[r + 1] - ptr[r], model["max_time"], dtype=np.float64) for r in rows])
 
-    return K.forward_chain_scores(times, ptr, edges, train, score)
+    return K.forward_chain_scores(times, ptr, edges, train, score, _observe)
 
 
 def test_every_fit_row_score_comes_from_a_model_trained_only_on_earlier_blocks(p1_sets):
@@ -163,6 +173,62 @@ def test_every_fit_row_score_comes_from_a_model_trained_only_on_earlier_blocks(p
     audit = K.assert_forward_only(chain, times, ptr)
     assert audit["scored_requests"] == int((block >= 2).sum()) and audit["min_seconds_after_training_data"] > 0
     assert np.array_equal(K.stacker_rows(chain, ptr), pair_block >= 2)
+    # 블록 모델마다의 기록은 모델이 적어 둔 값이다: 블록 < j의 요청 전부, 그 최대 시각은 블록 j의 시작 전
+    assert [r["block"] for r in chain.audit] == [2, 3, 4]
+    for r in chain.audit:
+        j = r["block"]
+        assert r["train_requests"] == int(((block >= 1) & (block < j)).sum()) and r["target_requests"] == int((block == j).sum())
+        assert r["train_max_time"] < edges[j - 1] <= r["target_min_time"]
+
+
+def test_a_trainer_that_ignores_its_rows_is_caught_by_what_the_model_recorded(p1_sets):
+    """계획(넘겨준 rows)이 아니라 모델의 기록을 본다: rows를 무시하고 창 전체로 학습한 모델은, 점수에 학습 시각이
+    드러나지 않아도 걸린다."""
+    sets, W = p1_sets
+    task, _ = sets["fit"]
+    times, ptr = task.req.time, task.req.cand_ptr
+    edges = K.block_edges(W["fit"], 24)
+    everything = np.arange(len(times))
+
+    def train_all(rows):
+        return {"max_time": int(times[everything].max()), "n": len(everything)}
+
+    with pytest.raises(K.LeakageError, match="요청 수"):
+        K.forward_chain_scores(times, ptr, edges, train_all, _zeros(ptr), _observe)
+
+    def train_latest(rows):      # 요청 수는 맞지만 가장 늦은 요청들로 학습한 모델
+        late = np.argsort(times, kind="stable")[-len(rows):]
+        return {"max_time": int(times[late].max()), "n": len(late)}
+
+    with pytest.raises(K.LeakageError, match="최대 시각"):
+        K.forward_chain_scores(times, ptr, edges, train_latest, _zeros(ptr), _observe)
+
+
+def test_a_model_without_a_record_of_its_training_rows_cannot_pass(p1_sets):
+    sets, W = p1_sets
+    task, _ = sets["fit"]
+    times, ptr = task.req.time, task.req.cand_ptr
+    edges = K.block_edges(W["fit"], 24)
+
+    def train(rows):
+        return {"max_time": int(times[rows].max()), "n": len(rows)}
+
+    for record in ({}, {"n_requests": None, "max_time": None}, {"n_requests": 1}):
+        with pytest.raises(K.LeakageError, match="기록"):
+            K.forward_chain_scores(times, ptr, edges, train, _zeros(ptr), lambda m, record=record: record)
+    # 표준화 통계를 계산한 행 수도 모델이 적어 두면 같이 본다(블록 밖 행으로 계산한 통계는 미래의 분포를 담는다)
+    pairs = lambda rows: int((ptr[rows + 1] - ptr[rows]).sum())  # noqa: E731
+
+    def train_stats(rows, wrong=0):
+        return {"max_time": int(times[rows].max()), "n": len(rows), "stats": pairs(rows) + wrong}
+
+    def observe_stats(m):
+        return {**_observe(m), "stats_pairs": m["stats"]}
+
+    chain = K.forward_chain_scores(times, ptr, edges, train_stats, _zeros(ptr), observe_stats)
+    assert [r["stats_pairs"] for r in chain.audit] == [r["train_pairs"] for r in chain.audit]
+    with pytest.raises(K.LeakageError, match="통계"):
+        K.forward_chain_scores(times, ptr, edges, lambda rows: train_stats(rows, wrong=1), _zeros(ptr), observe_stats)
 
 
 def test_leakage_check_rejects_scores_from_a_model_that_saw_the_row_or_its_future(p1_sets):
@@ -178,6 +244,16 @@ def test_leakage_check_rejects_scores_from_a_model_that_saw_the_row_or_its_futur
     scored_first = K.ForwardChain(np.zeros_like(chain.scores), np.ones_like(chain.scored), chain.train_max_time, chain.block, [])
     with pytest.raises(K.LeakageError):
         K.assert_forward_only(scored_first, times, ptr)
+
+
+def test_a_model_trained_on_the_whole_fit_window_may_only_score_later_rows():
+    """최종 모델(fit 전체로 학습)이 es·test·콜드 행을 채점할 때 보는 같은 규칙."""
+    rec = {"n_requests": 10, "max_time": 99}
+    assert K.assert_trained_before(rec, 10, 100, "final")["train_max_time"] == 99
+    with pytest.raises(K.LeakageError, match="최대 시각"):
+        K.assert_trained_before(rec, 10, 99, "final")
+    with pytest.raises(K.LeakageError, match="요청 수"):
+        K.assert_trained_before(rec, 11, 100, "final")
 
 
 def test_neural_score_enters_the_stacker_as_a_within_request_rank():
