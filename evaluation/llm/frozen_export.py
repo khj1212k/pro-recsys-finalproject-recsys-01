@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import importlib.util
+import io
 import json
 import logging
 import os
@@ -32,7 +33,6 @@ import re
 import shlex
 import subprocess
 import sys
-import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -312,12 +312,12 @@ def read_only_snapshot(conn, *, statement_timeout_s: int = 120, lock_timeout_s: 
 
 
 def fetch_with_connection(conn, window: Window, *, statement_timeout_s: int = 120, lock_timeout_s: int = 5) -> RawExport:
-    with tempfile.TemporaryFile() as buffer:
-        with read_only_snapshot(conn, statement_timeout_s=statement_timeout_s, lock_timeout_s=lock_timeout_s) as cur:
-            for statement in copy_statements(window):
-                cur.copy_expert(statement, buffer)
-        buffer.seek(0)
-        return parse_copy_stream(buffer)
+    # 메모리에 받는다. 임시 파일을 쓰면 본문 사본이 허용 위치(data/exports) 밖의 디스크에 잠깐 생긴다.
+    buffer = io.BytesIO()
+    with read_only_snapshot(conn, statement_timeout_s=statement_timeout_s, lock_timeout_s=lock_timeout_s) as cur:
+        for statement in copy_statements(window):
+            cur.copy_expert(statement, buffer)
+    return parse_copy_stream(buffer.getvalue().split(b"\n"))
 
 
 def _stderr_tail(data: bytes, lines: int = 5, width: int = 300) -> str:
