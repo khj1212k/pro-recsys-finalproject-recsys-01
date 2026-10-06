@@ -59,8 +59,14 @@ python -m sim.calibration --ebnerd-dir data/benchmarks/ebnerd/ebnerd_small \
 운영 코드가 아닌 것은 저장소(메모리 구현), 라우트, 가상 시계, 임베딩(키워드·카테고리 해시 대역 — BGE-M3가
 아니다)이다. 서버도 DB도 띄우지 않는다.
 
+**판정은 끝났고 다시 돌려서 바꾸지 않는다.** 사전 등록한 구성(300명 x 7일 x seed 0·1·2)의 실행은 GitHub Actions 실행
+`37400003072` 하나이고 `reports/sim/`의 리포트가 그 결과다(E9 실패, E10 enforce 조건 미충족). 그 실행은 ADR 0033
+이전의 서빙 코드로 돌았다. 지금의 하네스는 ADR 0033 뒤의 저장소 계약을 따른다(클릭마다 갱신되는 증분 장기 프로필,
+요청보다 엄격히 이전의 클릭만 읽는 사용자 상태). ADR 0025 A1.1에 등록한 세계가 아니므로 지금 코드로 내는 리포트는
+크기와 실행 위치가 어떻든 판정용이 아니고, 머리말에 그렇게 찍힌다(ADR 0025 A1.6). 워크플로
+`.github/workflows/sim-ope-validation.yml`은 수동 실행(`workflow_dispatch`, 사유 입력)만 받는다.
+
 ```bash
-# 사전 등록한 구성(300명 x 7일 x seed 0·1·2)은 GitHub Actions에서 돈다: .github/workflows/sim-ope-validation.yml
 # 로컬에서는 하네스가 도는지 보는 스모크만 돌린다(수치는 쓰지 않는다. 리포트 머리말에 "스모크"가 찍힌다).
 python -m sim.ope_validation     --runs-dir out/runs --out out/ope_validation.json --users 20 --days 2 --seeds 0 1
 python -m sim.fatigue_comparison --runs-dir out/runs --out out/fatigue_v1.json     --users 20 --days 2 --seeds 0 1
@@ -77,7 +83,11 @@ python -m sim.ope_report --ope out/ope_validation.json --fatigue out/fatigue_v1.
   커밋했다. 두 실행기는 판정이 무엇이든 0으로 끝난다(오류일 때만 실패한다).
 - 결과: [reports/sim/ope_validation.md](../reports/sim/ope_validation.md),
   [reports/sim/fatigue_v1.md](../reports/sim/fatigue_v1.md). 워크플로 아티팩트의 JSON을 그대로 옮기고 md는 그
-  JSON만으로 만든다(`sim.ope_report`).
+  JSON만으로 만든다(`sim.ope_report`). 테스트가 커밋된 md를 JSON에서 다시 렌더해 바이트로 대조한다.
+- 실행별 표(`--runs-dir`의 `<이름>.npz`)에는 만든 코드 커밋·플랫폼·서빙 경로가 들어 있고, 다른 코드가 만든 표는
+  캐시로 쓰이지 않는다. 같은 기계에서는 같은 구성이 바이트로 같은 표를 내지만 플랫폼이 다르면 궤적이 달라진다
+  (등록 실행의 정책 A seed 0: 러너 8,087 요청, macOS arm64 8,057 요청). 등록 실행을 재현하려면 그 코드 커밋을
+  같은 플랫폼에서 돌려야 한다.
 - **[SIM]**: 여기서 나오는 클릭률과 정책 간 차이는 시뮬레이터의 성질이다. 클릭 모델은 손으로 쓴 가정이고 임베딩
   대역은 클릭 모델이 읽는 필드로 만들었다. 추천 정확도나 서비스 클릭률의 근거로 쓰지 않는다.
 
