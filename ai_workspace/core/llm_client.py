@@ -97,7 +97,12 @@ class NaverHyperCLOVAClient(BaseLLMClient):
         purpose: str = "unknown"
     ) -> Optional[str]:
         # core.llm이 이 모듈을 import하므로 순환 import를 피하려고 지연 import한다.
+        from core.llm.budget import get_budget_guard
+        from core.llm.client import LLMUsage
         from core.llm.kill_switch import ensure_kill_switch_off
+        # 지출 상한·서킷브레이커로 이미 멈춘 런이면 여기서 LLMRunStop이 난다(docs/adr/0035).
+        guard = get_budget_guard()
+        guard.ensure_run_active("naver", self.model, purpose)
         ensure_kill_switch_off()
         if self.use_apps_auth:
             headers = {
@@ -144,8 +149,15 @@ class NaverHyperCLOVAClient(BaseLLMClient):
         # 서버가 계속 429/5xx를 반환하면 프로세스가 영원히 멈추지 않음.
         for attempt in range(1, MAX_RETRIES + 1):
             attempt_start = time.time()  # 실패/재시도 메트릭 기록용 (성공 latency와는 별개)
+            self.rate_limiter.wait()
+            # 이 시도의 최악 비용을 지출 원장에 예약한다 - 상한을 넘으면 requests.post 전에 예외가 난다.
+            # 아래 분기 중 정산하지 않고 빠져나가는 곳은 finally가 예약액 그대로 지출로 닫는다
+            # (이 프로바이더의 오류 응답이 과금되는지 확인한 문서가 없다).
+            spend = guard.begin_attempt(
+                provider="naver", model=self.model, purpose=purpose,
+                messages=messages, schema=None, max_tokens=max_tokens,
+            )
             try:
-                self.rate_limiter.wait()
                 start_time = time.time()  # Latency measurement
                 response = requests.post(
                     url,
@@ -163,6 +175,7 @@ class NaverHyperCLOVAClient(BaseLLMClient):
                         purpose=purpose, input_tokens=0, output_tokens=0,
                         latency_seconds=latency, success=False
                     )
+                    spend.settle("http_429")
                     time.sleep(wait_time)
                     backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                     continue
@@ -186,7 +199,8 @@ class NaverHyperCLOVAClient(BaseLLMClient):
                         latency_seconds=latency,
                         success=True
                     )
-                    
+                    spend.settle("ok", LLMUsage(input_tokens=input_tokens or 0, output_tokens=output_tokens or 0))
+
                     return content
                 else:
                     error_msg = result.get("status", {}).get("message", "Unknown error")
@@ -215,6 +229,7 @@ class NaverHyperCLOVAClient(BaseLLMClient):
                     purpose=purpose, input_tokens=0, output_tokens=0,
                     latency_seconds=time.time() - attempt_start, success=False
                 )
+                spend.settle("timeout")  # 연속 실패 임계에 닿으면 LLMCircuitOpen
                 time.sleep(backoff)
                 backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                 continue
@@ -226,6 +241,7 @@ class NaverHyperCLOVAClient(BaseLLMClient):
                 )
                 if hasattr(e, 'response') and e.response is not None:
                     status_code = e.response.status_code
+                    spend.settle(f"http_{status_code}")
                     if status_code == 429 or status_code >= 500:
                         logger.warning("HTTP %s. Retrying #%s...", status_code, attempt)
                         time.sleep(backoff)
@@ -236,6 +252,7 @@ class NaverHyperCLOVAClient(BaseLLMClient):
 
                 if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError)):
                     logger.warning("Connection error. Retrying #%s...", attempt)
+                    spend.settle("connection")
                     time.sleep(backoff)
                     backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
                     continue
@@ -250,6 +267,9 @@ class NaverHyperCLOVAClient(BaseLLMClient):
                     latency_seconds=time.time() - attempt_start, success=False
                 )
                 return None
+
+            finally:
+                spend.ensure_settled()
 
         logger.error("HyperCLOVA max retries (%s) exhausted.", MAX_RETRIES)
         return None
@@ -283,7 +303,11 @@ class OpenAIClient(BaseLLMClient):
         purpose: str = "unknown"
     ) -> Optional[str]:
         # core.llm이 이 모듈을 import하므로 순환 import를 피하려고 지연 import한다.
+        from core.llm.budget import get_budget_guard
+        from core.llm.client import LLMUsage
         from core.llm.kill_switch import ensure_kill_switch_off
+        guard = get_budget_guard()
+        guard.ensure_run_active("openai", self.model, purpose)
         ensure_kill_switch_off()
         kwargs = {
             "model": self.model,
@@ -300,8 +324,14 @@ class OpenAIClient(BaseLLMClient):
 
         for attempt in range(MAX_RETRIES):
             attempt_start = time.time()  # 실패/재시도 메트릭 기록용
+            self.rate_limiter.wait()
+            # 최악 비용 예약(상한을 넘으면 요청 전에 예외). 이 클라이언트는 실패 원인을 문자열로만
+            # 구분하므로 실패한 시도는 전부 finally에서 예약액 그대로 지출로 닫는다.
+            spend = guard.begin_attempt(
+                provider="openai", model=self.model, purpose=purpose,
+                messages=messages, schema=None, max_tokens=max_tokens,
+            )
             try:
-                self.rate_limiter.wait()
                 start_time = time.time()
                 response = self.client.chat.completions.create(**kwargs)
                 latency = time.time() - start_time
@@ -312,6 +342,7 @@ class OpenAIClient(BaseLLMClient):
                 usage = response.usage
                 input_tokens = usage.prompt_tokens if usage else 0
                 output_tokens = usage.completion_tokens if usage else 0
+                spend.settle("ok", LLMUsage.from_openai(usage))
                 
                 # Record metrics
                 get_metrics_collector().record_call(
@@ -341,6 +372,9 @@ class OpenAIClient(BaseLLMClient):
 
                 logger.error("OpenAI API error: %s", e)
                 return None
+
+            finally:
+                spend.ensure_settled()
 
         logger.error("Max retries (%s) exhausted. Last error: %s", MAX_RETRIES, last_error)
         return None

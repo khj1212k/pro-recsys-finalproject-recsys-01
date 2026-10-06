@@ -1,5 +1,5 @@
 # bake-off(ADR 0009)가 호출 단위로 재야 하는 값들: 첫 응답의 스키마 통과 여부,
-# 재시도 불가 HTTP 상태(402 선불 미결제 등 인프라 실패를 모델 품질 실패와 구분),
+# 재시도 불가 HTTP 상태(401/403/404 같은 인프라 실패를 모델 품질 실패와 구분; 402는 런 중단),
 # 역할과 무관하게 (provider, model)을 직접 지정하는 레지스트리 오버라이드.
 import sys
 import os
@@ -54,13 +54,27 @@ def test_schema_failures_counts_only_validation_failures_not_transport_retries()
 
 
 def test_non_retryable_http_error_exposes_status_code():
-    fake = FakeOpenAIClient(responses=[make_status_error(402, "prepay required")])
+    fake = FakeOpenAIClient(responses=[make_status_error(403, "permission denied")])
     client = OpenAICompatLLMClient("gemini", "m", supports_json_schema=True, client=fake)
 
     result = client.complete([{"role": "user", "content": "x"}], schema=ClusterEval)
 
     assert result.parsed is None
-    assert result.http_status == 402
+    assert result.http_status == 403
+
+
+def test_payment_required_stops_the_run_instead_of_returning_a_result():
+    """402(선불 잔액 소진)는 결과로 돌려주지 않는다 - 호출부가 로컬 폴백으로 넘어가지 못하게
+    런 중단으로 올린다(docs/adr/0035). 상태 코드는 예외에 실려 있다."""
+    from core.llm.budget import LLMCircuitOpen
+
+    fake = FakeOpenAIClient(responses=[make_status_error(402, "prepay required")])
+    client = OpenAICompatLLMClient("gemini", "m", supports_json_schema=True, client=fake)
+
+    with pytest.raises(LLMCircuitOpen) as exc:
+        client.complete([{"role": "user", "content": "x"}], schema=ClusterEval)
+
+    assert exc.value.details["http_status"] == 402
 
 
 @pytest.fixture
