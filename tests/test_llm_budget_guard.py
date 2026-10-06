@@ -164,7 +164,7 @@ def test_call_without_an_output_token_limit_is_refused():
 def test_shared_ops_root_points_a_linked_worktree_at_the_main_checkout(tmp_path):
     """워크트리마다 원장이 따로 생기면 전체 상한이 워크트리 수만큼 늘어난다 - 기본 원장은 메인 체크아웃에 둔다."""
     main = tmp_path / "repo"
-    worktree = main / ".claude" / "worktrees" / "exp"
+    worktree = tmp_path / "worktrees" / "exp"
     admin = main / ".git" / "worktrees" / "exp"
     admin.mkdir(parents=True)
     worktree.mkdir(parents=True)
