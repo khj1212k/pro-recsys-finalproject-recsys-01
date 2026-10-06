@@ -285,6 +285,23 @@ def test_load_refuses_a_file_with_a_row_removed(tmp_path):
         fx.load_export(dest, now=datetime(2026, 10, 7, tzinfo=timezone.utc))
 
 
+@pytest.mark.parametrize("old, new", [
+    ('"body_expires_at":"2026-11-02T01:00:00.000000Z"', '"body_expires_at":"2027-11-02T01:00:00.000000Z"'),
+    ('"body_expires_at":"2026-11-02T01:00:00.000000Z"', '"body_expires_at":null'),
+    ('"redistributable":false', '"redistributable":true'),
+])
+def test_load_refuses_a_file_whose_expiry_was_edited_to_dodge_the_purge(tmp_path, old, new):
+    dest = _written(tmp_path)
+    path = dest / fx.ARTICLES_FILE
+    data = path.read_bytes()
+    assert old.encode() in data
+    path.write_bytes(data.replace(old.encode(), new.encode(), 1))
+    with pytest.raises(fx.ExportIntegrityError):
+        fx.load_export(dest, now=datetime(2026, 12, 1, tzinfo=timezone.utc))
+    with pytest.raises(fx.ExportIntegrityError):
+        fx.purge_export(dest, now=datetime(2026, 12, 1, tzinfo=timezone.utc))
+
+
 # ---------------------------------------------------------------- 30일: 만료와 정리
 
 
