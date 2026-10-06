@@ -287,3 +287,103 @@
 - 병합 순서가 런타임 → 이 브랜치 → 추천 평가 재검증(`eval/team-baseline-repro-v1`)으로 정해져, 이 ADR이
   병합되는 시점에 추천 평가 프로토콜 ADR 파일이 아직 없다. 번호 참조 규칙을 지키려고 본문과 A6에서 그 ADR의
   **번호**를 빼고 브랜치 이름으로만 가리키게 고쳤다. 사전 등록한 지표·임계값·표본 크기는 바뀌지 않았다.
+
+### A8 (2026-10-06) — E0 기준선 측정 사전 등록 (bake-off 규칙 변경 아님). 결과 열람: 해당 없음(생성 파이프라인은 2026-02 이후 완주 기록이 없고, `reports/llm/`은 없다)
+
+**무엇을 등록하나.** `main`의 뉴스레터 생성 파이프라인(LangGraph 그래프 `ai_workspace/workflow/graph.py` 전체 — 클러스터 평가·생성·결정론 게이트·judge v2 shadow·
+문체 변환·드리프트 게이트·저장)을 **지금 코드 그대로** 실제 수집 기사에 돌려 "전(before)" 숫자를 재는 **기술 통계 측정**이다. 가설·결정 규칙은
+없다. 뒤의 모든 LLM 실험(정합 패치 M1, 프롬프트 v2·문체 병합 E4', 아키텍처 A/B E2)은 이 숫자와 비교된다. 설계 문서(`docs/design/2026-09-26-llm-generation-v2.md`
+4.3절 E0)는 "main+M1 뒤"에 E0을 두었지만, 여기서는 **M1 앞**에 둔다 — 그래야 M1의 효과를 전/후로 보일 수 있다. 실행 순서·데이터 경로의 근거는
+[실행 계획](../design/2026-10-06-llm-v2-execution-plan.md)에 있고, 효력이 있는 것은 이 Addendum과 `evaluation/llm/preregistration/e0-baseline-v1.yaml`이다.
+bake-off v1의 규칙(본문·A1~A7)은 바꾸지 않는다. **E0 결과를 열람한 뒤에도 bake-off v1의 게이트 임계값·표본 크기·승자 규칙을 고치지 않는다**; 고치면
+"결과 열람 후 변경"으로 표기한다. 반면 아키텍처 A/B 사전 등록(다음 Addendum, 설계 M4)은 아직 실행 전이므로 E0 수치를 검정력 표의 입력(기준 차단율,
+뉴스레터당 문장 수, 비용)으로 **쓰는 것이 목적**이다.
+
+**A8.1 표본 — 어떤 클러스터를 어디서 고르나**
+- 프레임: Tier 0 VM `news_raw`의 **동결 반출본**(실행 계획 2.3·2.4: 읽기 전용 `COPY`, 반출 시각 T0, `raw_news_extract_status='ok'`·본문 비어 있지 않음). 반출 매니페스트의
+  sha256(행 수·기간·행별 sha256의 sha256)과 임베딩 파일(`.npy`) sha256을 **실행 전에 A8.1 기록 항목으로 적는다**(아래 "실행 전 기록").
+- 임베딩: 운영 코드 `core.embedder.NewsEmbedder`(BGE-M3, `EMBEDDING_MAX_LENGTH=8192`, 텍스트 규칙 `f"{title} {content}"[:8000]`, 길이순 배치)를 Colab T4(cuda, fp16 — `embedder.py`의 cuda 기본값)로.
+  fp16/fp32 대조 100건의 코사인 p10·최솟값을 함께 적는다. 임베딩 코드는 바꾸지 않는다(ADR 0006 사전 등록 규칙).
+- 클러스터링: 운영 코드 `NewsClusterer.cluster_news()` 그대로(`HDBSCAN_MIN_CLUSTER_SIZE=3`, `HDBSCAN_MIN_SAMPLES=2`, `split_v2`, `CLUSTER_LOOKBACK_HOURS=24`), 저장소만 파일
+  구현. 의사 시각 t_k = T0 직전 완결된 KST 날짜 D₁<D₂<D₃ 각각의 **06:00 KST**(설계 3.2의 일일 생성 시각; UTC로 변환해 `crawled_at`과 비교) 세 번 돌려 run k=1,2,3의 멤버십 스냅숏(ids만)을 남긴다.
+  파일 저장소에는 뉴스레터가 없으므로 `news_letter_id IS NULL` 제외는 세 run에 걸쳐 적용되지 않는다(운영과의 차이로 기록).
+- 후보 = 세 run의 클러스터 중 크기 ≥3(`min_size=3`, split_v2 조각 제외). 카테고리는 전부 `미분류`(뉴스레터가 없다), `split_v2`는 `cluster_meta`에서.
+- 추출: `evaluation.llm.evalset.stratified_sample(candidates, n=15, seed=20261006, hard_fraction=0.0, warmup=2, min_size=3)` — 크기 버킷(3–4 / 5–9 / 10+) 균등 배분 5·5·5, 버킷 안은
+  (`미분류`, split_v2) 비례, 기사 중복 클러스터 제외(`used` 규칙). `hard_fraction=0`인 이유: 운영 FAIL 기록이 없어 어려운 사례를 정의할 수 없다.
+  **eval 15 + warmup 2.** warmup 2개는 설정 오류 확인용 스모크로 먼저 돌리고(결과는 기록하되 E0 집계에서 제외), 설정 오류가 있으면 고친 뒤 eval을 시작한다 —
+  모델 품질에 속하는 실패(스키마 소진·length·content_filter·폴백)는 설정 오류가 아니다.
+- 후보가 15개 미만이면 하루씩 앞으로 늘려(D₀, D₋₁; 최대 5일) 다시 뽑는다. 5일로도 9개 미만이면 **void(프레임 부족)**로 기록하고 반출을 다시 한다.
+- 매니페스트(`evaluation/llm/evalsets/e0-baseline-v1.jsonl`)에는 기사 id·URL·언론사·본문/제목 sha256·길이만 커밋한다(ADR 0023). 본문은 `data/`(gitignore).
+- E0 클러스터의 기사 id는 뒤의 평가셋(bake-off·A/B)에서 **중복 제외** 대상이다.
+
+**A8.2 파이프라인 구성 — 실행 전에 고정**
+- 코드: `origin/main`의 한 커밋 SHA(E0 러너 PR의 병합 커밋). 러너는 `git rev-parse HEAD`가 등록 SHA와 같고 `git status --porcelain`이 비어 있을 때만 시작한다. SHA는 실행 전
+  "실행 전 기록"에 적는다(이 Addendum을 쓰는 지금은 러너가 없어 적을 수 없다).
+- 설정: 그 SHA의 `ai_workspace/config/settings.py` 기본값 전부. 특히 `FAITHFULNESS_GATE_MODE=enforce`, `FAITHFULNESS_BLOCKING_TYPES=numbers,quotes`, `TONE_DRIFT_GATE_MODE=enforce`,
+  `TONE_DRIFT_BLOCKING_TYPES=numbers,dates,entities_added`, `MAX_RETRY_TONE_DRIFT=1`, `JUDGE_GATE_MODE=shadow`, `JUDGE_MIN_CRITERION_SCORE=3`, `JUDGE_MAX_UNSUPPORTED_CLAIMS=0`,
+  `MAX_RETRY_CLUSTER_EVAL=2`, `MAX_RETRY_NEWSLETTER_EVAL=3`, `MAX_RETRY_TONE_VALIDATION=2`, `MAX_LLM_CALL_RETRIES=10`, `LLM_REQUEST_TIMEOUT_S=60`, `LLM_CALL_DEADLINE_S=180`,
+  `NEWSLETTER_WORKERS=3`. 모델·프로바이더는 레지스트리 기본값(generator/tone `gemini-3.5-flash-lite`, judge `gemini-3.1-flash-lite`), 온도·`max_tokens`는 코드 값
+  (클러스터 평가 0.1/2048, 본문 0.2/8192, 메타 0.2/1024, judge 0.1/2048, 문체 0.4/4096). `reasoning_effort`는 **설정하지 않는다**(프로바이더 기본값; 코드에 없다).
+  러너는 시작 시 이 값들을 읽어 yaml과 다르면 시작하지 않고, 실제 값을 run manifest에 적는다. 허용되는 env 차이는 DB 대신 파일 저장소를 가리키는 것과 E0 계측뿐이다.
+- 운영과 다른 점(선언): (1) 저장소가 Postgres가 아니라 동결 파일 저장소. (2) `embed_newsletter_node`의 임베더는 벡터 대신 형식체 텍스트 sha256을 기록하고 `None`을 돌려 준다
+  (Mac 환경에 FlagEmbedding이 없다; 이 벡터를 읽는 하류 노드는 없다). 저장본 벡터는 뒤에 Colab에서 같은 모델로 계산한다. 뉴스레터당 지연에 임베딩 시간이 빠진다.
+  (3) 계측: `RecordingClient`(bake-off 러너와 같은 것)를 역할별 `get_client` 자리에, 문체 변환기에 로컬 폴백 플래그 서브클래스를 주입한다. 프롬프트·온도·`max_tokens`·재시도 로직은
+  건드리지 않는다. 사용자 결정으로 (2) 대신 생성 전체를 Colab CPU에서 실제 임베더로 돌릴 수 있고, 그 경우 "실행 전 기록"에 적는다(지표 정의는 같다).
+
+**A8.3 지표 — 정의**
+모든 비율에 Wilson 95% CI를 붙인다. 분모를 매번 적는다. 가설 검정은 없다.
+1. **완주 분포**: 클러스터별 최종 상태 ∈ {completed, skipped(클러스터 평가 FAIL), failed(`failure_reason` ∈ faithfulness / generator_fallback / judge_unavailable / judge), error(예외)}와 건수.
+   완주율 = completed / 15.
+2. **첫 시도 스키마 통과율**(bake-off G3 정의 재사용): 모델 응답을 한 번이라도 받은 구조화 호출(`parsed` 또는 `schema_failures>0` 또는 error ∈ {length, content_filter}) 중
+   `parsed`이고 `schema_failures==0`인 비율. 전체와 purpose별(cluster_eval / newsletter_content_gen / newsletter_meta_gen / newsletter_eval / tone_convert).
+3. **재시도**: `complete()`당 `attempts` 분포, `schema_failures` 합, 전송 실패(429 / 5xx / timeout·connection / deadline) 건수(메트릭 수집기의 실패 레코드와 `http_status`에서),
+   **429 비율** = 429 응답 / 전체 HTTP 시도. 그래프 수준: 클러스터당 생성 시도 수(`newsletter_retry_count`), 클러스터 평가 재시도 수, 문체 재변환(드리프트) 수, 문체 검증 재시도 수(`convert()` 안 호출 수).
+4. **지연**: 호출별 `latency_s` p50/p95(purpose별); 클러스터별 벽시계(init→END) p50/p95; 저장된 뉴스레터별 벽시계 p50/p95(재시도 포함)와 "마지막 성공 시도의 호출 지연 합"(단일 패스 근사, G4 비교용).
+5. **토큰·비용**: 호출별 prompt/completion 토큰, 응답에 `total_tokens`가 있으면 `hidden = total − prompt − completion`(thinking 추정), `core.llm.pricing`으로 실행일 단가 비용. 클러스터별·저장본별 합계,
+   purpose별 **문자/토큰 비율**(prompt 문자 수 / prompt 토큰). 전체 비용 USD와 청구 환율 기준 ₩.
+6. **결정론 사실성 검사기**: 생성 시도마다 `blocking.numbers`·`blocking.quotes` 건수, `advisory.entities` 건수, `number_total`, 필드별(title/sentence/content) 분포. 비율: 첫 초안 중 미지원 수치 ≥1(G1 상당),
+   미지원 인용 ≥1, 참고 개체명 ≥1; 최종 초안에서도 같은 비율; 차단으로 인한 재생성 건수.
+7. **문체 드리프트**: 변환 시도 중 차단 드리프트(numbers / dates / entities_added) 비율, 형식체 폴백 저장 비율, 로컬 폴백(`_fallback_convert`) 사용 비율. 추가로 저장된 캐주얼 `sentence`를
+   `check_tone_drift`에 **오프라인으로** 넣어 차단됐을 건수를 센다(`TONE_FIELDS`가 sentence를 빼는 C4의 크기).
+8. **judge v2 shadow**: 채점된 초안의 기준별 점수(faithfulness/coverage/coherence/style) 분포, `unsupported_claims` 수, 기본 임계값 기준 PASS/FAIL 비율, `judge_unavailable` 건수,
+   `unsupported_claims`의 초안 내 정확 부분 문자열 위치 추적 성공률(C17).
+9. **클러스터 평가기**: decision·confidence 분포(`parsed=False` 행은 따로 센다, A3), 이상치 수, `sub_groups` 수, 재시도 수, "두 번째 서브그룹 ≥3건이 버려진" 건수(C15).
+10. **연결 정합**: 저장본마다 `|current_article_ids| − |current_articles|`(제외됐는데 연결된 기사 수, C2).
+11. **규칙 위반(shadow, 오프라인·결정론)**: 저장 형식체 본문 길이(자)·문단 수·첫 어절 금지어·감정 자극어 수·제목 길이·sentence 길이·키워드 수와 `"뉴스"` 필러·카테고리 유효성. 비율만.
+12. **입력 통계**: 클러스터별 기사 수·언론사 수, 본문 길이, 1,500자 절단 비율, 같은 언론사 제목 near-dup 쌍(rapidfuzz `ratio ≥ 85`) 수.
+13. **실패 분류**(고정 목록): infra(401/402/403/404/kill_switch) · transport(429/5xx/timeout/deadline) · schema(검증 소진) · length · content_filter · generator_fallback · faithfulness_block ·
+    judge_unavailable · judge_fail(shadow→통과) · cluster_eval_fail · save_error · exception(기타). 클러스터마다 1차 결과 하나 + 사건 건수.
+사후에 더한 지표는 리포트에 "사후(post hoc)"로 표기한다.
+
+**A8.4 호출마다 기록하는 것**(`data/experiments/e0/<run>/calls.jsonl`, 저장소 밖): run, cluster_id, run_k(날짜 창), graph_attempt, purpose, provider, model, prompt_sha12(messages JSON sha256 앞 12자),
+prompt_chars, prompt_tokens, completion_tokens, total_tokens(없으면 null), hidden_tokens, cost_usd, latency_s, attempts, schema_failures, parsed, first_try_schema_pass, error, http_status, started_at.
+**프롬프트·응답 텍스트는 기록하지 않는다.** 초안·저장본 텍스트는 같은 디렉터리의 `newsletters.jsonl`에만(라벨링 입력), 리포트에는 sha256과 길이만.
+
+**A8.5 비용 상한·중단**
+- 상한 **$1.00**(warmup 2 + eval 15 + 합성 입력 pre-flight 5호출 포함). 기대값 ≈$0.62(실행 계획 2.5의 산술: 클러스터당 기대 $0.035, 최악 $0.101).
+- 러너는 호출 전에 `누적 비용 + 이 호출의 최악 비용(prompt 문자 × 1.5 토큰/자 × 입력 단가 + max_tokens × 출력 단가)`이 상한을 넘으면 보내지 않고 멈춘다(warmup `budget.py`의 규칙).
+  이렇게 멈춘 실행은 **void가 아니라 "예산으로 중단된 부분 실행"**으로, 끝난 클러스터까지 집계해 보고한다.
+- 인프라 실패(401/402/403/404, 킬 스위치, 레지스트리 키 없음)는 즉시 멈춘다. 처리(어느 결과든)가 끝난 eval 클러스터가 8개 미만이면 void, 이상이면 부분 실행.
+- 벽시계 상한 2시간: 넘으면 새 클러스터를 시작하지 않는다(진행 중은 끝낸다).
+- 429는 자동으로 멈추지 않고 비율만 잰다(E0의 측정 대상).
+- pre-flight(합성 입력, 운영 경로 5개 스키마 각 1회)는 eval 전에 돌리고 결과 표(parsed·지연·토큰·hidden)를 리포트에 넣는다. 실제 기사 본문은 유료 티어로만 보낸다(설계 3.7).
+
+**A8.6 void 실행**: (a) 코드 SHA 불일치 또는 더티 트리, (b) A8.2 설정 중 하나라도 다름, (c) 표본 매니페스트·반출본·임베딩 sha256이 "실행 전 기록"과 다름, (d) 처리 끝난 eval 클러스터 < 8(인프라 실패),
+(e) 러너가 아닌 수단으로 호출을 섞음. void는 비용·사유와 함께 A8.x에 적고, 같은 표본으로 다시 돈다(프레임이 바뀌면 새 표본·새 기록). **숫자를 좋게 하려는 재실행은 없다** — E0은 유효 실행 1회다.
+라벨은 void와 무관하게 유효 실행의 저장본에만 단다.
+
+**A8.7 보고**: `reports/llm/e0_baseline_v1.json`(집계 + 클러스터별 행: id·sha·건수·비율만)과 `e0_baseline_v1.md`. 머리말: 실행 명령, 코드 SHA, 실행 일시, 반출 T0·날짜 창·임베딩 sha256,
+n(eval/warmup/처리 완료), seed, 비용(USD, 청구 환율·₩), Colab CU, 라벨 시간 실측, "결과 열람 여부"(이 Addendum 등록 시점: 미열람), 선언된 이탈(A8.2). 기사·뉴스레터 **텍스트는 싣지 않는다**(ADR 0023,
+`reports/README.md`). 부분 실행·void도 그대로 보고하고 `reports/README.md`에 행을 더한다. ADR 0010 "증거"에는 첫 실제 차단율을 날짜와 함께 덧붙인다(판정 변경 아님).
+
+**A8.8 사람 라벨 부분집합**(`docs/eval/labeling-guide.md`의 정의 그대로, 가이드는 고치지 않는다)
+- 대상: E0 유효 실행의 **저장본 전부(≤15)**와 그 클러스터(≤15). 저장본이 15개 미만이면 있는 만큼. 라벨러 1인, 밤 세션 ≤1h.
+- 순서: 클러스터 라벨(`single_event`, `outlier_ids`, `key_facts` 3~6 + 근거 id)을 **출력을 보기 전에** 전부 → 출력 라벨(`fact_errors` 구간·유형, `key_facts_covered`, `style` 1~5, `publishable`,
+  `tone_drift` — 저장된 캐주얼본 대 형식체 초안). 출력은 불투명 id·무작위 순서, 게이트·judge 결과는 숨긴다(bake-off `export-blind` 형식).
+- 재라벨(intra-rater): 1차 뒤 **48시간 이상**, 출력 5건 + 클러스터 3개(`relabel.json`에 러너가 seed로 고른 것). κ는 보고만(n이 작아 판정에 쓰지 않는다).
+- 시간: 클러스터 15 × 4분 = 1.0h, 출력 15 × 4분 = 1.0h, 재라벨 8 × 3.5분 ≈ 0.5h → **≈2.5h**(3밤). 마감 = 표본 중 가장 오래된 기사의 `crawled_at` + 30일(ADR 0023).
+- 쓰임(기술 통계): 사람 발행 가능률(CI), 사실 오류 유형 분포, **결정론 검사기의 정밀도·재현율**(수치·인용 구간 대 사람 `fact_errors` — ADR 0010이 "측정하지 않은 것"으로 적은 첫 측정),
+  judge v2 shadow와 사람 `publishable`의 κ(CI와 함께, n≤15라 선정에 쓰지 않음), 핵심 사실 커버리지. 이 라벨로 발동되는 결정 규칙은 없다.
+
+**A8.9 바꾸지 않는 것**: 표본 추출 규칙·seed·n, 설정, 지표 정의, 상한·중단·void 규칙, 라벨 대상·시간. 바꾸려면 실행 전이면 A8.x로, 실행 뒤면 "결과 열람 후 변경"으로 적는다.
+**실행 전 기록(A8.1 추가 예정, 결과 열람 전)**: 코드 SHA, 반출 T0·행 수·매니페스트 sha256, 임베딩 sha256·fp16/fp32 코사인, 세 run의 멤버십 스냅숏 sha256, 표본 매니페스트 sha256, 사용자 결정(임베더 이탈 방식, 라벨 축소 여부).

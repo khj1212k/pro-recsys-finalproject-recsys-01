@@ -1,0 +1,135 @@
+# 사전 등록(pre-registration) - docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md Addendum A8
+# E0: main의 뉴스레터 생성 파이프라인을 지금 코드 그대로 실제 수집 기사에 돌려 "전(before)" 숫자를 재는
+# 기술 통계 측정. 가설·결정 규칙 없음. 사람이 읽는 원본은 A8이고, 둘이 다르면 A8이 옳다.
+# 결과 파일이 없는 상태에서 커밋됐다(reports/llm/ 없음, 생성 완주 기록 없음). 실행 전 변경은 아래
+# amendments와 A8.x에 같은 내용으로 적는다. 실행이 시작된 뒤의 변경은 새 id(e0-baseline-v2)로 파일을 따로 만든다.
+id: e0-baseline-v1
+registered_at: "2026-10-06"
+adr: docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md#A8
+plan: docs/design/2026-10-06-llm-v2-execution-plan.md
+kind: descriptive_baseline  # 가설 없음, 결정 규칙 없음
+amendments: []
+
+# 실행 전에 채운다(결과 열람 전). 비어 있으면 러너는 시작하지 않는다.
+pre_run_record:
+  code_sha: null                 # origin/main 커밋. 러너는 HEAD 일치 + 클린 트리를 요구한다
+  export_t0_kst: null            # Tier 0 VM 읽기 전용 COPY 시각
+  export_rows: null
+  export_manifest_sha256: null
+  embeddings_sha256: null        # emb.f16.npy
+  embeddings_fp16_vs_fp32_cos: {p10: null, min: null, n: 100}
+  snapshot_sha256: {run1: null, run2: null, run3: null}   # 세 날짜 창의 멤버십(ids) 스냅숏
+  sample_manifest_sha256: null   # evaluation/llm/evalsets/e0-baseline-v1.jsonl
+  user_decisions:
+    newsletter_embedder: null    # "record_only_mac" | "real_colab_cpu"
+    label_subset: null           # "all_saved_le_15" | "reduced_10"
+
+sample:
+  frame: frozen_export_of_tier0_news_raw   # extract_status=ok, 본문 비어 있지 않음
+  clustering:
+    code: NewsClusterer.cluster_news       # 운영 코드 그대로, 저장소만 파일 구현
+    min_cluster_size: 3
+    min_samples: 2
+    lookback_hours: 24
+    pseudo_now_kst: "06:00"                # T0 직전 완결된 KST 날짜 D1<D2<D3 각각 06:00 KST(UTC로 변환해 비교)
+    days: 3
+    extend_days_if_short: {max_days: 5, min_candidates: 15, void_below: 9}
+  stratified_sample:
+    function: evaluation.llm.evalset.stratified_sample
+    n: 15
+    seed: 20261006
+    hard_fraction: 0.0                     # 운영 FAIL 기록이 없어 어려운 사례를 정의할 수 없다
+    warmup: 2                              # 설정 오류 확인용 스모크, 집계 제외
+    min_size: 3
+    size_buckets: [[3, 4], [5, 9], [10, null]]   # 균등 배분 5·5·5
+  manifest_path: evaluation/llm/evalsets/e0-baseline-v1.jsonl   # id·URL·언론사·sha256·길이만 커밋
+  exclude_from_later_evalsets: true        # E0 클러스터의 기사 id는 bake-off·A/B 평가셋에서 중복 제외
+
+pipeline:
+  roles:
+    generator: {provider: gemini, model: gemini-3.5-flash-lite}
+    judge: {provider: gemini, model: gemini-3.1-flash-lite}
+    tone: {provider: gemini, model: gemini-3.5-flash-lite}
+  settings:                                # ai_workspace/config/settings.py 기본값. 러너가 읽어 다르면 시작하지 않음
+    FAITHFULNESS_GATE_MODE: enforce
+    FAITHFULNESS_BLOCKING_TYPES: "numbers,quotes"
+    TONE_DRIFT_GATE_MODE: enforce
+    TONE_DRIFT_BLOCKING_TYPES: "numbers,dates,entities_added"
+    MAX_RETRY_TONE_DRIFT: 1
+    JUDGE_GATE_MODE: shadow
+    JUDGE_MIN_CRITERION_SCORE: 3
+    JUDGE_MAX_UNSUPPORTED_CLAIMS: 0
+    MAX_RETRY_CLUSTER_EVAL: 2
+    MAX_RETRY_NEWSLETTER_EVAL: 3
+    MAX_RETRY_TONE_VALIDATION: 2
+    MAX_LLM_CALL_RETRIES: 10
+    LLM_REQUEST_TIMEOUT_S: 60
+    LLM_CALL_DEADLINE_S: 180
+    NEWSLETTER_WORKERS: 3
+    HDBSCAN_MIN_CLUSTER_SIZE: 3
+    HDBSCAN_MIN_SAMPLES: 2
+    CLUSTER_LOOKBACK_HOURS: 24
+  call_params_as_in_code:                  # 코드 값, 바꾸지 않음 (temperature / max_tokens)
+    cluster_eval: {temperature: 0.1, max_tokens: 2048}
+    newsletter_content_gen: {temperature: 0.2, max_tokens: 8192}
+    newsletter_meta_gen: {temperature: 0.2, max_tokens: 1024}
+    newsletter_eval: {temperature: 0.1, max_tokens: 2048}
+    tone_convert: {temperature: 0.4, max_tokens: 4096}
+  reasoning_effort: unset                  # 코드에 없다(C7). 프로바이더 기본값
+  declared_deviations:
+    - store: file                          # Postgres 대신 동결 파일 저장소
+    - newsletter_embedder: record_only     # 기본안. 벡터 대신 형식체 sha256 기록 후 None(하류 노드가 읽지 않음)
+    - instrumentation: [RecordingClient, tone_fallback_flag]   # 프롬프트·온도·max_tokens·재시도 불변
+  allowed_env_differences: [store_target, instrumentation]
+
+metrics:                                   # 정의는 A8.3. 모든 비율에 Wilson 95% CI, 분모 명시, 가설 검정 없음
+  - completion_distribution                # completed / skipped / failed(reason) / error
+  - first_try_schema_pass_rate             # bake-off G3 정의, purpose별
+  - retries                                # attempts, schema_failures, 429/5xx/timeout/deadline, 429 비율, 그래프 수준 재시도
+  - latency                                # 호출 p50/p95(purpose별), 클러스터 벽시계, 저장본 벽시계, 단일 패스 근사
+  - tokens_cost                            # prompt/completion/total/hidden, cost_usd, 문자/토큰 비율
+  - faithfulness_checker_rates             # numbers/quotes 차단, entities 참고, 필드별, 첫 초안·최종 초안
+  - tone_drift_rates                       # 차단 유형별, 형식체 폴백, 로컬 폴백, 저장 sentence 오프라인 검사(C4)
+  - judge_v2_shadow                        # 기준별 점수, unsupported_claims, PASS/FAIL, judge_unavailable, 위치 추적률(C17)
+  - cluster_evaluator                      # decision/confidence(parsed=False 분리), outlier, sub_groups, 두 번째 그룹 폐기 건수(C15)
+  - link_integrity                         # 제외됐는데 연결된 기사 수(C2)
+  - style_rules_shadow                     # 길이·문단·첫 어절·금지어·제목·sentence·키워드 필러·카테고리
+  - input_stats                            # 기사 수·언론사 수·길이·절단율·near-dup
+  - failure_taxonomy:
+      [infra, transport, schema, length, content_filter, generator_fallback, faithfulness_block,
+       judge_unavailable, judge_fail, cluster_eval_fail, save_error, exception]
+
+per_call_record_fields:
+  [run, cluster_id, run_k, graph_attempt, purpose, provider, model, prompt_sha12, prompt_chars,
+   prompt_tokens, completion_tokens, total_tokens, hidden_tokens, cost_usd, latency_s, attempts,
+   schema_failures, parsed, first_try_schema_pass, error, http_status, started_at]
+never_recorded: [prompt_text, response_text]   # 초안 텍스트는 data/experiments/e0/<run>/newsletters.jsonl에만(라벨링 입력)
+
+budget:
+  cap_usd: 1.00                            # warmup 2 + eval 15 + pre-flight 5호출 포함. 기대 ≈ 0.62
+  expected_usd: 0.62
+  worst_case_tokens_per_char: 1.5          # 호출 전 최악 비용 추정(warmup budget.py 규칙)
+  stop_on_infra: [401, 402, 403, 404, kill_switch, missing_api_key]
+  void_if_processed_eval_clusters_below: 8
+  wall_clock_cap_hours: 2
+  rate_limit_429: measure_only
+  preflight: {schemas: [ClusterEval, NewsletterContent, NewsletterMeta, NewsletterEvalV2, ToneResult], input: synthetic, calls: 5}
+  valid_runs: 1                            # 숫자를 좋게 하려는 재실행 없음. void만 같은 표본으로 재실행
+
+report:
+  json: reports/llm/e0_baseline_v1.json
+  md: reports/llm/e0_baseline_v1.md
+  header: [command, code_sha, run_at, export_t0, day_windows, embeddings_sha256, n_eval, n_warmup, n_processed,
+           seed, cost_usd, billing_fx, cost_krw, colab_cu, label_hours_actual, results_viewed, declared_deviations]
+  text_allowed: false                      # 기사·뉴스레터 텍스트 금지(ADR 0023). id·sha256·건수·비율만
+  also_update: [reports/README.md, "docs/adr/0010 증거(첫 실제 차단율, 날짜와 함께)"]
+
+human_labels:                              # docs/eval/labeling-guide.md 정의 그대로. 가이드는 고치지 않음
+  targets: {outputs: all_saved_le_15, clusters: matching}
+  order: clusters_first_then_blind_outputs
+  cluster_labels: [single_event, outlier_ids, key_facts]
+  output_labels: [fact_errors, key_facts_covered, style, publishable, tone_drift]
+  relabel: {outputs: 5, clusters: 3, min_hours_between_rounds: 48, kappa_use: report_only}
+  hours_estimate: {clusters: 1.0, outputs: 1.0, relabel: 0.5, total: 2.5, session_max_hours: 1}
+  deadline_rule: oldest_sample_article_crawled_at_plus_30_days   # ADR 0023
+  decision_rules_triggered: none           # 기술 통계. 검사기 정밀도·재현율, judge κ(CI), 발행 가능률(CI)만 보고
