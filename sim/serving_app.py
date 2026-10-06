@@ -11,6 +11,18 @@ What is not: the repository (an in-memory one that answers the same questions as
 the simulator's state), the HTTP routes (sim.fake_app), the clock (virtual), and the embeddings
 (sim.sim_embeddings - a keyword/category hash, not BGE-M3).
 
+Which serving path this is. The registered E9/E10 results (reports/sim/, CI run 37400003072) were
+produced by this harness against the serving code before ADR 0033: a nightly long-term vector and a
+short-term mean vector read through `long_term_and_categories` / `short_term_vector`. The repository
+below follows the contract after ADR 0033 instead: the long-term profile is the incremental state
+updated at every click (`profile_state`), the short-term vector is built by the pipeline from
+`recent_clicks` (clicks strictly before the request), and `item_window_counts` exists for the
+feature adapter. That is a different world from the one ADR 0025 A1.1 registered, so a run of this
+file does not reproduce those reports and is not a re-run of them (ADR 0025 A1.6, 2026-10-06).
+Not wired in here: the serving feature adapter (`feature_fn` is off, slot logs keep the heuristic's
+four terms) and the out-of-path shadow thread (the shadow scores in the request path, which keeps a
+run a pure function of its spec).
+
 Three things are added around the service for the off-policy experiments, none of which changes
 what policy A serves:
 - target slates: every time a ranking is computed, the slates of the target policies are computed
@@ -25,7 +37,7 @@ import itertools
 import sys
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
@@ -40,8 +52,10 @@ from app.recsys.metrics import RecsysCounters  # noqa: E402
 from app.recsys.pipeline import RealtimeRecommender  # noqa: E402
 from app.recsys.scoring import HeuristicScorer, HeuristicWeights, ScorerStack  # noqa: E402
 from app.recsys.service import RecommendationService  # noqa: E402
-from app.recsys.types import POLICY_NONE, DeterministicList, NewsletterMeta  # noqa: E402
+from app.recsys.types import POLICY_NONE, DeterministicList, NewsletterMeta, ProfileState  # noqa: E402
 from app.recsys.types import Item as RecsysItem  # noqa: E402
+from recsys_core.profile import NO_CATEGORY, apply_event  # noqa: E402
+from recsys_core.serving import ClickEvent, WindowCounts, epoch_seconds  # noqa: E402
 
 from sim.catalog import Catalog, Item  # noqa: E402
 from sim.click_model import ClickModel, ClickModelConfig  # noqa: E402
@@ -75,6 +89,7 @@ def serving_config(explore_slots: int = 2, fatigue_mode: str = "log") -> RecsysC
         explore_enabled=explore_slots > 0,
         explore_slots=max(explore_slots, 0),
         fatigue_mode=fatigue_mode,
+        feature_fn=None,  # the serving feature adapter is not part of this harness (see the module docstring)
     )
 
 
@@ -112,15 +127,33 @@ class SimRecsysRepository:
         clicks = self.w.clicks_by_user.get(user_id)
         return clicks[-1][0] if clicks else None
 
-    def long_term_and_categories(self, user_id: int) -> Tuple[Optional[np.ndarray], List[int]]:
+    def profile_state(self, user_id: int) -> Tuple[ProfileState, List[int]]:
         u = self.w.users_by_id.get(user_id)
         if u is None:
-            return None, []
-        return self.w.long_term.get(user_id), sorted(u.categories)
+            return ProfileState(), []
+        return self.w.profile_states.get(user_id, ProfileState()), sorted(u.categories)
 
-    def short_term_vector(self, user_id: int, since: datetime, limit: int) -> Optional[np.ndarray]:
-        recent = [nid for _, nid, at in reversed(self.w.clicks_by_user.get(user_id, ())) if at >= since][:limit]
-        return self.w.mean_embedding(recent)
+    def recent_clicks(self, user_id: int, since: datetime, until: datetime, limit: int) -> List[ClickEvent]:
+        """Clicks in [since, until), the latest `limit` by (whole second, newsletter id, log id) - the SQL order."""
+        clicks = sorted(
+            ((epoch_seconds(at), nid, log_id, at) for log_id, nid, at in self.w.clicks_by_user.get(user_id, ())
+             if since <= at < until),
+            reverse=True,
+        )[:limit]
+        return [ClickEvent(at, self.w.embeddings[nid], nid) for _, nid, _, at in clicks]
+
+    def item_window_counts(self, news_letter_ids: Sequence[int], click_starts: Sequence[datetime],
+                           inview_start: datetime, end: datetime) -> Dict[int, WindowCounts]:
+        """Clicks in [click_starts[j], end) and impressions in [inview_start, end), all users. Items without a
+        row in any window are left out. Nothing in this harness reads it (the feature adapter is off)."""
+        out: Dict[int, WindowCounts] = {}
+        for nid in news_letter_ids:
+            clicked_at = self.w.clicks_by_item.get(int(nid), ())
+            clicks = tuple(sum(1 for at in clicked_at if start <= at < end) for start in click_starts)
+            inviews = sum(1 for at in self.w.impressions_by_item.get(int(nid), ()) if inview_start <= at < end)
+            if any(clicks) or inviews:
+                out[int(nid)] = WindowCounts(clicks, inviews)
+        return out
 
     def onboarding_vector(self, user_id: int) -> Optional[np.ndarray]:
         u = self.w.users_by_id.get(user_id)
@@ -186,7 +219,8 @@ class SimRecsysRepository:
         for nid in news_letter_ids:
             if self._is_visible(nid):
                 it = self.w.catalog.by_id[int(nid)]
-                out[int(nid)] = RecsysItem(int(nid), self.w.embeddings[int(nid)], it.created_at, it.raw_news_count)
+                out[int(nid)] = RecsysItem(int(nid), self.w.embeddings[int(nid)], it.created_at, it.raw_news_count,
+                                           it.category_id)
         return out
 
     def latest_batch(self, user_id: int):
@@ -349,10 +383,15 @@ class ServingBackend(FakeBackend):
         self.item_meta = [NewsletterMeta(it.news_letter_id, it.created_at, it.raw_news_count) for it in catalog.items]
 
         # state the repository reads
-        self.long_term: Dict[int, np.ndarray] = {}
+        self.profile_states: Dict[int, ProfileState] = {}  # user_profile_state: updated at every click
         self.clicks_by_user: Dict[int, List[Tuple[int, int, datetime]]] = {}  # (log_id, newsletter, at)
         self.clicked_by_user: Dict[int, Set[int]] = {}
+        self.clicks_by_item: Dict[int, List[datetime]] = {}
         self.impressions_by_user: Dict[int, List[Tuple[datetime, int]]] = {}
+        self.impressions_by_item: Dict[int, List[datetime]] = {}
+        # event timestamps (see now()): the driver's instant the last event was stamped at, and its stamp
+        self._stamp_base: Optional[datetime] = None
+        self._stamp: Optional[datetime] = None
 
         # logs, as the service wrote them
         self.request_rows: List[dict] = []
@@ -392,6 +431,33 @@ class ServingBackend(FakeBackend):
     def close(self) -> None:
         self.service.shutdown()
 
+    # -- time
+    def now(self) -> datetime:
+        """The virtual clock, with ties broken in arrival order.
+
+        The driver sets the clock once per session, so every /today request and click of a session
+        would carry the same instant. The serving path reads "clicks strictly before the request"
+        (RecsysRepository.recent_clicks), and a click that is not strictly earlier than the next
+        request would be missing from that request's state - which no real clock does. So each
+        request and each click is stamped one microsecond after the previous event of the same
+        instant (stamp_event). Only this backend does it: sim.driver and the toy backends of
+        ADR 0019 keep their clock, and so do their numbers."""
+        base = super().now()
+        return self._stamp if base == self._stamp_base and self._stamp is not None else base
+
+    def stamp_event(self) -> datetime:
+        """Called once when a /today request or a click arrives; now() returns this stamp until the next event."""
+        base = super().now()
+        if base == self._stamp_base:
+            self._stamp += timedelta(microseconds=1)
+        else:
+            # A new instant. If the previous instant's events already ran past it (two sessions a few
+            # microseconds apart), keep going from the last stamp so the stamps never go back.
+            ran_past = self._stamp is not None and self._stamp_base < base <= self._stamp
+            self._stamp = self._stamp + timedelta(microseconds=1) if ran_past else base
+            self._stamp_base = base
+        return self._stamp
+
     # -- helpers
     def mean_embedding(self, ids: Sequence[int]) -> Optional[np.ndarray]:
         vecs = [self.embeddings[i] for i in ids if i in self.embeddings]
@@ -407,6 +473,7 @@ class ServingBackend(FakeBackend):
 
     # -- /newsletters/today: the real route's three steps (recommend, display, log after the response)
     def respond_today(self, u: _User) -> TodayAnswer:
+        self.stamp_event()
         rec = self.service.recommend(u.user_id, fallback_repo=self.repo)
         # Display stage: every id the repository returns is displayable, so only the 20-item cap applies.
         shown = list(rec.news_letter_ids)[: self.today_size]
@@ -428,28 +495,33 @@ class ServingBackend(FakeBackend):
         for row in rows:
             self.slots.append(row, now)
             self.impressions_by_user.setdefault(row["user_id"], []).append((now, row["news_letter_id"]))
+            self.impressions_by_item.setdefault(row["news_letter_id"], []).append(now)
 
     def record_click(self, u: _User, nid: int, request_id: Optional[str] = None,
                      position: Optional[int] = None) -> int:
         with self.lock:
+            now = self.stamp_event()
             log_id = super().record_click(u, nid, request_id, position)
-            now = self.now()
             self.click_rows.append(ClickRow(log_id, u.user_id, nid, now, request_id, position))
             self.clicks_by_user.setdefault(u.user_id, []).append((log_id, nid, now))
             self.clicked_by_user.setdefault(u.user_id, set()).add(nid)
+            self.clicks_by_item.setdefault(nid, []).append(now)
+            self.apply_click(u.user_id, nid, now)
             return log_id
 
-    # -- nightly job stand-in (ADR 0025 A1.1)
+    def apply_click(self, user_id: int, nid: int, clicked_at: datetime) -> None:
+        """The click API's profile update (app.recsys.profile_store.apply_click): the long-term state takes
+        the click in the same step that writes the click row. The arithmetic is recsys_core.profile's."""
+        state = self.profile_states.get(user_id, ProfileState())
+        category = self.catalog.by_id[nid].category_id
+        hist = apply_event(state.hist, epoch_seconds(clicked_at), self.embeddings[nid],
+                           NO_CATEGORY if category is None else int(category))
+        last = clicked_at if state.last_event_at is None else max(state.last_event_at, clicked_at)
+        self.profile_states[user_id] = ProfileState(hist, last)
+
     def day_end(self) -> None:
-        """Long-term vector = mean embedding of the newsletters the user picked at onboarding or has
-        clicked so far (each once). Users with neither keep none."""
-        with self.lock:
-            for u in self.users_by_id.values():
-                clicked = [nid for _, nid, _ in self.clicks_by_user.get(u.user_id, ())]
-                ids = list(dict.fromkeys([*u.onboarding_ids, *clicked]))
-                vec = self.mean_embedding(ids)
-                if vec is not None:
-                    self.long_term[u.user_id] = vec
+        """Nothing runs at night for the request path: the long-term profile is kept up to date click by
+        click (ADR 0033). Before that, this was the nightly long-term vector of ADR 0025 A1.1."""
 
     # -- click-model probe
     def probe_view(self, model: ClickModel, items: Sequence[Item], profile, now: datetime, hist) -> None:

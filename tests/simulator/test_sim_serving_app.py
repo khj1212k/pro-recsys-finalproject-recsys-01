@@ -6,6 +6,7 @@ ranking functions over the logged eligible set, and that the instruments added f
 (target slates, click-model probe) do not change what the simulated users see or do.
 """
 
+import inspect
 from datetime import timedelta
 
 import numpy as np
@@ -18,11 +19,16 @@ from sim.serving_app import (  # noqa: E402,I001  (first: it puts backend/ on sy
     TARGET_POLICIES,
     PolicyRecommender,
     RankContext,
+    SimRecsysRepository,
 )
 
 from app.recsys.deadline import Deadline  # noqa: E402
 from app.recsys.exploration import POLICY_DETERMINISTIC, POLICY_EPS_UNIFORM, det_propensity  # noqa: E402
 from app.recsys.pipeline import RealtimeRecommender  # noqa: E402
+from app.recsys.repository import RecsysRepository  # noqa: E402
+from app.recsys.types import ProfileState  # noqa: E402
+from recsys_core.profile import rebuild, same_state  # noqa: E402
+from recsys_core.serving import epoch_seconds  # noqa: E402
 
 from sim.catalog import Item  # noqa: E402
 from sim.reference import REFERENCE_START  # noqa: E402
@@ -309,15 +315,113 @@ def test_repository_hides_newsletters_published_after_the_virtual_now_and_keeps_
     assert {m.news_letter_id for m in repo.window_meta(since)} == {it.news_letter_id for it in window}
 
 
-def test_long_term_vector_is_the_mean_of_onboarding_picks_and_clicks_after_each_night(world_a):
+def test_repository_implements_every_method_of_the_serving_contract():
+    """The serving code calls the repository through app.recsys.repository.RecsysRepository. A method the
+    protocol gains (or renames) must show up here as a failure, not as a fallback inside a run."""
+    declared = {name: fn for name, fn in vars(RecsysRepository).items()
+                if not name.startswith("_") and inspect.isfunction(fn)}
+    assert {"profile_state", "recent_clicks", "item_window_counts", "fatigued_among", "rollback"} <= set(declared)
+    for name, fn in declared.items():
+        implemented = getattr(SimRecsysRepository, name, None)
+        assert implemented is not None, f"SimRecsysRepository.{name} is missing"
+        assert list(inspect.signature(implemented).parameters) == list(inspect.signature(fn).parameters), name
+
+
+def test_long_term_profile_is_the_incremental_state_of_the_click_log(world_a):
+    """ADR 0033: the click API updates the profile state with each click. What is stored must be what the
+    rebuild job computes from the click log (recsys_core.profile.rebuild)."""
     b = world_a.backend
-    user_id = next(uid for uid, clicks in b.clicks_by_user.items() if len(clicks) >= 2)
-    u = b.users_by_id[user_id]
-    b.day_end()
-    ids = list(dict.fromkeys([*u.onboarding_ids, *(nid for _, nid, _ in b.clicks_by_user[user_id])]))
-    assert np.allclose(b.long_term[user_id], np.mean([b.embeddings[i] for i in ids], axis=0))
-    vec, categories = b.repo.long_term_and_categories(user_id)
-    assert vec is b.long_term[user_id] and categories == sorted(u.categories)
+    user_id = max(b.clicks_by_user, key=lambda uid: len(b.clicks_by_user[uid]))
+    clicks = b.clicks_by_user[user_id]
+    assert len(clicks) >= 3
+    state, categories = b.repo.profile_state(user_id)
+    rebuilt = rebuild((epoch_seconds(at), b.embeddings[nid], b.catalog.by_id[nid].category_id)
+                      for _, nid, at in clicks)
+    assert same_state(state.hist, rebuilt) and state.hist.hist_len == len(clicks)
+    assert state.last_event_at == max(at for _, _, at in clicks)
+    assert categories == sorted(b.users_by_id[user_id].categories)
+    # a user who never clicked has an empty state: the pipeline answers from the onboarding picks
+    silent = next(uid for uid in b.users_by_id if uid not in b.clicks_by_user)
+    assert b.repo.profile_state(silent)[0].hist.empty
+    assert np.allclose(b.repo.onboarding_vector(silent),
+                       np.mean([b.embeddings[i] for i in b.users_by_id[silent].onboarding_ids], axis=0))
+    assert b.repo.profile_state(10**9) == (ProfileState(), [])
+
+
+def test_recent_clicks_are_strictly_before_until_in_the_sql_order(world_a):
+    b = world_a.backend
+    user_id = max(b.clicks_by_user, key=lambda uid: len(b.clicks_by_user[uid]))
+    clicks = b.clicks_by_user[user_id]
+    first, last = clicks[0][2], clicks[-1][2]
+    got = b.repo.recent_clicks(user_id, first, last, 1000)
+    inside = [(log_id, nid, at) for log_id, nid, at in clicks if first <= at < last]
+    assert 0 < len(inside) < len(clicks)  # the click made at `until` itself is not in
+    assert [(c.news_letter_id, c.at) for c in got] == [
+        (nid, at) for _, nid, at in sorted(inside, key=lambda c: (epoch_seconds(c[2]), c[1], c[0]), reverse=True)]
+    assert all(np.array_equal(c.embedding, b.embeddings[c.news_letter_id]) for c in got)
+    assert b.repo.recent_clicks(user_id, first, last, 2) == got[:2]
+    assert b.repo.recent_clicks(user_id, last + timedelta(seconds=1), last + timedelta(days=1), 10) == []
+
+
+def test_item_window_counts_count_clicks_and_impressions_of_all_users_inside_each_window(world_a):
+    b = world_a.backend
+    nid = max(b.clicks_by_item, key=lambda i: len(b.clicks_by_item[i]))
+    clicked_at, shown_at = sorted(b.clicks_by_item[nid]), sorted(b.impressions_by_item[nid])
+    assert len(clicked_at) >= 2 and len(shown_at) > len(clicked_at)
+    end = clicked_at[-1]  # exclusive: the last click is outside every window
+    starts = (clicked_at[-1] - timedelta(hours=6), clicked_at[0])
+    unknown = 10**9
+    counts = b.repo.item_window_counts([nid, unknown], starts, shown_at[1], end)
+    assert set(counts) == {nid}  # an item without a row in any window is left out
+    assert counts[nid].clicks == tuple(sum(1 for at in clicked_at if s <= at < end) for s in starts)
+    assert counts[nid].clicks[1] == len(clicked_at) - sum(1 for at in clicked_at if at == end)
+    assert counts[nid].inviews == sum(1 for at in shown_at if shown_at[1] <= at < end)
+    assert b.repo.item_window_counts([nid], starts, shown_at[0], shown_at[0]) == {}
+
+
+def test_events_of_one_virtual_instant_are_stamped_in_arrival_order(world_a):
+    """The driver keeps the clock at the session start, and the serving path reads the clicks strictly
+    before a request. Without distinct stamps the click that leads to the next view of a session would
+    not be in that view's user state."""
+    b, log = world_a.backend, world_a.log
+    asked_at = {r["request_id"]: r["created_at"] for r in b.request_rows}
+    followed = 0
+    for before, after in zip(log.views, log.views[1:]):
+        if (before.user, before.session, before.day) != (after.user, after.session, after.day):
+            continue
+        # same session: the driver's clock did not move, the stamps did
+        made = [c.at for c in b.click_rows if c.request_id == before.request_id]
+        assert made and asked_at[before.request_id] < min(made) and max(made) < asked_at[after.request_id]
+        assert asked_at[after.request_id] - asked_at[before.request_id] < timedelta(milliseconds=1)
+        user_id = b.responses[after.request_id].user_id
+        seen = b.repo.recent_clicks(user_id, asked_at[after.request_id] - timedelta(hours=24),
+                                    asked_at[after.request_id], 1000)
+        assert {c.news_letter_id for c in seen} >= set(before.clicked_ids)
+        followed += 1
+    assert followed > 20
+    # every event has its own stamp and the stamps follow the order of arrival
+    stamps = sorted([*asked_at.values(), *(c.at for c in b.click_rows)])
+    assert len(set(stamps)) == len(stamps)
+    assert [r["created_at"] for r in b.request_rows] == sorted(asked_at.values())
+    assert [c.at for c in b.click_rows] == sorted(c.at for c in b.click_rows)
+
+
+def test_the_clock_is_the_driver_s_whenever_no_event_was_stamped_at_its_instant(world_a):
+    b = world_a.backend
+    kept = (b.clock.now(), b._stamp_base, b._stamp)
+    try:
+        t0 = REFERENCE_START + timedelta(days=30)
+        b.clock.set(t0)
+        assert b.now() == t0
+        assert [b.stamp_event(), b.stamp_event(), b.now()] == [t0, t0 + timedelta(microseconds=1),
+                                                               t0 + timedelta(microseconds=1)]
+        b.clock.set(t0 + timedelta(microseconds=1))  # the next session starts inside the stamps already used
+        assert b.now() == t0 + timedelta(microseconds=1) and b.stamp_event() == t0 + timedelta(microseconds=2)
+        b.clock.set(t0 - timedelta(days=1))  # a clock put back (tests do it) is read as it is
+        assert b.now() == t0 - timedelta(days=1) and b.stamp_event() == t0 - timedelta(days=1)
+    finally:
+        b.clock.set(kept[0])
+        b._stamp_base, b._stamp = kept[1], kept[2]
 
 
 # --------------------------------------------------------------------------- fatigue rule
