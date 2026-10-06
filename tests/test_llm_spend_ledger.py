@@ -470,6 +470,87 @@ def test_two_processes_never_reserve_past_the_shared_day_cap(tmp_path):
     assert totals.corrupt_lines == 0
 
 
+_KILLED_HOLDER_WORKER = """
+import json, sys, threading, time
+from core.llm.spend_ledger import CallKey, Caps, Reservation, SpendLedger
+
+path, name, victim = sys.argv[1], sys.argv[2], sys.argv[3] == "victim"
+caps = Caps(run_nusd=10**12, day_nusd=10**12, total_nusd=30_000)
+granted, lock = [], threading.Lock()
+
+def work(tid):
+    ledger = SpendLedger(path)  # 스레드마다 객체를 따로 만든다 - 프로세스 안 뮤텍스에 기대지 않는다
+    key = CallKey(run_id=f"{name}-{tid}", day="2026-10-06", provider="gemini", model="m", role="generator", purpose="p")
+    for _ in range(2 if victim else 40):
+        time.sleep(0.001)
+        result = ledger.reserve(caps=caps, key=key, nusd=500)
+        if isinstance(result, Reservation):
+            with lock:
+                granted.append(result.id)
+            if not victim:  # 죽을 프로세스는 예약만 하고 정산하지 않는다
+                ledger.settle(result, nusd=200, outcome="ok", basis="actual")
+
+print("ready", flush=True)
+sys.stdin.readline()
+threads = [threading.Thread(target=work, args=(t,)) for t in range(3)]
+for t in threads:
+    t.start()
+for t in threads:
+    t.join()
+print(json.dumps({"granted": granted}), flush=True)
+if victim:
+    time.sleep(600)  # 예약을 든 채 SIGKILL을 기다린다
+"""
+
+
+def test_processes_and_threads_stay_under_the_cap_when_one_process_is_killed_holding_reservations(tmp_path):
+    """프로세스 4개 x 스레드 3개가 한 원장을 쓰고, 그중 하나는 예약을 든 채 SIGKILL로 죽는다.
+
+    원장 줄을 처음부터 다시 계산해도 어느 예약 시점에서든 '정산 + 열린 예약'이 상한 이하이고, 죽은
+    프로세스의 예약은 열린 채(최악 비용) 계속 잡혀 있다.
+    """
+    path = _ledger(tmp_path).path
+    env = {**os.environ, "PYTHONPATH": AI_WORKSPACE + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    roles = ["victim", "worker", "worker", "worker"]
+    procs = [
+        subprocess.Popen([sys.executable, "-c", _KILLED_HOLDER_WORKER, str(path), f"p{i}", role],
+                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        for i, role in enumerate(roles)
+    ]
+    try:
+        for p in procs:
+            assert p.stdout.readline().strip() == "ready", p.stderr.read()
+        for p in procs:
+            p.stdin.write("go\n")
+            p.stdin.flush()
+        held = json.loads(procs[0].stdout.readline())["granted"]
+        procs[0].kill()  # SIGKILL: 정산도 정리도 없다
+        survivors = [json.loads(p.communicate(timeout=120)[0].strip().splitlines()[-1])["granted"] for p in procs[1:]]
+        for p in procs[1:]:
+            assert p.returncode == 0
+    finally:
+        for p in procs:
+            if p.poll() is None:
+                p.kill()
+            p.wait(timeout=30)
+
+    cap = 30_000
+    committed, open_ = 0, {}
+    for e in _events(path):
+        if e["ev"] == "reserve":
+            open_[e["id"]] = e["nusd"]
+            assert committed + sum(open_.values()) <= cap
+        elif e["ev"] == "commit":
+            committed += e["nusd"]
+            del open_[e["id"]]
+    assert len(held) == 6 and set(open_) == set(held)  # 죽은 프로세스의 예약만 열린 채 남았다
+    assert all(survivors), "살아남은 프로세스가 하나도 예약하지 못했으면 경합을 시험하지 못한다"
+    assert committed == 200 * sum(len(g) for g in survivors)
+    assert cap - 500 < committed + sum(open_.values()) <= cap  # 상한까지 찼고(거부가 있었다) 넘지 않았다
+    totals = SpendLedger(path).totals(run_id="p0-0", day=DAY)
+    assert (totals.used("total"), totals.corrupt_lines, totals.problem) == (committed + 3_000, 0, None)
+
+
 # ---------------------------------------------------------------------------
 # 집계용 읽기
 # ---------------------------------------------------------------------------
