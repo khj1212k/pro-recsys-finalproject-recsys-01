@@ -246,6 +246,10 @@ def test_budget_skips_descriptive_steps_at_the_warning_line_and_everything_at_a_
     compute = json.loads((env.out / "compute.json").read_text())["sessions"]["s3"]
     assert compute["skipped_for_budget"] == ["p1:narrative"] and compute["cu_estimated"] == pytest.approx(7.0)
     assert compute["cu_spent_before"] == 18.0 and compute["budget_rules_active"] is True and compute["environment"]["gpu"] == "Tesla T4"
+    # 경고선은 6번째 단계(stack)가 도는 동안 넘었다. 규칙은 단계 시작 전에만 보므로 그 단계는 끝까지 돌았고, 넘은 사실이 남는다
+    assert compute["budget_lines_crossed_during_step"] == {"p1:stack": ["total_warn"]}
+    assert "step p1:stack 도중 total_warn" in (env.out / "run.log").read_text()
+    assert (compute["registered_runtime"], compute["device_args"], compute["allow_cpu_used"]) == ("t4", ["auto"], False)
 
 
 def test_session_cap_and_total_cap_stop_remaining_steps_but_assemble_still_runs(env, tmp_path):
@@ -257,11 +261,15 @@ def test_session_cap_and_total_cap_stop_remaining_steps_but_assemble_still_runs(
     assert rc == 0 and r.calls == ["p2:gate:recheck", "p2:determinism", "p2:neural_tune", "assemble"]
     skipped = json.loads((env.out / "compute.json").read_text())["sessions"]["s4"]["skipped_for_budget"]
     assert skipped == ["p2:select", "p2:neural_final", "p2:stack", "p2:cold", "p2:narrative"]
+    crossed = json.loads((env.out / "compute.json").read_text())["sessions"]["s4"]["budget_lines_crossed_during_step"]
+    assert crossed == {"p2:neural_tune": ["session_cap"]}        # 세션 상한을 넘긴 단계가 무엇이었는지(그만큼 초과했다)
     # 전체 상한: 앞 세션까지 29.5 CU면 첫 단계(0.5시간) 뒤 30 CU
     work2 = tmp_path / "work2"
     clock2 = Clock()
     rc, r = env.run(env.argv("s4", "--cu-spent-before", "29.5", *extra, work=work2), Runner(clock=clock2, seconds=1800.0), clock=clock2)
     assert rc == 0 and r.calls == ["p2:gate:recheck", "assemble"]
+    crossed = json.loads((work2 / "out" / "compute.json").read_text())["sessions"]["s4"]["budget_lines_crossed_during_step"]
+    assert crossed == {"p2:gate:recheck": ["total_cap"]}         # 경고선은 시작 전에 이미 넘어 있었다
 
 
 def test_real_data_sessions_refuse_to_start_without_a_rate_and_zero_turns_the_rules_off_on_record(env):
@@ -292,6 +300,24 @@ def test_gpu_session_needs_cuda_and_the_previous_sessions_bundle(env, tmp_path):
     assert rc == drv.EXIT_ENVIRONMENT and r.calls == []
     rc, r = env.run(env.argv("s3", *extra, "--allow-cpu"), torch_probe=probe(cuda=False))
     assert rc == 0 and r.cmds[0][r.cmds[0].index("--device") + 1] == "cpu" and r.cmds[0][-2:] == ["--recheck-gate", "s3"]
+    compute = json.loads((env.out / "compute.json").read_text())["sessions"]["s3"]
+    # 등록한 런타임(t4)이 아닌 장치로 돌았다는 것이 계산 기록에 남는다(등급은 run_neural이 신경망 환경 기록으로 내린다)
+    assert (compute["registered_runtime"], compute["device_args"], compute["allow_cpu_used"]) == ("t4", ["cpu"], True)
+
+
+def test_nvidia_driver_version_is_read_when_available_and_absent_otherwise():
+    class Done:
+        def __init__(self, code, out):
+            self.returncode, self.stdout = code, out
+
+    assert drv.nvidia_driver_version(lambda *a, **k: Done(0, "550.54.15\n550.54.15\n")) == "550.54.15"
+    assert drv.nvidia_driver_version(lambda *a, **k: Done(9, "")) is None
+    assert drv.nvidia_driver_version(lambda *a, **k: Done(0, "\n")) is None
+
+    def missing(*a, **k):
+        raise FileNotFoundError("nvidia-smi")
+
+    assert drv.nvidia_driver_version(missing) is None
 
 
 def _bundle(env, name="prev"):

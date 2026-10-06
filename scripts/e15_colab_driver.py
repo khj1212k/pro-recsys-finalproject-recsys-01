@@ -143,17 +143,33 @@ def pinned_torch(repo: Path) -> str:
     return m.group(1)
 
 
+def nvidia_driver_version(run: Callable = subprocess.run) -> Optional[str]:
+    """NVIDIA 드라이버 버전(기록용). nvidia-smi가 없거나 실패하면 None — 환경 확인을 막지 않는다."""
+    try:
+        out = run(["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"], capture_output=True, text=True,
+                  timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = (out.stdout or "").strip().splitlines() if out.returncode == 0 else []
+    return lines[0].strip() or None if lines else None
+
+
 def probe_torch(python: str) -> dict:
-    """단계를 돌릴 인터프리터에서 torch 버전과 장치를 읽는다(설치 뒤의 새 프로세스)."""
-    code = ("import json, torch; c = torch.cuda.is_available(); print(json.dumps({'torch': torch.__version__, "
-            "'cuda_available': c, 'gpu': torch.cuda.get_device_name(0) if c else None, 'cuda': torch.version.cuda}))")
+    """단계를 돌릴 인터프리터에서 torch 버전과 장치를 읽는다(설치 뒤의 새 프로세스). GPU가 있으면 드라이버 버전도 적는다."""
+    code = ("import json, torch; c = torch.cuda.is_available(); b = torch.backends.cudnn; "
+            "print(json.dumps({'torch': torch.__version__, 'cuda_available': c, "
+            "'gpu': torch.cuda.get_device_name(0) if c else None, 'cuda': torch.version.cuda, "
+            "'cudnn': b.version() if b.is_available() else None}))")
     try:
         out = subprocess.run([python, "-c", code], capture_output=True, text=True, timeout=300)
     except (OSError, subprocess.TimeoutExpired) as e:
         return {"error": type(e).__name__}
     if out.returncode != 0:
         return {"error": (out.stderr or "").strip().splitlines()[-1:] or ["torch를 임포트하지 못했습니다"]}
-    return json.loads(out.stdout.strip().splitlines()[-1])
+    info = json.loads(out.stdout.strip().splitlines()[-1])
+    if info.get("cuda_available"):
+        info["nvidia_driver"] = nvidia_driver_version()
+    return info
 
 
 def check_environment(session: str, repo: Path, python: str, probe: Callable[[str], dict], allow_cpu: bool) -> dict:
@@ -238,6 +254,27 @@ def run_steps(workdir: Path, state: dict, state_path: Path, *, python: str, thre
     def session_cu() -> Optional[float]:
         return None if cu_rate is None else cu_rate * m4.wall_seconds(state) / 3600.0
 
+    # 예산선. 등록한 규칙(A3.9)은 단계를 시작하기 전에만 이 선들을 본다. 단계가 도는 동안 넘은 것은 기록만 한다.
+    lines = (("session_cap", lambda mine, total: mine >= session_cap), ("total_cap", lambda mine, total: total >= cu_cap_total),
+             ("total_warn", lambda mine, total: total >= cu_warn_total))
+
+    def over_lines() -> list[str]:
+        mine = session_cu()
+        return [name for name, over in lines if over(mine, cu_spent_before + mine)]
+
+    def note_crossings(sid: str) -> None:
+        """단계가 도는 동안 새로 넘은 예산선을 한 번씩 로그와 상태에 적는다. 단계를 멈추지 않는다."""
+        if not budget_active:
+            return
+        st = state["stages"][sid]
+        crossed = st.setdefault("budget_lines_crossed_during_step", [])
+        for name in over_lines():
+            if name not in crossed and name not in st.get("budget_lines_over_at_start", ()):
+                crossed.append(name)
+                mine = session_cu()
+                log(f"budget: step {sid} 도중 {name} 선을 넘었다(이 세션 {mine:.2f} CU, 누적 {cu_spent_before + mine:.2f} CU). "
+                    "규칙은 단계를 시작하기 전에만 보므로 이 단계는 끝까지 돈다(초과분은 계산 기록에 남는다)")
+
     def write_compute():
         cu = session_cu()
         all_sessions = (read_json(out_dir / "compute.json") or {}).get("sessions", {})
@@ -249,15 +286,24 @@ def run_steps(workdir: Path, state: dict, state_path: Path, *, python: str, thre
             "cu_spent_before": cu_spent_before, "cu_before": state.get("cu_before"), "budget_rules_active": budget_active,
             "cu_cap_session": session_cap, "cu_cap_total": cu_cap_total, "cu_warn_total": cu_warn_total,
             "skipped_for_budget": [s for s, v in state["stages"].items() if v.get("status") == "skipped_budget"],
+            "budget_lines_crossed_during_step": {s: v["budget_lines_crossed_during_step"] for s, v in state["stages"].items()
+                                                 if v.get("budget_lines_crossed_during_step")},
+            "registered_runtime": SESSIONS[session]["runtime"],
+            "device_args": sorted({i["device_arg"] for i in state["invocations"] if i.get("device_arg")}),
+            "allow_cpu_used": any(i.get("device_arg") == "cpu" for i in state["invocations"])
+            and SESSIONS[session]["runtime"] != "cpu",
             "invocations": len(state["invocations"]), "code_commit": state["code"]["commit"]}
         known = [v["cu_estimated"] for v in all_sessions.values() if v.get("cu_estimated") is not None]
         write_json(out_dir / "compute.json", {
             "sessions": all_sessions, "cu_estimated_sum": round(sum(known), 3) if known else None,
             "note": "cu_estimated = rate x 벽시계 시간(세션마다). 단계가 도는 동안 60초마다 시각을 적으므로 세션이 단계 도중에 "
-                    "죽어도 그때까지의 시간이 들어간다. 정확한 값은 실행 전후의 잔액 차이로 따로 적는다."})
+                    "죽어도 그때까지의 시간이 들어간다. 정확한 값은 실행 전후의 잔액 차이로 따로 적는다(실행 뒤 잔액은 VM "
+                    "안에서 알 수 없어 사람이 적는다). 예산 규칙은 단계 시작 전에만 보므로 긴 단계 하나가 상한을 그 단계의 "
+                    "길이만큼 넘길 수 있고, 넘긴 단계는 budget_lines_crossed_during_step에 남는다."})
 
     if not budget_active:
         log(f"budget: CU rate가 {'없다' if cu_rate is None else '0이다'} — 예산 규칙이 꺼져 있다")
+    invocation["device_arg"] = device
     ran_any = False
     for step in session_plan(session):
         beat()
@@ -279,12 +325,20 @@ def run_steps(workdir: Path, state: dict, state_path: Path, *, python: str, thre
                 continue
         t0 = clock()
         st.update(status="running")
+        if budget_active:
+            st["budget_lines_over_at_start"] = over_lines()
         beat()
         log(f"step {sid}: 시작")
-        with m4.Heartbeat(beat, heartbeat_seconds):
+
+        def step_beat(sid=sid):
+            beat()
+            note_crossings(sid)
+
+        with m4.Heartbeat(step_beat, heartbeat_seconds):
             code = runner(stage_command(python, workdir, state["run_args"], threads, step, device), workdir / "repo", env,
                           out_dir / "run.log")
         st["seconds"] = round(clock() - t0, 1)
+        step_beat()
         if code != 0:
             st.update(status="failed", returncode=code)
             beat()
