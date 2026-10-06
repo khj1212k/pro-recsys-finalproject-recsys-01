@@ -713,7 +713,8 @@ class SpendLedger:
             return (BAD_WATERMARK,
                     f"원장 밖에 두는 누계 기록을 읽을 수 없습니다: {self.watermark_path}. `{CLI} adopt --yes`로 지금 "
                     "원장을 기준으로 삼으세요(이어받을 누계는 알 수 없습니다)")
-        prev = f"기록된 누계 ${usd(watermark['committed_total_nusd']):.6f}"
+        prev = (f"기록된 정산 누계 ${usd(watermark['committed_total_nusd']):.6f} + 열려 있던 예약 "
+                f"${usd(_amount_or_zero(watermark.get('open_nusd'))):.6f}")
         if watermark["ledger_id"] != state.ledger_id:
             return (REPLACED,
                     f"지출 원장이 다른 파일로 바뀌었습니다(기록된 원장 {watermark['ledger_id'][:8]}, 지금 "

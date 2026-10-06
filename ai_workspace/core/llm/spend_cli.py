@@ -18,6 +18,7 @@
 
 ai_workspace/를 임포트 경로에 둔 상태로 실행한다(가상환경에 editable 설치했거나 ai_workspace/에서 실행).
 원장 위치와 상한은 환경변수(LLM_SPEND_LEDGER_FILE, LLM_BUDGET_*_USD)를 따른다. --ledger로 다른 원장을 볼 수 있다.
+원장의 누계 기록은 원장 디렉터리 밖(LLM_SPEND_STATE_DIR, 기본 ~/.local/state/newsletter-recsys/llm-spend)에 있다.
 
 금액은 단가표(config/llm_pricing.yaml)로 계산한 추정이다. 실제 청구액은 프로바이더 청구서가 기준이다.
 """
@@ -435,8 +436,9 @@ def cmd_init(args, ledger: SpendLedger) -> int:
     print(f"누계 기록(원장 디렉터리 밖): {info['watermark']}")
     if info["prior"] is not None:
         print(f"이 경로에는 이전 원장(id {info['prior']['ledger_id'][:8]})의 누계 기록이 남아 있습니다: 정산 누계 "
-              f"${usd(info['prior']['committed_total_nusd']):.6f}. 새 원장은 그 누계를 이어받기 전까지 호출을 거부합니다 - "
-              f"`python -m core.llm.spend_cli adopt --yes`")
+              f"${usd(info['prior']['committed_total_nusd']):.6f} + 열려 있던 예약 "
+              f"${usd(int(info['prior'].get('open_nusd') or 0)):.6f}. 새 원장은 그 사용액을 이어받기 전까지 호출을 "
+              f"거부합니다 - `python -m core.llm.spend_cli adopt --yes`")
     elif info["prior_unreadable"]:
         print("이 경로의 누계 기록을 읽을 수 없습니다. `python -m core.llm.spend_cli adopt --yes` 전까지 호출이 거부됩니다.")
     return 0
