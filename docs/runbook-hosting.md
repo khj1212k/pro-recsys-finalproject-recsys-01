@@ -225,6 +225,11 @@ A1 재시도 루프(`.ops/oci_launch_retry.sh`)는 성공하면 `.ops/oci_instan
 2026-09-26 22:17 KST에 이 절의 데이터 단계(3~5)를 Tier 0의 일회용 DB에서 리허설했다: 복원 3초, 병합 2초,
 기대 행 수 1,087 = 결과 1,087, 재실행 0행(ADR 0026 증거 7).
 
+**2026-10-06 추가 — 병합 전에 6.7을 본다.** 수집기의 발행 시각 처리를 고쳤으므로(ADR 0008), 승격 뒤에도 도는
+Tier 0는 고친 코드로 재배포돼 있어야 한다(아니면 A1과 Tier 0가 AI타임스 발행 시각을 서로 다르게 적는다).
+기존 행을 보정하기로 했다면 Tier 0 DB와 복원한 Mac 덤프를 **각각 병합 전에** 보정한다 — 병합된 DB에서는
+보정할 수 없다.
+
 1. `scripts/oci/micro_bootstrap.sh`를 그대로 실행한다(아키텍처 무관). 12 GB에서도 스왑 2 GB는 모델 로드 피크 흡수용으로 둔다.
 2. 코드 스냅숏을 보내고 `.env`는 `COMPOSE_FILE`을 기본값(`docker-compose.yml`만)으로 둔다 - 전체 worker 이미지를
    arm64로 직접 빌드한다. `sudo docker compose up -d db`로 **DB만** 올린다(스케줄러는 아직 끈다).
@@ -331,6 +336,129 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 하루 `runs`가 24보다 적으면 그만큼 건너뛴 것이다. 지금까지 긴 회차는 동아일보 요청 실패와 같이 나타났다
 (fetch_failed 343건 중 339건이 동아일보, 원인 미확정). 손볼 수 있는 곳은 추출 요청의 시간 제한·재시도 횟수와
 언론사별 격리인데, 아직 바꾸지 않았다 - 바꾸면 ADR 0026을 갱신한다.
+
+### 6.7 AI타임스 기존 행의 발행 시각 보정 (제안 — 실행하지 않았다)
+
+**이 절의 SQL은 어느 DB에서도 실행하지 않았다.** 구문만 PostgreSQL 파서로 확인했다. 실행할지, 어느 범위로
+언제 할지는 소유자가 정한다. 실행하기로 하면 6.4의 병합 스크립트처럼 `scripts/`에 파일로 두고 CI의 Postgres에서
+integration 테스트로 먼저 돌려 본다.
+
+배경: 2026-10-06 이전 수집기는 시간대 없는 발행 시각에 UTC를 붙였다. AI타임스 피드는 KST 벽시계 시각을
+시간대 없이 내보내므로 `raw_news_created_at`이 9시간 뒤로 저장돼 있다(ADR 0008 "2026-10-06 갱신", ADR 0026
+증거 3·8). 수집기를 고쳐도 이미 들어간 행은 바뀌지 않는다(`ON CONFLICT DO NOTHING`).
+
+지켜야 할 것:
+
+- **한 행은 한 번만 보정한다.** 두 번 빼면 18시간 밀린다.
+- **보정은 DB마다 따로, 그 DB에 쓰는 수집기를 고친 코드로 바꾼 뒤에 한다.** "고치기 전 코드로 수집한 행"은
+  그 DB에서 고친 코드로 돈 첫 ingest보다 먼저 수집된 행이다. 수집기가 옛 코드인 채로 보정하면 그 뒤에
+  들어오는 행이 다시 9시간 밀린다.
+- **병합된 DB에서는 이 SQL을 돌리지 않는다.** 6.4로 합친 DB에서는 어느 행이 어느 수집기에서 왔는지를 수집
+  시각으로 가를 수 없다. 병합에 넣는 원본(Tier 0 DB, 복원한 Mac 덤프)을 각각 먼저 보정하고 나서 합친다.
+
+Tier 0에서의 순서:
+
+1. **고친 코드를 먼저 배포한다**(4절의 재배포 절차, 그 전에 6.5 백업). `.env`의 `GIT_SHA`도 새 커밋으로 고친다 —
+   다음 단계가 이 값으로 경계를 찾는다.
+2. 경계 시각을 정한다. 고친 코드로 돈 첫 ingest의 시작 시각(UTC)이다:
+
+   ```sql
+   SELECT git_sha, count(*) AS runs,
+          min(started_at) AT TIME ZONE 'UTC' AS first_start_utc,
+          max(started_at) AT TIME ZONE 'UTC' AS last_start_utc
+   FROM job_runs
+   WHERE job = 'ingest'
+   GROUP BY git_sha
+   ORDER BY first_start_utc;
+   ```
+
+   기대: 옛 스냅숏과 새 커밋, 두 줄. 새 커밋 줄의 `first_start_utc`가 경계다. 한 줄뿐이면 `GIT_SHA`를 고치지
+   않고 재배포한 것이므로 이 표로는 가를 수 없다 — 재배포한 시각 뒤에 시작한 첫 ingest를 `job_runs`에서 직접
+   찾아 그 `started_at`을 쓴다.
+3. 사전 확인(읽기 전용). `raw_news_crawled_at`은 시간대 없는 컬럼에 UTC로 적혀 있어 `AT TIME ZONE 'UTC'`로
+   맞춰 비교한다:
+
+   ```sql
+   SELECT p.press_name,
+          count(*) AS total_rows,
+          count(*) FILTER (WHERE n.raw_news_created_at > (n.raw_news_crawled_at AT TIME ZONE 'UTC')) AS published_after_crawled,
+          max(n.raw_news_created_at - (n.raw_news_crawled_at AT TIME ZONE 'UTC')) AS max_lead
+   FROM news_raw n
+   JOIN press p ON p.press_id = n.press_id
+   GROUP BY p.press_name
+   ORDER BY max_lead DESC NULLS LAST;
+   ```
+
+   기대: AI타임스의 `max_lead`만 9시간 안팎이다(2026-10-06 04:41 KST 조회에서 320행 중 268행, 최대 9.0시간).
+   다른 언론사는 0 이하이거나 분 단위다(언론사 시계 오차·예약 발행). 다른 언론사의 `max_lead`가 1시간을
+   넘으면 원인이 다르니 여기서 멈춘다.
+4. 보정. 아래 블록은 끝이 `ROLLBACK`이라 **그대로 실행하면 아무것도 바뀌지 않는다**(리허설). 출력이 아래 기준을
+   모두 만족할 때만 마지막 줄을 `COMMIT`으로 바꿔 한 번 더 실행한다. 트랜잭션을 연 채로 수치를 읽으며 기다리지
+   않는다 — 열려 있는 동안 ingest가 같은 행에서 멈춰 선다.
+
+   ```sql
+   BEGIN;
+
+   -- 되돌리기용 원래 값. 이 표가 이미 있으면 여기서 실패한다 = 이 DB는 이미 보정됐다.
+   CREATE TABLE news_raw_created_at_fix_kst AS
+   SELECT n.raw_news_id, n.raw_news_created_at AS created_at_before
+   FROM news_raw n
+   JOIN press p ON p.press_id = n.press_id
+   WHERE p.press_name = 'AI타임스'
+     AND n.raw_news_created_at IS NOT NULL
+     AND n.raw_news_crawled_at < TIMESTAMP '<2단계의 경계 시각(UTC)>';
+
+   UPDATE news_raw n
+   SET raw_news_created_at = b.created_at_before - INTERVAL '9 hours'
+   FROM news_raw_created_at_fix_kst b
+   WHERE n.raw_news_id = b.raw_news_id;
+
+   -- 보정 뒤의 수집 지연(수집 시각 - 발행 시각)
+   SELECT count(*) AS fixed_rows,
+          min((n.raw_news_crawled_at AT TIME ZONE 'UTC') - n.raw_news_created_at) AS min_lag,
+          max((n.raw_news_crawled_at AT TIME ZONE 'UTC') - n.raw_news_created_at) AS max_lag
+   FROM news_raw n
+   JOIN news_raw_created_at_fix_kst b ON b.raw_news_id = n.raw_news_id;
+
+   ROLLBACK;   -- 기준을 만족하면 이 줄만 COMMIT으로 바꿔 다시 실행한다
+   ```
+
+   기준:
+   - `CREATE TABLE`이 "already exists"로 실패하지 않는다. 실패하면 이미 보정한 DB다 — 멈춘다.
+   - `fixed_rows`가 0보다 크고, `UPDATE`가 알려 준 행 수와 같다. 0이면 경계 시각이 틀렸다.
+   - `min_lag`가 0 근처다(분 단위, 약간 음수일 수 있다). **-9시간 근처면 보정이 안 된 것이고, +9시간 근처면
+     이미 보정된 행을 한 번 더 뺀 것이다** — 둘 다 `COMMIT`하지 않는다.
+   - `max_lag`는 며칠 안이다(첫 ingest가 받은 피드 백로그).
+
+   `COMMIT` 뒤에 되돌리려면(보관 표까지 지워야 범위를 바꿔 다시 보정할 수 있다):
+
+   ```sql
+   BEGIN;
+   UPDATE news_raw n
+   SET raw_news_created_at = b.created_at_before
+   FROM news_raw_created_at_fix_kst b
+   WHERE n.raw_news_id = b.raw_news_id;
+   DROP TABLE news_raw_created_at_fix_kst;
+   COMMIT;
+   ```
+
+   되돌리지 않는 한 보관 표(`news_raw_created_at_fix_kst`)는 "이 DB는 보정했다"는 표시이므로 지우지 않는다.
+
+Mac 덤프(`data/backups/mac-compose-2026-09-26.dump`)의 AI타임스 행도 같은 상태다(5.0~8.9시간 앞섬). 덤프 파일은
+고치지 않는다. 6.4에서 덤프를 복원하면 **Tier 0 행을 병합하기 전에** 복원한 DB에서 4단계를 실행한다 — 덤프의
+행은 모두 고치기 전 코드로 수집했으므로 수집 시각 조건(`AND n.raw_news_crawled_at < ...`) 줄은 뺀다. 그때
+병합에 넣는 Tier 0 쪽도 이미 보정돼 있어야 한다(위 "지켜야 할 것"). 보정 전에 받아 둔 백업을 복원하면 그 행은
+다시 보정 전 값이다.
+
+소유자가 정할 것:
+
+- **범위.** 위 SQL은 고치기 전 코드로 수집한 AI타임스 행 **전부**에서 9시간을 뺀다. 발행 시각이 수집 시각보다
+  뒤인 행(268행)만 고치는 좁은 안도 있다 — 4단계의 `CREATE TABLE ... WHERE`에
+  `AND n.raw_news_created_at > (n.raw_news_crawled_at AT TIME ZONE 'UTC')`를 더하면 된다. 좁은 안은 틀렸다고
+  드러난 행만 건드리지만, 같은 경로로 들어온 나머지 행(52행)이 9시간 밀린 채 남아 한 언론사 안에서 기준이
+  갈린다. 나머지 행도 밀려 있다는 것은 코드 경로에서 나온 추정이고 DB에서 확인하지는 않았다(ADR 0008).
+- **시점.** Tier 0 재배포 자체가 아직 돌려 보지 않은 절차다(4절). 재배포를 미루는 동안에는 보정도 미룬다 —
+  그동안 AI타임스의 새 행은 계속 9시간 뒤로 저장된다.
 
 ## 7. Tier 0 내리기
 
