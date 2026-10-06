@@ -10,6 +10,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Float,
+    ForeignKey,
     Index,
     Integer,
     LargeBinary,
@@ -45,8 +46,9 @@ MODEL_ROLES = ("active", "shadow", "retired")
 #   화면에 나간 목록이 계획한 목록과 달라진 요청, 로그 v2 이전의 행.
 # - det_rank: 결정론 목록에서의 0부터 시작하는 순위. 탐색 칸은 NULL.
 # - scores_shadow: {"모델 버전": 점수}. 같은 후보를 shadow 스코어러가 매긴 점수이고 응답 순서에는 쓰이지 않는다.
-# - features: 활성 스코어러가 이 아이템에 쓴 피처의 float32 little-endian 바이트. 해석은 요청 로그의
-#   feature_schema_version이 정한다(app/recsys/scoring.py FEATURE_SCHEMAS).
+# - features: 이 아이템의 피처 float32 little-endian 바이트. 해석은 요청 로그의 feature_schema_version이
+#   정한다(app/recsys/scoring.py FEATURE_SCHEMAS): 2 = recsys_core 서빙 어댑터의 22열(ADR 0033),
+#   1 = 휴리스틱 4항(어댑터 피처를 만들지 못한 요청).
 class RecommendationImpressionLog(SQLModel, table=True):
     __tablename__ = "recommendation_impression_log"
     __table_args__ = (
@@ -54,6 +56,12 @@ class RecommendationImpressionLog(SQLModel, table=True):
             "ix_recommendation_impression_log_user_id_created_at",
             "user_id",
             text("created_at DESC"),
+        ),
+        # 아이템별 최근 노출 수(인기도 창 집계, ADR 0033)
+        Index(
+            "ix_recommendation_impression_log_news_letter_id_created_at",
+            "news_letter_id",
+            "created_at",
         ),
         UniqueConstraint(
             "request_id", "position", name="uq_recommendation_impression_log_request_position"
@@ -105,6 +113,8 @@ class RecommendationImpressionLog(SQLModel, table=True):
 #   그 요청의 칸 로그 propensity는 NULL이다.
 # - explore_positions: 탐색 칸의 위치(오름차순). 탐색이 없으면 빈 배열, 폴백 응답은 NULL.
 # - feature_schema_version: 칸 로그 features의 해석 버전. 피처를 남기지 않았으면 NULL.
+# - features_as_of: 그 피처(와 결정론 목록)를 계산한 요청 시각. 캐시가 적중한 요청은 목록을 계산한 요청의
+#   값을 다시 적는다. 로그에서 피처를 다시 계산할 때의 기준 시각이다(ADR 0033). 피처가 없으면 NULL.
 # - shadow_versions: 이 요청의 후보에 점수를 매긴 shadow 모델 버전들.
 # - fatigue_mode / fatigued_count: 노출 피로 규칙의 모드(off | log | enforce)와, 규칙에 걸린 후보 수.
 #   log 모드에서는 세기만 하고 후보에서 빼지 않는다.
@@ -146,6 +156,9 @@ class RecommendationRequestLog(SQLModel, table=True):
     feature_schema_version: Optional[int] = Field(
         default=None, sa_column=Column(SmallInteger, nullable=True)
     )
+    features_as_of: Optional[datetime] = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
     shadow_versions: Optional[list] = Field(
         default=None, sa_column=Column(ARRAY(String(160)), nullable=True)
     )
@@ -161,6 +174,10 @@ class RecommendationRequestLog(SQLModel, table=True):
 # role(ADR 0025): 'active'는 목록을 만드는 모델, 'shadow'는 같은 후보에 점수만 매겨 로그에 남기는 모델
 # (여러 개 가능, 서빙은 최신 RECSYS_SHADOW_MAX개만 읽는다), 'retired'는 읽지 않는 모델이다. 새 행의
 # 기본값은 'shadow'다 - 등록만으로 응답이 바뀌지 않게. is_active는 role = 'active'와 항상 같다(체크 제약).
+#
+# feature_schema_hash(ADR 0033): 등록할 때의 서빙 피처 스키마 지문(recsys_core.serving.SCHEMA_HASH - 열 이름·
+# 순서와 창·반감기 같은 정의). 서빙은 자기 지문과 다르면 그 모델로 점수를 내지 않는다. NULL은 이 컬럼
+# 이전에 등록된 행이고 열 이름만 비교한다.
 class ModelRegistry(SQLModel, table=True):
     __tablename__ = "model_registry"
     __table_args__ = (
@@ -184,6 +201,7 @@ class ModelRegistry(SQLModel, table=True):
     )
     model_text: str = Field(sa_column=Column(Text, nullable=False))
     feature_names: Optional[list] = Field(default=None, sa_column=Column(JSON))
+    feature_schema_hash: Optional[str] = Field(default=None, sa_column=Column(String(64), nullable=True))
     metrics: Optional[dict] = Field(default=None, sa_column=Column(JSON))
     is_active: bool = Field(
         default=False,
@@ -194,6 +212,36 @@ class ModelRegistry(SQLModel, table=True):
         sa_column=Column(String(16), nullable=False, server_default="shadow"),
     )
     created_at: Optional[datetime] = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+
+
+# 장기 프로필의 증분 상태(ADR 0033). 사용자당 한 행이고, 클릭 API가 클릭 행을 쓰는 트랜잭션 안에서 갱신한다
+# (app/recsys/profile_store.py). 클릭 로그에서 언제든 다시 만들 수 있는 캐시다(jobs.run rebuild_user_state).
+#
+# - hist_sum: 클릭한 뉴스레터 단위 벡터의 반감기 7일 감쇠 합, 기준 시각 = hist_anchor_ts. float64 little-endian
+#   바이트(1024차원이면 8,192바이트). 코사인은 양수 배에 불변이라 읽을 때 감쇠를 다시 계산하지 않는다.
+# - hist_anchor_ts: 반영된 클릭 중 가장 늦은 것의 시각.
+# - hist_len: 반영된 클릭 수. 0이면 장기 프로필이 없는 사용자다.
+# - hist_cat_counts: {"대표 카테고리 ID": 클릭 수}. 카테고리가 없는 뉴스레터는 "0". 값의 합 = hist_len.
+#
+# "user" 테이블에 두지 않은 이유: 인증이 요청마다 그 행 전체를 읽고, 클릭마다의 갱신이 그 행을 잠근다.
+class UserProfileState(SQLModel, table=True):
+    __tablename__ = "user_profile_state"
+
+    user_id: int = Field(
+        sa_column=Column(Integer, ForeignKey("user.user_id", ondelete="CASCADE"), primary_key=True)
+    )
+    hist_sum: Optional[bytes] = Field(default=None, sa_column=Column(LargeBinary, nullable=True))
+    hist_anchor_ts: Optional[datetime] = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    hist_len: int = Field(
+        default=0, sa_column=Column(Integer, nullable=False, server_default=text("0"))
+    )
+    hist_cat_counts: Optional[dict] = Field(default=None, sa_column=Column(JSON, nullable=True))
+    updated_at: Optional[datetime] = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
     )

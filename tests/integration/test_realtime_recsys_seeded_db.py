@@ -81,14 +81,24 @@ def seeded(pg_conn):
                 vec_of[nid] = v
 
     def add_user(long_term=None, onboarding=(), categories=()):
+        """long_term을 주면 그 벡터를 장기 프로필 상태(user_profile_state)로 직접 심는다 - 클릭 이력과 무관하게
+        프로필을 고정하려는 테스트용이다(상태가 클릭 로그와 맞지 않으므로 피처 어댑터의 입력으로는 쓰이지 않는다).
+        클릭으로 만들어지는 상태는 tests/integration/test_profile_state.py와 parity 게이트가 본다."""
+        import psycopg2
+
         with pg_conn.cursor() as cur:
             cur.execute(
-                'INSERT INTO "user" (user_email, user_password_hash, user_nickname, user_created_at, user_embedding) '
-                "VALUES (%s, 'h', 'n', NOW(), %s::vector) RETURNING user_id",
-                (f"rt-{uuid.uuid4().hex[:10]}@example.com",
-                 None if long_term is None else str(np.asarray(long_term).tolist())),
+                'INSERT INTO "user" (user_email, user_password_hash, user_nickname, user_created_at) '
+                "VALUES (%s, 'h', 'n', NOW()) RETURNING user_id",
+                (f"rt-{uuid.uuid4().hex[:10]}@example.com",),
             )
             uid = cur.fetchone()[0]
+            if long_term is not None:
+                cur.execute(
+                    "INSERT INTO user_profile_state (user_id, hist_sum, hist_anchor_ts, hist_len, hist_cat_counts) "
+                    "VALUES (%s, %s, NOW() - interval '30 days', 1, '{\"0\": 1}')",
+                    (uid, psycopg2.Binary(np.asarray(long_term, dtype="<f8").tobytes())),
+                )
             for nid in onboarding:
                 cur.execute(
                     "INSERT INTO user_preferred_newsletter (news_letter_id, user_id) VALUES (%s, %s)",
@@ -256,11 +266,10 @@ def test_a_click_older_than_24h_does_not_count_as_short_term(engine, seeded):
     from app.recsys.sql_repository import SqlRecsysRepository
     from sqlalchemy.orm import Session
 
+    now = datetime.now(timezone.utc)
     with Session(engine) as s:
-        vec = SqlRecsysRepository(s).short_term_vector(
-            uid, datetime.now(timezone.utc) - timedelta(hours=24), 20
-        )
-    assert vec is None
+        recent = SqlRecsysRepository(s).recent_clicks(uid, now - timedelta(hours=24), now, 20)
+    assert recent == []
 
 
 def test_brand_new_users_never_get_an_empty_list(engine, seeded):

@@ -14,14 +14,16 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
+from recsys_core import schema
+
 from .prepare import RankTask
 
-TEAM_FEATURES = ["hours_since_pub", "is_fresh_24h", "is_fresh_7d", "hist_cos", "cat_match_count",
-                 "is_cat_match", "news_category", "user_age", "user_gender", "user_ncat"]
-POP_FEATURES = ["pop_clicks_6h", "pop_clicks_24h", "pop_clicks_48h", "pop_inviews_24h", "pop_ctr_24h"]
-SHORT_FEATURES = ["short_cos", "short_len", "sess_cos", "sess_len", "hours_since_last_event"]
-V2_EXTRA_FEATURES = ["cat_share", "hist_len"]
-ALL_GROUPS = ("recency", "history", "team_category", "category", "popularity", "short_term")
+# 피처 이름·순서의 출처는 recsys_core.schema다(서빙 어댑터가 같은 목록을 쓴다, ADR 0033).
+TEAM_FEATURES = list(schema.TEAM_FEATURES)
+POP_FEATURES = list(schema.POP_FEATURES)
+SHORT_FEATURES = list(schema.SHORT_FEATURES)
+V2_EXTRA_FEATURES = list(schema.V2_EXTRA_FEATURES)
+ALL_GROUPS = schema.ALL_GROUPS
 
 TEAM_PARAMS = {
     "boosting_type": "gbdt", "num_leaves": 31, "learning_rate": 0.05, "feature_fraction": 0.9,
@@ -89,8 +91,9 @@ def feature_matrix(feats: pd.DataFrame, task: RankTask, columns: list[str]) -> n
         "user_age": task.extra["age"][pair_req],
         "user_gender": task.extra["gender"][pair_req],
     }
-    cols = [np.asarray(extra[c] if c in extra else feats[c], dtype=np.float32) for c in columns]
-    return np.column_stack(cols) if cols else np.zeros((len(pair_req), 0), np.float32)
+    if not columns:
+        return np.zeros((len(pair_req), 0), np.float32)
+    return schema.assemble(feats, extra, columns)
 
 
 def _order_and_groups(task: RankTask, group: str,

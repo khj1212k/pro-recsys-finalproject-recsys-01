@@ -57,6 +57,8 @@ COPY backend/alembic ./backend/alembic
 COPY backend/alembic.ini ./backend/alembic.ini
 COPY backend/scheduler ./backend/scheduler
 COPY evaluation ./evaluation
+# 피처 코어: evaluation과 app.recsys(장기 프로필 상태를 다시 만드는 rebuild_user_state 잡)가 임포트한다.
+COPY recsys_core ./recsys_core
 COPY jobs ./jobs
 COPY docker/crontab docker/scheduler-entrypoint.sh ./docker/
 

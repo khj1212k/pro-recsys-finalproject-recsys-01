@@ -25,7 +25,7 @@ JOBS = {
     "cluster": "jobs.tasks.cluster",
     "generate": "jobs.tasks.generate",
     "popularity": "jobs.tasks.popularity",
-    "user_embed": "jobs.tasks.user_embed",
+    "rebuild_user_state": "jobs.tasks.rebuild_user_state",
     "train": "jobs.tasks.train",
     "batch_fallback": "jobs.tasks.batch_fallback",
     "daily_report": "jobs.tasks.daily_report",

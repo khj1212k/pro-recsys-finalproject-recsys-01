@@ -1,8 +1,11 @@
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
+
+from recsys_core.profile import HistState
+from recsys_core.serving import ClickEvent, WindowCounts
 
 # X-Rec-Source 값. realtime/cold_start_*는 요청 시점 파이프라인이 만든 결과이고,
 # batch/popular/recent는 폴백 체인(또는 RECSYS_MODE=batch)이 만든 결과다.
@@ -34,18 +37,42 @@ class Item:
     embedding: np.ndarray
     created_at: datetime
     raw_news_count: int
+    # 대표 카테고리(매핑된 카테고리 ID 중 가장 작은 것). 화면에 내보낼 수 있는 아이템은 항상 값이 있다.
+    category_id: Optional[int] = None
+
+
+@dataclass(frozen=True)
+class ProfileState:
+    """user_profile_state 한 행: 클릭마다 갱신되는 장기 프로필의 증분 상태(ADR 0033).
+
+    last_event_at은 반영된 클릭 중 가장 늦은 것의 시각(마이크로초)이다. 요청 시각 이후(같은 시각 포함)이면 이
+    상태는 그 요청의 피처 입력으로 쓸 수 없고, 최근 클릭 조회의 가장 늦은 클릭보다 이르면 상태가 로그보다
+    뒤처진 것이다. 둘 다 recsys_core.serving.check_inputs가 마이크로초로 비교한다 - hist의 기준 시각은 정수
+    초라 요청과 같은 초 안의 어긋남은 이 값으로만 보인다."""
+
+    hist: HistState = field(default_factory=HistState)
+    last_event_at: Optional[datetime] = None
 
 
 @dataclass
 class UserState:
     user_id: int
+    # 장기 벡터 = 증분 상태의 방향(반감기 7일 감쇠 합). 클릭 이력이 없으면 None이다.
     long_term: Optional[np.ndarray] = None
+    # 단기 벡터 = 최근 24시간·최근 20클릭의 단위 벡터 합(ADR 0017)
     short_term: Optional[np.ndarray] = None
     category_ids: List[int] = field(default_factory=list)
     clicked_ids: Set[int] = field(default_factory=set)
     # long_term이 없을 때 콜드스타트 체인이 채우는 대체 프로필(온보딩 평균/카테고리 중심)
     profile: Optional[np.ndarray] = None
     profile_source: str = "none"
+    # --- recsys_core 서빙 어댑터의 입력(ADR 0033). 휴리스틱 스코어러는 읽지 않는다.
+    hist: Optional[HistState] = None
+    # hist에 반영된 마지막 클릭의 시각(ProfileState.last_event_at). 어댑터가 요청 시각·최근 클릭과 비교한다.
+    hist_last_event_at: Optional[datetime] = None
+    recent_clicks: List[ClickEvent] = field(default_factory=list)
+    # 후보 아이템의 인기도 창 집계. None은 "아직 읽지 않음"이다(어댑터가 값을 내지 않는다).
+    popularity: Optional[Dict[int, WindowCounts]] = None
 
     @property
     def has_personal_signal(self) -> bool:
@@ -58,9 +85,11 @@ class ScoreResult:
     model_version: str
     # shadow 모델 버전 -> 같은 아이템 순서의 점수. 응답 순서에는 쓰이지 않고 로그에만 남는다(ADR 0025).
     extra_scores: Dict[str, np.ndarray] = field(default_factory=dict)
-    # 활성 스코어러가 쓴 피처 (아이템 수, 피처 수) float32와 그 해석 버전(scoring.FEATURE_SCHEMAS).
+    # 로그에 남길 피처 (아이템 수, 피처 수) float32와 그 해석 버전(scoring.FEATURE_SCHEMAS).
     features: Optional[np.ndarray] = None
     feature_schema_version: Optional[int] = None
+    # 요청 경로 밖으로 넘긴 shadow·피처 작업의 손잡이(app.recsys.shadow.DeferredScores). 없으면 None.
+    deferred: Optional[Any] = None
 
 
 @dataclass
@@ -85,6 +114,10 @@ class DeterministicList:
     feature_schema_version: Optional[int] = None
     fatigue_mode: str = "off"
     fatigued_count: Optional[int] = None
+    # 이 목록(과 피처)을 계산한 요청 시각. 캐시에서 꺼내 쓴 요청도 로그에 이 값을 적는다(ADR 0033).
+    computed_at: Optional[datetime] = None
+    # 요청 경로 밖에서 계산 중이거나 끝난 shadow 점수·피처. 로그를 쓸 때 찾아간다.
+    deferred: Optional[Any] = None
 
     def __post_init__(self):
         self.eligible_ids = np.asarray(self.eligible_ids, dtype=np.int32)
@@ -99,6 +132,9 @@ class SlotInfo:
     det_rank: Optional[int] = None
     scores_shadow: Optional[Dict[str, Optional[float]]] = None
     features: Optional[np.ndarray] = None
+    # 이 칸의 아이템이 후보 배열(DeterministicList.eligible_ids)에서 놓인 자리. 요청 경로 밖에서 계산한
+    # 값(Recommendation.deferred)에서 이 칸의 행을 찾는 데 쓴다.
+    row: Optional[int] = None
 
 
 POLICY_NONE = "none"  # 폴백 응답: 탐색 정책이 만든 화면이 아니다
@@ -126,6 +162,8 @@ class Recommendation:
     fatigue_mode: Optional[str] = None
     fatigued_count: Optional[int] = None
     latency_ms: Optional[int] = None
+    features_as_of: Optional[datetime] = None
+    deferred: Optional[Any] = None
 
     def score_by_id(self) -> Dict[int, Optional[float]]:
         return dict(zip(self.news_letter_ids, self.scores))

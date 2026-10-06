@@ -25,7 +25,7 @@ flowchart LR
     R --> H[FastAPI] --> I[React]
 ```
 
-그림은 코드에 있는 경로다. compose 스케줄러가 지금 돌리는 잡은 수집, 임베딩, 인기도, 클러스터 통계, 일일 리포트다. `generate`, `user_embed`, `train`, `batch_fallback` 잡은 `docker/crontab`에서 꺼져 있다.
+그림은 코드에 있는 경로다. compose 스케줄러가 지금 돌리는 잡은 수집, 임베딩, 인기도, 클러스터 통계, 일일 리포트다. `generate`, `batch_fallback` 잡은 `docker/crontab`에서 꺼져 있다. 팀 시절의 학습 잡 `train`은 은퇴했고(불려도 아무것도 실행하지 않는다) `user_embed` 잡은 없앴다 - 장기 프로필은 클릭마다 갱신되는 상태다 ([ADR 0033](docs/adr/0033-train-serve-feature-parity.md)).
 
 | 영역 | 지금 있는 것 | 아직 없는 것 |
 |---|---|---|
@@ -33,7 +33,7 @@ flowchart LR
 | LLM | OpenAI 호환 어댑터 하나로 Gemini·Upstage·OpenAI 호출, 요청 타임아웃 60초·호출당 deadline 180초, 킬 스위치 ([ADR 0005](docs/adr/0005-llm-provider-abstraction.md)) | 모델 선정 결과(평가 프로토콜과 선정 규칙만 사전 등록, [ADR 0009](docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md)), `main`에서 실데이터로 끝까지 돈 생성 기록 |
 | 생성 품질 | LangGraph 안의 결정론적 사실성 게이트·문체 드리프트 게이트와 judge v2 (`ai_workspace/core/faithfulness.py`, [ADR 0010](docs/adr/0010-faithfulness-gate-and-judge-v2.md), 차단 유형·임계값은 잠정값), 클러스터링 지표 함수(`evaluation/clustering/metrics.py`) | 사람 라벨로 보정한 품질·사실성 수치, 실제 생성물로 잰 게이트 차단율 |
 | 추천(배치) | 팀 시절 LightGBM + MMR에 7월 셀프 리뷰 수정 반영 (시점 누출·그룹 정의·시드 등, [ADR 0003](docs/adr/0003-lightgbm-mmr-for-recommendation.md)·[0004](docs/adr/0004-continue-in-fork-and-port-july-fixes.md)) | 이 서비스의 사람 클릭으로 잰 추천 성능(실사용자가 없다) |
-| 추천(요청 시점) | `GET /newsletters/today`를 API 프로세스 안에서 요청마다 계산한다. 후보 합집합 → 휴리스틱 스코어 → MMR, 시간 예산 300ms, 폴백(배치 행 → 인기 → 최신), 노출 로그 ([ADR 0015](docs/adr/0015-request-time-recommendation.md)). 단기 사용자 상태는 클릭 로그에서 요청마다 계산한다 ([ADR 0017](docs/adr/0017-short-term-state-store.md)) | 추천 품질, 배포 대상 장비와 HTTP 수준의 지연, 실제 임베딩으로 정한 휴리스틱 가중치. LightGBM 스코어러는 API 이미지에서 아직 켤 수 없다 |
+| 추천(요청 시점) | `GET /newsletters/today`를 API 프로세스 안에서 요청마다 계산한다. 후보 합집합 → 휴리스틱 스코어 → MMR, 시간 예산 300ms, 폴백(인기 → 최신. `RECSYS_MODE=batch`에서는 배치 행부터), 노출 로그 ([ADR 0015](docs/adr/0015-request-time-recommendation.md)). 단기 사용자 상태는 클릭 로그에서 요청마다 계산한다 ([ADR 0017](docs/adr/0017-short-term-state-store.md)). 랭커의 피처는 오프라인 하네스와 같은 코드(`recsys_core`)로 요청 시점에 만들고, 레지스트리에 등록된 모델은 요청 경로 밖에서 점수만 남긴다(shadow). 서빙이 남긴 피처가 같은 로그의 오프라인 재계산과 같은지는 CI가 요청 200건의 재생으로 본다 ([ADR 0033](docs/adr/0033-train-serve-feature-parity.md), [리포트](reports/recsys/parity_v1.md)) | 추천 품질, 배포 대상 장비와 HTTP 수준의 지연, 실제 임베딩으로 정한 휴리스틱 가중치. 등록된 랭커 모델이 아직 없다(목록은 휴리스틱이 만든다). parity 게이트가 쓰는 모델은 무작위 데이터로 만든 22열 모델이다 |
 | 추천 평가 | 팀 베이스라인 재현 하네스와 오프라인 평가 프로토콜(point-in-time, 고정 정답 창, 베이스라인, 시드와 부트스트랩 신뢰구간, [ADR 0007](docs/adr/0007-recsys-offline-evaluation-protocol.md)). EB-NeRD 공개 벤치마크 하네스, point-in-time 피처 코어 `recsys_core`, ranker v2 설계와 사전 등록한 승격 규칙 ([ADR 0013](docs/adr/0013-ranker-v2-design.md)) | 한국어 데이터에서의 ranker v2 검증(서빙은 shadow부터), 팀 재현 리포트의 전체 재실행(재실행 대기) |
 | 시뮬레이터·부하 | 합성 사용자 시뮬레이터, Locust 부하 하네스, 사전 등록한 지표 타당성 격자 ([ADR 0019](docs/adr/0019-user-simulator-design-and-claim-scope.md)). 시스템 반응 지표만 보고 추천 정확도는 주장하지 않는다 | 부하 수치(재실행 대기), drift 적응 지표의 타당성 |
 | DB | pgvector 어댑터 등록, `news_raw` URL UNIQUE·timestamptz ([ADR 0008](docs/adr/0008-db-layer-pgvector-schema-and-upsert.md)), 노출 로그·모델 레지스트리 테이블과 요청 경로 인덱스 (ADR 0015) | — |

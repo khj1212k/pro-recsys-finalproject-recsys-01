@@ -15,6 +15,9 @@
 
 클릭 로그에는 이벤트 종류가 있다(ADR 0025). 추천 경로가 "클릭"으로 읽는 것은 event = 'click' 행뿐이다 -
 같은 클릭의 체류 보고('detail_view')까지 세면 단기 벡터에서 그 뉴스레터가 두 번 평균된다.
+
+장기 프로필은 user_profile_state(클릭마다 갱신되는 증분 상태, app/recsys/profile_store.py)에서 읽는다.
+"user".user_embedding은 더 읽지 않는다(ADR 0033).
 """
 import uuid
 from contextlib import contextmanager
@@ -27,14 +30,9 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from app.models.recsys import RecommendationImpressionLog, RecommendationRequestLog
-from app.recsys.types import Item, NewsletterMeta
-
-
-def vector_from_send(buf) -> Optional[np.ndarray]:
-    """pgvector vector_send() 바이너리: uint16 dim, uint16 unused, float32[dim] (big-endian)."""
-    if buf is None:
-        return None
-    return np.frombuffer(bytes(buf), dtype=">f4", offset=4).astype(np.float32)
+from app.recsys.pgvector_io import vector_from_send
+from app.recsys.profile_store import STATE_COLUMNS, state_from_row
+from app.recsys.types import ClickEvent, Item, NewsletterMeta, ProfileState, WindowCounts
 
 
 def _vec_param(v: np.ndarray) -> np.ndarray:
@@ -73,34 +71,80 @@ class SqlRecsysRepository:
             uid=user_id,
         )
 
-    def long_term_and_categories(self, user_id: int) -> Tuple[Optional[np.ndarray], List[int]]:
+    def profile_state(self, user_id: int) -> Tuple[ProfileState, List[int]]:
+        columns = ", ".join(f"s.{c}" for c in STATE_COLUMNS.split(", "))
         rows = self._rows(
-            'SELECT vector_send(u.user_embedding), '
+            f"SELECT {columns}, "
             "ARRAY(SELECT p.category_id FROM user_preferred_categories p "
             "      WHERE p.user_id = u.user_id ORDER BY p.category_id) "
-            'FROM "user" u WHERE u.user_id = :uid',
+            'FROM "user" u LEFT JOIN user_profile_state s ON s.user_id = u.user_id '
+            "WHERE u.user_id = :uid",
             uid=user_id,
         )
         if not rows:
-            return None, []
-        vec, cats = rows[0]
-        return vector_from_send(vec), list(cats or [])
+            return ProfileState(), []
+        *state_row, cats = rows[0]
+        return state_from_row(*state_row), list(cats or [])
 
-    def short_term_vector(self, user_id: int, since: datetime, limit: int) -> Optional[np.ndarray]:
-        return vector_from_send(
-            self._scalar(
-                "SELECT vector_send(AVG(t.e)) FROM ("
-                "  SELECT n.news_letter_embedding AS e"
-                "  FROM user_newsletter_ctr_log l"
-                "  JOIN news_letter n ON n.news_letter_id = l.news_letter_id"
-                "  WHERE l.user_id = :uid AND l.created_at >= :since AND l.event = 'click'"
-                "    AND n.news_letter_embedding IS NOT NULL"
-                "  ORDER BY l.created_at DESC LIMIT :lim) t",
-                uid=user_id,
-                since=since,
-                lim=limit,
+    def recent_clicks(
+        self, user_id: int, since: datetime, until: datetime, limit: int
+    ) -> List[ClickEvent]:
+        rows = self._rows(
+            "SELECT l.created_at::timestamptz, vector_send(n.news_letter_embedding), l.news_letter_id"
+            "  FROM user_newsletter_ctr_log l"
+            "  JOIN news_letter n ON n.news_letter_id = l.news_letter_id"
+            "  WHERE l.user_id = :uid AND l.created_at >= :since AND l.created_at < :until"
+            "    AND l.event = 'click' AND n.news_letter_embedding IS NOT NULL"
+            # (초, 뉴스레터 ID) 순으로 가장 뒤의 것들. 같은 초의 클릭을 마이크로초로 가르지 않는다(저장소 계약 참고).
+            "  ORDER BY date_trunc('second', l.created_at) DESC, l.news_letter_id DESC, l.log_id DESC"
+            "  LIMIT :lim",
+            uid=user_id,
+            since=since,
+            until=until,
+            lim=limit,
+        )
+        return [ClickEvent(r[0], vector_from_send(r[1]), int(r[2])) for r in rows]
+
+    def item_window_counts(
+        self,
+        news_letter_ids: Sequence[int],
+        click_starts: Sequence[datetime],
+        inview_start: datetime,
+        end: datetime,
+    ) -> Dict[int, WindowCounts]:
+        if not news_letter_ids:
+            return {}
+        ids = list(news_letter_ids)
+        # 클릭: 가장 넓은 창만큼 한 번 읽고 창마다 FILTER로 센다. ix_user_newsletter_ctr_log_news_letter_id_created_at.
+        filters = ", ".join(
+            f"COUNT(*) FILTER (WHERE created_at >= :s{j})" for j in range(len(click_starts))
+        )
+        clicks = self._rows(
+            f"SELECT news_letter_id, {filters} FROM user_newsletter_ctr_log "
+            "WHERE event = 'click' AND news_letter_id = ANY(:ids) "
+            "  AND created_at >= :widest AND created_at < :end GROUP BY news_letter_id",
+            ids=ids,
+            widest=min(click_starts),
+            end=end,
+            **{f"s{j}": start for j, start in enumerate(click_starts)},
+        )
+        # 노출: 화면에 나간 칸 하나가 한 건. ix_recommendation_impression_log_news_letter_id_created_at.
+        inviews = dict(
+            self._rows(
+                "SELECT news_letter_id, COUNT(*) FROM recommendation_impression_log "
+                "WHERE news_letter_id = ANY(:ids) AND created_at >= :start AND created_at < :end "
+                "GROUP BY news_letter_id",
+                ids=ids,
+                start=inview_start,
+                end=end,
             )
         )
+        zero = (0,) * len(click_starts)
+        by_id = {r[0]: tuple(int(c) for c in r[1:]) for r in clicks}
+        return {
+            int(nid): WindowCounts(by_id.get(nid, zero), int(inviews.get(nid, 0)))
+            for nid in set(by_id) | set(inviews)
+        }
 
     def onboarding_vector(self, user_id: int) -> Optional[np.ndarray]:
         return vector_from_send(
@@ -206,13 +250,15 @@ class SqlRecsysRepository:
             return {}
         rows = self._rows(
             "SELECT n.news_letter_id, vector_send(n.news_letter_embedding), "
-            "       n.news_letter_created_at::timestamptz, n.raw_news_count "
+            "       n.news_letter_created_at::timestamptz, n.raw_news_count, "
+            "       (SELECT MIN(c.category_id) FROM news_letter_categories c "
+            "         WHERE c.news_letter_id = n.news_letter_id) "
             "FROM news_letter n "
             "WHERE n.news_letter_id = ANY(:ids) AND n.news_letter_embedding IS NOT NULL "
             "  AND " + _DISPLAYABLE,
             ids=list(news_letter_ids),
         )
-        return {r[0]: Item(r[0], vector_from_send(r[1]), r[2], r[3]) for r in rows}
+        return {r[0]: Item(r[0], vector_from_send(r[1]), r[2], r[3], r[4]) for r in rows}
 
     def latest_batch(self, user_id: int) -> Optional[Tuple[datetime, List[int]]]:
         rows = self._rows(
@@ -271,6 +317,22 @@ def create_aux_engine(database_url: str) -> Engine:
         pool_size=1,
         max_overflow=1,
         pool_timeout=2,
+        pool_pre_ping=True,
+    )
+
+
+def create_feature_engine(database_url: str, workers: int, budget_ms: int) -> Engine:
+    """요청 경로 밖의 shadow·피처 작업 전용 풀(ADR 0033). 그 작업이 읽는 것은 후보의 인기도 창 집계다.
+
+    실시간 풀이나 보조 풀을 같이 쓰지 않는 이유: 이 조회의 비용은 노출 로그의 크기를 따라 커진다. 느려졌을 때
+    붙잡히는 것이 요청을 처리하는 커넥션이나 로그를 쓰는 커넥션이어서는 안 된다. 전용 스레드 수만큼만 두고,
+    못 빌리면 작업의 시간 예산만큼 기다리다 포기한다(features.error로 센다)."""
+    return create_engine(
+        database_url,
+        connect_args={"options": "-c client_encoding=utf8", "connect_timeout": CONNECT_TIMEOUT_S},
+        pool_size=max(1, workers),
+        max_overflow=0,
+        pool_timeout=max(0.001, budget_ms / 1000.0),
         pool_pre_ping=True,
     )
 

@@ -33,6 +33,21 @@ async def boot():
 
 asyncio.run(boot())
 
+# 기본 피처 함수(recsys_core 서빙 어댑터, ADR 0033)가 이미지 안의 파일만으로 임포트되고 값을 낸다.
+import numpy as np
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
+from app.recsys.config import RecsysConfig
+from app.recsys.lgbm_scorer import resolve_feature_fn
+
+fn = resolve_feature_fn(RecsysConfig().feature_fn)
+now = datetime(2026, 10, 6, tzinfo=timezone.utc)
+item = SimpleNamespace(news_letter_id=1, embedding=np.ones(4, dtype=np.float32), created_at=now, category_id=1)
+state = SimpleNamespace(category_ids=[1], hist=None, recent_clicks=[], popularity={})
+print("FEATURES=" + json.dumps(list(fn(state, [item], now).shape)))
+print("PANDAS=" + json.dumps("pandas" in sys.modules))
+
 repo = os.path.realpath(os.environ["PROBE_REPO_ROOT"]) + os.sep
 allowed = tuple(
     os.path.realpath(p) + os.sep for p in (os.getcwd(), sys.prefix, sys.base_prefix)
@@ -103,3 +118,26 @@ def test_api_imports_and_boots_with_only_the_files_the_image_copies(tmp_path):
     marker = [ln for ln in done.stdout.splitlines() if ln.startswith("LEAKED=")]
     assert marker, done.stdout[-2000:]
     assert json.loads(marker[-1][len("LEAKED="):]) == []
+
+
+def test_the_default_feature_function_works_inside_the_image_layout_without_pandas(tmp_path):
+    """이미지에 복사되는 recsys_core만으로 서빙 어댑터가 피처를 내고, 그 경로가 pandas를 끌어오지 않는다
+    (API 이미지에는 pandas가 없다)."""
+    app_dir = materialize_image_layout(DOCKERFILE, tmp_path)
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH" and not k.startswith("RECSYS_")}
+    env.update(
+        DATABASE_URL="postgresql://probe:probe@127.0.0.1:1/probe",
+        SECRET_KEY="probe",
+        ALGORITHM="HS256",
+        ACCESS_TOKEN_EXPIRE_MINUTES="30",
+        PROBE_REPO_ROOT=str(REPO_ROOT),
+    )
+
+    done = subprocess.run([sys.executable, "-c", PROBE], cwd=app_dir, env=env, capture_output=True, text=True,
+                          timeout=120)
+
+    assert done.returncode == 0, done.stderr[-2000:]
+    lines = dict(ln.split("=", 1) for ln in done.stdout.splitlines() if "=" in ln)
+    assert json.loads(lines["FEATURES"]) == [1, 22]
+    assert json.loads(lines["PANDAS"]) is False
+    assert json.loads(lines["LEAKED"]) == []

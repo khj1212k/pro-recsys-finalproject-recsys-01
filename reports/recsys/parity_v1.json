@@ -1,0 +1,150 @@
+{
+  "meta": {
+    "report": "serving parity gate v1 (ADR 0033)",
+    "generated_at": "2026-10-05T23:40:41+00:00",
+    "git_sha": "30f655320f9877e9b436be9dd8c7a970b74430dc",
+    "feature_schema_version": 2,
+    "feature_schema_hash": "7ce824189c2ad677bfb0f7209a18d5cf32b0c42a97b68506868ffeeaea82995d",
+    "catalog_items": 348,
+    "click_events": 585,
+    "impression_rows": 6500,
+    "requests": 198,
+    "users": 6,
+    "thresholds": {
+      "features_max_abs_diff": 1e-06,
+      "scores_min_kendall_tau": 1.0,
+      "end_to_end_mean_overlap": 0.9
+    },
+    "source": "CI integration test: PostgreSQL 16 + pgvector, real routers, production wiring (tests/integration/test_feature_parity.py)",
+    "commit": "30f655320f9877e9b436be9dd8c7a970b74430dc",
+    "ci_run_id": "37389722931",
+    "replayed_requests": 200,
+    "clicks_through_api": 131,
+    "response_sources": {
+      "cold_start_category": 5,
+      "realtime": 193,
+      "cold_start_popular": 2
+    },
+    "model_version": "lgbm:parity-b0eca66b@gate",
+    "service_counters": {
+      "cache.hit": 113,
+      "cache.miss": 87,
+      "features.computed": 86,
+      "shadow.scored": 86,
+      "shadow.submitted": 86
+    }
+  },
+  "features": {
+    "requests": 198,
+    "slots": 3960,
+    "columns": 22,
+    "max_abs_diff": 1.1920928955078125e-07,
+    "per_column_max_abs_diff": {
+      "hours_since_pub": 0.0,
+      "is_fresh_24h": 0.0,
+      "is_fresh_7d": 0.0,
+      "hist_cos": 1.1920928955078125e-07,
+      "cat_match_count": 0.0,
+      "is_cat_match": 0.0,
+      "news_category": 0.0,
+      "user_age": 0.0,
+      "user_gender": 0.0,
+      "user_ncat": 0.0,
+      "pop_clicks_6h": 0.0,
+      "pop_clicks_24h": 0.0,
+      "pop_clicks_48h": 0.0,
+      "pop_inviews_24h": 0.0,
+      "pop_ctr_24h": 0.0,
+      "short_cos": 0.0,
+      "short_len": 0.0,
+      "sess_cos": 0.0,
+      "sess_len": 0.0,
+      "hours_since_last_event": 0.0,
+      "cat_share": 0.0,
+      "hist_len": 0.0
+    },
+    "nan_position_mismatches": 0,
+    "threshold": 1e-06,
+    "pass": true
+  },
+  "scores": {
+    "requests_with_shadow_scores": 198,
+    "requests_without_shadow_scores": 0,
+    "requests_without_comparable_pairs": 0,
+    "min_kendall_tau": 1.0,
+    "requests_with_tau_below_1": 0,
+    "max_abs_score_diff": 0.0,
+    "threshold": 1.0,
+    "pass": true
+  },
+  "end_to_end": {
+    "k": 20,
+    "requests": 198,
+    "mean_overlap": 0.9987373737373737,
+    "min_overlap": 0.95,
+    "p10_overlap": 1.0,
+    "requests_with_full_overlap": 193,
+    "mean_serving_candidates": 172.65151515151516,
+    "mean_harness_candidates": 214.52020202020202,
+    "mean_candidate_set_jaccard": 0.7547456813327423,
+    "threshold": 0.9,
+    "pass": true
+  },
+  "candidate_config": {
+    "serving": {
+      "window_h": 72.0,
+      "sources": [
+        [
+          "knn_profile",
+          100
+        ],
+        [
+          "knn_short",
+          100
+        ],
+        [
+          "recent",
+          100
+        ],
+        [
+          "popular",
+          100
+        ],
+        [
+          "category",
+          50
+        ]
+      ],
+      "cap": 300
+    },
+    "harness": {
+      "window_h": 72.0,
+      "sources": [
+        [
+          "knn_profile",
+          100
+        ],
+        [
+          "knn_short",
+          100
+        ],
+        [
+          "recent",
+          100
+        ],
+        [
+          "popular",
+          100
+        ],
+        [
+          "category",
+          50
+        ]
+      ],
+      "cap": 300
+    },
+    "equal": true,
+    "pass": true
+  },
+  "pass": true
+}

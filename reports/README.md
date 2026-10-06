@@ -20,6 +20,7 @@
 
 | 리포트 | 내용 | 데이터 |
 |---|---|---|
+| [recsys/parity_v1](recsys/parity_v1.md) | train/serve parity 게이트: 서빙이 칸 로그에 남긴 피처·shadow 점수·후보를 같은 로그에서 오프라인 하네스 방식으로 다시 계산해 비교한 4항목(추천 품질의 수치가 아니다). 원자료 `parity_v1.json`은 CI 실행 37389722931의 아티팩트 그대로. 설계와 한계는 [ADR 0033](../docs/adr/0033-train-serve-feature-parity.md) | 합성(CI 테스트 DB에 시드한 뉴스레터·클릭, 무작위 데이터로 만든 22열 모델) |
 | [recsys/constant_feature_ablation_v1](recsys/constant_feature_ablation_v1.md) | 상수 피처 2개 제거 전후 LightGBM 예측 비교 | 합성 |
 | [recsys/team_repro_v2](recsys/team_repro_v2.md) | 팀 베이스라인 재현과 분해 실험(v2.2). 추론 시점 누출, 베이스라인 대비, 조기 종료 아티팩트. 원자료는 `team_repro_v2.json`·`team_repro_v2_raw.json`. 프로토콜은 [ADR 0007](../docs/adr/0007-recsys-offline-evaluation-protocol.md) | 팀이 남긴 합성 클릭 아카이브(LLM 페르소나 100명, 저장소 밖) |
 | [recsys/team_repro_v1](recsys/team_repro_v1.md) | 위 재현의 첫 판. 방법론 검토에서 신뢰 불가 판정을 받아 v2로 다시 썼다. 조사 기록으로만 남기며 수치를 인용하지 않는다 | 같음 |

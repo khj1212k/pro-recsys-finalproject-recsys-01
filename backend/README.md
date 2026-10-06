@@ -46,7 +46,12 @@ UPSTAGE_API_KEY=your_upstage_api_key
 
 #### 3. 서버 실행
 ```bash
-uvicorn app.main:app --reload
+# 저장소 루트의 recsys_core(오프라인 하네스와 같이 쓰는 피처 코어, ADR 0033)를 임포트할 수 있어야 한다.
+# API 이미지는 그 디렉터리를 복사해 넣는다(docker/api.Dockerfile). 저장소에서 직접 띄울 때는 경로를 준다.
+PYTHONPATH=.. uvicorn app.main:app --reload
 ```
+
+`requirements.txt`의 lightgbm은 레지스트리에 등록된 랭커를 채점할 때만 임포트된다. macOS에서 그 임포트가
+`libomp`를 찾지 못하면 `brew install libomp`가 필요하다(이미지에는 `libgomp1`이 들어 있다).
 
 `http://localhost:8000/docs`에서 API 문서 확인 가능합니다.

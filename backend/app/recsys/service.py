@@ -27,6 +27,7 @@ from app.recsys.pipeline import (
     RealtimeRecommender,
     build_recommendation,
     popular_ids,
+    shadow_scores_at,
 )
 from app.recsys.repository import RecsysRepository
 from app.recsys.scoring import HeuristicScorer, Scorer, encode_features
@@ -141,9 +142,25 @@ class RecommendationService:
             self.counters.inc("impressions.slate_mismatch")
         slot_by_id = dict(zip(rec.news_letter_ids, rec.slots)) if planned else {}
         score_by_id = rec.score_by_id()
+        # 요청 경로 밖에서 계산한 shadow 점수와 어댑터 피처를 찾아온다. 아직이면 shadow_log_wait_ms(와 그 작업의
+        # 남은 예산 중 짧은 쪽)만큼만 기다린다. 여기는 응답을 보낸 뒤지만 요청 핸들러와 같은 스레드 풀의 자리를
+        # 쓰고 있어서, 기다리는 동안 그 자리가 묶인다. 없으면 요청 경로에서 나온 값(활성 스코어러의 피처)을 남긴다.
+        late = None
+        if rec.deferred is not None:
+            late = rec.deferred.wait(max_wait_s=self.cfg.shadow_log_wait_ms / 1000.0)
+        late_features = None if late is None else late.features
+        late_scores = {} if late is None else late.extra_scores
+        feature_schema_version = rec.feature_schema_version if late_features is None else late.feature_schema_version
+        shadow_versions = sorted(set(rec.shadow_versions) | set(late_scores))
         rows = []
         for pos, nid in enumerate(shown):
             slot = slot_by_id.get(nid, _NO_SLOT)
+            features, scores_shadow = slot.features, slot.scores_shadow
+            if slot.row is not None:
+                if late_features is not None:
+                    features = late_features[slot.row]
+                if late_scores:
+                    scores_shadow = {**(scores_shadow or {}), **shadow_scores_at(late_scores, slot.row)}
             rows.append(
                 {
                     "request_id": rec.request_id,
@@ -156,8 +173,8 @@ class RecommendationService:
                     "explored": slot.explored,
                     "propensity": slot.propensity if intact else None,
                     "det_rank": slot.det_rank,
-                    "scores_shadow": slot.scores_shadow,
-                    "features": None if slot.features is None else encode_features(slot.features),
+                    "scores_shadow": scores_shadow,
+                    "features": None if features is None else encode_features(features),
                 }
             )
         request_row = {
@@ -177,8 +194,10 @@ class RecommendationService:
             "shown_count": len(shown),
             "explore_positions": None if rec.explore_positions is None else list(rec.explore_positions),
             "candidate_ids": None if rec.eligible_ids is None else list(rec.eligible_ids),
-            "feature_schema_version": rec.feature_schema_version,
-            "shadow_versions": list(rec.shadow_versions) or None,
+            "feature_schema_version": feature_schema_version,
+            # 피처를 계산한 요청 시각. 캐시에서 꺼낸 목록이면 그 목록을 계산한 요청의 시각이다(ADR 0033).
+            "features_as_of": rec.features_as_of if feature_schema_version is not None else None,
+            "shadow_versions": shadow_versions or None,
             "fatigue_mode": rec.fatigue_mode,
             "fatigued_count": rec.fatigued_count,
             "latency_ms": rec.latency_ms,
@@ -325,10 +344,14 @@ def build_service(
     clock: Callable[[], float] = time.monotonic,
     counters: Optional[RecsysCounters] = None,
     rng_factory: RngFactory = rng_for_request,
+    feature_repo_factory: Optional[RepoFactory] = None,
 ) -> RecommendationService:
-    """scorer는 스코어러 하나(shadow 없음)이거나 ScorerStack(활성 + shadow)이다."""
+    """scorer는 스코어러 하나(shadow 없음)이거나 ScorerStack(활성 + shadow)이다.
+    feature_repo_factory는 요청 경로 밖의 피처 작업이 인기도 창 집계를 읽는 저장소다(pipeline.RealtimeRecommender)."""
     counters = counters or RecsysCounters()
-    recommender = RealtimeRecommender(cfg, scorer=scorer or HeuristicScorer(), counters=counters)
+    recommender = RealtimeRecommender(
+        cfg, scorer=scorer or HeuristicScorer(), counters=counters, feature_repo_factory=feature_repo_factory
+    )
     return RecommendationService(
         cfg,
         repo_factory=repo_factory,

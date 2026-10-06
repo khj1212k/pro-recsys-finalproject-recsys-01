@@ -50,7 +50,9 @@ def _simulate(api_client, seeded, pg_conn):  # noqa: F811
 
 def test_request_slot_and_click_logs_join_one_to_one_over_200_requests(api_client, seeded, pg_conn):  # noqa: F811
     from app.recsys.exploration import det_propensity, explore_propensity
+    from app.recsys.scoring import ADAPTER_FEATURE_SCHEMA, FEATURE_SCHEMAS
 
+    schema_versions = set()
     users, responses, linked, legacy = _simulate(api_client, seeded, pg_conn)
     assert len(responses) == 200 and linked and legacy
 
@@ -58,7 +60,8 @@ def test_request_slot_and_click_logs_join_one_to_one_over_200_requests(api_clien
         cur.execute(
             "SELECT request_id::text, user_id, source, policy_version, cache_hit, slate_size, shown_count, "
             "       explore_positions, explore_pool_size, eligible_count, candidate_ids, fatigue_mode, "
-            "       fatigued_count, profile_source, fallback_reason, model_version, latency_ms "
+            "       fatigued_count, profile_source, fallback_reason, model_version, latency_ms, "
+            "       feature_schema_version, features_as_of "
             "FROM recommendation_request_log WHERE user_id = ANY(%s)",
             (users,),
         )
@@ -105,10 +108,21 @@ def test_request_slot_and_click_logs_join_one_to_one_over_200_requests(api_clien
             else:
                 assert propensity == pytest.approx(det_propensity(det_rank, position, slate, m))
             assert score is not None
-            if request["model_version"] == "heuristic-v1":
-                assert len(bytes(features)) == 4 * 4  # 휴리스틱 4항, float32
+            if request["source"] == "cold_start_popular":
+                # 신호 없는 사용자의 인기 목록 경로는 스코어러 묶음을 거치지 않는다: 피처가 없다
+                assert features is None and request["feature_schema_version"] is None
+            else:
+                # 운영 기본 배선: 어댑터 피처(스키마 2, 22열)가 남고, 어댑터 입력이 요청 시각의 것으로 맞지 않는
+                # 요청(여기서는 프로필을 직접 심은 사용자가 아직 클릭하지 않은 경우가 아니라, 상태가 클릭 로그보다
+                # 뒤처진 경우)에는 활성 휴리스틱의 4항(스키마 1)이 남는다. 어느 쪽이든 길이가 버전과 맞는다.
+                version = request["feature_schema_version"]
+                assert version in FEATURE_SCHEMAS and request["features_as_of"] is not None
+                assert len(bytes(features)) == 4 * len(FEATURE_SCHEMAS[version])
+                schema_versions.add(version)
     # 신호 없는 사용자의 첫 요청은 4칸, 프로필이 있는 사용자는 2칸
     assert explore_counts == {2, 4}
+    # 어댑터 피처가 실제로 남았다(요청 경로 밖에서 계산해 응답 뒤에 로그와 함께 쓰인다)
+    assert ADAPTER_FEATURE_SCHEMA in schema_versions
 
     # --- 캐시: 클릭이 없으면 결정론 목록은 캐시에서 오지만 탐색 칸은 요청마다 다시 뽑힌다
     by_user = defaultdict(list)
@@ -219,14 +233,17 @@ def test_detail_view_rows_are_not_read_as_clicks_by_the_request_path(api_client,
         repo = SqlRecsysRepository(s)
         assert repo.last_click_id(uid) is None
         assert repo.clicked_among(uid, [viewed, clicked]) == set()
-        assert repo.short_term_vector(uid, since, 20) is None
+        assert repo.recent_clicks(uid, since, datetime.now(timezone.utc), 20) == []
+        assert repo.profile_state(uid)[0].hist.empty  # 체류 보고는 장기 프로필에도 들어가지 않는다
 
     click_log_id = client.post("/logs/newsletter/click", json={"news_letter_id": clicked}).json()["log_id"]
     with Session(engine) as s:
         repo = SqlRecsysRepository(s)
         assert repo.last_click_id(uid) == click_log_id
         assert repo.clicked_among(uid, [viewed, clicked]) == {clicked}
-        np.testing.assert_allclose(repo.short_term_vector(uid, since, 20), seeded.vec_of[clicked], atol=1e-6)
+        (event,) = repo.recent_clicks(uid, since, datetime.now(timezone.utc), 20)
+        np.testing.assert_allclose(event.embedding, seeded.vec_of[clicked], atol=1e-6)
+        assert repo.profile_state(uid)[0].hist.hist_len == 1
     with pg_conn.cursor() as cur:
         cur.execute(
             "SELECT request_id::text, position, event, dwell_ms FROM user_newsletter_ctr_log "

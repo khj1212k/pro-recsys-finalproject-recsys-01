@@ -6,7 +6,10 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 
-from app.recsys.types import Item, NewsletterMeta
+from recsys_core.profile import NO_CATEGORY, HistState, apply_event
+from recsys_core.serving import epoch_seconds
+
+from app.recsys.types import ClickEvent, Item, NewsletterMeta, ProfileState, WindowCounts
 
 NOW = datetime(2026, 9, 25, 9, 0, tzinfo=timezone.utc)
 
@@ -51,6 +54,9 @@ class FakeNewsletter:
 
 @dataclass
 class FakeUser:
+    """long_term을 주면 그 벡터가 장기 프로필이다(클릭 이력과 무관하게 프로필을 고정하고 싶은 테스트용).
+    주지 않으면 장기 프로필은 클릭 로그에서 만든 증분 상태다(SQL 저장소와 같은 규칙)."""
+
     id: int
     long_term: Optional[np.ndarray] = None
     category_ids: List[int] = field(default_factory=list)
@@ -94,22 +100,50 @@ class FakeRepo:
         ids = [c[0] for c in self.clicks if c[1] == user_id]
         return max(ids) if ids else None
 
-    def long_term_and_categories(self, user_id):
-        self._call("long_term_and_categories")
-        u = self.users.get(user_id)
-        if u is None:
-            return None, []
-        return u.long_term, list(u.category_ids)
+    def _category_of(self, nl_id: int) -> int:
+        n = self.newsletters.get(nl_id)
+        return min(n.category_ids) if n is not None and n.category_ids else NO_CATEGORY
 
-    def short_term_vector(self, user_id, since, limit):
-        self._call("short_term_vector")
+    def profile_state(self, user_id):
+        self._call("profile_state")
+        u = self.users.get(user_id)
+        cats = [] if u is None else list(u.category_ids)
+        events = sorted(
+            (c for c in self.clicks if c[1] == user_id and c[2] in self.newsletters), key=lambda c: (c[3], c[0])
+        )
+        last = events[-1][3] if events else None
+        if u is not None and u.long_term is not None:
+            hist = HistState(
+                hist_sum=np.asarray(u.long_term, dtype=np.float64),
+                anchor_s=epoch_seconds(last or NOW - timedelta(days=30)),
+                hist_len=max(1, len(events)),
+                cat_counts={NO_CATEGORY: max(1, len(events))},
+            )
+            return ProfileState(hist, last or NOW - timedelta(days=30)), cats
+        hist = HistState()
+        for _, _, nl_id, at in events:
+            hist = apply_event(hist, epoch_seconds(at), self.newsletters[nl_id].embedding, self._category_of(nl_id))
+        return ProfileState(hist, last), cats
+
+    def recent_clicks(self, user_id, since, until, limit):
+        self._call("recent_clicks")
+        # SQL 구현과 같은 순서: (초 단위 시각, 뉴스레터 ID)로 가장 뒤의 limit개
         recent = sorted(
-            (c for c in self.clicks if c[1] == user_id and c[3] >= since),
-            key=lambda c: c[3],
+            (c for c in self.clicks if c[1] == user_id and since <= c[3] < until and c[2] in self.newsletters),
+            key=lambda c: (epoch_seconds(c[3]), c[2], c[0]),
             reverse=True,
         )[:limit]
-        vecs = [self.newsletters[c[2]].embedding for c in recent if c[2] in self.newsletters]
-        return np.mean(vecs, axis=0) if vecs else None
+        return [ClickEvent(c[3], self.newsletters[c[2]].embedding, c[2]) for c in recent]
+
+    def item_window_counts(self, news_letter_ids, click_starts, inview_start, end):
+        self._call("item_window_counts")
+        out = {}
+        for nid in news_letter_ids:
+            clicks = tuple(sum(1 for c in self.clicks if c[2] == nid and s <= c[3] < end) for s in click_starts)
+            views = sum(1 for _, i, at in self.impressions if i == nid and inview_start <= at < end)
+            if any(clicks) or views:
+                out[nid] = WindowCounts(clicks, views)
+        return out
 
     def onboarding_vector(self, user_id):
         self._call("onboarding_vector")
@@ -180,7 +214,7 @@ class FakeRepo:
         for i in news_letter_ids:
             n = self.newsletters.get(i)
             if n is not None and self._displayable(n):
-                out[i] = Item(i, n.embedding, n.created_at, n.raw_news_count)
+                out[i] = Item(i, n.embedding, n.created_at, n.raw_news_count, min(n.category_ids))
         return out
 
     def displayable_among(self, news_letter_ids):
