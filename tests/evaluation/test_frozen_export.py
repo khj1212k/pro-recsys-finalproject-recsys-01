@@ -1,8 +1,8 @@
 """evaluation/llm/frozen_export.py — news_raw의 동결 반출(읽기 전용), 매니페스트, 30일 정리.
 
 DB 없이 도는 단위 테스트다. COPY 출력은 PostgreSQL 텍스트 형식을 흉내 낸 합성 줄로 만든다(실제 서버의
-출력은 tests/integration/test_frozen_export_db.py가 CI의 Postgres에서 확인한다). 기사 본문은 전부 이
-파일에서 지어낸 문장이다.
+출력은 tests/integration/test_frozen_export_db.py가 CI의 Postgres에서 확인한다). 기사 본문은 전부
+tests/frozen_news_fakes.py에서 지어낸 문장이다.
 """
 import hashlib
 import json
@@ -18,63 +18,15 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from evaluation.llm import frozen_export as fx
+from tests.frozen_news_fakes import BODY_MARK, CODE, TITLE_MARK
+from tests.frozen_news_fakes import body as _body
+from tests.frozen_news_fakes import header as _header
+from tests.frozen_news_fakes import server_row as _server_row
+from tests.frozen_news_fakes import sha as _sha
+from tests.frozen_news_fakes import stream as _stream
 
 KST = timezone(timedelta(hours=9))
 WINDOW = fx.Window.from_iso("2026-10-02T21:00:00", "2026-10-05T21:00:00")
-CODE = {"git_sha": "0" * 40, "dirty": False}
-# 본문·제목이 출력이나 로그로 새는지 찾는 표식. 합성 문장에만 들어 있다.
-BODY_MARK = "가람시청은"
-TITLE_MARK = "가람시"
-
-
-def _sha(text):
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _body(k):
-    return (
-        f"{BODY_MARK} {k}일 새 도서관을 짓는 계획을 내놓았다. 예산은 {100 + k}억 원이다.\n"
-        f"둘째 문단에는 \"따옴표\"와 역슬래시 \\ 와 탭\t이 있고, 줄 구분 문자   와 그림 문자 📚 도 있다."
-    )
-
-
-def _server_row(k, *, press="가람일보", crawled="2026-10-03T01:00:00.000000Z", body=None, db_sha="auto"):
-    body = _body(k) if body is None else body
-    return {
-        "kind": "row", "id": 1000 + k, "press": press, "url": f"https://news.example/a/{k}",
-        "title": f"{TITLE_MARK} 도서관 계획 {k}", "body": body,
-        "created_at": "2026-10-03T00:30:00.000000Z", "crawled_at": crawled,
-        "extracted_at": "2026-10-03T01:05:00.000000Z", "extract_status": "ok",
-        "content_sha256": _sha(body) if db_sha == "auto" else db_sha,
-    }
-
-
-def _header(**over):
-    header = {
-        "kind": "header", "snapshot_at_utc": "2026-10-06T07:21:30.123456Z",
-        "alembic_revision": "d48994e9d26e", "server_version": "16.15", "server_encoding": "UTF8",
-        "transaction_read_only": "on", "transaction_isolation": "repeatable read",
-        "statement_timeout": "2min", "txid_snapshot": "100:100:",
-    }
-    header.update(over)
-    return header
-
-
-def _copy_line(obj):
-    """서버가 COPY ... TO STDOUT(텍스트 형식)으로 내보내는 한 줄. json 텍스트의 역슬래시만 두 번 적힌다."""
-    return json.dumps(obj, ensure_ascii=False).replace("\\", "\\\\").encode("utf-8")
-
-
-def _stream(rows, *, header=None, trailer="auto"):
-    lines = [_copy_line(header or _header())]
-    lines += [_copy_line(r) for r in rows]
-    if trailer == "auto":
-        ids = [r["id"] for r in rows]
-        trailer = {"kind": "trailer", "rows": len(rows), "min_id": min(ids) if ids else None,
-                   "max_id": max(ids) if ids else None}
-    if trailer is not None:
-        lines.append(_copy_line(trailer))
-    return lines
 
 
 def _bundle(rows=None, **kwargs):
@@ -190,7 +142,7 @@ def test_parse_refuses_truncated_stream():
 ])
 def test_parse_refuses_header_that_does_not_prove_a_bounded_read_only_snapshot(override):
     with pytest.raises(fx.ExportError, match="읽기 전용 스냅숏"):
-        fx.parse_copy_stream(_stream([_server_row(1)], header=_header(**override)))
+        fx.parse_copy_stream(_stream([_server_row(1)], head=_header(**override)))
 
 
 # ---------------------------------------------------------------- 행과 매니페스트
@@ -221,7 +173,7 @@ def test_build_export_sorts_rows_hashes_bodies_and_sets_thirty_day_expiry():
 
 def test_identity_does_not_depend_on_server_row_order_but_does_on_content():
     same = _bundle([_server_row(k) for k in (1, 2, 3)])
-    changed = _bundle([_server_row(1), _server_row(2), _server_row(3, body=_body(3) + " 한 글자 더")])
+    changed = _bundle([_server_row(1), _server_row(2), _server_row(3, text=_body(3) + " 한 글자 더")])
     assert _bundle().manifest["identity_sha256"] == same.manifest["identity_sha256"]
     assert _bundle().manifest["identity"]["rows_sha256"] != changed.manifest["identity"]["rows_sha256"]
 
@@ -238,7 +190,7 @@ def test_build_export_refuses_rows_outside_the_window_duplicates_and_empty_bodie
     with pytest.raises(fx.ExportError, match="중복"):
         _bundle([_server_row(1), _server_row(1)])
     with pytest.raises(fx.ExportError, match="본문"):
-        _bundle([_server_row(1, body="")])
+        _bundle([_server_row(1, text="")])
 
 
 def test_redistributable_sources_are_exempt_from_expiry_and_unknown_sources_are_not():
