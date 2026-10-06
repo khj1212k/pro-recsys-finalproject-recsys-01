@@ -494,3 +494,22 @@ n(eval / warmup / n_p / 중단·미시작), 버킷별 실제 배분, seed와 처
 **A8.10 실행 전 기록**(A8.0의 4단계에서 채운다. 지금은 러너가 없어 비어 있다): `code_sha`와 `git diff --stat b64da14 <code_sha> -- ai_workspace` 요약, 반출 T0·행 수·매니페스트 sha256·본문
 만료일(가장 이른 `crawled_at` + 30일), 임베딩 sha256·fp16/fp32 코사인·Colab CU, 날짜 창과 run별 멤버십 스냅숏 sha256, 표본 매니페스트 sha256·버킷별 실제 배분·처리 순서,
 사용자 결정(뉴스레터 임베더 방식, 라벨 전체/축소), ADR 0023 개정이 들어간 커밋. void가 생기면 이 아래에 날짜·사유·비용을 덧붙인다.
+
+**A8.10 덧붙임 (2026-10-06, 반출 도구·파일 대역 PR) — 실행 전이고 결과는 없다.** 위 A8.0~A8.9의 문안은 고치지 않았다. 반출·임베딩·E0 실행은
+하지 않았고 `reports/llm/`은 여전히 없다. 아래는 실행 전 기록을 채울 때 어느 값을 어디서 읽는지와, 도구가 A8의 문장을 어떻게 구현했는지다.
+- 데이터 경로의 결정은 [ADR 0036](0036-experiment-data-path-frozen-export-file-stand-ins.md)(제안됨), A8.0의 2단계가 요구하는 개정은
+  [ADR 0023](0023-data-sources-copyright-retention.md)의 "개정 (2026-10-06)" 절이다. `adr_0023_amendment_commit`에는 그 절이 main에 들어간 커밋을 적는다.
+- **창.** `evaluation.llm.frozen_export.registered_day_windows(T0, days)`가 A8.1의 문장을 이렇게 계산한다: 마지막 의사 시각은 (T0의 KST 날짜 − 1일)의
+  06:00 KST이고, 그 앞으로 하루씩이다. 예: T0 = 10-08 14:00 KST, 3일이면 t = 10-05·10-06·10-07의 06:00 KST. 반출과 러너가 같은 함수를 쓴다.
+- **`export_manifest_sha256`** = 반출 매니페스트의 `identity_sha256`. 창·조건·행 수·행별 신원의 sha256·원본 리비전·코드 SHA를 묶은 값이고, 30일 정리로
+  본문을 지워도 바뀌지 않는다. `export_t0_kst`는 매니페스트의 `snapshot_at_utc`(서버의 트랜잭션 시작 시각)를 KST로 옮긴 값,
+  `export_body_expires_at`은 `first_body_expiry_utc`다.
+- **`embeddings_sha256`** = 임베딩 팩의 벡터 파일(`emb.f16.npy`) sha256. 팩은 `scripts/import_embeddings.py`가 반출본과 대조한 것만 쓴다.
+- **`snapshot_sha256`** = `evaluation.llm.e0_store.ClusterRun.membership_snapshot()`의 `membership_sha256`. 코드 SHA는 이 값에 들어가지 않는다.
+- **이탈 1·6의 구현.** `evaluation/llm/e0_store.py`가 바꿔 끼우는 이름은 A8.2에 적은 것과 같다(`NewsClusterer._load_data_from_db`, `workflow.nodes`의
+  `get_connection`·`release_connection`·`save_news_letter`, 이탈 6의 `get_shared_embedder`). 끼우기 전에 그 이름들의 인자 구성과, 대역이 흉내 내는
+  운영 함수 8개의 본문 sha256이 고정값과 같은지 확인하고 다르면 끼우지 않는다.
+- **A8.2의 목록에 없는 하네스 장치가 하나 있다.** 대역이 끼워진 동안 `db.connection.get_pool`·`db.connection._build_db_config`를 막아 실제 DB 연결이
+  만들어지지 않게 한다(기본 켜짐, `installed(forbid_database=...)`). 등록된 경로에서는 불리지 않는 이름이지만 "바꿔 끼우는 이름"이 둘 늘어나는 것이므로,
+  E0에서 켜고 돌리려면 실행 전에 A8.x 개정(yaml `amendments`의 `changed_keys`에 `pipeline.declared_deviations`)으로 등록한다. 등록하지 않으면 끄고 돈다.
+  어느 쪽인지는 러너 PR에서 정하고 여기에 적는다.
