@@ -5,6 +5,7 @@
 # 뒤에 호출되면 페이크가 바로 실패한다. 실제 API 호출은 없다.
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -290,26 +291,128 @@ def test_cap_reached_between_retries_stops_before_the_next_request(monkeypatch, 
     assert [e["ev"] for e in _events(tmp_path)] == ["reserve", "commit", "refuse"]
 
 
-def test_day_cap_engages_the_kill_switch_so_a_fresh_process_gets_the_kill_switch_path(monkeypatch, tmp_path):
+def test_day_cap_engages_the_kill_switch_and_every_process_stops_with_the_same_reason(monkeypatch, tmp_path):
     _caps(monkeypatch, day="0")
     first, first_fake = _client([])
-    with pytest.raises(LLMBudgetExceeded):
+    with pytest.raises(LLMBudgetExceeded) as hit:
         first.complete(MESSAGES, schema=ClusterEval, purpose="cluster_eval")
-    assert (tmp_path / "LLM_KILL_SWITCH").exists()
+    kill_file = tmp_path / "LLM_KILL_SWITCH"
+    assert json.loads(kill_file.read_text(encoding="utf-8"))["engaged_by"] == "llm_spend_cap"
+    assert hit.value.details["kill_switch_file"] == str(kill_file)
+    assert sorted(os.listdir(tmp_path)) == ["LLM_KILL_SWITCH", "ledger.jsonl"]  # 임시 파일을 남기지 않는다
 
     # 같은 프로세스의 다른 스레드: 킬 스위치 결과("kill_switch" -> 로컬 폴백)가 아니라 같은 중단을 받는다
     second, second_fake = _client([])
     with pytest.raises(LLMBudgetExceeded):
         second.complete(MESSAGES, schema=ClusterEval, purpose="tone_convert")
 
-    # 다른 프로세스(런 상태 없음): 킬 스위치 파일만 보고 막힌다 - 네트워크 호출 없음
+    # 다른 프로세스(런 상태 없음, 상한도 넉넉하다): 킬 스위치 파일이 지출 가드가 켠 것이면 "kill_switch"
+    # 결과가 아니라 같은 런 중단이다 - 그래야 그 프로세스의 Stage5도 stopped / 종료 코드 3으로 끝난다
     budget.reset_run_state()
+    _caps(monkeypatch)
+    before = _events(tmp_path)
     third, third_fake = _client([])
-    result = third.complete(MESSAGES, schema=ClusterEval, purpose="cluster_eval")
+    with pytest.raises(LLMBudgetExceeded) as other:
+        third.complete(MESSAGES, schema=ClusterEval, purpose="cluster_eval")
 
-    assert result.error == "kill_switch" and result.attempts == 0
+    assert (other.value.details["scope"], other.value.details["via"]) == ("day", "kill_switch_file")
+    assert other.value.details["kill_switch_file"] == str(kill_file)
+    assert budget.run_stop().code == "llm_budget_exceeded"  # 그 프로세스의 런도 멈춘 것으로 표시된다
+    assert _events(tmp_path) == before  # 원장을 건드리지 않는다
     assert first_fake.chat.completions.call_count == second_fake.chat.completions.call_count == 0
     assert third_fake.chat.completions.call_count == 0
+
+
+@pytest.mark.parametrize("content", ["", "external budget watcher\n", '{"engaged_by": "gcp-budget-guard"}\n'])
+def test_kill_switch_engaged_by_anything_else_keeps_the_adr_0005_result(tmp_path, content):
+    """저장소 밖 감시가 켠 킬 스위치는 지금까지대로 호출 하나의 실패("kill_switch", 시도 0회)다."""
+    (tmp_path / "LLM_KILL_SWITCH").write_text(content, encoding="utf-8")
+    client, fake = _client([])
+
+    result = client.complete(MESSAGES, schema=ClusterEval, purpose="cluster_eval")
+
+    assert result.error == "kill_switch" and result.attempts == 0
+    assert fake.chat.completions.call_count == 0 and budget.run_stop() is None
+
+
+def test_worker_entering_while_the_kill_switch_is_being_engaged_gets_the_run_stop(monkeypatch, tmp_path):
+    """런을 멈춘 것으로 표시한 뒤에 킬 스위치 파일을 만든다. 순서가 반대면, 파일이 생긴 순간 complete()에
+    들어온 같은 프로세스의 다른 워커가 "kill_switch" 결과를 받아 로컬 폴백 경로로 간다."""
+    _caps(monkeypatch, day="0")
+    kill_file = tmp_path / "LLM_KILL_SWITCH"
+    seen = {}
+
+    def engage(_reason):
+        kill_file.write_text("")  # 파일이 막 생긴 순간(누가 켰는지 아직 읽을 수 없다)
+        seen["latched"] = budget.run_stop()
+
+        def other_worker():
+            client, fake = _client([])
+            try:
+                seen["other"] = client.complete(MESSAGES, schema=ClusterEval, purpose="tone_convert")
+            except BaseException as e:  # noqa: BLE001
+                seen["other"] = e
+            seen["other_calls"] = fake.chat.completions.call_count
+
+        thread = threading.Thread(target=other_worker)
+        thread.start()
+        thread.join(timeout=30)
+        return str(kill_file)
+
+    monkeypatch.setattr(budget, "engage_kill_switch", engage)
+    first, _ = _client([])
+
+    with pytest.raises(LLMBudgetExceeded) as exc:
+        first.complete(MESSAGES, schema=ClusterEval, purpose="cluster_eval")
+
+    assert seen["latched"] is not None and seen["latched"].details["scope"] == "day"
+    assert isinstance(seen["other"], LLMBudgetExceeded) and seen["other"].details["scope"] == "day"
+    assert seen["other_calls"] == 0
+    assert exc.value.details["kill_switch_file"] == str(kill_file)
+    assert budget.run_stop().details["kill_switch_file"] == str(kill_file)
+
+
+_OTHER_PROCESS = """
+import json
+from tests.llm_fakes import FakeOpenAIClient
+from core.llm.adapters import OpenAICompatLLMClient
+from core.llm.budget import LLMRunStop
+from core.llm.schemas import ClusterEval
+
+fake = FakeOpenAIClient(responses=[])  # 전송 계층에 닿으면 AssertionError
+client = OpenAICompatLLMClient(provider="gemini", model="gemini-3.5-flash-lite", client=fake)
+try:
+    result = client.complete([{"role": "user", "content": "x"}], schema=ClusterEval, purpose="cluster_eval", max_tokens=64)
+    out = {"result_error": result.error}
+except LLMRunStop as stop:
+    out = {"stop": stop.code, "scope": stop.details.get("scope"), "via": stop.details.get("via")}
+print(json.dumps({**out, "transport_calls": fake.chat.completions.call_count}))
+"""
+
+
+def test_two_processes_sharing_a_ledger_both_stop_cleanly_at_the_day_cap(tmp_path):
+    """프로세스 A가 일 상한에 닿아 킬 스위치를 켠다. 상한이 넉넉하게 설정된 프로세스 B도 "kill_switch" 결과가
+    아니라 런 중단을 받는다 - 결과가 로컬 폴백 초안이나 규칙 기반 문체 변환으로 이어지지 않는다."""
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    base_env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join([os.path.join(repo_root, "ai_workspace"), repo_root]),
+        "LLM_KILL_SWITCH_FILE": str(tmp_path / "LLM_KILL_SWITCH"),  # 하위 프로세스의 Settings가 읽는다
+        "LLM_BUDGET_FALLBACK_INPUT_PER_1M": "", "LLM_BUDGET_FALLBACK_OUTPUT_PER_1M": "",
+    }
+
+    def run(day_cap):
+        proc = subprocess.run([sys.executable, "-c", _OTHER_PROCESS], capture_output=True, text=True, timeout=120,
+                              env={**base_env, "LLM_BUDGET_DAY_USD": day_cap}, cwd=str(tmp_path))
+        assert proc.returncode == 0, proc.stderr[-2000:]
+        return json.loads(proc.stdout.strip().splitlines()[-1])
+
+    first = run("0")
+    second = run("100")
+
+    assert first == {"stop": "llm_budget_exceeded", "scope": "day", "via": None, "transport_calls": 0}
+    assert second == {"stop": "llm_budget_exceeded", "scope": "day", "via": "kill_switch_file", "transport_calls": 0}
+    assert [e["ev"] for e in _events(tmp_path)] == ["refuse"]  # B는 원장에 닿기 전에 멈췄다
 
 
 class _MeteredTransport:

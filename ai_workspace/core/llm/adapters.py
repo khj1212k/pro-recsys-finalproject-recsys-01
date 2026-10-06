@@ -85,9 +85,11 @@ class OpenAICompatLLMClient(LLMClient):
         temperature: float = 0.2,
         max_tokens: int = 4096,
     ) -> LLMResult:
-        # 지출 상한이나 서킷브레이커로 이미 멈춘 런이면 같은 중단(LLMRunStop)을 다시 낸다. 킬 스위치보다
-        # 먼저 본다 - 상한이 킬 스위치를 켠 프로세스에서 다른 스레드가 "kill_switch" 결과를 받아
-        # 로컬 폴백으로 넘어가지 않게 (docs/adr/0035).
+        # 지출 상한이나 서킷브레이커로 이미 멈춘 런이면 같은 중단(LLMRunStop)을 다시 낸다. 지출 가드가
+        # (이 프로세스든 다른 프로세스든) 일·전체 상한으로 켠 킬 스위치 파일이 있어도 같은 중단이다.
+        # 킬 스위치보다 먼저 본다 - "kill_switch" 결과를 받은 호출부는 로컬 폴백으로 넘어가기 때문이다.
+        # 그 밖의 킬 스위치(환경변수, 저장소 밖 감시가 만든 파일)는 아래에서 ADR 0005대로 처리한다
+        # (docs/adr/0035).
         guard = get_budget_guard()
         guard.ensure_run_active(self.provider, self.model, purpose)
 

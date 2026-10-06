@@ -392,13 +392,16 @@ def reset_run_state() -> None:
         _pricing_cache = None
 
 
-def _latch(stop: LLMRunStop) -> None:
+def _latch(stop: LLMRunStop) -> Optional[LLMRunStop]:
+    """런을 멈춘 것으로 표시한다. 이 호출이 표시를 세웠으면 보관한 사본을, 이미 멈춰 있었으면 None을 돌려준다."""
     global _run_stop
     with _state_lock:
-        if _run_stop is None:
-            # 던져진 인스턴스가 아니라 사본을 보관한다 - 원본의 트레이스백이 호출 스택(프롬프트를 든
-            # 지역 변수 포함)을 프로세스가 끝날 때까지 붙잡지 않게.
-            _run_stop = stop.again()
+        if _run_stop is not None:
+            return None
+        # 던져진 인스턴스가 아니라 사본을 보관한다 - 원본의 트레이스백이 호출 스택(프롬프트를 든
+        # 지역 변수 포함)을 프로세스가 끝날 때까지 붙잡지 않게.
+        _run_stop = stop.again()
+        return _run_stop
 
 
 def latch_run_stop(stop: LLMRunStop) -> None:
@@ -432,33 +435,74 @@ def _pricing() -> PriceTable:
 # 킬 스위치 연동
 # ---------------------------------------------------------------------------
 
+KILL_SWITCH_OWNER = "llm_spend_cap"
+
+
 def engage_kill_switch(reason: Dict[str, Any]) -> Optional[str]:
     """킬 스위치 파일을 만든다. 이미 있으면 그대로 둔다(먼저 켠 쪽의 사유를 지우지 않는다).
 
     만든(또는 이미 있던) 파일 경로를 돌려주고, 만들 수 없으면 None이다 - 그래도 이 프로세스의
     호출은 원장이 막고, 같은 원장을 쓰는 다른 프로세스도 같은 상한에서 막힌다.
+
+    내용을 다 쓴 임시 파일을 하드 링크로 제자리에 놓는다: 다른 프로세스가 "파일은 있는데 내용이 아직
+    없는" 순간을 보면 이 가드가 켠 것인지 알 수 없어 ADR 0005의 킬 스위치 경로(로컬 폴백)로 빠진다.
     """
     path = Settings.LLM_KILL_SWITCH_FILE
     if not path:
         return None
-    payload = {"engaged_by": "llm_spend_cap", **reason,
+    payload = {"engaged_by": KILL_SWITCH_OWNER, **reason,
                "ts_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"), "pid": os.getpid()}
+    data = json.dumps(payload, ensure_ascii=False) + "\n"
     try:
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     except OSError as e:  # 부모가 파일이거나(FileExistsError 포함) 읽기 전용 마운트
         logger.error("LLM 킬 스위치 디렉터리를 만들지 못했습니다 (%s): %s", path, e)
         return None
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-    except FileExistsError:
-        return path
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(data)
+        try:
+            os.link(tmp, path)  # 이미 있으면 FileExistsError - 덮어쓰지 않는다
+        except FileExistsError:
+            return path
+        except OSError:
+            # 하드 링크가 안 되는 파일시스템: 배타 생성으로 만든다(내용이 비어 보이는 순간이 생길 수 있다)
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            except FileExistsError:
+                return path
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(data)
     except OSError as e:
         logger.error("LLM 킬 스위치 파일을 만들지 못했습니다 (%s): %s", path, e)
         return None
-    with os.fdopen(fd, "w", encoding="utf-8") as f:
-        f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
     logger.error("LLM 지출 상한(%s)에 닿아 킬 스위치를 켰습니다: %s", reason.get("scope"), path)
     return path
+
+
+def spend_cap_kill_switch() -> Optional[Dict[str, Any]]:
+    """킬 스위치 파일이 이 가드가 켠 것이면({"engaged_by": "llm_spend_cap", ...}) 그 내용을, 아니면 None.
+
+    파일이 없거나, 비었거나, 다른 주체(저장소 밖 비용 감시 등)가 만든 것이면 None이다 - 그 경우는
+    ADR 0005의 킬 스위치 동작 그대로다. 환경변수 LLM_KILL_SWITCH도 여기서 보지 않는다.
+    """
+    path = Settings.LLM_KILL_SWITCH_FILE
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            payload = json.loads(f.read() or "null")
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("engaged_by") != KILL_SWITCH_OWNER:
+        return None
+    return {**payload, "kill_switch_file": path}
 
 
 # ---------------------------------------------------------------------------
@@ -533,11 +577,28 @@ class Attempt:
 
 class BudgetGuard:
     def ensure_run_active(self, provider: str, model: str, purpose: str) -> None:
-        """이미 멈춘 런이면 같은 중단을 다시 낸다(원장·네트워크를 건드리지 않는다)."""
+        """이미 멈춘 런이면 같은 중단을 다시 낸다(원장·네트워크를 건드리지 않는다).
+
+        다른 프로세스의 가드가 일·전체 상한으로 켠 킬 스위치 파일이 있으면 이 런도 같은 사유로 멈춘다.
+        클라이언트는 이 검사를 킬 스위치 검사보다 먼저 부른다 - 그렇지 않으면 상한에 닿은 프로세스만
+        깨끗이 멈추고, 원장을 함께 쓰는 다른 프로세스는 "kill_switch" 결과를 받아 로컬 폴백 초안을 만들고
+        (재생성 루프) 이미 게이트를 통과한 글에 규칙 기반 문체 변환본을 저장한 뒤 종료 코드 0으로 끝난다.
+        """
         stop = run_stop()
         if stop is not None:
             self._record_block(stop, provider, model, purpose)
             raise stop.again()
+        engaged = spend_cap_kill_switch()
+        if engaged is not None:
+            scope = engaged.get("scope")
+            details = {k: engaged.get(k) for k in ("scope", "day", "cap_usd", "spent_usd", "reserved_usd",
+                                                   "requested_usd", "ledger", "kill_switch_file")}
+            self._stop(LLMBudgetExceeded(
+                f"LLM 지출 상한({scope})으로 켜진 킬 스위치가 있어 런을 멈춥니다: {engaged['kill_switch_file']} "
+                f"(켠 프로세스 {engaged.get('pid')}, {engaged.get('ts_utc')})",
+                **details, engaged_run_id=engaged.get("run_id"), engaged_pid=engaged.get("pid"),
+                via="kill_switch_file",
+            ), provider, model, purpose)
 
     def begin_attempt(self, *, provider: str, model: str, purpose: str, messages: List[Dict[str, Any]],
                       schema: Any = None, max_tokens: Optional[int]) -> Attempt:
@@ -568,7 +629,8 @@ class BudgetGuard:
             ), provider, model, purpose)
 
         if isinstance(result, Refusal):
-            self._stop(self._exceeded(result, cfg, key), provider, model, purpose)
+            stop, engage = self._exceeded(result, cfg, key)
+            self._stop(stop, provider, model, purpose, engage=engage)
         return Attempt(self, cfg, ledger, result, price)
 
     # ------------------------------------------------------------------ 내부
@@ -588,7 +650,8 @@ class BudgetGuard:
         return _Price(Decimal(str(entry.input_per_1m)), Decimal(str(entry.output_per_1m)), "table")
 
     @staticmethod
-    def _exceeded(refusal: Refusal, cfg: BudgetConfig, key: CallKey) -> LLMBudgetExceeded:
+    def _exceeded(refusal: Refusal, cfg: BudgetConfig, key: CallKey) -> Tuple[LLMBudgetExceeded, Optional[Dict[str, Any]]]:
+        """상한 초과 예외와, 일·전체 범위면 킬 스위치 파일에 적을 사유(런 범위면 None)."""
         details: Dict[str, Any] = {
             "scope": refusal.scope,
             "cap_usd": usd(refusal.cap_nusd),
@@ -598,19 +661,29 @@ class BudgetGuard:
             "run_id": key.run_id, "day": key.day, "model": key.model, "purpose": key.purpose,
             "ledger": cfg.ledger_path,
         }
+        engage = None
         if refusal.scope in ("day", "total"):
-            details["kill_switch_file"] = engage_kill_switch(
-                {k: details[k] for k in ("scope", "day", "cap_usd", "spent_usd", "reserved_usd",
-                                         "requested_usd", "run_id", "ledger")}
-            )
+            engage = {k: details[k] for k in ("scope", "day", "cap_usd", "spent_usd", "reserved_usd",
+                                              "requested_usd", "run_id", "ledger")}
         return LLMBudgetExceeded(
             f"LLM 지출 상한({refusal.scope}) ${usd(refusal.cap_nusd):.4f}: 정산 ${usd(refusal.committed_nusd):.6f}"
             f" + 예약 ${usd(refusal.open_nusd):.6f} + 이번 요청 최악 ${usd(refusal.requested_nusd):.6f}",
             **details,
-        )
+        ), engage
 
-    def _stop(self, stop: LLMRunStop, provider: str, model: str, purpose: str):
-        _latch(stop)
+    def _stop(self, stop: LLMRunStop, provider: str, model: str, purpose: str,
+              *, engage: Optional[Dict[str, Any]] = None):
+        """런을 멈춘 것으로 표시하고 stop을 낸다. engage가 있으면 킬 스위치 파일도 만든다.
+
+        표시가 먼저다: 킬 스위치 파일이 먼저 생기면, 그 사이에 complete()에 들어온 같은 프로세스의 다른
+        워커가 멈춘 런 검사를 통과하고 킬 스위치 검사에서 "kill_switch" 결과를 받는다(로컬 폴백 경로).
+        """
+        latched = _latch(stop)
+        if engage is not None:
+            kill_switch_file = engage_kill_switch(engage)
+            stop.details["kill_switch_file"] = kill_switch_file
+            if latched is not None:
+                latched.details["kill_switch_file"] = kill_switch_file
         self._record_block(stop, provider, model, purpose)
         logger.error("%s/%s: LLM 런 중단 (%s, purpose=%s): %s", provider, model, stop.code, purpose, stop)
         raise stop
