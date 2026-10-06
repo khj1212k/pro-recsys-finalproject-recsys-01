@@ -160,6 +160,14 @@ def test_both_tasks_use_the_v1_samples_and_negatives(full_run, synth_bench):
     assert h["fit|0"] == keys_sha256(fit.req.user, fit.req.time, fit.req.cand_item)
     assert h["es|0"] == keys_sha256(es.req.user, es.req.time, es.req.cand_item)
     assert d["tasks"]["p2"]["cold"]["pop0"]["meta"]["n_requests"] == 200
+    # 선택 표본(test 미사용)도 v1 select_p2_model과 같은 난수에서 나오고, 그 해시는 trial이 실제로 채점한 표본에서 적힌다
+    es_idx = impressions_in(tr, W["es"])
+    sel = np.sort(np.random.default_rng(SPLIT_SEED + 5).choice(es_idx, size=80, replace=False))
+    for t, want in (("p1", es_idx), ("p2", sel)):
+        assert d["protocol"][t]["selection_sample_sha256"] == keys_sha256(want) == d["selection"][t]["sample_sha256"]
+        assert d["protocol"][t]["selection_sample_requests"] == len(want) == d["selection"][t]["sample_requests"]
+        rows = [r for arm in d["trials"][t].values() for r in arm]
+        assert len(rows) == 6 and {r["selection_sample_sha256"] for r in rows} == {keys_sha256(want)}
     # A*가 trial 0(팀 설정)을 골랐고 증강을 빼면 P2에서는 A와 같은 모델이다(같은 데이터·같은 파라미터)
     if d["tasks"]["p2"]["unit_meta"]["p2__test_gbdt"]["best"]["A_star"]["trial"] == 0:
         assert d["tasks"]["p2"]["diffs"]["A_star_noaug-vs-A"]["diff"] == 0.0
@@ -232,6 +240,8 @@ def test_gbdt_stages_run_without_torch_and_refuse_a_changed_configuration(synth_
     assert {"p2__gate", "p2__tune_A_star_t01", "p2__tune_A_plus_t01", "p2__test_gbdt", "model:p2_A_plus:s0"} <= set(units)
     gate = json.loads((out / "p2__gate_result.json").read_text())
     assert gate["status"] == "fail" and gate["enforced"] is False        # 합성 데이터는 v1 구간 밖이지만 demo라 멈추지 않는다
+    trial = json.loads((out / "units" / "p2__tune_A_plus_t01.json").read_text())
+    assert len(trial["selection_sample_sha256"]) == 64 and trial["selection_requests"] == 80
     changed = [a if a != "150" else "140" for a in _args(synth_root, out, "--task", "p2", "--stage", "gate")]
     assert R.main(changed) == R.EXIT_CONFIG_MISMATCH
 
@@ -242,6 +252,18 @@ def test_reproduction_gate_failure_stops_an_evidence_grade_run(synth_root, tmp_p
     assert R.main(_args(synth_root, out, "--task", "p1", "--stage", "gate")) == R.EXIT_GATE_FAILED
     rec = json.loads((out / "p1__gate_result.json").read_text())
     assert rec["enforced"] is True and rec["status"] == "fail" and set(rec["checks"]) == {"judged", "seen_incl"}
+
+
+def test_selection_refuses_trials_that_were_scored_on_different_samples():
+    """선택은 모든 trial이 같은 선택 표본에서 채점됐을 때만 한다(표본의 해시는 trial이 채점한 요청에서 적힌다)."""
+    rows = [{"trial": i, "selection_sample_sha256": "a" * 64, "selection_requests": 80} for i in range(3)]
+    assert R.selection_sample(rows) == {"sha256": "a" * 64, "n_requests": 80}
+    with pytest.raises(RuntimeError, match="선택 표본"):
+        R.selection_sample(rows + [{"trial": 3, "selection_sample_sha256": "b" * 64, "selection_requests": 80}])
+    with pytest.raises(RuntimeError, match="선택 표본"):
+        R.selection_sample(rows + [{"trial": 3}])
+    with pytest.raises(RuntimeError, match="선택 표본"):
+        R.selection_sample([])
 
 
 def test_gate_values_require_every_seed_and_every_interval():

@@ -498,6 +498,22 @@ def stage_gate(run: Run):
         raise ReproductionGateFailed(f"재현 게이트 실패({T}): {gate['checks']}. 이 실행은 무효입니다(사전 등록 A3.2).")
 
 
+# --- 선택 표본의 기록 --------------------------------------------------------------------------
+
+def _sel_record(sel: EvalSet) -> dict:
+    """trial 행에 남기는 선택 표본의 기록: 그 trial이 실제로 채점한 요청(노출 인덱스)의 해시와 수."""
+    return {"selection_sample_sha256": keys_sha256(sel.task.imp_index), "selection_requests": int(sel.task.req.n)}
+
+
+def selection_sample(rows: list[dict]) -> dict:
+    """trial 행들이 채점한 선택 표본. 행마다 다르거나 기록이 없으면 선택하지 않는다(다른 표본의 지표는 비교할 수 없다)."""
+    seen = {(r.get("selection_sample_sha256"), r.get("selection_requests")) for r in rows}
+    if len(seen) != 1 or None in next(iter(seen)):
+        raise RuntimeError(f"trial들이 같은 선택 표본에서 채점되지 않았습니다(기록 {len(seen)}종, 행 {len(rows)}개)")
+    sha, n = next(iter(seen))
+    return {"sha256": sha, "n_requests": int(n)}
+
+
 # --- GBDT: A*·A+ 튠과 최종 ---------------------------------------------------------------------
 
 def stage_gbdt_tune(run: Run):
@@ -515,7 +531,7 @@ def stage_gbdt_tune(run: Run):
             metric = sel.selection_metric(m.predict(sel.feats, sel.task), run.seeds[0])
             run.store.json_unit(unit, {"trial": i, "arm": arm, "config": cfg, "selection_metric": metric,
                                        "best_iteration": m.best_iteration, "best_es_score": m.best_score,
-                                       "seconds": round(time.time() - t0, 1)}, time.time() - t0)
+                                       **_sel_record(sel), "seconds": round(time.time() - t0, 1)}, time.time() - t0)
             log.info("tune %s %s trial %d/%d sel=%.4f best_it=%d", T, arm, i + 1, len(cfgs), metric, m.best_iteration)
 
 
@@ -528,6 +544,7 @@ def gbdt_trials(store: NeuralStore, task: str, arm: str, n: int) -> list[dict]:
 
 def best_gbdt(run: Run, arm: str) -> dict:
     rows = gbdt_trials(run.store, run.task, arm, run.args.gbdt_trials)
+    selection_sample(rows)
     return rows[select_best(rows)]
 
 
@@ -662,7 +679,8 @@ def stage_neural_tune(run: Run):
             t, stats = _fit_neural(run, env, _spec(run, family, cfg), seed, int(run.args.tune_max_epochs))
             metric = sel.selection_metric(_score_neural(run, env, t, stats, sel.task, sel.feats, sel.seq), seed)
             run.store.json_unit(unit, {"trial": i, "family": family, "config": cfg, "selection_metric": metric,
-                                       **t.summary(), "seconds": round(time.time() - t0, 1)}, time.time() - t0)
+                                       **t.summary(), **_sel_record(sel), "seconds": round(time.time() - t0, 1)},
+                                time.time() - t0)
             log.info("tune %s %s trial %d/%d sel=%.4f best_epoch=%d %.0fs", T, family, i + 1, len(cfgs), metric,
                      t.best_epoch, time.time() - t0)
 
@@ -680,15 +698,21 @@ def stage_select(run: Run):
     if run.store.done(unit):
         return
     families = list(run.prereg["neural"]["families"])
-    table = {}
+    table, scored = {}, []
     for f in families:
         rows = neural_trials(run.store, T, f, run.args.neural_trials)
+        scored += rows
         b = rows[select_best(rows)]
         table[f] = {"best_trial": b["trial"], "selection_metric": b["selection_metric"], "config": b["config"],
                     "best_epoch_in_tuning": b["best_epoch"]}
+    # A*·A+의 trial도 같은 표본에서 채점됐어야 한다(선택 표본은 trial·family·A*·A+ 공통, A3.6)
+    scored += [r for arm in (A_STAR, A_PLUS) for r in (run.store.unit_json(f"{T}__tune_{arm}_t{i:02d}")
+                                                       for i in range(run.args.gbdt_trials)) if r]
+    sample = selection_sample(scored)
     chosen = select_family({f: table[f]["selection_metric"] for f in families}, families)
     run.store.json_unit(unit, {"family": chosen, "table": table, "rule": run.prereg["selection"]["family_rule"],
-                               "sample": run.prereg["tasks"][T]["selection_sample"], "uses_test": False})
+                               "sample": run.prereg["tasks"][T]["selection_sample"], "sample_sha256": sample["sha256"],
+                               "sample_requests": sample["n_requests"], "uses_test": False})
     log.info("selection %s: %s %s", T, chosen, {f: round(v["selection_metric"], 4) for f, v in table.items()})
 
 
@@ -978,7 +1002,13 @@ def assemble(store: NeuralStore, prereg: dict, n_boot: int, meta: dict) -> dict:
             d["trials"][task][f] = [r for r in (store.unit_json(neural_unit(task, f"tune_{f}_t{i:02d}"))
                                                 for i in range(cfg["neural_trials"])) if r]
         env_file = store.dir / f"{task}__neural_env.json"
+        # 선택 표본: trial 행들이 채점한 표본의 해시. 한 가지가 아니면(있을 수 없는 일이지만) 비워 두고 종류 수를 남긴다
+        samples = sorted({(r.get("selection_sample_sha256"), r.get("selection_requests"))
+                          for rows in d["trials"][task].values() for r in rows}, key=str)
+        one = samples[0] if len(samples) == 1 else (None, None)
         d["protocol"][task] = {"gate": {k: v for k, v in gate_meta.items() if k != "models"},
+                               "selection_sample_sha256": one[0], "selection_sample_requests": one[1],
+                               "selection_sample_distinct": len(samples),
                                "neural_environment": json.loads(env_file.read_text()) if env_file.exists() else None,
                                "budget": check_budget(prereg, cfg["neural_trials"], cfg["gbdt_trials"])}
     d["verdict"] = neural_verdict(d, prereg)
