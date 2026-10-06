@@ -84,7 +84,8 @@ def _service(repo, source, log, runner=None, feature_repo=True, feature_fn=servi
     def factory():
         yield repo
 
-    cfg = RecsysConfig(model_reload_s=0.0, **cfg_kw)
+    # 전용 스레드의 결과가 로그에 남는 것을 본다: 로그 쓰기의 대기 상한(기본 100ms)에 걸려 버려지지 않게 넉넉히.
+    cfg = RecsysConfig(**{"model_reload_s": 0.0, "shadow_log_wait_ms": 10_000, **cfg_kw})
     counters = RecsysCounters()
     stack = build_scorer_stack(cfg, source, feature_fn, counters, runner=runner)
     for scorer in (stack.active, *stack.shadows):

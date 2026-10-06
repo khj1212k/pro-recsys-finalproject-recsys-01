@@ -74,12 +74,15 @@ class RecsysConfig:
     shadow_max: int = 2
     shadow_deadline_fraction: float = 0.5
     # shadow 점수와 로그용 피처는 요청 경로 밖의 전용 스레드에서 계산한다(ADR 0033, app/recsys/shadow.py).
-    # 넘긴 시점부터 shadow_budget_ms 안에 끝나지 않은 작업은 버린다(응답 뒤의 로그 쓰기가 기다리는 상한이기도 하다).
-    # 밀린 작업이 shadow_max_pending개면 더 받지 않는다. shadow_deadline_fraction은 전용 스레드 없이 요청
-    # 경로에서 바로 도는 배선(테스트)에만 쓰인다.
+    # 넘긴 시점부터 shadow_budget_ms 안에 끝나지 않은 작업은 버린다. 밀린 작업이 shadow_max_pending개면 더 받지
+    # 않는다. shadow_deadline_fraction은 전용 스레드 없이 요청 경로에서 바로 도는 배선(테스트)에만 쓰인다.
     shadow_budget_ms: int = 500
     shadow_workers: int = 1
     shadow_max_pending: int = 16
+    # 응답 뒤의 로그 쓰기가 그 작업의 결과를 기다리는 상한. 로그 쓰기는 요청 핸들러와 같은 스레드 풀의 자리를
+    # 쓰므로(동기 BackgroundTask) 작업의 예산보다 훨씬 짧게 둔다. 넘으면 그 작업을 버리고 shadow 점수·어댑터 피처
+    # 없이 로그를 쓴다(shadow.log_wait_exceeded). 0이면 이미 끝난 결과만 쓴다. 예산보다 크게 줘도 예산이 상한이다.
+    shadow_log_wait_ms: int = 100
 
     def __post_init__(self):
         if self.mode not in MODES:
@@ -98,6 +101,8 @@ class RecsysConfig:
             raise ValueError(
                 "RECSYS_SHADOW_BUDGET_MS, RECSYS_SHADOW_WORKERS and RECSYS_SHADOW_MAX_PENDING must be positive"
             )
+        if self.shadow_log_wait_ms < 0:
+            raise ValueError("RECSYS_SHADOW_LOG_WAIT_MS must not be negative")
         if self.feature_fn is not None and self.feature_fn.strip().lower() in ("", "off", "none", "false", "0"):
             object.__setattr__(self, "feature_fn", None)
 

@@ -142,9 +142,12 @@ class RecommendationService:
             self.counters.inc("impressions.slate_mismatch")
         slot_by_id = dict(zip(rec.news_letter_ids, rec.slots)) if planned else {}
         score_by_id = rec.score_by_id()
-        # 요청 경로 밖에서 계산한 shadow 점수와 어댑터 피처를 찾아온다. 아직이면 그 작업의 남은 예산만큼만
-        # 기다린다(여기는 응답을 보낸 뒤다). 없으면 요청 경로에서 나온 값(활성 스코어러의 피처)을 남긴다.
-        late = rec.deferred.wait() if rec.deferred is not None else None
+        # 요청 경로 밖에서 계산한 shadow 점수와 어댑터 피처를 찾아온다. 아직이면 shadow_log_wait_ms(와 그 작업의
+        # 남은 예산 중 짧은 쪽)만큼만 기다린다. 여기는 응답을 보낸 뒤지만 요청 핸들러와 같은 스레드 풀의 자리를
+        # 쓰고 있어서, 기다리는 동안 그 자리가 묶인다. 없으면 요청 경로에서 나온 값(활성 스코어러의 피처)을 남긴다.
+        late = None
+        if rec.deferred is not None:
+            late = rec.deferred.wait(max_wait_s=self.cfg.shadow_log_wait_ms / 1000.0)
         late_features = None if late is None else late.features
         late_scores = {} if late is None else late.extra_scores
         feature_schema_version = rec.feature_schema_version if late_features is None else late.feature_schema_version

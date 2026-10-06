@@ -120,7 +120,10 @@ def test_serving_features_scores_and_lists_match_the_offline_harness_over_200_re
             tx.close()
 
         # --- 운영 배선의 서비스 하나를 모든 요청이 같이 쓴다(결과 캐시·아이템 캐시·shadow 전용 스레드 포함)
-        cfg = RecsysConfig(time_budget_ms=5000, shadow_budget_ms=5000, model_name=model_name, shadow_max=1)
+        # 게이트는 피처와 shadow 점수가 남은 요청을 비교한다: 러너가 느려도 요청이 폴백으로 가지 않고, 전용
+        # 스레드의 결과가 로그 쓰기의 대기 상한(기본 100ms)에 걸려 버려지지 않게 세 한도를 넉넉히 둔다.
+        cfg = RecsysConfig(time_budget_ms=5000, shadow_budget_ms=5000, shadow_log_wait_ms=5000,
+                           model_name=model_name, shadow_max=1)
         service = build_sql_service(cfg, database_url)
         shadow = service.recommender.stack.shadows[0]
         deadline = time.monotonic() + 30

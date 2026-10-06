@@ -20,6 +20,9 @@ from tests.recsys.fakes import NOW, FakeRepo, FakeUser, LogRecorder, axis_vec, t
 
 DIM = 16
 WARM = 1
+# 결과가 로그에 남는 것을 보는 테스트는 로그 쓰기의 대기 상한(기본 100ms)을 넉넉히 준다: 느린 기계에서 전용
+# 스레드가 늦게 깨어나도 결과가 버려지지 않게. 상한 자체는 따로 본다.
+WAIT_FOR_RESULT_MS = 5000
 
 
 def _wait_until(predicate, timeout=5.0):
@@ -90,6 +93,76 @@ def test_wait_gives_up_when_the_jobs_own_budget_runs_out_and_never_waits_for_it_
     assert runner.counters.get("shadow.timeout") == 1  # 같은 작업을 두 번 세지 않는다
     release.set()
     assert _wait_until(lambda: saw_expired == [True])  # 돌던 작업은 다음 단계에서 버려진 것을 안다
+
+
+def test_a_capped_wait_gives_up_at_the_cap_even_though_the_jobs_budget_remains(runners):
+    """기다리는 쪽(응답 뒤의 로그 쓰기)은 요청을 받는 스레드 풀의 자리를 쓴다. 작업의 예산이 5초 남았어도 자기
+    상한만큼만 기다리고, 그 작업은 버린다(다음에 다시 기다리지 않는다)."""
+    runner = runners(budget_s=5.0)
+    release = threading.Event()
+    saw_expired = []
+
+    def stuck(expired):
+        release.wait(5)
+        saw_expired.append(expired())
+        return DeferredResult()
+
+    handle = runner.submit(stuck)
+    started = time.monotonic()
+    first = handle.wait(max_wait_s=0.05)
+    waited = time.monotonic() - started
+    started = time.monotonic()
+    second = handle.wait(max_wait_s=0.05)
+    waited_again = time.monotonic() - started
+
+    assert first is None and second is None
+    assert 0.03 < waited < 1.0 and waited_again < 0.02
+    assert runner.counters.get("shadow.timeout") == 1 and runner.counters.get("shadow.log_wait_exceeded") == 1
+    release.set()
+    assert _wait_until(lambda: saw_expired == [True])  # 버려진 작업은 다음 단계에서 멈춘다
+
+
+def test_a_capped_wait_returns_a_result_that_arrives_within_the_cap(runners):
+    runner = runners(budget_s=5.0)
+    release = threading.Event()
+
+    def job(expired):
+        release.wait(5)
+        return DeferredResult(extra_scores={"m": np.array([1.0, 2.0])})
+
+    handle = runner.submit(job)
+    threading.Timer(0.03, release.set).start()
+    result = handle.wait(max_wait_s=3.0)
+
+    assert result is not None and result.extra_scores["m"].tolist() == [1.0, 2.0]
+    assert runner.counters.get("shadow.timeout") == 0 and runner.counters.get("shadow.log_wait_exceeded") == 0
+
+
+def test_a_budget_that_runs_out_before_the_cap_is_a_budget_timeout_not_a_log_wait_one(runners):
+    runner = runners(budget_s=0.05)
+    release = threading.Event()
+    handle = runner.submit(lambda expired: release.wait(5) and DeferredResult())
+
+    started = time.monotonic()
+    assert handle.wait(max_wait_s=3.0) is None
+
+    assert time.monotonic() - started < 1.0
+    assert runner.counters.get("shadow.timeout") == 1 and runner.counters.get("shadow.log_wait_exceeded") == 0
+    release.set()
+
+
+def test_capped_waits_that_keep_giving_up_open_the_breaker_so_later_log_writes_do_not_wait_at_all(runners):
+    """작업이 계속 상한보다 늦으면 받지 않게 된다: 로그 쓰기마다 상한만큼 스레드를 붙잡는 일이 이어지지 않는다."""
+    now = [0.0]
+    runner = runners(workers=1, max_pending=50, budget_s=10.0, breaker_after=3, cooldown_s=30.0, clock=lambda: now[0])
+    release = threading.Event()
+    handles = [runner.submit(lambda expired: release.wait(5) and DeferredResult()) for _ in range(3)]
+
+    assert [h.wait(max_wait_s=0.01) for h in handles] == [None, None, None]
+
+    assert runner.counters.get("shadow.log_wait_exceeded") == 3 and runner.counters.get("shadow.breaker_open") == 1
+    assert runner.submit(lambda expired: DeferredResult()) is None
+    release.set()
 
 
 def test_a_job_that_was_still_queued_when_abandoned_never_starts(runners):
@@ -250,11 +323,55 @@ def test_a_shadow_slower_than_the_request_budget_does_not_turn_the_request_into_
         plain.shutdown()
 
 
+def test_the_log_writer_waits_for_shadow_results_no_longer_than_its_own_cap(runners):
+    """응답 뒤의 로그 쓰기는 요청을 받는 스레드 풀(Starlette의 BackgroundTask)에서 돈다. shadow의 예산(5초)이 남아
+    있어도 로그 쓰기는 RECSYS_SHADOW_LOG_WAIT_MS만큼만 기다리고, 요청·칸 로그는 shadow 점수 없이 쓴다."""
+    counters = RecsysCounters()
+    release = threading.Event()
+    shadow = Shadow(gate=release)
+    runner = runners(budget_s=5.0, counters=counters)
+    repo, log = _repo(), LogRecorder()
+    service = _service(repo, ScorerStack(HeuristicScorer(), [shadow], counters=counters, runner=runner), log,
+                       shadow_log_wait_ms=50)
+    try:
+        rec = service.recommend(WARM, fallback_repo=repo)
+        started = time.monotonic()
+        service.log_impressions(WARM, rec, rec.news_letter_ids)
+        waited = time.monotonic() - started
+
+        assert 0.03 < waited < 1.0  # 예산 5초가 아니라 상한 0.05초 근처
+        assert len(log.requests) == 1 and len(log.slots) == 20
+        assert log.requests[0]["shadow_versions"] is None and all(s["scores_shadow"] is None for s in log.slots)
+        assert all(s["features"] is not None for s in log.slots)  # 요청 경로에서 나온 활성 휴리스틱의 피처
+        assert counters.get("shadow.log_wait_exceeded") == 1 and counters.get("shadow.timeout") == 1
+
+        # 같은 목록의 다음 요청(캐시 적중)은 버린 작업을 다시 기다리지 않는다
+        again = service.recommend(WARM, fallback_repo=repo)
+        started = time.monotonic()
+        service.log_impressions(WARM, again, again.news_letter_ids)
+        assert again.cache_hit and time.monotonic() - started < 0.03
+        assert counters.get("shadow.log_wait_exceeded") == 1
+    finally:
+        release.set()
+        service.shutdown()
+
+
+def test_the_log_wait_cap_is_a_setting_with_a_default_well_below_the_shadow_budget():
+    cfg = RecsysConfig()
+
+    assert cfg.shadow_log_wait_ms == 100 and cfg.shadow_log_wait_ms < cfg.shadow_budget_ms == 500
+    assert RecsysConfig.from_env({"RECSYS_SHADOW_LOG_WAIT_MS": "20"}).shadow_log_wait_ms == 20
+    assert RecsysConfig(shadow_log_wait_ms=0).shadow_log_wait_ms == 0  # 0: 이미 끝난 결과만 쓴다
+    with pytest.raises(ValueError, match="SHADOW_LOG_WAIT_MS"):
+        RecsysConfig(shadow_log_wait_ms=-1)
+
+
 def test_a_failing_shadow_changes_neither_the_response_nor_the_fallback_counters(runners):
     counters = RecsysCounters()
     runner = runners(budget_s=2.0, counters=counters)
     repo, log = _repo(), LogRecorder()
-    service = _service(repo, ScorerStack(HeuristicScorer(), [Shadow(fail=True)], counters=counters, runner=runner), log)
+    service = _service(repo, ScorerStack(HeuristicScorer(), [Shadow(fail=True)], counters=counters, runner=runner), log,
+                       shadow_log_wait_ms=WAIT_FOR_RESULT_MS)
     plain = _service(_repo(), HeuristicScorer())
     try:
         rec = service.recommend(WARM, fallback_repo=repo)
@@ -274,7 +391,8 @@ def test_a_shadow_scored_off_the_request_path_is_logged_for_every_slot_and_reuse
     shadow = Shadow()
     runner = runners(budget_s=5.0, counters=counters)
     repo, log = _repo(), LogRecorder()
-    service = _service(repo, ScorerStack(HeuristicScorer(), [shadow], counters=counters, runner=runner), log)
+    service = _service(repo, ScorerStack(HeuristicScorer(), [shadow], counters=counters, runner=runner), log,
+                       shadow_log_wait_ms=WAIT_FOR_RESULT_MS)
     try:
         first = service.recommend(WARM, fallback_repo=repo)
         second = service.recommend(WARM, fallback_repo=repo)
