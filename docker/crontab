@@ -29,6 +29,8 @@
 #
 # 장기 프로필 상태 점검(쓰지 않음): 저장된 user_profile_state가 클릭 로그와 다른 사용자가 있으면 경고를 낸다.
 # 사용자가 생기면 켠다. 다시 만드는 것은 `python -m jobs.run rebuild_user_state`(ADR 0033).
+# 서빙이 스스로 알아채지 못하는 어긋남(예: 클릭할 때 임베딩이 없던 뉴스레터의 클릭)을 찾는 방법은 이 점검뿐이다
+# (docs/runbook.md 9-1).
 # 30 15 * * * python -m jobs.run rebuild_user_state --check
 
 # --- 없어진 줄 (ADR 0033) ---

@@ -217,6 +217,19 @@ docker compose run --rm scheduler python -m jobs.run rebuild_user_state         
 docker compose run --rm scheduler python -m jobs.run rebuild_user_state --check   # 쓰지 않고 로그와 다른 사용자만 센다
 ```
 
+배포 뒤 한 번으로 끝나지 않는다. 상태는 클릭 로그의 캐시라 아래 경우에 로그와 어긋나고, 다시 만들어야 맞는다.
+
+| 어긋나는 경우 | 보이는 모습 |
+|---|---|
+| 클릭 API를 거치지 않은 클릭(시드·이관), 리비전 적용 전의 클릭 | 클릭 이력이 있는데 장기 프로필이 없는 사용자로 읽힌다 |
+| 클릭 API의 상태 갱신 실패(클릭 행은 저장된다) | API 로그의 `profile state update failed` |
+| **클릭 시점에 임베딩이 없던 뉴스레터의 클릭**(임베딩은 나중에 채워진다), 클릭 뒤에 임베딩이 다시 계산된 뉴스레터 | 그 클릭이 그 사용자의 가장 최근 클릭인 동안에는 요청마다 어댑터 피처가 남지 않는다(`GET /recsys/stats`의 `features.inputs_missing`이 요청 수만큼 는다). 그 뒤에 다른 클릭이 들어오면 조용히 어긋난 채 남는다 |
+
+마지막 줄의 뒤쪽 경우는 서빙이 알아채지 못한다(ADR 0033 한계). 찾는 방법은 `--check`뿐이라, 사용자가 생기면
+`docker/crontab`의 `rebuild_user_state --check` 줄을 켜고, 경고가 뜨면(`job_runs.stats`의 `warnings`,
+`SLACK_WEBHOOK_URL`이 있으면 Slack) 다시 만든다.
+`features.inputs_missing`이 계속 늘 때도 같은 조치다.
+
 **모델 등록.** 학습한 LightGBM text 모델을 `model_registry`에 올린다. 서빙 피처 어댑터와 열 이름·순서가 다른
 모델은 이유와 함께 거절된다. 기본 역할은 shadow다(응답은 바뀌지 않고 칸 로그에 점수만 남는다).
 
