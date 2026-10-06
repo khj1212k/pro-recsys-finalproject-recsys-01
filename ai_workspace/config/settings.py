@@ -16,6 +16,33 @@ load_dotenv(override=False)
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def shared_ops_root(repo_root: Path) -> Path:
+    """git 워크트리에서 실행 중이면 메인 체크아웃의 루트를, 아니면 repo_root를 돌려준다.
+
+    LLM 지출 원장(docs/adr/0035)의 기본 위치를 정하는 데만 쓴다. 워크트리마다 `.ops/`가 따로면
+    원장도 따로 생겨 전체 상한이 워크트리 수만큼 늘어난다. 워크트리의 `.git`은 디렉터리가
+    아니라 `gitdir: <메인>/.git/worktrees/<이름>` 한 줄짜리 파일이고, 그 디렉터리의 `commondir`가
+    공용 `.git`을 가리킨다 - git을 실행하지 않고 그 두 파일만 읽는다.
+    """
+    git_entry = repo_root / ".git"
+    try:
+        if not git_entry.is_file():
+            return repo_root
+        head = git_entry.read_text(encoding="utf-8").strip()
+        if not head.startswith("gitdir:"):
+            return repo_root
+        gitdir = Path(head.split(":", 1)[1].strip())
+        if not gitdir.is_absolute():
+            gitdir = repo_root / gitdir
+        commondir_file = gitdir / "commondir"
+        if not commondir_file.is_file():
+            return repo_root  # 서브모듈 등 - 공용 저장소가 따로 없다
+        common = (gitdir / commondir_file.read_text(encoding="utf-8").strip()).resolve()
+        return common.parent if common.name == ".git" else repo_root
+    except OSError:
+        return repo_root
+
+
 class Environment:
     DEV = "dev"
     STAGING = "staging"
@@ -142,6 +169,32 @@ class BaseSettings:
     LLM_KILL_SWITCH_FILE: str = os.getenv(
         "LLM_KILL_SWITCH_FILE", str(_REPO_ROOT / ".ops" / "LLM_KILL_SWITCH")
     )
+
+    # ========== LLM 지출 상한 (docs/adr/0035) ==========
+    # 아래는 같은 이름(_DEFAULT 뺀)의 환경변수가 없을 때 쓰는 기본값이다. 환경변수는
+    # core/llm/budget.py가 호출마다 읽는다(킬 스위치와 같은 이유 - 실행 중에 바꾼 값이 다음
+    # 호출부터 적용돼야 한다). 값이 숫자로 해석되지 않으면 기본값으로 넘어가지 않고 호출을 거부한다.
+    # 금액은 세전 USD다. 기본 전체 상한 $3.00은 가정 환율 ₩1,400/$로 ₩4,200이다.
+    LLM_BUDGET_RUN_USD_DEFAULT: str = "0.20"    # 런(프로세스 1회 실행, 또는 LLM_RUN_ID가 같은 실행들)
+    LLM_BUDGET_DAY_USD_DEFAULT: str = "0.30"    # LLM_BUDGET_DAY_TZ 기준 하루
+    LLM_BUDGET_TOTAL_USD_DEFAULT: str = "3.00"  # 원장 파일 전체
+    LLM_BUDGET_DAY_TZ_DEFAULT: str = "Asia/Seoul"
+    # 원장 기본 위치. 워크트리에서 돌려도 메인 체크아웃의 .ops/를 가리킨다(shared_ops_root).
+    LLM_SPEND_LEDGER_FILE_DEFAULT: str = str(
+        shared_ops_root(_REPO_ROOT) / ".ops" / "llm_spend_ledger.jsonl"
+    )
+    # 정산 없이 이 시간을 넘긴 예약은 예약액 그대로 지출로 확정한다. 시도 1회는 요청 타임아웃
+    # (LLM_REQUEST_TIMEOUT_S, 기본 60초)을 넘지 못하므로 그보다 충분히 길게 둔다.
+    LLM_BUDGET_RESERVATION_TTL_S_DEFAULT: str = "900"
+    # 프롬프트 토큰 상한 추정: UTF-8 바이트 수 / 이 값. 1.0이면 토크나이저와 무관한 상한이다
+    # (서브워드 토큰은 최소 1바이트). 실측 비율을 얻은 뒤에만 올린다.
+    LLM_BUDGET_BYTES_PER_TOKEN_DEFAULT: str = "1.0"
+    # 요약 CLI가 원화를 함께 보여줄 때 쓰는 가정 환율(실제 청구 환율이 아니다).
+    LLM_BUDGET_KRW_PER_USD_DEFAULT: str = "1400"
+    # 연속 인프라 실패(5xx·타임아웃·연결 오류)가 이 횟수에 닿으면 런을 멈춘다. 0이면 세지 않는다
+    # (HTTP 402는 값과 무관하게 한 번에 멈춘다). 기본 5는 Stage5 워커 상한(4)보다 커서, 워커들이
+    # 같은 순간에 한 번씩 실패한 것만으로는 닿지 않는다.
+    LLM_CIRCUIT_BREAKER_THRESHOLD_DEFAULT: str = "5"
     
     # ========== Crawler Settings ==========
     PARALLEL_WORKERS: int = 8  # 병렬 크롤링 워커
