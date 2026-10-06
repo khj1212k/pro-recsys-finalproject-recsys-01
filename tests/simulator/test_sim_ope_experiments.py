@@ -370,7 +370,12 @@ def test_bootstrap_ratio_resamples_clusters():
 # ----------------------------------------------------------------- end to end, at smoke size
 
 
-def test_both_experiments_run_end_to_end_and_report_from_their_json_alone(tmp_path, capsys):
+GITHUB_ENV = ("GITHUB_SHA", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_REPOSITORY", "GITHUB_REF_NAME")
+
+
+def test_both_experiments_run_end_to_end_and_report_from_their_json_alone(tmp_path, capsys, monkeypatch):
+    for name in GITHUB_ENV:  # this test runs inside GitHub Actions too; here it plays a local run
+        monkeypatch.delenv(name, raising=False)
     common = ["--runs-dir", str(tmp_path / "runs"), "--users", "12", "--days", "1", "--seeds", "0", "1",
               "--git-sha", "testsha", "--prereg-commit", "preregsha"]
     assert e9.main([*common, "--out", str(tmp_path / "ope_validation.json")]) == 0
@@ -412,6 +417,28 @@ def test_both_experiments_run_end_to_end_and_report_from_their_json_alone(tmp_pa
     assert ope["verdict"]["text"] in ope_md and all(name in ope_md for name in TARGET_POLICIES)
     assert fatigue["verdict"]["text"] in (tmp_path / "reports" / "fatigue_v1.md").read_text(encoding="utf-8")
     assert "E9 [SIM] verdict" in capsys.readouterr().out
+
+
+def test_inside_github_actions_the_report_records_the_runner_s_commit_and_run(monkeypatch):
+    from argparse import Namespace
+
+    from sim.serving_runs import experiment_meta
+
+    args = Namespace(users=300, days=7, seeds=[0, 1, 2], prereg_commit="p", git_sha="typed-by-hand")
+    for name in GITHUB_ENV:
+        monkeypatch.delenv(name, raising=False)
+    local = experiment_meta(args, "E", "sim.x", "prereg", True)
+    assert local["git_sha"] == "typed-by-hand" and local["github_run_id"] is None
+
+    monkeypatch.setenv("GITHUB_SHA", "abc123")
+    monkeypatch.setenv("GITHUB_RUN_ID", "42")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    in_ci = experiment_meta(args, "E", "sim.x", "prereg", True)
+    # the runner's own commit wins over the flag: the report cannot name a commit it did not run
+    assert (in_ci["git_sha"], in_ci["github_run_id"], in_ci["github_run_attempt"]) == ("abc123", "42", "1")
+    assert in_ci["config"] == {"n_users": 300, "n_days": 7, "seeds": [0, 1, 2], "preset": "default",
+                               "catalog": "synthetic",
+                               "embeddings": "keyword/category hash, 64d (sim.sim_embeddings)"}
 
 
 def test_registered_reports_carry_no_smoke_banner():

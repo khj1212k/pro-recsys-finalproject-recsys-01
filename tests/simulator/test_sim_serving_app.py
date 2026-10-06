@@ -256,6 +256,20 @@ def test_the_probe_reads_click_probabilities_without_changing_what_users_do():
     assert all(plain.backend.responses[rid].expected_shown is None for rid in plain.backend.response_order)
 
 
+def test_computing_target_slates_next_to_the_answers_does_not_change_the_answers():
+    """E10's log arm is E9's policy-A run (targets computed) and its enforce arm has none: the two arms
+    may differ in the fatigue mode only, so the target computation must leave no trace in what is served."""
+    with_targets = simulate(policy_a(4, 20, 2, with_targets=True))
+    without = simulate(policy_a(4, 20, 2, with_targets=False))
+
+    def trace(world):
+        return [(v.user, v.item_ids, v.clicked_ranks) for v in world.log.views]
+
+    assert trace(with_targets) == trace(without) and len(trace(without)) > 50
+    assert with_targets.backend.slots.propensity == without.backend.slots.propensity
+    assert all(not without.backend.responses[rid].targets for rid in without.backend.response_order)
+
+
 def test_probe_items_are_the_items_the_driver_builds_from_the_payload(world_a):
     b = world_a.backend
     nid = b.catalog.items[0].news_letter_id
