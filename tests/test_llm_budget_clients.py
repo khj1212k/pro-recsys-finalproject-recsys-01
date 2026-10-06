@@ -9,7 +9,6 @@ import sys
 import threading
 import time
 from decimal import Decimal
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -142,6 +141,23 @@ def test_successful_call_reserves_the_worst_case_and_commits_the_reported_usage(
     assert (commit["thinking_tokens"], commit["cached_tokens"], commit["total_tokens"]) == (180, 64, 700)
     assert commit["billable_output_tokens"] == 300
     assert (result.usage.thinking_tokens, result.usage.cached_tokens, result.usage.total_tokens) == (180, 64, 700)
+
+
+def test_ledger_holds_counts_and_ids_only_never_prompt_or_response_text(tmp_path):
+    """프롬프트에는 기사 본문이 들어간다(저작물, ADR 0023) - 원장에는 수치와 식별자만 남아야 한다."""
+    marker_in, marker_out = "원문기사본문표식", "생성응답표식"
+    client, _ = _client([make_response(marker_out, parsed=_parsed(), usage=_usage())])
+
+    client.complete([{"role": "system", "content": marker_in}, {"role": "user", "content": marker_in * 50}],
+                    schema=ClusterEval, purpose="cluster_eval", max_tokens=64)
+
+    raw = (tmp_path / "ledger.jsonl").read_text(encoding="utf-8")
+    assert marker_in not in raw and marker_out not in raw
+    allowed = {"ev", "id", "ts", "day", "run_id", "pid", "provider", "model", "role", "purpose", "nusd",
+               "reserved_nusd", "outcome", "basis", "est_input_tokens", "max_output_tokens", "price_in_per_1m",
+               "price_out_per_1m", "price_source", "input_tokens", "output_tokens", "thinking_tokens",
+               "cached_tokens", "total_tokens", "billable_output_tokens"}
+    assert set().union(*(e.keys() for e in _events(tmp_path))) <= allowed
 
 
 def test_every_role_goes_through_the_guard(monkeypatch, tmp_path):

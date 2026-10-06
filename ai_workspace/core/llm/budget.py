@@ -390,7 +390,9 @@ def _latch(stop: LLMRunStop) -> None:
     global _run_stop
     with _state_lock:
         if _run_stop is None:
-            _run_stop = stop
+            # 던져진 인스턴스가 아니라 사본을 보관한다 - 원본의 트레이스백이 호출 스택(프롬프트를 든
+            # 지역 변수 포함)을 프로세스가 끝날 때까지 붙잡지 않게.
+            _run_stop = stop.again()
 
 
 def latch_run_stop(stop: LLMRunStop) -> None:
