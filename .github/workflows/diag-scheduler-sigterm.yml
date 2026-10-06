@@ -24,5 +24,21 @@ jobs:
       - name: Create virtualenv
         run: uv venv --python 3.11 .venv
 
+      # 진짜 supercronic: worker.Dockerfile이 고정한 버전과 체크섬 그대로 받는다.
+      - name: Fetch supercronic
+        run: |
+          set -eux
+          ver=$(sed -n 's/^ARG SUPERCRONIC_VERSION=//p' docker/worker.Dockerfile)
+          sha=$(sed -n 's/^ARG SUPERCRONIC_SHA256_AMD64=//p' docker/worker.Dockerfile)
+          mkdir -p "$RUNNER_TEMP/supercronic-bin"
+          curl -fsSLo "$RUNNER_TEMP/supercronic-bin/supercronic" \
+            "https://github.com/aptible/supercronic/releases/download/${ver}/supercronic-linux-amd64"
+          echo "${sha}  $RUNNER_TEMP/supercronic-bin/supercronic" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/supercronic-bin/supercronic"
+          "$RUNNER_TEMP/supercronic-bin/supercronic" -version || true
+          echo "REAL_SUPERCRONIC_DIR=$RUNNER_TEMP/supercronic-bin" >> "$GITHUB_ENV"
+
       - name: Reproduce
+        env:
+          REPRO_SET: order
         run: .venv/bin/python diag/scheduler_sigterm_repro.py

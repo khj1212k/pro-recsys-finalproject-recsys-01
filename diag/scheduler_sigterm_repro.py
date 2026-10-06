@@ -14,10 +14,15 @@
   real : docker/scheduler-entrypoint.sh 그대로
   inst : 같은 스크립트에, supercronic에 신호를 보내기 직전 /proc/<pid>/status의 State·SigCgt를
          stderr로 남기는 줄만 끼운 사본(내장 명령만 써서 fork가 없다)
+  reordered : supercronic에 신호를 보내는 줄을 /proc 순회 앞으로 옮긴 사본(supercronic 먼저, 잡은 그 다음)
+
+REPRO_SET=doubles : 가짜 supercronic 판별 비교(첫 라운드)
+REPRO_SET=order   : 신호 순서 비교. 가짜 old/new와, REAL_SUPERCRONIC_DIR에 둔 진짜 supercronic(매초 실행 crontab)
 """
 import collections
 import json
 import os
+import random
 import signal
 import statistics
 import subprocess
@@ -83,6 +88,20 @@ PROBE = """\
 """
 
 
+# 진짜 supercronic 아래에서 도는 잡: 시작과 SIGTERM 수신을 줄 단위로 남긴다(한 번의 정지에 잡이 몇 번 떴는지 센다).
+REAL_JOB = """
+    import os, signal, sys, time
+    def on_term(signum, frame):
+        open({terms!r}, "a").write(str(os.getpid()) + chr(10))
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, on_term)
+    open({starts!r}, "a").write(str(os.getpid()) + chr(10))
+    time.sleep(30)
+"""
+
+SIG_LINE = "  sig=$1\n"
+
+
 def write_executable(path, body):
     with open(path, "w") as f:
         f.write(f"#!{sys.executable}\n" + textwrap.dedent(body))
@@ -106,6 +125,80 @@ def instrumented_entrypoint(directory):
     with open(path, "w") as f:
         f.write(source.replace(KILL_LINE, PROBE + KILL_LINE))
     return path
+
+
+def reordered_entrypoint(directory):
+    with open(ENTRYPOINT) as f:
+        source = f.read()
+    assert source.count(KILL_LINE) == 1 and source.count(SIG_LINE) == 1, "엔트리포인트 구조가 예상과 다름"
+    path = os.path.join(directory, "scheduler-entrypoint.reordered.sh")
+    with open(path, "w") as f:
+        f.write(source.replace(KILL_LINE, "").replace(SIG_LINE, SIG_LINE + KILL_LINE))
+    return path
+
+
+def session_members(sid):
+    members = []
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat") as f:
+                stat = f.read()
+        except OSError:
+            continue
+        comm = stat[stat.index("(") + 1:stat.rindex(")")]
+        fields = stat[stat.rindex(")") + 2:].split()
+        if int(fields[3]) == sid:
+            members.append((int(name), comm, fields[0]))
+    return members
+
+
+def run_once_real(entrypoint, timeout, rng):
+    """진짜 supercronic + 매초 crontab. 잡이 뜬 뒤 0~1초 아무 때나 SIGTERM을 보낸다(초 경계와의 위상을 고르게)."""
+    with tempfile.TemporaryDirectory(prefix="sigterm-real-") as tmp:
+        starts, terms = os.path.join(tmp, "starts"), os.path.join(tmp, "terms")
+        job = os.path.join(tmp, "job.py")
+        write_executable(job, REAL_JOB.format(starts=starts, terms=terms))
+        crontab = os.path.join(tmp, "crontab")
+        with open(crontab, "w") as f:
+            f.write(f"* * * * * * * {job}\n")
+        env = {**os.environ, "PATH": f"{os.environ['REAL_SUPERCRONIC_DIR']}{os.pathsep}{os.environ.get('PATH', '')}"}
+        err_path = os.path.join(tmp, "stderr")
+        with open(err_path, "wb") as err:
+            proc = subprocess.Popen(["sh", entrypoint, crontab], env=env, stderr=err, start_new_session=True)
+        rc, elapsed, leftover = "timeout", None, []
+        try:
+            wait_for(starts, 10.0)
+            time.sleep(rng.random())
+            started = time.monotonic()
+            proc.send_signal(signal.SIGTERM)
+            rc = proc.wait(timeout=timeout)
+            elapsed = time.monotonic() - started
+        except (TimeoutError, subprocess.TimeoutExpired):
+            pass
+        finally:
+            leftover = [m for m in session_members(proc.pid) if m[2] != "Z"]
+            for pid, _, _ in session_members(proc.pid):
+                kill_quietly(pid)
+            proc.wait()
+
+        def count(path):
+            return len(open(path).read().split()) if os.path.exists(path) else 0
+
+        with open(err_path, errors="replace") as f:
+            stderr = f.read()
+        return {
+            "rc": rc,
+            "elapsed": elapsed,
+            "terminated_line": "Terminated" in stderr.splitlines(),
+            "other_stderr": [],
+            "outcome": f"jobs started={count(starts)} got SIGTERM={count(terms)}",
+            "state": None,
+            "sigterm_handler": None,
+            "leftover": sorted(comm for _, comm, _ in leftover),
+            "log_tail": stderr.splitlines()[-8:],
+        }
 
 
 def kill_quietly(pid):
@@ -169,20 +262,24 @@ def run_once(double, entrypoint, timeout):
     }
 
 
-def run_arm(name, double, entrypoint, n, sleepers=0, cpu_load=False, budget=300.0):
+def run_arm(name, double, entrypoint, n, sleepers=0, cpu_load=False, budget=420.0):
     if SMOKE:  # 로컬 문법 점검용: 부하를 만들지 않는다
         sleepers, cpu_load = min(sleepers, 2), False
     extras = [subprocess.Popen(["sleep", "3600"]) for _ in range(sleepers)]
     if cpu_load:
         extras += [subprocess.Popen([sys.executable, "-c", "while True: pass"]) for _ in range(os.cpu_count() or 2)]
     timeout = 2.0 if SMOKE else 10.0
+    rng = random.Random(20261006)
     results = []
     began = time.monotonic()
     try:
         for _ in range(n):
             if time.monotonic() - began > budget:
                 break
-            results.append(run_once(double, entrypoint, timeout))
+            if double == "real":
+                results.append(run_once_real(entrypoint, min(timeout, 6.0), rng))
+            else:
+                results.append(run_once(double, entrypoint, timeout))
     finally:
         for p in extras:
             p.kill()
@@ -208,7 +305,11 @@ def run_arm(name, double, entrypoint, n, sleepers=0, cpu_load=False, budget=300.
         "elapsed_max_ms": round(max(elapsed) * 1000, 1) if elapsed else None,
         "wall_s": round(time.monotonic() - began, 1),
     }
-    if entrypoint != ENTRYPOINT:
+    if double == "real":
+        summary["leftover_at_exit_or_timeout"] = dict(collections.Counter(str(r["leftover"]) for r in results))
+        summary["log_tail_ok"] = next((r["log_tail"] for r in results if r["rc"] == 0), None)
+        summary["log_tail_not_ok"] = next((r["log_tail"] for r in results if r["rc"] != 0), None)
+    elif os.path.basename(entrypoint).endswith(".inst.sh"):
         crosstab = collections.Counter(
             f"state={r['state']} sigterm_handler={r['sigterm_handler']} -> rc={r['rc']}" for r in results
         )
@@ -277,28 +378,55 @@ def main():
     def n(count):
         return 1 if SMOKE else max(1, int(count * scale))
 
+    which = os.environ.get("REPRO_SET", "order")
     with tempfile.TemporaryDirectory(prefix="sigterm-inst-") as tmp:
         inst = instrumented_entrypoint(tmp)
-        subprocess.run(["sh", "-n", inst], check=True)
-        print("== 반복 실행 ==", flush=True)
-        arms = [
-            # 고정 재현: 종료 정리 구간에 들어가 있는 old에 신호가 온다
-            ("held/inst", "held", inst, n(30), {}),
-            # old: 실패하던 판의 자연 발생률과, 신호를 보내는 순간의 상태
-            ("old/real", "old", ENTRYPOINT, n(300), {}),
-            ("old/inst", "old", inst, n(300), {}),
-            ("old/real +300 procs", "old", ENTRYPOINT, n(200), {"sleepers": 300}),
-            ("old/inst +300 procs", "old", inst, n(200), {"sleepers": 300}),
-            ("old/real +1000 procs", "old", ENTRYPOINT, n(150), {"sleepers": 1000}),
-            ("old/real cpu load", "old", ENTRYPOINT, n(200), {"cpu_load": True}),
-            # new: main에 있는 판
-            ("new/real", "new", ENTRYPOINT, n(500), {}),
-            ("new/inst", "new", inst, n(300), {}),
-            ("new/real +300 procs", "new", ENTRYPOINT, n(300), {"sleepers": 300}),
-            ("new/inst +300 procs", "new", inst, n(200), {"sleepers": 300}),
-            ("new/real +1000 procs", "new", ENTRYPOINT, n(200), {"sleepers": 1000}),
-            ("new/real cpu load", "new", ENTRYPOINT, n(300), {"cpu_load": True}),
-        ]
+        reordered = reordered_entrypoint(tmp)
+        for path in (inst, reordered):
+            subprocess.run(["sh", "-n", path], check=True)
+        print(f"== 반복 실행 ({which}) ==", flush=True)
+        if which == "doubles":
+            arms = [
+                # 고정 재현: 종료 정리 구간에 들어가 있는 old에 신호가 온다
+                ("held/inst", "held", inst, n(30), {}),
+                # old: 실패하던 판의 자연 발생률과, 신호를 보내는 순간의 상태
+                ("old/real", "old", ENTRYPOINT, n(300), {}),
+                ("old/inst", "old", inst, n(300), {}),
+                ("old/real +300 procs", "old", ENTRYPOINT, n(200), {"sleepers": 300}),
+                ("old/inst +300 procs", "old", inst, n(200), {"sleepers": 300}),
+                ("old/real +1000 procs", "old", ENTRYPOINT, n(150), {"sleepers": 1000}),
+                ("old/real cpu load", "old", ENTRYPOINT, n(200), {"cpu_load": True}),
+                # new: main에 있는 판
+                ("new/real", "new", ENTRYPOINT, n(500), {}),
+                ("new/inst", "new", inst, n(300), {}),
+                ("new/real +300 procs", "new", ENTRYPOINT, n(300), {"sleepers": 300}),
+                ("new/inst +300 procs", "new", inst, n(200), {"sleepers": 300}),
+                ("new/real +1000 procs", "new", ENTRYPOINT, n(200), {"sleepers": 1000}),
+                ("new/real cpu load", "new", ENTRYPOINT, n(300), {"cpu_load": True}),
+            ]
+        else:
+            arms = [
+                # 첫 라운드에서 old가 실패하던 조건에서, 신호를 보내는 순간의 supercronic 상태
+                ("old/inst +1000 procs", "old", inst, n(150), {"sleepers": 1000}),
+                ("old/inst cpu load", "old", inst, n(200), {"cpu_load": True}),
+                # 같은 조건에서 신호 순서만 바꾼다(supercronic 먼저)
+                ("old/reordered", "old", reordered, n(300), {}),
+                ("old/reordered +300 procs", "old", reordered, n(200), {"sleepers": 300}),
+                ("old/reordered +1000 procs", "old", reordered, n(150), {"sleepers": 1000}),
+                ("old/reordered cpu load", "old", reordered, n(200), {"cpu_load": True}),
+                ("new/reordered", "new", reordered, n(300), {}),
+                ("new/reordered +1000 procs", "new", reordered, n(150), {"sleepers": 1000}),
+                ("new/reordered cpu load", "new", reordered, n(200), {"cpu_load": True}),
+            ]
+            if os.environ.get("REAL_SUPERCRONIC_DIR"):
+                arms = arms + [
+                    # 진짜 supercronic: 지금 순서(잡 먼저)와 바꾼 순서. 프로세스가 많을수록 두 신호 사이가 벌어진다.
+                    ("supercronic/real", "real", ENTRYPOINT, n(50), {}),
+                    ("supercronic/reordered", "real", reordered, n(50), {}),
+                    ("supercronic/real +2000 procs", "real", ENTRYPOINT, n(50), {"sleepers": 2000}),
+                    ("supercronic/reordered +2000 procs", "real", reordered, n(50), {"sleepers": 2000}),
+                ]
+                arms = arms[-4:] + arms[:-4]
         summaries = [run_arm(name, double, entry, count, **kw) for name, double, entry, count, kw in arms]
 
     lines = [
