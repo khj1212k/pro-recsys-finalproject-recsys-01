@@ -881,14 +881,16 @@ DOI 10.1145/3687151.3687160), 리더보드 AUC는 우리 split·정답 창과 �
 
 **저장소 내부**
 - `docs/design/2026-09-26-architecture-review.md` — 종합 리뷰, D1·D4·D5·D6·D13.
-- ADR 번호 감사(main 미수록) — ADR 인벤토리, 번호 충돌(0017/0023/0026), 브랜치별 수정 항목.
 - `docs/adr/0013-ranker-v2-design.md`, `reports/recsys/ebnerd_v1.{md,json}`, `reports/recsys/ebnerd_v1_1_poolneg.json` (origin/eval/ebnerd-harness 3df4df6).
-- `docs/adr/0007-recsys-offline-evaluation-protocol.md`, `reports/recsys/team_repro_v2.{md,json}` (origin/eval/team-baseline-repro-v1 1585ce6);
-  2차 반대 검토 결과(저장소 밖 검토 기록).
+- `docs/adr/0007-recsys-offline-evaluation-protocol.md`, `reports/recsys/team_repro_v2.{md,json}` (origin/eval/team-baseline-repro-v1 1585ce6).
 - `backend/app/recsys/*`, `backend/alembic/versions/8b7f830013b7_*`, `evaluation/serving/*`, `tests/integration/test_realtime_recsys_seeded_db.py` (origin/feat/realtime-recommendation 5e84358).
 - `docs/adr/0019-user-simulator-design-and-claim-scope.md`, `sim/*` (origin/feat/user-simulator-loadtest b3b20e4).
 - `docker/crontab`, `jobs/tasks/{train,user_embed,batch_fallback}.py`, `docs/adr/0006` (origin/feat/runtime-compose-and-collection b6d4c0c).
 - `reports/README.md`, `docs/adr/0023` (origin/fix/cleanup-and-claim-scrub).
+
+**main에 없는 기록**
+- ADR 번호 감사(main 미수록) — ADR 인벤토리, 번호 충돌(0017/0023/0026), 브랜치별 수정 항목.
+- 팀 베이스라인 재현 리포트에 대한 2차 반대 검토 결과(저장소 밖 검토 기록).
 
 **데이터셋·대회**
 - EB-NeRD 데이터셋 논문: https://arxiv.org/abs/2410.03432

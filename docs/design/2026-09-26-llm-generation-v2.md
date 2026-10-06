@@ -19,10 +19,10 @@
 
 - 기준: `main` `9aa235e`. 진행 중이던 브랜치는 이 시각의 `origin/<branch>` tip을 읽었다 — `eval/llm-bakeoff-and-gate` `94255de`,
   `exp/generation-warmup` `a1d20e4`, `fix/cleanup-and-claim-scrub` `6c90d87`, `feat/runtime-compose-and-collection` `1f44fc9`,
-  `ops/hosting-tiers` `1c0b3d4`, 종합 아키텍처 리뷰(당시 판 `8e859b6`), 결정 지도(당시 판 `230e7e0`). `exp/claim-anchored-generation`은
+  `ops/hosting-tiers` `1c0b3d4`, 종합 아키텍처 리뷰(당시 판 `8e859b6`), ADR 번호 감사(당시 판 `230e7e0`). `exp/claim-anchored-generation`은
   origin·로컬·워크트리 어디에도 없다(ADR 0021은 번호만 예약된 상태).
 - 입력: LLM 도메인 설계 리뷰(이하 **리뷰**)와 그에 대한 반대 검토(이하 **반대 검토**), 종합 아키텍처 리뷰(`docs/design/2026-09-26-architecture-review.md`),
-  ADR 번호 감사(이하 **결정 지도**, main 미수록), 이전 LLM 도메인 리뷰(아키텍처 리뷰의 입력이 된 판).
+  ADR 번호 감사(main 미수록), 이전 LLM 도메인 리뷰(저장소 밖 검토 기록).
 - 이 문서는 **설계 스펙**이다. 여기서 내린 결정은 각 ADR(또는 ADR 0009의 Addendum)으로 옮겨질 때만 효력을 갖는다. 코드·데이터는
   이 문서를 쓰면서 바꾸지 않았다(읽기 전용).
 - 증거 라벨: `[코드]` 저장소에서 직접 확인, `[KR-ops]` 로컬 수집 런타임 실측, `[팀 아카이브]` 팀이 생성한 뉴스레터 401편의 통계,
@@ -69,7 +69,7 @@
 | R26 | 산출물 목표 | 하루 20~30건 | 10~15건 + $/건 실측 | **반대 검토.** thinking 토큰과 재시도를 넣으면 동기 호출 하루 13~16건도 낙관적이다(부록 A). |
 | R27 | 반대 검토가 추가한 누락 항목(입력 신뢰 경계, Kiwi 문장 분할, 핵심 사실 정의, 레이트 리밋, 실패 실험도 기록) | — | 추가 | **채택.** 3.5(보일러플레이트 블록리스트·"기사 안 지시 무시"), 3.6(Kiwi `split_into_sents` 통일, 리드 문장 클레임 ≥2), 4.3(E2 핵심 사실 목록은 자동 후보+라벨러 확정), E0(429 비율), 8절(실패한 사전 등록 실험도 리포트에 그대로). |
 | R28 | Addendum 번호 | "Addendum A2" | "Addendum A2" | **둘 다 틀림.** ADR 0009에는 A1~A6이 이미 있다(A2는 "분석 정의 명확화 3건"). 새 항목은 **A7**. `[코드]` |
-| R29 | ADR 번호 | 0021/0022/0028/0029 | 같음 | **일부 조정.** 결정 지도가 0031~0033을 재배정에 예약했고 프로비넌스를 0029(저장소 경계 동결)에 묶은 것은 부자연스럽다 → 프로비넌스·입력 준비·프롬프트 v2의 "양 팔 공통 계약"을 **0034**로 분리(7절). |
+| R29 | ADR 번호 | 0021/0022/0028/0029 | 같음 | **일부 조정.** ADR 번호 감사가 0031~0033을 재배정에 예약했고 프로비넌스를 0029(저장소 경계 동결)에 묶은 것은 부자연스럽다 → 프로비넌스·입력 준비·프롬프트 v2의 "양 팔 공통 계약"을 **0034**로 분리(7절). |
 
 요약: 사실관계 논쟁은 반대 검토가 거의 전부 옳았고(R1~R13), 설계 논쟁도 반대 검토의 축소안이 옳았다(R14~R26). 리뷰가 옳은 것은 **진단**이다 —
 결정론 게이트의 커버리지 상한, 예산이 곧 제품이라는 점, 프로비넌스 부재, 폴백 발행 위험, 문체 키 버그, 저장 FK 오염. 이 문서는 리뷰의 진단 위에 반대 검토의 범위를 얹는다.
@@ -139,7 +139,7 @@ bakeoff 브랜치(`94255de`)가 바꾼 것: `check_faithfulness`(수치·인용 
 |---|---|---|---|---|---|
 | C1 | P1 | `generator.py:110-137,145-191` (main) | 로컬 폴백이 정상 초안처럼 발행 경로로 | bakeoff의 `_fallback` 표시·차단을 게이트와 분리해 main에 선반영; 폴백은 발행 금지, `failure_reason=generator_fallback` | `test_workflow_faithfulness_gates.py` 503 케이스(저장 0건) 이식 |
 | C2 | P1 | `nodes.py:377` (main, bakeoff) | 제외 기사까지 `news_letter_id` 갱신 | warmup `eab2b89` 채택(`current_articles`의 id만) | warmup `tests/test_save_links_only_used_articles.py` |
-| C3 | P1 | `tone_converter.py:82,138-190` + `nodes.py:365` (main) | `summary`/`sentence` 키 불일치, 변환 요약 폐기 | warmup `99fa60d`(`_original_summary`/`_with_sentence_key`) **하나만** 채택; cleanup `6c90d87` 계열의 `_draft_summary`/`_with_sentence_alias`+save 수정은 폐기(결정 지도 4.6절) | warmup `tests/test_tone_converter_sentence_key.py` |
+| C3 | P1 | `tone_converter.py:82,138-190` + `nodes.py:365` (main) | `summary`/`sentence` 키 불일치, 변환 요약 폐기 | warmup `99fa60d`(`_original_summary`/`_with_sentence_key`) **하나만** 채택; cleanup `6c90d87` 계열의 `_draft_summary`/`_with_sentence_alias`+save 수정은 폐기(ADR 번호 감사 4.6절) | warmup `tests/test_tone_converter_sentence_key.py` |
 | C4 | P1 | `gates.py:22 TONE_FIELDS` (bakeoff) | C3 병합 뒤 캐주얼 sentence가 저장되는데 드리프트 게이트가 보지 않음 | `TONE_FIELDS=("title","sentence","content")` | 드리프트 게이트 테스트에 sentence 수치 변조 1건 추가 |
 | C5 | P1 | `evaluators.py:228` (main) | judge 파싱 실패 시 "PASS" 문자열로 통과 | judge v2로 대체(bakeoff) — main 단독 패치 불필요, 병합 순서로 해소 | bakeoff `test_newsletter_judge_v2.py` |
 | C6 | P1 | `settings.py:69-70` (main) | 죽은 설정 2개 | 둘 다 삭제(cleanup `6c90d87`과 같은 방향; bakeoff는 `MIN_NEWSLETTER_SCORE` 이미 없음) | `grep` 0건 |
@@ -537,7 +537,7 @@ class RunCircuitBreaker:  def note(self, result: LLMResult) -> None;  @property 
 
 ## 7. 새로 필요한 ADR
 
-번호 원칙(결정 지도 D9·2절): 코드가 참조하는 번호 유지, 계획 번호는 0021부터, 충돌 재배정은 0031~0033 예약. 증거가 나오기 전엔 `proposed`.
+번호 원칙(ADR 번호 감사 D9·2절): 코드가 참조하는 번호 유지, 계획 번호는 0021부터, 충돌 재배정은 0031~0033 예약. 증거가 나오기 전엔 `proposed`.
 
 | 번호 | 제목 | 내용 | 상태·시점 | 증거 |
 |---|---|---|---|---|
@@ -549,8 +549,8 @@ class RunCircuitBreaker:  def note(self, result: LLMResult) -> None;  @property 
 | **0034** (신규 제안) | 양 팔 공통 계약: 소스 준비(near-dup·라운드로빈·문장 경계 절단·블록리스트·기사 번호), 프롬프트 v2 규칙(600~900자·3문단·리드·제목 ≤20자·정보형 sentence·문체 병합), 뉴스레터 프로비넌스 컬럼·`news_letter_sources`·API `sources`, 팀 아카이브 통계를 규칙 근거로 | 3.2 소스, 3.5, 3.8 | M3~M5 | E0 위반률, E4' |
 | **0012** | 스토리 연속성: 측정 결과(연속 사건 비율·정밀도 격자), 최소판 채택/불필요 판정, `news_raw.news_letter_id` 의미 축소 | 3.9, E5 | M7 | `story_linking_v1` |
 
-아키텍처 리뷰 7절은 프로비넌스를 0029(저장소 경계 동결)에 묶었다. 여기서는 0034로 분리할 것을 제안한다 — 결정 지도가 0031~0033을 다른 재배정에 예약했고, 프로비넌스는 LLM 도메인의
-독립 결정이기 때문이다. 채택 여부는 결정 지도 담당 PR에서 확정한다. `docs/adr/README.md` 행은 각 ADR과 같은 PR에.
+아키텍처 리뷰 7절은 프로비넌스를 0029(저장소 경계 동결)에 묶었다. 여기서는 0034로 분리할 것을 제안한다 — ADR 번호 감사가 0031~0033을 다른 재배정에 예약했고, 프로비넌스는 LLM 도메인의
+독립 결정이기 때문이다. 채택 여부는 ADR 번호 감사 담당 PR에서 확정한다. `docs/adr/README.md` 행은 각 ADR과 같은 PR에.
 
 ---
 
@@ -608,7 +608,10 @@ class RunCircuitBreaker:  def note(self, result: LLMResult) -> None;  @property 
 - FlagEmbedding BGE-M3 1.2.5(이미 의존성)
 
 **저장소 내부**
-- `docs/adr/0005`(어댑터·부록 실호출), `0009`(사전 등록·A1~A6), `0010`(게이트·judge v2), `0023`(출처·30일 보존·노출 규칙), 결정 지도(main 미수록), `docs/design/2026-09-26-architecture-review.md`(3.0 D3·D8·D10·D12, 3.2, 7절).
+- `docs/adr/0005`(어댑터·부록 실호출), `0009`(사전 등록·A1~A6), `0010`(게이트·judge v2), `0023`(출처·30일 보존·노출 규칙), `docs/design/2026-09-26-architecture-review.md`(3.0 D3·D8·D10·D12, 3.2, 7절).
+
+**main에 없는 기록**
+- ADR 번호 감사(main 미수록).
 - 이전 LLM 도메인 리뷰: 팀 아카이브 270편에서 숫자·절대날짜·인용 문장 517/2,620 = 19.7%, 옵션 A~E, E1~E6 — 저장소 밖 검토 기록.
 
 ---
