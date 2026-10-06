@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+"""scheduler-entrypoint SIGTERM 테스트가 143으로 실패하던 경합을 Linux에서 재현하고 분해한다.
+
+진단 전용이다(main에 넣지 않는다). tests/test_scheduler_entrypoint.py와 같은 절차를 반복하되
+가짜 supercronic과 엔트리포인트를 판별로 바꿔 가며 종료 코드를 센다.
+
+가짜 supercronic
+  old  : b72b63f 시점 - 파이썬 수준 SIGTERM 핸들러를 두고 sys.exit(0)으로 끝난다(실패하던 CI가 돌린 판)
+  new  : 69ccfc9 이후 - 같은 핸들러, os._exit(0)으로 끝난다(main에 있는 판)
+  held : old와 같은 핸들러와 sys.exit(0)인데, 잡을 기다리지 않고 바로 종료 정리(모듈 해제)에 들어가
+         그 안에서 멈춰 있는다 - 그 구간에 신호가 오면 어떻게 되는지를 타이밍과 무관하게 본다
+
+엔트리포인트
+  real : docker/scheduler-entrypoint.sh 그대로
+  inst : 같은 스크립트에, supercronic에 신호를 보내기 직전 /proc/<pid>/status의 State·SigCgt를
+         stderr로 남기는 줄만 끼운 사본(내장 명령만 써서 fork가 없다)
+"""
+import collections
+import json
+import os
+import signal
+import statistics
+import subprocess
+import sys
+import tempfile
+import textwrap
+import time
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ENTRYPOINT = os.path.join(ROOT, "docker", "scheduler-entrypoint.sh")
+SIGTERM_BIT = 1 << (signal.SIGTERM - 1)
+SMOKE = "--smoke" in sys.argv
+
+# 잡은 테스트와 같다. ready에 "ok" 대신 pid를 적는 것만 다르다(실패한 반복의 뒷정리에 쓴다).
+JOB = """
+    import os, signal, sys, time
+    def on_term(signum, frame):
+        open({outcome!r}, "w").write("terminated")
+        sys.exit(0)
+    signal.signal(signal.SIGTERM, on_term)
+    open({ready!r}, "w").write(f"{{os.getpid()}} {{os.getppid()}}")
+    time.sleep(30)
+    open({outcome!r}, "w").write("finished without signal")
+"""
+
+DOUBLES = {
+    "old": """
+        import signal, subprocess, sys
+        signal.signal(signal.SIGTERM, lambda *a: None)
+        child = subprocess.Popen([{job!r}], process_group=0)
+        child.wait()
+        sys.exit(0)
+    """,
+    "new": """
+        import os, signal, subprocess
+        signal.signal(signal.SIGTERM, lambda *a: None)
+        child = subprocess.Popen([{job!r}], process_group=0)
+        child.wait()
+        os._exit(0)
+    """,
+    "held": """
+        import signal, subprocess, sys, time
+        signal.signal(signal.SIGTERM, lambda *a: None)
+        child = subprocess.Popen([{job!r}], process_group=0)
+        class Hold:
+            def __del__(self, _sleep=time.sleep, _open=open):
+                _open({window!r}, "w").close()
+                _sleep(5)
+        keep = Hold()
+        sys.exit(0)
+    """,
+}
+
+KILL_LINE = '  kill "-$sig" "$SUPERCRONIC_PID" 2>/dev/null\n'
+PROBE = """\
+  if [ -r "/proc/$SUPERCRONIC_PID/status" ]; then
+    while read -r diag_key diag_val; do
+      case $diag_key in State:|SigCgt:) echo "DIAG $diag_key $diag_val" >&2 ;; esac
+    done < "/proc/$SUPERCRONIC_PID/status"
+  else
+    echo "DIAG gone" >&2
+  fi
+"""
+
+
+def write_executable(path, body):
+    with open(path, "w") as f:
+        f.write(f"#!{sys.executable}\n" + textwrap.dedent(body))
+    os.chmod(path, 0o755)
+
+
+def wait_for(path, timeout):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if os.path.exists(path):
+            return
+        time.sleep(0.01)
+    raise TimeoutError(path)
+
+
+def instrumented_entrypoint(directory):
+    with open(ENTRYPOINT) as f:
+        source = f.read()
+    assert source.count(KILL_LINE) == 1, "엔트리포인트에서 supercronic에 신호를 보내는 줄을 찾지 못함"
+    path = os.path.join(directory, "scheduler-entrypoint.inst.sh")
+    with open(path, "w") as f:
+        f.write(source.replace(KILL_LINE, PROBE + KILL_LINE))
+    return path
+
+
+def kill_quietly(pid):
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def run_once(double, entrypoint, timeout):
+    with tempfile.TemporaryDirectory(prefix="sigterm-repro-") as tmp:
+        ready, outcome, window = (os.path.join(tmp, name) for name in ("ready", "outcome", "window"))
+        job = os.path.join(tmp, "job.py")
+        write_executable(job, JOB.format(ready=ready, outcome=outcome))
+        bin_dir = os.path.join(tmp, "bin")
+        os.mkdir(bin_dir)
+        write_executable(os.path.join(bin_dir, "supercronic"), DOUBLES[double].format(job=job, window=window))
+        env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+        err_path = os.path.join(tmp, "stderr")
+        with open(err_path, "wb") as err:
+            proc = subprocess.Popen(["sh", entrypoint, "/dev/null"], env=env, stderr=err)
+        rc, elapsed = "timeout", None
+        try:
+            wait_for(ready, timeout)
+            if double == "held":
+                wait_for(window, timeout)
+            started = time.monotonic()
+            proc.send_signal(signal.SIGTERM)
+            rc = proc.wait(timeout=timeout)
+            elapsed = time.monotonic() - started
+        except (TimeoutError, subprocess.TimeoutExpired):
+            pass
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            if os.path.exists(ready):
+                for pid in open(ready).read().split():
+                    kill_quietly(int(pid))
+        with open(err_path, errors="replace") as f:
+            stderr = f.read()
+        outcome_text = open(outcome).read() if os.path.exists(outcome) else None
+    state = handler = None
+    for line in stderr.splitlines():
+        parts = line.split()
+        if parts[:2] == ["DIAG", "State:"]:
+            state = parts[2]
+        elif parts[:2] == ["DIAG", "SigCgt:"]:
+            handler = bool(int(parts[2], 16) & SIGTERM_BIT)
+        elif parts[:2] == ["DIAG", "gone"]:
+            state = "gone"
+    other = [line for line in stderr.splitlines() if not line.startswith("DIAG ") and line != "Terminated"]
+    return {
+        "rc": rc,
+        "elapsed": elapsed,
+        "terminated_line": "Terminated" in stderr.splitlines(),
+        "other_stderr": other,
+        "outcome": outcome_text,
+        "state": state,
+        "sigterm_handler": handler,
+    }
+
+
+def run_arm(name, double, entrypoint, n, sleepers=0, cpu_load=False, budget=300.0):
+    if SMOKE:  # 로컬 문법 점검용: 부하를 만들지 않는다
+        sleepers, cpu_load = min(sleepers, 2), False
+    extras = [subprocess.Popen(["sleep", "3600"]) for _ in range(sleepers)]
+    if cpu_load:
+        extras += [subprocess.Popen([sys.executable, "-c", "while True: pass"]) for _ in range(os.cpu_count() or 2)]
+    timeout = 2.0 if SMOKE else 10.0
+    results = []
+    began = time.monotonic()
+    try:
+        for _ in range(n):
+            if time.monotonic() - began > budget:
+                break
+            results.append(run_once(double, entrypoint, timeout))
+    finally:
+        for p in extras:
+            p.kill()
+        for p in extras:
+            p.wait()
+    rcs = collections.Counter(str(r["rc"]) for r in results)
+    elapsed = [r["elapsed"] for r in results if r["elapsed"] is not None]
+    summary = {
+        "arm": name,
+        "double": double,
+        "entrypoint": os.path.basename(entrypoint),
+        "sleepers": sleepers,
+        "cpu_load": cpu_load,
+        "n": len(results),
+        "rc": dict(rcs),
+        "rc_143": rcs.get("143", 0),
+        "rc_143_with_terminated_line": sum(1 for r in results if r["rc"] == 143 and r["terminated_line"]),
+        "terminated_line_without_143": sum(1 for r in results if r["rc"] != 143 and r["terminated_line"]),
+        "outcome": dict(collections.Counter(str(r["outcome"]) for r in results)),
+        "other_stderr_runs": sum(1 for r in results if r["other_stderr"]),
+        "other_stderr_sample": next((r["other_stderr"][:3] for r in results if r["other_stderr"]), None),
+        "elapsed_median_ms": round(statistics.median(elapsed) * 1000, 1) if elapsed else None,
+        "elapsed_max_ms": round(max(elapsed) * 1000, 1) if elapsed else None,
+        "wall_s": round(time.monotonic() - began, 1),
+    }
+    if entrypoint != ENTRYPOINT:
+        crosstab = collections.Counter(
+            f"state={r['state']} sigterm_handler={r['sigterm_handler']} -> rc={r['rc']}" for r in results
+        )
+        summary["at_kill_time"] = dict(sorted(crosstab.items()))
+    print(json.dumps(summary, ensure_ascii=False), flush=True)
+    return summary
+
+
+def sh_capture(script, signal_after=None):
+    proc = subprocess.Popen(["sh", "-c", script], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if signal_after is not None:
+        time.sleep(signal_after)
+        proc.send_signal(signal.SIGTERM)
+    out, _ = proc.communicate(timeout=20)
+    return f"{out.rstrip()}\n[shell exit={proc.returncode}]"
+
+
+def shell_semantics():
+    print("== sh 의미 확인 ==", flush=True)
+    print("-- 백그라운드 자식이 SIGTERM으로 죽었을 때 wait")
+    print(sh_capture('sleep 30 &\npid=$!\nkill -TERM "$pid"\nwait "$pid"\necho "wait status=$?"'))
+    print("-- wait 중 트랩이 돌고, 그 사이 자식이 7로 끝났을 때 두 번째 wait")
+    loop = textwrap.dedent("""
+        (sleep 0.3; exit 7) &
+        pid=$!
+        trap 'interrupted=1; sleep 1' TERM
+        n=0
+        while :; do
+          interrupted=0
+          wait "$pid"
+          status=$?
+          n=$((n+1))
+          echo "wait#$n status=$status interrupted=$interrupted"
+          [ "$interrupted" = 1 ] || break
+        done
+        exit "$status"
+    """)
+    print(sh_capture(loop, signal_after=0.1), flush=True)
+
+
+def environment():
+    def run(cmd):
+        try:
+            return subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=20).stdout.strip()
+        except Exception as exc:  # 진단 출력일 뿐이라 실패해도 계속 간다
+            return f"<{exc}>"
+
+    info = {
+        "python": sys.version.split()[0],
+        "executable": sys.executable,
+        "sh": run("readlink -f \"$(command -v sh)\""),
+        "dash": run("dpkg-query -W -f='${Version}' dash 2>/dev/null"),
+        "kernel": run("uname -sr"),
+        "cpus": os.cpu_count(),
+        "proc_pids": len([d for d in os.listdir("/proc") if d.isdigit()]) if os.path.isdir("/proc") else None,
+    }
+    print("== 환경 ==")
+    print(json.dumps(info, ensure_ascii=False), flush=True)
+
+
+def main():
+    environment()
+    shell_semantics()
+    scale = 0 if SMOKE else float(os.environ.get("REPRO_SCALE", "1"))
+
+    def n(count):
+        return 1 if SMOKE else max(1, int(count * scale))
+
+    with tempfile.TemporaryDirectory(prefix="sigterm-inst-") as tmp:
+        inst = instrumented_entrypoint(tmp)
+        subprocess.run(["sh", "-n", inst], check=True)
+        print("== 반복 실행 ==", flush=True)
+        arms = [
+            # 고정 재현: 종료 정리 구간에 들어가 있는 old에 신호가 온다
+            ("held/inst", "held", inst, n(30), {}),
+            # old: 실패하던 판의 자연 발생률과, 신호를 보내는 순간의 상태
+            ("old/real", "old", ENTRYPOINT, n(300), {}),
+            ("old/inst", "old", inst, n(300), {}),
+            ("old/real +300 procs", "old", ENTRYPOINT, n(200), {"sleepers": 300}),
+            ("old/inst +300 procs", "old", inst, n(200), {"sleepers": 300}),
+            ("old/real +1000 procs", "old", ENTRYPOINT, n(150), {"sleepers": 1000}),
+            ("old/real cpu load", "old", ENTRYPOINT, n(200), {"cpu_load": True}),
+            # new: main에 있는 판
+            ("new/real", "new", ENTRYPOINT, n(500), {}),
+            ("new/inst", "new", inst, n(300), {}),
+            ("new/real +300 procs", "new", ENTRYPOINT, n(300), {"sleepers": 300}),
+            ("new/inst +300 procs", "new", inst, n(200), {"sleepers": 300}),
+            ("new/real +1000 procs", "new", ENTRYPOINT, n(200), {"sleepers": 1000}),
+            ("new/real cpu load", "new", ENTRYPOINT, n(300), {"cpu_load": True}),
+        ]
+        summaries = [run_arm(name, double, entry, count, **kw) for name, double, entry, count, kw in arms]
+
+    lines = [
+        "| arm | n | rc=0 | rc=143 | 143 중 'Terminated' 줄 | 다른 rc | 신호~종료 중앙값(ms) |",
+        "|---|---|---|---|---|---|---|",
+    ]
+    for s in summaries:
+        other = {k: v for k, v in s["rc"].items() if k not in ("0", "143")}
+        lines.append(
+            f"| {s['arm']} | {s['n']} | {s['rc'].get('0', 0)} | {s['rc_143']} | "
+            f"{s['rc_143_with_terminated_line']} | {other or '-'} | {s['elapsed_median_ms']} |"
+        )
+    table = "\n".join(lines)
+    print("== 요약 ==")
+    print(table, flush=True)
+    step_summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if step_summary:
+        with open(step_summary, "a") as f:
+            f.write(table + "\n")
+
+
+if __name__ == "__main__":
+    main()

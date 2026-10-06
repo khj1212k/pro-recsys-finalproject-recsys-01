@@ -1,0 +1,28 @@
+name: diag-scheduler-sigterm
+
+# 진단 전용 브랜치에서만 돈다. main에 넣지 않는다.
+on:
+  push:
+    branches: ["diag/scheduler-sigterm-repro"]
+
+jobs:
+  repro:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      # CI의 test 잡과 같은 방법으로 파이썬을 둔다(같은 인터프리터에서 종료 정리 구간을 본다).
+      - name: Install Python 3.11
+        run: uv python install 3.11
+
+      - name: Create virtualenv
+        run: uv venv --python 3.11 .venv
+
+      - name: Reproduce
+        run: .venv/bin/python diag/scheduler_sigterm_repro.py
