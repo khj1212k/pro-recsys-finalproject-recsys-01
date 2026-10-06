@@ -170,6 +170,8 @@ class BaseSettings:
     DB_POOL_MAX: int = 10
 
     # ========== RSS Feeds ==========
+    # 수집기는 시간대 없는 pubDate를 KST로 읽는다(crawler/rss_collector.py의 KST, docs/adr/0008).
+    # 한국 밖 시간대로 내보내면서 시간대 표기를 빼는 피드를 추가하려면 그 가정부터 고쳐야 한다.
     RSS_FEEDS: Dict[str, Tuple[str, str]] = {
         # 종합 일간지
         '동아일보': ('direct', 'https://rss.donga.com/total.xml'),
