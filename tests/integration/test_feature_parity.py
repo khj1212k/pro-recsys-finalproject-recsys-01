@@ -75,7 +75,14 @@ def test_serving_features_scores_and_lists_match_the_offline_harness_over_200_re
 ):
     from app.recsys.config import RecsysConfig
     from app.recsys.runtime import build_sql_service
-    from evaluation.recsys.serving_parity import THRESHOLDS, load_from_db, load_model, run_gate, write_report
+    from evaluation.recsys.serving_parity import (
+        GATE_ITEMS,
+        THRESHOLDS,
+        load_from_db,
+        load_model,
+        run_gate,
+        write_report,
+    )
     from jobs.tasks.rebuild_user_state import rebuild_all
     from recsys_core import serving
     from tests.recsys.parity_sim import train_model_text
@@ -171,12 +178,13 @@ def test_serving_features_scores_and_lists_match_the_offline_harness_over_200_re
         out = os.environ.get("RECSYS_PARITY_REPORT")
         if out:
             write_report(report, out)
-        summary = {k: report[k] for k in ("features", "scores", "end_to_end", "candidate_config")}
+        summary = {k: report[k] for k in GATE_ITEMS}
+        overlap = summary["candidate_generator_top20_overlap"]
         print("\n[parity gate] " + json.dumps(
             {"requests": len(requests), "pass": report["pass"],
              "features_max_abs_diff": summary["features"]["max_abs_diff"],
              "min_kendall_tau": summary["scores"]["min_kendall_tau"],
-             "mean_top20_overlap": summary["end_to_end"]["mean_overlap"],
+             "mean_top20_overlap": overlap["mean_overlap"],
              "candidate_config_equal": summary["candidate_config"]["equal"], "sources": sources}))
 
         # 재생이 게이트가 보려는 경로를 실제로 지났는가
@@ -192,8 +200,8 @@ def test_serving_features_scores_and_lists_match_the_offline_harness_over_200_re
         # 2. 점수 순서: 칸 로그의 shadow 점수 vs 다시 계산한 피처로 낸 점수, Kendall τ = 1
         assert summary["scores"]["requests_with_shadow_scores"] >= 150, summary["scores"]
         assert summary["scores"]["min_kendall_tau"] == 1.0, summary["scores"]
-        # 3. end-to-end 상위 20개 겹침
-        assert summary["end_to_end"]["mean_overlap"] >= THRESHOLDS["end_to_end_mean_overlap"], summary["end_to_end"]
+        # 3. 랭커 상위 20개 겹침: 서빙의 후보 집합 위 vs 하네스의 후보 구성 위(둘 다 오프라인 재계산)
+        assert overlap["mean_overlap"] >= THRESHOLDS["candidate_generator_top20_mean_overlap"], overlap
         # 4. 후보 생성기 구성
         assert summary["candidate_config"]["equal"] is True, summary["candidate_config"]
         assert report["pass"] is True

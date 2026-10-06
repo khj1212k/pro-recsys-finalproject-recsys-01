@@ -8,12 +8,15 @@
    전 열 max|Δ| < 1e-6. NaN의 위치도 같아야 한다.
 2. scores: 같은 칸들(= 같은 후보 집합)에서, 칸 로그에 남은 shadow 점수(서빙 피처로 낸 점수)와 다시 계산한
    피처로 같은 모델이 낸 점수의 순서가 같다(요청마다 Kendall τ = 1, 동점 쌍 제외).
-3. end_to_end: 요청마다 두 목록의 상위 20개 겹침의 평균 ≥ 0.9.
+3. candidate_generator_top20_overlap: 요청마다 두 목록의 상위 20개 겹침의 평균 ≥ 0.9.
    - 서빙 쪽: 요청 로그에 남은 후보 집합 E(서빙의 후보 생성기 + 제외) 위에서 모델 점수 상위 20개.
    - 하네스 쪽: 하네스의 서빙 후보 구성(candidate_config.SERVING: 출처별 상위 k를 라운드로빈으로 합쳐 cap)으로
      고른 후보 위에서 모델 점수 상위 20개. 풀 = 신선도 창 안에서 화면에 내보낼 수 있고 아직 클릭하지 않은 것.
-   랭커의 순위만 비교한다. MMR과 탐색 칸은 서빙에만 있는 뒤 단계라 넣지 않는다. 1·2가 같은 후보에서의
-   동일성이라면 이 항목은 **후보 생성기가 갈리는 만큼**을 잰다.
+   **두 목록 모두 오프라인에서 다시 계산한 것이다**(같은 이벤트 로그, 하네스 방식의 피처, 같은 모델). 서빙이
+   실제로 내보낸 목록은 비교하지 않는다 - 그 목록은 활성 스코어러(지금은 휴리스틱)와 MMR·탐색 칸이 만든 것이고
+   이 게이트의 모델이 만든 것이 아니다. 그래서 1·2가 통과한 상태에서 이 항목이 재는 것은 **후보 생성기가
+   갈리는 만큼**뿐이다. 설계 문서는 이 항목을 "end-to-end 목록 top-20 겹침"이라고 불렀고 키 이름도 처음에는
+   end_to_end였다. 서빙된 목록까지 비교한 것처럼 읽혀서 이름을 바꿨다(값의 정의는 그대로다. read_report 참고).
 4. candidate_config: 서빙이 지금 도는 후보 구성(RecsysConfig.candidate_spec)과 하네스의 서빙 구성이 같은 값.
 
 "겹침 0.9" 하나만으로는 게이트가 되지 않는다: 피처가 어긋나도 상위 목록은 대체로 겹친다. 그래서 1·2가 먼저다.
@@ -41,9 +44,16 @@ from recsys_core.serving import FEATURE_NAMES, FEATURE_SCHEMA_VERSION, SCHEMA_HA
 from .service_logs import LogBench, ServiceLogs, epoch_us
 
 THRESHOLDS = {
-    "features_max_abs_diff": 1e-6,   # 미만
-    "scores_min_kendall_tau": 1.0,   # 이상
-    "end_to_end_mean_overlap": 0.9,  # 이상
+    "features_max_abs_diff": 1e-6,                    # 미만
+    "scores_min_kendall_tau": 1.0,                    # 이상
+    "candidate_generator_top20_mean_overlap": 0.9,    # 이상
+}
+# 리포트의 항목 키(게이트 1~4번 순서). 전체 통과 = 넷 다 통과.
+GATE_ITEMS = ("features", "scores", "candidate_generator_top20_overlap", "candidate_config")
+# 이름을 바꾸기 전에 쓰인 리포트의 키 -> 지금 키(read_report). 3번 항목과 그 임계 둘뿐이다.
+LEGACY_KEYS = {
+    "end_to_end": "candidate_generator_top20_overlap",
+    "end_to_end_mean_overlap": "candidate_generator_top20_mean_overlap",
 }
 TOP_K = 20
 PredictFn = Callable[[np.ndarray], np.ndarray]
@@ -161,8 +171,10 @@ def harness_candidates(bench: LogBench, user_id: int, now_us: int, config, seed:
     return [pool_ids[i] for i in keep], {name: values[keep] for name, values in cols.items()}
 
 
-def end_to_end_overlap(bench: LogBench, requests: Sequence[LoggedRequest], predict: PredictFn, config,
-                       k: int = TOP_K, seed: int = 0) -> dict:
+def candidate_generator_top20_overlap(bench: LogBench, requests: Sequence[LoggedRequest], predict: PredictFn, config,
+                                      k: int = TOP_K, seed: int = 0) -> dict:
+    """게이트 3번. 요청 로그에서 읽는 것은 후보 집합(candidate_ids)과 기준 시각뿐이다: 화면에 나간 칸과 그 칸의
+    피처·shadow 점수는 쓰지 않는다. 두 쪽의 점수 모두 여기서 다시 계산한 피처로 낸다."""
     overlaps, n_serving, n_harness, jaccard = [], [], [], []
     for r in requests:
         if not r.candidate_ids:
@@ -182,6 +194,11 @@ def end_to_end_overlap(bench: LogBench, requests: Sequence[LoggedRequest], predi
         n_harness.append(len(b))
     mean = float(np.mean(overlaps)) if overlaps else None
     return {
+        "compares": (
+            "model top-k over the logged serving candidate set vs model top-k over the harness serving candidate "
+            "config. Both lists are recomputed offline from the same event log with harness features; the list "
+            "that was actually served (active scorer + MMR + exploration slots) is not compared."
+        ),
         "k": k,
         "requests": len(overlaps),
         "mean_overlap": mean,
@@ -191,8 +208,8 @@ def end_to_end_overlap(bench: LogBench, requests: Sequence[LoggedRequest], predi
         "mean_serving_candidates": float(np.mean(n_serving)) if n_serving else None,
         "mean_harness_candidates": float(np.mean(n_harness)) if n_harness else None,
         "mean_candidate_set_jaccard": float(np.mean(jaccard)) if jaccard else None,
-        "threshold": THRESHOLDS["end_to_end_mean_overlap"],
-        "pass": bool(overlaps and mean >= THRESHOLDS["end_to_end_mean_overlap"]),
+        "threshold": THRESHOLDS["candidate_generator_top20_mean_overlap"],
+        "pass": bool(overlaps and mean >= THRESHOLDS["candidate_generator_top20_mean_overlap"]),
     }
 
 
@@ -235,10 +252,11 @@ def run_gate(logs: ServiceLogs, requests: Sequence[LoggedRequest], predict: Pred
         },
         "features": feature_parity(bench, requests),
         "scores": score_parity(bench, requests, predict),
-        "end_to_end": end_to_end_overlap(bench, requests, predict, SERVING, seed=seed),
+        "candidate_generator_top20_overlap": candidate_generator_top20_overlap(bench, requests, predict, SERVING,
+                                                                               seed=seed),
         "candidate_config": candidate_config_equality(serving_spec, spec_of(SERVING)),
     }
-    report["pass"] = all(report[k]["pass"] for k in ("features", "scores", "end_to_end", "candidate_config"))
+    report["pass"] = all(report[k]["pass"] for k in GATE_ITEMS)
     return report
 
 
@@ -248,6 +266,23 @@ def write_report(report: dict, path) -> None:
     out = Path(path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def read_report(path) -> dict:
+    """리포트 JSON을 지금의 키 이름으로 읽는다. 3번 항목의 이름을 바꾸기 전에 쓰인 파일(end_to_end,
+    thresholds.end_to_end_mean_overlap)은 LEGACY_KEYS대로 옮겨 읽는다. 파일과 값은 건드리지 않는다."""
+    from pathlib import Path
+
+    report = json.loads(Path(path).read_text(encoding="utf-8"))
+
+    def renamed(mapping: dict) -> dict:
+        return {LEGACY_KEYS.get(key, key): value for key, value in mapping.items()}
+
+    report = renamed(report)
+    meta = report.get("meta")
+    if isinstance(meta, dict) and isinstance(meta.get("thresholds"), dict):
+        report["meta"] = {**meta, "thresholds": renamed(meta["thresholds"])}
+    return report
 
 
 # ---------------------------------------------------------------------------- DB에서 읽기
@@ -385,8 +420,7 @@ def main(argv=None) -> int:
     report = run_gate(logs, requests, predict, serving_spec_from_env(),
                       meta={"source": "cli", "model_version": version})
     write_report(report, args.out)
-    print(json.dumps({k: report[k]["pass"] for k in ("features", "scores", "end_to_end", "candidate_config")}
-                     | {"pass": report["pass"], "requests": len(requests)}))
+    print(json.dumps({k: report[k]["pass"] for k in GATE_ITEMS} | {"pass": report["pass"], "requests": len(requests)}))
     return 0 if report["pass"] else 1
 
 

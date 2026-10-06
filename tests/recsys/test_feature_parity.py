@@ -18,9 +18,12 @@ import pytest
 
 from app.recsys.config import RecsysConfig
 from evaluation.recsys.serving_parity import (
+    GATE_ITEMS,
     THRESHOLDS,
+    candidate_generator_top20_overlap,
     feature_parity,
     kendall_tau_without_ties,
+    read_report,
     run_gate,
     top_k,
     write_report,
@@ -95,14 +98,34 @@ def test_gate_item_2_logged_shadow_scores_rank_the_slots_like_the_recomputed_fea
     assert s["max_abs_score_diff"] < 1e-6
 
 
-def test_gate_item_3_end_to_end_top20_overlap_with_the_harness_candidate_generator(report):
-    e = report["end_to_end"]
+def test_gate_item_3_ranker_top20_overlap_across_the_two_candidate_generators(report):
+    e = report["candidate_generator_top20_overlap"]
 
     assert e["pass"] is True and e["k"] == 20
-    assert e["mean_overlap"] >= THRESHOLDS["end_to_end_mean_overlap"] == 0.9
+    assert e["mean_overlap"] >= THRESHOLDS["candidate_generator_top20_mean_overlap"] == 0.9
     assert e["requests"] >= 180
     # 두 후보 집합은 같지 않다(후보 생성기가 갈리는 층을 실제로 지났다)
     assert e["mean_candidate_set_jaccard"] < 0.95
+    assert "end_to_end" not in report and GATE_ITEMS[2] == "candidate_generator_top20_overlap"
+
+
+def test_gate_item_3_does_not_look_at_the_list_that_was_actually_served(sim, predict):
+    """3번의 "서빙 쪽" 상위 20개는 서빙이 내보낸 목록이 아니다. 요청 로그의 후보 집합 위에서 같은 모델의 점수를
+    오프라인으로 다시 계산한 순위다. 화면에 나간 칸(활성 휴리스틱 + MMR + 탐색 칸의 결과)과 그 칸의 피처·shadow
+    점수를 전부 바꿔도 값이 그대로다 - 이 항목이 재는 것은 후보 생성기가 갈리는 만큼뿐이다."""
+    from evaluation.recsys.ebnerd.candidate_config import SERVING
+
+    bench = LogBench(sim.logs)
+    sample = sim.requests[:30]
+    served_differently = [
+        replace(r, slot_ids=list(reversed(r.candidate_ids))[: len(r.slot_ids)],
+                slot_features=np.zeros_like(r.slot_features), slot_shadow=None)
+        for r in sample
+    ]
+    assert any(a.slot_ids != b.slot_ids for a, b in zip(sample, served_differently))
+
+    assert (candidate_generator_top20_overlap(bench, served_differently, predict, SERVING)
+            == candidate_generator_top20_overlap(bench, sample, predict, SERVING))
 
 
 def test_gate_item_4_serving_candidate_config_equals_the_harness_serving_config(report):
@@ -180,7 +203,8 @@ def test_a_serving_candidate_generator_that_drops_most_candidates_fails_item_3(s
 
     report = _gate(sim, predict, tampered)
 
-    assert report["end_to_end"]["pass"] is False and report["end_to_end"]["mean_overlap"] < 0.9
+    overlap = report["candidate_generator_top20_overlap"]
+    assert overlap["pass"] is False and overlap["mean_overlap"] < 0.9
     assert report["features"]["pass"] is True and report["scores"]["pass"] is True
 
 
@@ -203,7 +227,7 @@ def test_an_empty_log_passes_nothing(sim, predict):
     report = _gate(sim, predict, [])
 
     assert report["pass"] is False
-    assert not report["features"]["pass"] and not report["scores"]["pass"] and not report["end_to_end"]["pass"]
+    assert set(GATE_ITEMS) <= set(report) and not any(report[item]["pass"] for item in GATE_ITEMS[:3])
 
 
 # ----------------------------------------------------------------------------- 작은 부품
@@ -245,13 +269,30 @@ def test_a_repository_that_picks_the_latest_clicks_by_microsecond_fails_items_1_
     assert report["scores"]["pass"] is False  # 피처가 어긋나면 같은 모델의 순서도 갈린다
 
 
+def test_reports_written_before_item_3_was_renamed_are_read_with_the_current_key_names(report, tmp_path):
+    """3번 항목의 키는 처음에 end_to_end였다(서빙이 내보낸 목록을 비교한 것처럼 읽혀 바꿨다). 그 이름으로 쓰인
+    리포트(reports/recsys에 옮겨 둔 CI 아티팩트)를 읽을 때는 지금 이름으로 옮긴다. 값은 건드리지 않는다."""
+    legacy = json.loads(json.dumps(report))
+    legacy["end_to_end"] = legacy.pop("candidate_generator_top20_overlap")
+    legacy["meta"]["thresholds"]["end_to_end_mean_overlap"] = legacy["meta"]["thresholds"].pop(
+        "candidate_generator_top20_mean_overlap")
+    old_path, new_path = tmp_path / "old.json", tmp_path / "new.json"
+    old_path.write_text(json.dumps(legacy), encoding="utf-8")
+    write_report(report, new_path)
+
+    current = json.loads(json.dumps(report))
+    assert read_report(old_path) == current
+    assert read_report(new_path) == current  # 지금 이름의 리포트는 그대로다
+    assert json.loads(old_path.read_text(encoding="utf-8")) == legacy  # 파일은 고치지 않는다
+
+
 def test_the_committed_report_is_evidence_about_the_current_feature_schema():
     """reports/recsys/parity_v1.json은 CI 실행이 쓴 파일을 옮긴 것이다. 서빙 피처의 정의가 바뀌면 그 파일은 지난
     정의의 증거다: 그대로 두고 "게이트 통과"라고 읽히지 않게, 새 실행의 파일로 바꿀 때까지 실패한다."""
     from pathlib import Path
 
     path = Path(__file__).resolve().parents[2] / "reports" / "recsys" / "parity_v1.json"
-    committed = json.loads(path.read_text(encoding="utf-8"))
+    committed = read_report(path)
 
     assert committed["meta"]["feature_schema_hash"] == serving.SCHEMA_HASH, (
         "서빙 피처 스키마가 리포트를 만든 때와 다릅니다. CI의 recsys-parity 아티팩트로 "
@@ -260,4 +301,4 @@ def test_the_committed_report_is_evidence_about_the_current_feature_schema():
     assert committed["meta"]["thresholds"] == THRESHOLDS
     assert committed["candidate_config"]["serving"] == SERVING_CANDIDATE_SPEC.as_dict()
     assert committed["meta"]["ci_run_id"] and committed["meta"]["commit"]  # 로컬에서 만든 파일이 아니다
-    assert committed["pass"] is True
+    assert committed["pass"] is True and all(committed[item]["pass"] is True for item in GATE_ITEMS)
