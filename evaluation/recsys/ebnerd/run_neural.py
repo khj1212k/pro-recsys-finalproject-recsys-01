@@ -399,8 +399,31 @@ def _seed_mean(arrays: dict, kind: str, arm: str, seeds: list[int]) -> Optional[
         return np.nanmean(np.stack(runs).astype(np.float64), axis=0)
 
 
-def evidence_grade(config: dict, n_boot: int, prereg: dict, fit_blocks: Optional[int]) -> dict:
-    """실행 인자·입력 파일이 사전 등록과 같은지. 다르면 demo 등급이고 판정에 쓰지 않는다."""
+# 등록한 세션 런타임이 뜻하는 torch 장치 종류. 판정용 신경망 단위는 이 장치에서 나온 것이어야 한다.
+RUNTIME_DEVICE = {"t4": "cuda", "cpu": "cpu"}
+
+
+def registered_neural_device(prereg: dict, task: str) -> Optional[str]:
+    """그 과제의 판정용 신경망 단계를 도는 세션(사전 등록 yaml의 sessions)의 런타임이 뜻하는 장치 종류."""
+    runtimes = {s["runtime"] for s in prereg["sessions"].values()
+                if s.get("judged") and task in s["tasks"] and "neural_final" in s["stages"]}
+    return RUNTIME_DEVICE.get(next(iter(runtimes))) if len(runtimes) == 1 else None
+
+
+def recorded_neural_env(store: "NeuralStore", prereg: dict) -> dict:
+    """과제별로 남아 있는 신경망 단위가 나온 환경(ensure_neural_env가 적은 것). 아직 신경망 단계를 돌지 않은 과제는 없다."""
+    out = {}
+    for task in prereg["run"]["tasks"]:
+        f = store.dir / f"{task}__neural_env.json"
+        if f.exists():
+            out[task] = json.loads(f.read_text())
+    return out
+
+
+def evidence_grade(config: dict, n_boot: int, prereg: dict, fit_blocks: Optional[int],
+                   neural_env: Optional[dict] = None) -> dict:
+    """실행 인자·입력 파일이 사전 등록과 같은지, 신경망 단위가 등록한 런타임의 장치에서 나왔는지. 다르면 demo 등급이고
+    판정에 쓰지 않는다. neural_env = 과제별 신경망 환경 기록(없는 과제는 아직 신경망 단계를 돌지 않은 것이라 가리지 않는다)."""
     reg, reasons = prereg["run"], []
     for key in GRADE_KEYS:
         if config.get(key) != reg[key]:
@@ -421,12 +444,17 @@ def evidence_grade(config: dict, n_boot: int, prereg: dict, fit_blocks: Optional
         reasons.append("사전 등록 yaml의 sha256이 실행 당시와 다름")
     if fit_blocks != prereg["windows"]["fit_blocks"]:
         reasons.append(f"fit 블록 수 {fit_blocks} (등록값 {prereg['windows']['fit_blocks']})")
+    for task, env in sorted((neural_env or {}).items()):
+        want = registered_neural_device(prereg, task)
+        if env and want and env.get("device") != want:
+            reasons.append(f"{task} 신경망 단위의 장치 {env.get('device')!r} (등록한 런타임의 장치 {want!r})")
     return {"grade": DEMO_GRADE if reasons else EVIDENCE_GRADE, "reasons": reasons}
 
 
 def _grade(run: Run) -> str:
     info = run.store.progress.get("bench_info") or {}
-    return evidence_grade(run.store.progress["config"], run.args.n_boot, run.prereg, info.get("fit_blocks"))["grade"]
+    return evidence_grade(run.store.progress["config"], run.args.n_boot, run.prereg, info.get("fit_blocks"),
+                          recorded_neural_env(run.store, run.prereg))["grade"]
 
 
 def _lgbm_extra(prereg: dict) -> dict:
@@ -1024,7 +1052,8 @@ def stage_assemble(store: NeuralStore, prereg: dict, args):
     compute = json.loads((store.dir / "compute.json").read_text()) if (store.dir / "compute.json").exists() else None
     recorded, claimed = prereg_commit(), os.getenv(ENV_PREREG_COMMIT) or None
     meta = {
-        "label": prereg["evidence_label"], "evidence": evidence_grade(config, args.n_boot, prereg, info.get("fit_blocks")),
+        "label": prereg["evidence_label"],
+        "evidence": evidence_grade(config, args.n_boot, prereg, info.get("fit_blocks"), recorded_neural_env(store, prereg)),
         "preregistration": {"id": prereg["id"], "sha256": config["prereg_sha256"], "adr": prereg["adr"],
                             "commit": recorded or claimed, "commit_source": "file" if recorded else ("env" if claimed else None)},
         "code_sha": config["code_sha"], "n_boot": args.n_boot, **{k: config[k] for k in GRADE_KEYS},
@@ -1141,7 +1170,8 @@ def main(argv=None) -> int:
     except ConfigMismatch as e:
         log.error("%s", e)
         return EXIT_CONFIG_MISMATCH
-    grade = evidence_grade(store.progress["config"], args.n_boot, prereg, info["fit_blocks"])
+    grade = evidence_grade(store.progress["config"], args.n_boot, prereg, info["fit_blocks"],
+                           recorded_neural_env(store, prereg))
     log.info("evidence grade: %s%s", grade["grade"], " — " + "; ".join(grade["reasons"]) if grade["reasons"] else "")
 
     run = Run(args=args, prereg=prereg, bench=bench, windows=W, idx=idx, store=store, task=args.task)

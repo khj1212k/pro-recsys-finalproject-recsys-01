@@ -62,6 +62,8 @@ def test_chain_runs_every_registered_stage_for_both_tasks_and_labels_the_result_
     out, d = full_run
     assert d["meta"]["evidence"]["grade"] == DEMO_GRADE and d["verdict"]["judged"] is False and d["verdict"]["claim"] == "none"
     assert d["verdict"]["shadow_eligible"] == []
+    # 이 실행은 CPU에서 돌았다: 등록한 런타임(T4)의 장치가 아니라는 것도 demo 사유에 과제마다 적힌다
+    assert sum("신경망 단위의 장치" in r for r in d["meta"]["evidence"]["reasons"]) == 2
     assert "demo, not evidence" in (out / R.REPORT_MD).read_text()
     stages = {(s["task"], s["stage"]) for s in d["meta"]["stage_log"]}
     # 리포트는 마지막 assemble이 쓰므로 그 단계 자신의 기록은 리포트에 아직 없다
@@ -300,6 +302,26 @@ def test_evidence_grade_requires_every_registered_argument_and_input():
     assert R.evidence_grade(derived, reg["n_boot"], PREREG, 4)["grade"] == DEMO_GRADE
     linked = {**derived, "articles_original_sha256_manifest": PREREG["data"]["articles_original_sha256"]}
     assert R.evidence_grade(linked, reg["n_boot"], PREREG, 4)["grade"] == EVIDENCE_GRADE
+
+
+def test_neural_units_from_a_device_other_than_the_registered_runtime_are_demo_grade():
+    """등록한 세션 표에서 판정용 신경망 단계는 T4 런타임이다. 그 과제의 신경망 단위가 CPU에서 나왔으면(--allow-cpu) 다른
+    인자가 전부 등록값이어도 판정용이 아니다."""
+    reg = PREREG["run"]
+    config = {k: reg[k] for k in R.GRADE_KEYS}
+    config.update(data_files={**PREREG["data"]["files_sha256"], "articles.parquet": PREREG["data"]["articles_original_sha256"]},
+                  embeddings_sha256=PREREG["data"]["embeddings_sha256"], code_sha="a" * 40, prereg_sha256=prereg_sha256())
+    assert {t: R.registered_neural_device(PREREG, t) for t in reg["tasks"]} == {"p1": "cuda", "p2": "cuda"}
+    gpu, cpu = {"torch": "2.11.0+cu128", "device": "cuda", "gpu": "Tesla T4"}, {"torch": "2.11.0+cu128", "device": "cpu", "gpu": None}
+
+    def grade(env):
+        return R.evidence_grade(config, reg["n_boot"], PREREG, 4, neural_env=env)
+
+    assert grade({"p1": gpu, "p2": gpu}) == {"grade": EVIDENCE_GRADE, "reasons": []}
+    assert grade({})["grade"] == grade({"p1": gpu})["grade"] == EVIDENCE_GRADE        # 아직 신경망 단계를 돌지 않은 과제는 가리지 않는다
+    g = grade({"p1": gpu, "p2": cpu})
+    assert g["grade"] == DEMO_GRADE and len(g["reasons"]) == 1 and "p2" in g["reasons"][0] and "cuda" in g["reasons"][0]
+    assert len(grade({"p1": cpu, "p2": cpu})["reasons"]) == 2
 
 
 def test_cli_defaults_are_the_registered_run_arguments():
