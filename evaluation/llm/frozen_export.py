@@ -57,8 +57,10 @@ ROW_FILTER = (
     "n.raw_news_extract_status = 'ok' AND n.raw_news_content IS NOT NULL AND n.raw_news_content <> ''"
 )
 # 행의 신원에 들어가는 열. 본문 자체는 없다 - 본문을 지운 뒤에도 같은 값이 나와야 한다.
+# 만료 시각과 만료 면제 여부도 신원이다: 파일에서 그 값을 고쳐 정리를 피하면 신원이 달라져 읽히지 않는다.
 _IDENTITY_KEYS = ("id", "press", "url", "title_sha256", "content_sha256", "body_chars",
-                  "created_at", "crawled_at", "extracted_at", "extract_status")
+                  "created_at", "crawled_at", "extracted_at", "extract_status",
+                  "redistributable", "body_expires_at")
 
 
 class ExportError(RuntimeError):
