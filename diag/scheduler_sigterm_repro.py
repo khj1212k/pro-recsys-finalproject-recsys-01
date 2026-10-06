@@ -21,6 +21,7 @@
 
 REPRO_SET=doubles : 가짜 supercronic 판별 비교(첫 라운드)
 REPRO_SET=resched : resched 대역으로 지금 순서와 바꾼 순서 비교
+REPRO_SET=gap     : 진짜 supercronic에서, 잡 뒤에 뜬 프로세스가 많아 "잡에 신호 -> supercronic에 신호" 사이가 길 때
 REPRO_SET=order   : 신호 순서 비교. 가짜 old/new와, REAL_SUPERCRONIC_DIR에 둔 진짜 supercronic(매초 실행 crontab)
 """
 import collections
@@ -171,7 +172,7 @@ def session_members(sid):
     return members
 
 
-def run_once_real(entrypoint, timeout, rng):
+def run_once_real(entrypoint, timeout, rng, late_sleepers=0):
     """진짜 supercronic + 매초 crontab. 잡이 뜬 뒤 0~1초 아무 때나 SIGTERM을 보낸다(초 경계와의 위상을 고르게)."""
     with tempfile.TemporaryDirectory(prefix="sigterm-real-") as tmp:
         starts, terms = os.path.join(tmp, "starts"), os.path.join(tmp, "terms")
@@ -184,9 +185,12 @@ def run_once_real(entrypoint, timeout, rng):
         err_path = os.path.join(tmp, "stderr")
         with open(err_path, "wb") as err:
             proc = subprocess.Popen(["sh", entrypoint, crontab], env=env, stderr=err, start_new_session=True)
-        rc, elapsed, leftover = "timeout", None, []
+        rc, elapsed, leftover, late = "timeout", None, [], []
         try:
             wait_for(starts, 10.0)
+            # 잡보다 나중에 뜬 프로세스는 pid가 커서 /proc 순회에서 잡 뒤에 온다: 잡에 신호가 간 뒤
+            # supercronic에 신호가 가기까지 이만큼을 더 훑어야 한다.
+            late = [subprocess.Popen(["sleep", "3600"]) for _ in range(late_sleepers)]
             time.sleep(rng.random())
             started = time.monotonic()
             proc.send_signal(signal.SIGTERM)
@@ -195,6 +199,10 @@ def run_once_real(entrypoint, timeout, rng):
         except (TimeoutError, subprocess.TimeoutExpired):
             pass
         finally:
+            for p in late:
+                p.kill()
+            for p in late:
+                p.wait()
             leftover = [m for m in session_members(proc.pid) if m[2] != "Z"]
             for pid, _, _ in session_members(proc.pid):
                 kill_quietly(pid)
@@ -283,7 +291,7 @@ def run_once(double, entrypoint, timeout):
     }
 
 
-def run_arm(name, double, entrypoint, n, sleepers=0, cpu_load=False, budget=420.0):
+def run_arm(name, double, entrypoint, n, sleepers=0, cpu_load=False, late_sleepers=0, budget=420.0):
     if SMOKE:  # 로컬 문법 점검용: 부하를 만들지 않는다
         sleepers, cpu_load = min(sleepers, 2), False
     extras = [subprocess.Popen(["sleep", "3600"]) for _ in range(sleepers)]
@@ -298,7 +306,7 @@ def run_arm(name, double, entrypoint, n, sleepers=0, cpu_load=False, budget=420.
             if time.monotonic() - began > budget:
                 break
             if double == "real":
-                results.append(run_once_real(entrypoint, min(timeout, 6.0), rng))
+                results.append(run_once_real(entrypoint, min(timeout, 6.0), rng, late_sleepers))
             else:
                 results.append(run_once(double, entrypoint, timeout))
     finally:
@@ -406,7 +414,12 @@ def main():
         for path in (inst, reordered):
             subprocess.run(["sh", "-n", path], check=True)
         print(f"== 반복 실행 ({which}) ==", flush=True)
-        if which == "resched":
+        if which == "gap":
+            arms = [
+                ("supercronic/real, 1000 procs after job", "real", ENTRYPOINT, n(40), {"late_sleepers": 1000}),
+                ("supercronic/reordered, 1000 procs after job", "real", reordered, n(40), {"late_sleepers": 1000}),
+            ]
+        elif which == "resched":
             arms = [
                 (f"resched/{label}{suffix}", "resched", entry, n(count), kw)
                 for suffix, count, kw in (
