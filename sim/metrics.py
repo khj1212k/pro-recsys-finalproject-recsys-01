@@ -6,6 +6,7 @@ accuracy estimate for real users - see ADR 0019.
 """
 
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence
 
 import numpy as np
@@ -90,21 +91,40 @@ def cold_start_metrics(log: SimulationLog, k: int) -> dict:
     }
 
 
-def reactivity_metrics(log: SimulationLog, k: int) -> dict:
+@dataclass(frozen=True)
+class AfterClickPair:
+    """A view with a click and the next view of the same session, compared on their top-k."""
+
+    user: int
+    jaccard: float
+    identical: bool
+    similar_before: Optional[float]  # share of the clicked view's top-k similar to what was clicked
+    similar_after: Optional[float]   # the same share in the next view
+
+
+def after_click_pairs(log: SimulationLog, k: int) -> List[AfterClickPair]:
     by_session: Dict[tuple, List[ViewEvent]] = defaultdict(list)
     for v in log.views:
         by_session[(v.user, v.day, v.session)].append(v)
-    jac, identical, before, after = [], [], [], []
+    pairs: List[AfterClickPair] = []
     for vs in by_session.values():
         vs.sort(key=lambda v: v.view_in_session)
         for prev, nxt in zip(vs, vs[1:]):
             if not prev.clicked_ids or not prev.ok or not nxt.ok:
                 continue
             a, b = prev.item_ids[:k], nxt.item_ids[:k]
-            jac.append(jaccard_ids(a, b))
-            identical.append(float(a == b))
-            before.append(similar_share(a, prev.clicked_ids, log.items))
-            after.append(similar_share(b, prev.clicked_ids, log.items))
+            pairs.append(AfterClickPair(prev.user, jaccard_ids(a, b), a == b,
+                                        similar_share(a, prev.clicked_ids, log.items),
+                                        similar_share(b, prev.clicked_ids, log.items)))
+    return pairs
+
+
+def reactivity_metrics(log: SimulationLog, k: int) -> dict:
+    pairs = after_click_pairs(log, k)
+    jac = [p.jaccard for p in pairs]
+    identical = [float(p.identical) for p in pairs]
+    before = [p.similar_before for p in pairs]
+    after = [p.similar_after for p in pairs]
     b_mean, a_mean = _mean(before), _mean(after)
     return {
         "n_after_click_pairs": len(jac),
