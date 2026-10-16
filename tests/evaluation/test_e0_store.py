@@ -132,7 +132,7 @@ def test_contract_names_the_patch_target_whose_parameters_changed(monkeypatch, s
     problems = e0.check_production_contract()
     assert any("NewsClusterer._load_data_from_db" in p and "인자" in p for p in problems)
     with pytest.raises(e0.ProductionContractError, match="_load_data_from_db"):
-        with e0.installed(store):
+        with e0.installed(store, forbid_database=True):
             pass
 
 
@@ -146,7 +146,7 @@ def test_contract_fails_when_a_mirrored_production_function_changes_its_body(mon
     problems = e0.check_production_contract()
     assert any("db.batch_manager.save_news_letter" in p and "본문" in p for p in problems)
     with pytest.raises(e0.ProductionContractError):
-        with e0.installed(store):
+        with e0.installed(store, forbid_database=True):
             pass
 
 
@@ -383,7 +383,7 @@ def test_production_save_node_runs_unchanged_against_the_file_store(store):
         "current_article_ids": [5001, 5002, 5003], "current_cluster_id": 4, "run_id": 9,
         "generation_history": {"attempts": []}, "completed_newsletters": [],
     }
-    with e0.installed(store):
+    with e0.installed(store, forbid_database=True):
         first = nodes.save_newsletter_to_db(dict(state))
         second = nodes.save_newsletter_to_db(dict(state))
 
@@ -400,7 +400,7 @@ def test_record_only_embedder_lets_the_production_embed_node_continue_without_a_
     import workflow.nodes as nodes
 
     draft = {"title": DRAFT_TITLE, "content": DRAFT_CONTENT}
-    with e0.installed(store):
+    with e0.installed(store, forbid_database=True):
         update = nodes.embed_newsletter_node({"newsletter_draft": draft})
 
     assert update == {"original_newsletter": draft, "newsletter_embedding": None}
@@ -419,7 +419,7 @@ def test_a_real_newsletter_vector_is_recorded_as_a_hash_when_the_node_stores_it(
         "newsletter_embedding": [0.25] * 1024,
         "current_article_ids": [1, 2, 3], "current_cluster_id": 0, "run_id": 1,
     }
-    with e0.installed(store):
+    with e0.installed(store, forbid_database=True):
         assert nodes.save_newsletter_to_db(state) == {"completed_newsletters": [1]}
     record = store.embedding_records()[-1]
     assert (record["kind"], record["news_letter_id"], record["dim"]) == ("stored", 1, 1024)
@@ -447,7 +447,7 @@ def test_installed_blocks_every_real_database_connection_and_restores_production
         (batch_manager, "create_new_batch"), (batch_manager, "update_cluster_log"))}
 
     with pytest.raises(RuntimeError, match="안에서 난 오류"):
-        with e0.installed(store, cluster_history=True):
+        with e0.installed(store, forbid_database=True, cluster_history=True):
             assert nodes.save_news_letter == store.save_news_letter
             with pytest.raises(e0.UnexpectedDatabaseAccess):
                 connection.get_connection()          # 풀을 거치는 모든 연결
@@ -456,7 +456,7 @@ def test_installed_blocks_every_real_database_connection_and_restores_production
             with pytest.raises(e0.UnexpectedDatabaseAccess):
                 batch_manager.get_current_run_id()   # 다른 모듈이 임포트해 둔 get_connection도 같은 풀로 간다
             with pytest.raises(e0.ProductionContractError, match="이미"):
-                with e0.installed(store):
+                with e0.installed(store, forbid_database=True):
                     pass
             raise RuntimeError("안에서 난 오류")
 
@@ -466,6 +466,20 @@ def test_installed_blocks_every_real_database_connection_and_restores_production
                            (connection, "_build_db_config"), (batch_manager, "create_new_batch"),
                            (batch_manager, "update_cluster_log")):
         assert getattr(module, name) is before[name]
+
+
+def test_the_database_guard_has_no_default_and_can_be_left_off(store):
+    """가드는 A8.2의 이탈 목록에 없다 - 러너가 켤지 끌지 명시해야 하고, 끄면 db.connection을 건드리지 않는다."""
+    import db.connection as connection
+    import workflow.nodes as nodes
+
+    with pytest.raises(TypeError, match="forbid_database"):
+        with e0.installed(store):
+            pass
+    pool = connection.get_pool
+    with e0.installed(store, forbid_database=False):
+        assert connection.get_pool is pool and nodes.save_news_letter == store.save_news_letter
+    assert nodes.save_news_letter != store.save_news_letter
 
 
 def test_cluster_history_stand_ins_number_runs_and_keep_the_log(store):
@@ -538,7 +552,7 @@ def test_fifty_synthetic_articles_cluster_generate_save_and_read_back(source, st
     assert run.n_articles == 50 and set(run.cluster_meta) == set(run.clusters)
 
     app = compile_workflow()
-    with e0.installed(store):
+    with e0.installed(store, forbid_database=True):
         finals = {cid: app.invoke(run.state_for(cid, run_id=3)) for cid in sorted(run.clusters)}
 
     assert all(final["completed_newsletters"] for final in finals.values())
@@ -582,7 +596,7 @@ def test_unchanged_stage5_runs_end_to_end_on_the_stand_ins(source, store, fake_l
 
     expected = e0.cluster_frozen_window(source, PSEUDO_NOW).clusters
     monkeypatch.chdir(tmp_path)  # Stage5가 logs/llm_metrics_run*.json을 현재 디렉터리에 쓴다
-    with source.patched_loader(PSEUDO_NOW), e0.installed(store, cluster_history=True):
+    with source.patched_loader(PSEUDO_NOW), e0.installed(store, forbid_database=True, cluster_history=True):
         created = Stage5_NewsletterGeneration(Settings).execute()
 
     assert created == len(expected) == len(store.newsletters()) and created >= 5

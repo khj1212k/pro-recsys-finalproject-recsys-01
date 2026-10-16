@@ -18,9 +18,10 @@
 **조용히 빗나가지 않게 하는 장치.** 이름이나 인자가 바뀐 운영 함수에 대역을 끼우면 틀린 것이 조용히 돈다.
 그래서 `installed()`와 `FileArticleSource.patched_loader()`는 끼우기 전에 `check_production_contract()`를
 돌린다: 바꿔 끼우는 대상의 인자 구성과, 대역이 흉내 내는 운영 함수의 본문 sha256이 여기 고정한 값과 같아야
-한다(주석 한 줄만 바뀌어도 멈춘다 - 그때 대역을 다시 대조하고 고정값을 갱신한다). 그리고 대역이 끼워져 있는
-동안에는 실제 DB 연결을 만드는 길(`db.connection`의 풀과 접속 설정)을 막아, 터널이 열려 있거나 DB 환경변수가
-잡혀 있어도 운영 DB에 닿지 않는다. 막힌 시도는 `store.violations`에 남는다.
+한다(주석 한 줄만 바뀌어도 멈춘다 - 그때 대역을 다시 대조하고 고정값을 갱신한다). 그리고 `forbid_database=True`로
+끼우면 그동안 실제 DB 연결을 만드는 길(`db.connection`의 풀과 접속 설정)을 막아, 터널이 열려 있거나 DB 환경변수가
+잡혀 있어도 운영 DB에 닿지 않는다. 막힌 시도는 `store.violations`에 남는다. 이 가드는 ADR 0009 A8.2의 이탈 목록에
+없어서 기본값이 없다 - 러너가 등록 여부에 따라 명시한다.
 """
 from __future__ import annotations
 
@@ -639,8 +640,8 @@ class _Patch:
 
 
 @contextmanager
-def installed(store: FileGenerationStore, *, embedder: str = "record_only", cluster_history: bool = False,
-              forbid_database: bool = True) -> Iterator[FileGenerationStore]:
+def installed(store: FileGenerationStore, *, forbid_database: bool, embedder: str = "record_only",
+              cluster_history: bool = False) -> Iterator[FileGenerationStore]:
     """운영 생성 경로의 저장 접촉점을 `store`로 바꿔 끼운다. 블록을 나가면(오류로 나가도) 전부 되돌린다.
 
     - 언제나: `workflow.nodes`의 `get_connection`·`release_connection`·`save_news_letter`.
@@ -648,8 +649,10 @@ def installed(store: FileGenerationStore, *, embedder: str = "record_only", clus
       `"production"`이면 건드리지 않는다(실제 임베더가 있는 환경에서 돌릴 때).
     - `cluster_history=True`: `db.batch_manager`의 `create_new_batch`·`update_cluster_log`도 (Stage5.execute를
       통째로 돌릴 때만 필요하다. E0은 Stage5를 우회하므로 끄고 쓴다).
-    - `forbid_database=True`(기본): `db.connection`의 풀과 접속 설정을 막는다 - 대역 밖의 DB 접근은 예외가 되고
-      `store.violations`에 남는다.
+    - `forbid_database`(기본값 없음 - 호출자가 정한다): True면 `db.connection`의 풀과 접속 설정을 막는다 - 대역 밖의
+      DB 접근은 예외가 되고 `store.violations`에 남는다. 이 가드는 ADR 0009 A8.2의 이탈 목록에 없는 장치다(바꿔
+      끼우는 이름이 둘 늘어난다). E0 러너는 A8.x 개정으로 등록한 뒤에만 True를 주고, 등록하지 않았으면 False를 준다
+      (A8.10 덧붙임). 기본값을 두지 않는 이유: 인자를 빠뜨린 러너가 등록되지 않은 이탈을 조용히 켜지 않게.
 
     패치는 프로세스 전체에 걸린다. 겹쳐 쓰지 않는다.
     """
