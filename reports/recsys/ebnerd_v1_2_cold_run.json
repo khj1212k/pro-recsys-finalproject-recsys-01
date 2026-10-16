@@ -25,7 +25,7 @@
    "git_version": "2.44.0",
    "sha256_equal": true
   },
-  "not_in_run": "드라이버의 줄 단위 flush 수정(브랜치 ops/m4-run, 지금 SHA 1070f4d — 실행 당시 기록의 83ada2a)은 이 실행에 들어 있지 않다."
+  "not_in_run": "드라이버의 줄 단위 flush 수정(브랜치 ops/m4-run, 지금 SHA 5388b0e — 실행 당시 기록의 83ada2a)은 이 실행에 들어 있지 않다."
  },
  "report_files": {
   "reports/recsys/ebnerd_v1_2_cold.json": {
@@ -38,9 +38,9 @@
   },
   "provenance": "VM의 /content/m4/out에서 assemble 단계가 쓴 두 파일을 2026-10-06 18:53 KST에 내려받은 그대로 복사했다(바이트 동일, 손으로 고친 곳 없음).",
   "checks_2026_10_17": {
-   "md_rerender": "python -m evaluation.recsys.ebnerd.make_cold_report reports/recsys/ebnerd_v1_2_cold.json 의 출력이 위 md와 바이트로 같다(코드 e68ae9a, Python 3.11.14, 2026-10-17).",
-   "verdicts_recompute": "cold_verdicts.cold_verdicts(JSON, cold-v1.2.yaml)의 결과가 JSON의 verdicts와 같다(코드 e68ae9a).",
-   "content_scan": "JSON의 문자열 값 122종은 지표·arm·피처·조건 이름, sha256, 커밋, 버전, 판정 문구, 임베딩 입력 템플릿 이름뿐이다. 10만 이상의 정수 145개는 행·노출·이벤트 수와 split_seed다. 기사 id·제목·본문은 없다. md도 같다."
+   "md_rerender": "python -m evaluation.recsys.ebnerd.make_cold_report reports/recsys/ebnerd_v1_2_cold.json 의 출력이 위 md와 바이트로 같다(make_cold_report.py는 실행 코드 7d7c9f3과 같은 파일이다 — 이 브랜치와 main은 그 파일을 바꾸지 않았다. Python 3.11.14, 2026-10-17).",
+   "verdicts_recompute": "cold_verdicts.cold_verdicts(JSON, cold-v1.2.yaml)의 결과가 JSON의 verdicts와 같다(cold_verdicts.py와 cold-v1.2.yaml은 실행 코드 7d7c9f3과 같은 파일이다).",
+   "content_scan": "JSON의 문자열 값 122종은 지표·arm·피처·조건 이름, sha256, 커밋, 버전, 판정 문구, 임베딩 입력 템플릿 이름뿐이다. 10만 이상의 정수는 149개다. 그중 145개는 행·노출·이벤트 수와 split_seed이고, 4개는 meta.data의 train·validation time_min/time_max(유닉스 시각)다. EB-NeRD 기사 id 범위(9,000,000~9,999,999)의 정수는 0개다. 기사 id·제목·본문은 없다. md도 같다."
   }
  },
  "runtime": {
@@ -93,8 +93,10 @@
   "driver": "python m4_colab_driver.py run --workdir /content/m4 --code-tarball /content/m4_code.tar.gz --code-sha256 0ce89e67628a90ddbe0782b919e2a1ec00ca61b827af718046fc267ddf8cd69d --manifest /content/m4_manifest.json --url <키>=<서명 URL> (8개) --cu-rate 0.08 --cu-cap 6 --threads 2 --cu-before <잔액> --detach",
   "stage": "python -m evaluation.recsys.ebnerd.run_cold --dataset ebnerd_small --root /content/m4/data --out-dir /content/m4/out --seeds 0 1 2 --n-boot 1000 --p2-sample 20000 --sub-cap 20000 --threads 2 --resume --stage <fit|e1|e2p2|e8|e4|e2p1|assemble>",
   "cu_before_by_launch": {
-   "attempt_1_2_3": 199.56,
-   "relaunch_1": 199.29
+   "attempts_1_2": null,
+   "attempt_3": 199.56,
+   "relaunch_1": 199.29,
+   "note": "1·2차에 넘긴 --cu-before 값은 기록이 없다. 3차의 값은 그날 운영 메모, 재개의 값은 지킴이의 실행 설정에 남아 있다. 1차가 시작된 08:10에는 드라이 런 세션이 아직 돌고 있었으므로(08:27:58 정지 뒤 잔액 199.57) 그때의 잔액은 199.56보다 컸다."
   },
   "config_hash": "e82782577143644d1b6c12ccec65a012c58fe9575bba7c1c7c18df73ce861249",
   "driver_config_digest": "7d96f3fe737820dad92d1bf5bafd051771ee67acd22064616a70af07f54057c1"
@@ -223,7 +225,12 @@
  "compute_units": {
   "cap": 6.0,
   "warn": 5.0,
-  "registered_estimate": "약 0.65 (범위 0.55~0.9)",
+  "ops_estimate_during_attempt_3": {
+   "cu": "약 0.65 (범위 0.55~0.9)",
+   "stage_wall_hours": "약 8 (범위 7~10)",
+   "registered": false,
+   "source": "비공개 운영 메모(저장소 밖)에 2026-10-06 09:16 KST경 이후, 즉 3차 시도의 fit 단계가 시작된 지 28분이 지난 뒤에 적은 추정이다. 그 28분 동안 끝난 fit 단위 5개의 시간과 합성 데이터 리허설의 단계 시간으로 환산했다. 실행 전 추정이 아니다. A2.9가 등록한 것은 상한 6 CU와 경고선 5 CU뿐이고, 시간·CU 추정은 등록하지 않았다."
+  },
   "spent": {
    "dry_run_and_attempts_1_2": {
     "cu": 0.1,
@@ -244,7 +251,7 @@
   "budget_rule_note": "드라이버의 누적 추정은 VM마다 새로 시작했다(driver_state.json을 되돌리지 않음). 재개 1회의 추정에는 3차 시도의 2.69시간(0.21 CU)이 빠졌다. 실제 누적이 경고선 5 CU에 크게 못 미쳐 건너뛴 단계는 없다(skipped_for_budget = [])."
  },
  "cleanup": {
-  "vm": "2026-10-06 18:54경 드라이버 cleanup 뒤 세션 정지. 2026-10-17 `colab sessions`: 활성 세션 없음.",
+  "vm": "2026-10-06 18:54경 드라이버 cleanup 뒤 세션 정지. 2026-10-17 `colab sessions`에 M4 세션(m4-dry, m4-run)은 없다. 계정 전체가 비어 있다는 뜻은 아니다 — 같은 날 다른 실험(E15)의 세션은 있었다.",
   "bucket_meta_articles_object": {
    "object": "ebnerd/ebnerd_small/articles.meta5cols.parquet",
    "deleted": true,
