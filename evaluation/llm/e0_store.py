@@ -115,6 +115,10 @@ class BodyExpired(RuntimeError):
     """창 안에 본문 보존 기한(ADR 0023, 30일)이 지난 기사가 있다."""
 
 
+class WindowOutsideExport(RuntimeError):
+    """요청한 창이 반출본의 창 밖으로 나간다 - 파일에는 그 시간의 기사가 없으므로 운영 로더와 같은 결과를 낼 수 없다."""
+
+
 class UnexpectedDatabaseAccess(RuntimeError):
     """대역이 끼워진 동안 운영 코드가 DB에 닿으려 했다."""
 
@@ -206,19 +210,25 @@ def _canonical_sha256(obj: Any) -> str:
 class FileArticleSource:
     """동결 반출본과 임베딩 팩에서 운영 로더(`NewsClusterer._load_data_from_db`)와 같은 dict를 만든다."""
 
-    def __init__(self, export: frozen_export.FrozenExport, pack: embedding_pack.EmbeddingPack):
+    def __init__(self, export: frozen_export.FrozenExport, pack: embedding_pack.EmbeddingPack, *,
+                 clock: Optional[Callable[[], datetime]] = None):
         if export.ids != pack.ids.tolist() or pack.vectors.shape[0] != len(export.rows):
             raise ValueError("반출본과 임베딩 팩의 id가 같은 순서로 맞지 않는다 - load_embedding_pack으로 검증한 팩을 쓴다")
         self.export = export
         self.pack = pack
         self.calls: List[Dict[str, Any]] = []  # load가 불릴 때마다의 기록(텍스트 없음)
         self._crawled = [frozen_export._parse(r["crawled_at"]) for r in export.rows]
+        window = export.identity["window_utc"]
+        self.window = (frozen_export._parse(window["start"]), frozen_export._parse(window["end"]))
+        # 만료는 열 때 한 번이 아니라 load마다 다시 본다(소스를 오래 열어 두는 러너). 시간대 있는 "지금"을 준다.
+        self._clock = clock or frozen_export._utcnow
 
     @classmethod
     def open(cls, export_dir: Path, pack_dir: Path, *, now: Optional[datetime] = None) -> "FileArticleSource":
-        """반출본을 열고(만료된 본문은 이때 지워진다) 팩을 대조해 읽는다."""
+        """반출본을 열고(만료된 본문은 이때 지워진다) 팩을 대조해 읽는다. `now`를 주면 그 시각에 멈춘 시계를 쓴다."""
         export = frozen_export.load_export(Path(export_dir), now=now)
-        return cls(export, embedding_pack.load_embedding_pack(Path(pack_dir), export))
+        clock = (lambda: now) if now is not None else None
+        return cls(export, embedding_pack.load_embedding_pack(Path(pack_dir), export), clock=clock)
 
     def load(self, *, pseudo_now: datetime, lookback_hours: int = 24, exclude_clustered: bool = True,
              on_expired: str = "raise") -> Dict[str, Any]:
@@ -228,15 +238,28 @@ class FileArticleSource:
         다른 점은 둘이다. 상한을 건다(운영에서는 NOW()가 자연 상한이다). `exclude_clustered`는 받아서 기록만
         한다(파일에는 뉴스레터가 없다).
 
-        창 안에 본문이 지워진(만료된) 기사가 있으면 기본으로 멈춘다 - 그 창의 입력은 더 이상 같은 바이트가
-        아니다. `on_expired="drop"`은 운영의 보존 잡이 본문을 비운 뒤의 운영 쿼리와 같은 결과(그 행 제외)를 낸다.
+        창이 반출본의 창 밖으로 나가면 멈춘다(fail closed) - 파일에 없는 시간의 기사를 빈 결과로 돌려주면
+        입력이 소리 없이 줄어든다. 창 안에 본문이 지워졌거나 지금 만료된 기사가 있으면 기본으로 멈춘다 - 그 창의
+        입력은 더 이상 같은 바이트가 아니다. `on_expired="drop"`은 운영의 보존 잡이 본문을 비운 뒤의 운영 쿼리와
+        같은 결과(그 행 제외)를 낸다.
         """
         if not isinstance(pseudo_now, datetime) or pseudo_now.tzinfo is not None:
             raise ValueError("pseudo_now는 시간대 없는 UTC datetime이다(raw_news_crawled_at과 같은 표기)")
         if on_expired not in ("raise", "drop"):
             raise ValueError("on_expired는 'raise' 또는 'drop'이다")
         start = pseudo_now - timedelta(hours=lookback_hours)
+        export_start, export_end = self.window
+        if not (export_start <= start and pseudo_now <= export_end):
+            raise WindowOutsideExport(
+                f"창 [{_iso(start)}, {_iso(pseudo_now)})이 반출본의 창 [{_iso(export_start)}, {_iso(export_end)}) 밖으로 "
+                "나간다 - 그 창을 담은 반출본을 쓴다"
+            )
+        now_utc = frozen_export._naive_utc(self._clock())
         picked = [i for i, at in enumerate(self._crawled) if start <= at < pseudo_now]
+        for i in picked:
+            row = self.export.rows[i]
+            if row["body"] is not None and frozen_export._is_expired(row, now_utc):
+                row["body"] = None  # 소스를 연 뒤에 만료됐다. 이 프로세스에서는 다시 주지 않는다(디스크는 다음에 열 때)
         gone = [i for i in picked if not self.export.rows[i]["body"]]
         if gone and on_expired == "raise":
             raise BodyExpired(

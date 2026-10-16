@@ -221,7 +221,7 @@ def test_file_loader_applies_the_filters_of_the_production_query(source):
 
 def test_empty_window_has_the_same_shape_as_production_with_no_rows(source):
     expected, _ = _production_load([], [])
-    got = source.load(pseudo_now=datetime(2026, 10, 2, 21, 0), lookback_hours=24)
+    got = source.load(pseudo_now=datetime(2026, 10, 5, 21, 0), lookback_hours=24)  # 반출 창 안이지만 기사가 없는 날
     assert got["ids"].shape == expected["ids"].shape == (0,)
     assert got["embeddings"].shape == expected["embeddings"].shape and got["embeddings"].dtype == expected["embeddings"].dtype
     assert got["titles"] == got["contents"] == got["press_names"] == []
@@ -244,6 +244,23 @@ def test_window_is_half_open_and_ends_at_the_pseudo_now(tmp_path):
         source.load(pseudo_now=datetime(2026, 10, 3, 21, 0, tzinfo=timezone.utc))
 
 
+@pytest.mark.parametrize("pseudo_now, lookback", [
+    (datetime(2026, 10, 6, 21, 0), 24),   # 반출 창 [10-02 21:00, 10-05 21:00) 뒤 - 파일에는 한 건도 없다
+    (datetime(2026, 10, 6, 12, 0), 24),   # 일부만 겹친다 - 일부만 돌려주면 입력이 소리 없이 준다
+    (datetime(2026, 10, 3, 6, 0), 24),    # 시작이 반출 창보다 앞
+    (datetime(2026, 10, 5, 21, 0), 96),   # 끝은 맞지만 lookback이 길어 앞으로 나간다
+])
+def test_loader_refuses_a_window_that_leaves_the_export(source, pseudo_now, lookback):
+    with pytest.raises(e0.WindowOutsideExport, match="반출본의 창"):
+        source.load(pseudo_now=pseudo_now, lookback_hours=lookback)
+    assert source.calls == []
+
+
+def test_loader_accepts_windows_that_touch_the_export_bounds(source):
+    assert source.load(pseudo_now=datetime(2026, 10, 3, 21, 0), lookback_hours=24)["ids"].shape == (50,)  # 시작과 같다
+    assert source.load(pseudo_now=datetime(2026, 10, 5, 21, 0), lookback_hours=72)["ids"].shape == (50,)  # 전체
+
+
 def test_loader_refuses_a_window_that_contains_an_expired_body(tmp_path):
     rows = [server_row(1, crawled="2026-10-02T22:00:00.000000Z"), server_row(2, crawled="2026-10-03T12:00:00.000000Z")]
     vectors = np.eye(2, ep.EMBEDDING_DIM, dtype=np.float32)
@@ -254,6 +271,22 @@ def test_loader_refuses_a_window_that_contains_an_expired_body(tmp_path):
         source.load(pseudo_now=PSEUDO_NOW, lookback_hours=24)
     dropped = source.load(pseudo_now=PSEUDO_NOW, lookback_hours=24, on_expired="drop")
     assert dropped["ids"].tolist() == [1002]  # 운영의 보존 잡이 본문을 비웠을 때 운영 쿼리가 내는 결과와 같다
+
+
+def test_loader_rechecks_expiry_on_every_call_while_the_source_stays_open(tmp_path):
+    rows = [server_row(1, crawled="2026-10-02T22:00:00.000000Z"), server_row(2, crawled="2026-10-03T12:00:00.000000Z")]
+    vectors = np.eye(2, ep.EMBEDDING_DIM, dtype=np.float32)
+    opened = _source(tmp_path, rows, vectors, now=NOW)  # 10-07에 열었다 - 둘 다 본문이 있다
+    clock = {"now": NOW}
+    source = e0.FileArticleSource(opened.export, opened.pack, clock=lambda: clock["now"])
+    assert source.load(pseudo_now=PSEUDO_NOW, lookback_hours=24)["ids"].tolist() == [1001, 1002]
+
+    clock["now"] = datetime(2026, 11, 1, 22, 0, tzinfo=timezone.utc)  # 1번 행의 만료 시각(수집 + 30일)
+    with pytest.raises(e0.BodyExpired, match="1건"):
+        source.load(pseudo_now=PSEUDO_NOW, lookback_hours=24)
+    dropped = source.load(pseudo_now=PSEUDO_NOW, lookback_hours=24, on_expired="drop")
+    assert dropped["ids"].tolist() == [1002] and dropped["contents"] == [opened.export.rows[1]["body"]]
+    assert all(r["body"] is None for r in source.export.rows if r["id"] == 1001)  # 메모리에서도 비웠다
 
 
 def test_source_refuses_a_pack_that_does_not_line_up_with_the_export(source):
@@ -531,9 +564,9 @@ def test_same_frozen_input_and_pseudo_now_give_the_same_membership(tmp_path, top
     text = json.dumps(first, ensure_ascii=False)
     assert all(row["title"] not in text for row in rows)  # 스냅숏에는 id와 해시만 있다
 
-    earlier = e0.cluster_frozen_window(_source(tmp_path, rows, vectors, name="c"), datetime(2026, 10, 3, 6, 0))
-    assert earlier.n_articles < 50
-    assert earlier.membership_snapshot()["membership_sha256"] != first["membership_sha256"]
+    later = e0.cluster_frozen_window(_source(tmp_path, rows, vectors, name="c"), datetime(2026, 10, 4, 6, 0))
+    assert later.n_articles < 50  # 창 [10-03 06:00, 10-04 06:00)에는 06:00 뒤에 수집된 기사만 있다
+    assert later.membership_snapshot()["membership_sha256"] != first["membership_sha256"]
 
 
 def test_float16_pack_gives_the_same_membership_as_float32_on_synthetic_input(tmp_path, topics):
