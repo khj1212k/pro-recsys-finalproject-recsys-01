@@ -1,7 +1,7 @@
 # 원격 GPU 런타임(Colab T4)에서 기사 임베딩 잡(evaluation/llm/embed_job.py)을 돌릴 때 설치하는 고정 버전.
 # 임베딩 결과에 닿는 패키지는 운영 워커 이미지의 잠금 파일(docker/requirements-worker.txt)과 같은 값이다:
 # FlagEmbedding·transformers·tokenizers·sentence-transformers·huggingface-hub·safetensors·accelerate. python-dotenv는
-# config.settings가 임포트한다. torch는 확인만 한다: 런타임에 미리 깔린 2.11.0+cu128이 이 핀을 만족하므로 다시 내려받지
+# config.settings가 임포트한다. torch는 확인만 한다: 런타임에 미리 깔린 2.11.0+cu130(2026-10-17 S0에서 확인)이 이 핀을 만족하므로 다시 내려받지
 # 않고, 다른 버전이 깔려 있으면 scripts/colab_embed_articles.py가 잡을 시작하지 않는다. 운영 워커의 torch는 2.14.0(CPU)이라
 # 장치·정밀도·torch 빌드가 운영과 다르다(ADR 0009 A8.2 이탈 5) — 그래서 잡이 fp32 대조를 함께 남긴다.
 # 모델 가중치의 리비전은 embed_job.MODEL_REVISION으로 고정하고, 잡이 실제로 읽은 스냅숏과 대조한다.

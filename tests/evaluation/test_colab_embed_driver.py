@@ -287,3 +287,28 @@ def test_manual_cleanup_lists_names_and_sizes_only(workdir, capsys):
     printed = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert sorted(x["name"] for x in printed["removed"]) == sorted(drv.INPUT_FILES)
     assert not (workdir / "input").exists()
+
+
+# ---------------------------------------------------------------- 커널 런처
+
+
+def test_launcher_checks_the_tarball_and_runs_the_driver_from_it(tmp_path):
+    launcher = _load("colab_embed_launch")
+    wd = tmp_path / "wd"
+    wd.mkdir()
+    tar = _tarball(wd / "code.tar.gz", {"scripts/colab_embed_articles.py": "# driver", "scripts/m4_colab_driver.py": "#"})
+    calls = []
+
+    def run(cmd, env, cwd):
+        calls.append((cmd, env, cwd))
+        return type("R", (), {"returncode": 0})()
+
+    args = json.dumps(["run", "--workdir", str(wd)])
+    env = {"E0EMB_WORKDIR": str(wd), "E0EMB_CODE_SHA256": "0" * 64, "E0EMB_DRIVER_ARGS_JSON": args}
+    assert launcher.launch(env, run=run) == 2 and calls == []
+    env["E0EMB_CODE_SHA256"] = m4.sha256_file(tar)
+    assert launcher.launch(env, run=run) == 0
+    cmd, passed, cwd = calls[0]
+    assert cmd[1] == str(wd / "drv" / "scripts" / "colab_embed_articles.py") and passed["E0EMB_DRIVER_ARGS_JSON"] == args
+    assert (wd / "drv" / "scripts" / "m4_colab_driver.py").read_text() == "#"
+    assert launcher.launch({"E0EMB_WORKDIR": str(wd)}, run=run) == 64
