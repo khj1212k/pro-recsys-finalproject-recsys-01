@@ -31,6 +31,7 @@ import pytest
 from evaluation.llm import e0_store as e0
 from evaluation.llm import embedding_pack as ep
 from evaluation.llm import frozen_export as fx
+from tests.frozen_news_fakes import use_tmp_main_checkout
 
 WINDOW = fx.Window.from_iso("2026-10-02T21:00:00", "2026-10-05T21:00:00")
 CODE = {"git_sha": "c" * 40, "dirty": False}
@@ -40,6 +41,12 @@ TRICKY = (
     "둘째 줄에는 탭\t과 \\N 과 \\. 이 있고\r\n셋째 줄에는 줄 구분 문자   와 그림 문자 📚, 한자 漢字가 있다."
 )
 SHA_SQL = "encode(sha256(convert_to(%s, 'UTF8')), 'hex')"  # 마이그레이션 d48994e9d26e와 같은 식
+
+
+@pytest.fixture(autouse=True)
+def _main_checkout(monkeypatch, tmp_path):
+    """반출본은 메인 체크아웃의 data/exports 아래에만 쓰인다 - 여기서는 tmp_path/data/exports가 그 자리다."""
+    return use_tmp_main_checkout(monkeypatch, tmp_path)
 
 
 @pytest.fixture
@@ -249,8 +256,8 @@ def _psql_command(psql_bin, database_url, schema):
 def test_psql_path_exports_the_same_rows_as_the_connection_path(pg_conn, conn, schema, seeded, tmp_path,
                                                                  database_url, psql_bin):
     before = _table_fingerprint(pg_conn, schema)
-    via_conn = fx.export_news_raw(WINDOW, root=tmp_path / "a" / "data" / "exports", conn=conn, code=CODE)
-    via_psql = fx.export_news_raw(WINDOW, root=tmp_path / "b" / "data" / "exports",
+    via_conn = fx.export_news_raw(WINDOW, root=tmp_path / "data" / "exports" / "a", conn=conn, code=CODE)
+    via_psql = fx.export_news_raw(WINDOW, root=tmp_path / "data" / "exports" / "b",
                                   psql_command=_psql_command(psql_bin, database_url, schema), code=CODE)
 
     assert _table_fingerprint(pg_conn, schema) == before

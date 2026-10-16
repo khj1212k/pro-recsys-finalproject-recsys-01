@@ -10,11 +10,16 @@ import pytest
 
 from evaluation.llm import embedding_pack as ep
 from evaluation.llm import frozen_export as fx
-from tests.frozen_news_fakes import CODE, server_row, stream
+from tests.frozen_news_fakes import CODE, server_row, stream, use_tmp_main_checkout
 
 WINDOW = fx.Window.from_iso("2026-10-02T21:00:00", "2026-10-05T21:00:00")
 NOW = datetime(2026, 10, 7, tzinfo=timezone.utc)
 N = 6
+
+
+@pytest.fixture(autouse=True)
+def _main_checkout(monkeypatch, tmp_path):
+    return use_tmp_main_checkout(monkeypatch, tmp_path)
 
 
 def _unit(n=N, dim=ep.EMBEDDING_DIM, seed=3):
@@ -37,7 +42,7 @@ def _write(tmp_path, export, *, name="pack", **over):
         export_identity_sha256=export.identity_sha256, model=dict(ep.EXPECTED_MODEL), dtype="float16",
     )
     args.update(over)
-    directory = tmp_path / name
+    directory = export.dir / name  # 런북 9.5: data/exports/<T0>/embeddings
     ep.write_embedding_pack(directory, **args)
     return directory
 
@@ -219,6 +224,11 @@ def test_cli_prints_a_summary_without_text_and_fails_with_the_reason(tmp_path, e
     other = _write(tmp_path, export, name="other", export_identity_sha256="e" * 64)
     assert ep.main(["--export-dir", str(export.dir), "--pack-dir", str(other)]) == 2
     assert "export_identity" in capsys.readouterr().err
+
+    outside = tmp_path / "Downloads" / "pack"  # 반출본 옆(data/exports 아래)이 아닌 팩은 받지 않는다
+    outside.mkdir(parents=True)
+    assert ep.main(["--export-dir", str(export.dir), "--pack-dir", str(outside)]) == 2
+    assert "아래에만" in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------- 운영 코드와의 계약

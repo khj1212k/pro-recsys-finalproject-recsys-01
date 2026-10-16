@@ -28,7 +28,7 @@ sys.path.insert(0, str(REPO_ROOT / "ai_workspace"))
 from evaluation.llm import e0_store as e0  # noqa: E402
 from evaluation.llm import embedding_pack as ep  # noqa: E402
 from evaluation.llm import frozen_export as fx  # noqa: E402
-from tests.frozen_news_fakes import CODE, server_row, stream, topic_articles  # noqa: E402
+from tests.frozen_news_fakes import CODE, server_row, stream, topic_articles, use_tmp_main_checkout  # noqa: E402
 
 WINDOW = fx.Window.from_iso("2026-10-02T21:00:00", "2026-10-05T21:00:00")
 NOW = datetime(2026, 10, 7, tzinfo=timezone.utc)
@@ -36,6 +36,12 @@ PSEUDO_NOW = datetime(2026, 10, 3, 21, 0)  # 창 [10-02 21:00, 10-03 21:00) UTC
 DRAFT_CONTENT = "여러 매체가 같은 소식을 전했다. 관계자는 계획을 차례로 진행한다고 밝혔다. " * 4
 DRAFT_TITLE = "합성 소식 정리"
 DRAFT_SENTENCE = "같은 소식을 한데 모았어요"
+
+
+@pytest.fixture(autouse=True)
+def _main_checkout(monkeypatch, tmp_path):
+    """반출본(data/exports)과 생성 저장본(data/experiments)은 메인 체크아웃 아래에만 쓰인다 - 여기서는 tmp_path/data."""
+    return use_tmp_main_checkout(monkeypatch, tmp_path)
 
 
 def _source(tmp_path, rows, vectors, *, name="t0", dtype="float32", now=NOW):
@@ -458,14 +464,23 @@ def test_runner_records_share_the_newsletter_file_without_becoming_saved_rows(st
         store.append_newsletter_record("saved", {})
 
 
-def test_store_refuses_a_directory_git_could_track(tmp_path):
+def test_store_lives_only_under_the_main_checkout_experiments_directory(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True, capture_output=True)
+    (repo / ".gitignore").write_text("/data/exports/\n", encoding="utf-8")
+    monkeypatch.setattr(fx, "main_checkout_data", lambda: repo / "data")
+
+    for refused in (repo / "reports" / "llm" / "e0-run",          # 저장소가 추적하는 곳
+                    tmp_path / "elsewhere" / "data" / "experiments" / "e0" / "run1",  # 이름만 같은 곳
+                    repo / "data" / "experiments"):                # 실험·run 아래가 아닌 뿌리
+        with pytest.raises(fx.DestinationRefused, match="아래에만"):
+            e0.FileGenerationStore(refused)
+    with pytest.raises(fx.DestinationRefused, match="추적"):  # 허용 위치라도 git이 추적할 수 있으면
+        e0.FileGenerationStore(repo / "data" / "experiments" / "e0" / "run1")
+    assert not (repo / "reports").exists() and not (repo / "data").exists()
+
     (repo / ".gitignore").write_text("/data/\n", encoding="utf-8")
-    with pytest.raises(fx.DestinationRefused):
-        e0.FileGenerationStore(repo / "reports" / "llm" / "e0-run")
-    assert not (repo / "reports").exists()
     assert e0.FileGenerationStore(repo / "data" / "experiments" / "e0" / "run1").dir.is_dir()
 
 

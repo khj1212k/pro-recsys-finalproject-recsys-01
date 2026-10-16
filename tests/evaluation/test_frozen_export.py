@@ -24,9 +24,16 @@ from tests.frozen_news_fakes import header as _header
 from tests.frozen_news_fakes import server_row as _server_row
 from tests.frozen_news_fakes import sha as _sha
 from tests.frozen_news_fakes import stream as _stream
+from tests.frozen_news_fakes import use_tmp_main_checkout
 
 KST = timezone(timedelta(hours=9))
 WINDOW = fx.Window.from_iso("2026-10-02T21:00:00", "2026-10-05T21:00:00")
+
+
+@pytest.fixture(autouse=True)
+def _main_checkout(monkeypatch, tmp_path):
+    """반출본은 메인 체크아웃의 data/exports 아래에만 쓰인다 - 테스트에서는 tmp_path/data가 그 자리다."""
+    return use_tmp_main_checkout(monkeypatch, tmp_path)
 
 
 def _bundle(rows=None, **kwargs):
@@ -246,6 +253,21 @@ def repo(tmp_path):
     return root
 
 
+def test_body_files_are_written_only_under_the_main_checkout_exports_directory(tmp_path):
+    """이름만 data/exports인 다른 곳(동기화 폴더, 임시 디렉터리)은 받지 않는다."""
+    for refused in (tmp_path / "elsewhere" / "data" / "exports" / "x", tmp_path / "data" / "x",
+                    tmp_path / "data" / "exports-old" / "x"):
+        with pytest.raises(fx.DestinationRefused, match="아래에만"):
+            fx.write_export(refused, _bundle())
+        assert not refused.exists()
+    with pytest.raises(fx.DestinationRefused, match="아래에만"):
+        fx.export_news_raw(WINDOW, root=tmp_path / "elsewhere" / "data" / "exports", psql_command=["false"], code=CODE)
+    assert fx.ensure_export_location(tmp_path / "data" / "exports") == (tmp_path / "data" / "exports").resolve()
+    assert fx.ensure_export_location(tmp_path / "data" / "exports" / "x" / "..") == (tmp_path / "data" / "exports").resolve()
+    with pytest.raises(fx.DestinationRefused):
+        fx.ensure_export_location(tmp_path / "data" / "exports" / ".." / "elsewhere")
+
+
 def test_destination_must_not_be_trackable_by_git(repo):
     assert fx.ensure_private_destination(repo / "data" / "exports" / "x") == (repo / "data" / "exports" / "x").resolve()
     for refused in (repo / "exports" / "x", repo / "docs" / "exports", repo / ".git" / "exports"):
@@ -262,10 +284,15 @@ def test_destination_with_a_tracked_file_under_an_ignored_directory_is_refused(r
         fx.ensure_private_destination(forced)
 
 
-def test_write_export_checks_the_destination(repo):
-    with pytest.raises(fx.DestinationRefused):
+def test_write_export_checks_the_destination(repo, monkeypatch):
+    monkeypatch.setattr(fx, "main_checkout_data", lambda: repo / "data")
+    with pytest.raises(fx.DestinationRefused, match="아래에만"):
         fx.write_export(repo / "exports" / "x", _bundle())
     assert not (repo / "exports").exists()
+    (repo / ".gitignore").write_text("", encoding="utf-8")  # data/를 무시하지 않는 저장소라면
+    with pytest.raises(fx.DestinationRefused, match="추적"):
+        fx.write_export(repo / "data" / "exports" / "x", _bundle())
+    assert not (repo / "data").exists()
 
 
 def test_load_refuses_a_file_whose_body_no_longer_matches_its_hash(tmp_path):
@@ -434,13 +461,16 @@ def test_export_needs_exactly_one_way_to_reach_the_database(tmp_path):
         fx.export_news_raw(WINDOW, root=tmp_path / "data" / "exports", code=CODE)
 
 
-def test_cli_refuses_a_root_that_is_not_the_data_exports_directory(tmp_path, capsys):
+@pytest.mark.parametrize("where", [("anywhere",), ("Dropbox", "x", "data", "exports")])
+def test_cli_refuses_a_root_that_is_not_the_main_checkout_exports_directory(tmp_path, capsys, where):
     command = _fake_psql(tmp_path, _stream([_server_row(1)]))
+    root = tmp_path.joinpath(*where)
     argv = ["export", "--start-utc", "2026-10-02T21:00:00", "--end-utc", "2026-10-05T21:00:00",
-            "--root", str(tmp_path / "anywhere"), "--any-minute", "--psql-command", shlex.join(command)]
+            "--root", str(root), "--any-minute", "--psql-command", shlex.join(command)]
     assert fx.main(argv) == 2
-    assert "data/exports" in capsys.readouterr().err
-    assert not (tmp_path / "anywhere").exists()
+    assert str((tmp_path / "data" / "exports").resolve()) in capsys.readouterr().err
+    assert not root.exists() and not (tmp_path / "received.sql").exists()  # DB에 닿기 전에 멈춘다
+    assert fx.main(["purge", "--all", "--root", str(root)]) == 2
 
 
 def test_cli_export_verify_and_purge(tmp_path, capsys):

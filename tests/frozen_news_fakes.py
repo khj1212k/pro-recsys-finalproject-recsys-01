@@ -18,6 +18,16 @@ SNAPSHOT_AT = "2026-10-06T07:21:30.123456Z"
 EMBEDDING_DIM = 1024
 
 
+def use_tmp_main_checkout(monkeypatch, tmp_path):
+    """`tmp_path/data`를 메인 체크아웃의 data/처럼 쓰게 한다. 반출본(data/exports)과 생성 저장본
+    (data/experiments)은 그 아래에만 쓰이므로, 테스트는 이 함수로 허용 위치를 임시 디렉터리로 옮긴다."""
+    from evaluation.llm import frozen_export
+
+    data = tmp_path / "data"
+    monkeypatch.setattr(frozen_export, "main_checkout_data", lambda: data)
+    return data
+
+
 def sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 

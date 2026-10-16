@@ -11,8 +11,9 @@
 3. **30일**: 행마다 `crawled_at + 30일`이 본문 만료 시각이다. 반출본을 여는 함수(`load_export`)는 만료된
    본문을 돌려주지 않고(fail closed), 열 때마다 디스크에서도 지운다. 해시·길이·제목·URL은 남는다.
 
-본문이 든 파일은 git이 추적할 수 있는 곳에 쓰지 않는다(`ensure_private_destination`). 이 모듈은 본문·제목·
-URL을 표준출력이나 로그에 내지 않는다 - 요약에는 건수·해시·시각만 있다.
+본문이 든 파일은 메인 체크아웃의 `data/exports` 아래에만 쓰고(`ensure_export_location`), 그곳이 git이 추적할 수
+있는 곳이면 쓰지 않는다(`ensure_private_destination`). 이 모듈은 본문·제목·URL을 표준출력이나 로그에 내지 않는다 -
+요약에는 건수·해시·시각만 있다.
 
     python scripts/export_news_raw.py plan-window --t0-kst 2026-10-08T14:00 --days 5
     python scripts/export_news_raw.py export --start-utc ... --end-utc ... --psql-command "ssh ... psql ..."
@@ -48,7 +49,6 @@ ARTICLES_FILE = "articles.jsonl"
 MANIFEST_FILE = "manifest.json"
 BODY_RETENTION_DAYS = 30          # ADR 0023. 이 값을 늘리는 예외는 없다.
 MAX_WINDOW_HOURS = 5 * 24         # 실험에 필요한 창만 내보낸다(ADR 0009 A8.1: 날짜 창 최대 5개).
-EXPORTS_ROOT_PARTS = ("data", "exports")
 INGEST_GAP_MINUTES = (20, 50)     # 정시 ingest 사이. docs/runbook-hosting.md의 반출 절.
 KST = timezone(timedelta(hours=9))
 
@@ -528,19 +528,40 @@ def ensure_private_destination(path: Path) -> Path:
     return path
 
 
-def default_exports_root() -> Path:
-    """`<메인 체크아웃>/data/exports`. 워크트리에서 돌려도 메인 체크아웃을 가리킨다.
+def main_checkout_data() -> Path:
+    """`<메인 체크아웃>/data`. 워크트리에서 돌려도 메인 체크아웃을 가리킨다.
 
-    워크트리는 지워지는 디렉터리라 거기에 본문 사본을 두면 정리 대상에서 빠진 채 잊힌다.
+    워크트리는 지워지는 디렉터리라 거기에 본문 사본을 두면 정리 대상에서 빠진 채 잊힌다. 테스트는 이 함수를
+    바꿔 끼워 임시 디렉터리를 메인 체크아웃처럼 쓴다.
     """
     try:
         common = _git(REPO_ROOT, "rev-parse", "--path-format=absolute", "--git-common-dir")
         git_dir = Path(common.stdout.strip())
         if common.returncode == 0 and git_dir.name == ".git":
-            return git_dir.parent.joinpath(*EXPORTS_ROOT_PARTS)
+            return git_dir.parent / "data"
     except OSError:
         pass
-    return REPO_ROOT.joinpath(*EXPORTS_ROOT_PARTS)
+    return REPO_ROOT / "data"
+
+
+def default_exports_root() -> Path:
+    """`<메인 체크아웃>/data/exports` - 본문이 든 반출본이 놓일 수 있는 유일한 곳(ADR 0023 개정)."""
+    return main_checkout_data() / "exports"
+
+
+def ensure_under(path: Path, root: Path, *, what: str, strictly: bool = False) -> Path:
+    """`path`가 `root`이거나 그 아래면(`strictly`면 그 아래만) 절대 경로를 돌려준다. 이름만 같은 다른 곳
+    (`~/Dropbox/x/data/exports`, 시스템 임시 디렉터리)은 받지 않는다. 그다음 git이 추적할 수 없는 곳인지도 본다."""
+    root = Path(root).expanduser().resolve()
+    resolved = Path(path).expanduser().resolve()
+    inside = root in resolved.parents or (resolved == root and not strictly)
+    if not inside:
+        raise DestinationRefused(f"{resolved}: {what}은 {root} 아래에만 둔다(ADR 0023 개정의 허용 위치)")
+    return ensure_private_destination(resolved)
+
+
+def ensure_export_location(path: Path) -> Path:
+    return ensure_under(path, default_exports_root(), what="본문이 든 반출본")
 
 
 def _write_private(path: Path, data: bytes) -> None:
@@ -578,7 +599,7 @@ def _file_entry(data: bytes, rows: Sequence[Dict[str, Any]], *, at_export: Optio
 
 
 def write_export(dest: Path, bundle: ExportBundle) -> Path:
-    dest = ensure_private_destination(Path(dest))
+    dest = ensure_export_location(Path(dest))
     if (dest / MANIFEST_FILE).exists() or (dest / ARTICLES_FILE).exists():
         raise DestinationRefused(f"{dest}: 이미 반출본이 있다 - 동결된 반출본을 덮어쓰지 않는다")
     old_umask = os.umask(0o077)
@@ -793,7 +814,7 @@ def export_news_raw(window: Window, *, root: Optional[Path] = None, conn=None,
     """창 하나를 반출해 `<root>/<T0>/`에 쓰고 요약을 돌려준다. T0는 서버의 트랜잭션 시작 시각(UTC)이다."""
     if (conn is None) == (psql_command is None):
         raise ExportError("DB에 닿는 길을 하나만 준다: conn 또는 psql_command")
-    root = ensure_private_destination(Path(root) if root is not None else default_exports_root())
+    root = ensure_export_location(Path(root) if root is not None else default_exports_root())
     if conn is not None:
         raw = fetch_with_connection(conn, window, statement_timeout_s=statement_timeout_s, lock_timeout_s=lock_timeout_s)
     else:
@@ -812,12 +833,8 @@ def _minute_now() -> int:
 
 
 def _cli_root(value: Optional[str]) -> Path:
-    root = Path(value).expanduser().resolve() if value else default_exports_root()
-    if root.parts[-2:] != EXPORTS_ROOT_PARTS:
-        raise DestinationRefused(
-            f"{root}: 반출본은 data/exports 아래에만 둔다(ADR 0023 개정의 허용 위치)"
-        )
-    return root
+    """`--root`는 메인 체크아웃의 data/exports이거나 그 아래여야 한다(이름만 같은 다른 곳은 받지 않는다)."""
+    return ensure_export_location(Path(value) if value else default_exports_root())
 
 
 def _emit(obj: Dict[str, Any]) -> None:

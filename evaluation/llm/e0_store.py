@@ -445,15 +445,22 @@ class _FileConnection:
         return None
 
 
-class FileGenerationStore:
-    """생성 경로의 저장 호출을 받아 JSONL로 남긴다. 디렉터리는 git이 추적할 수 없는 곳이어야 한다.
+def default_experiments_root() -> Path:
+    """`<메인 체크아웃>/data/experiments` - 생성 저장본(초안 텍스트)이 놓일 수 있는 곳(ADR 0023 개정)."""
+    return frozen_export.main_checkout_data() / "experiments"
 
+
+class FileGenerationStore:
+    """생성 경로의 저장 호출을 받아 JSONL로 남긴다.
+
+    디렉터리는 메인 체크아웃의 `data/experiments/<실험>/<run>`이어야 하고 git이 추적할 수 없는 곳이어야 한다.
     초안 텍스트(우리가 생성한 뉴스레터)가 들어가므로 공개 저장소에 넣지 않는다(ADR 0023 개정). 한 줄씩 덧붙이고
     줄마다 fsync한다 - 프로세스가 죽어도 저장된 줄은 남고, 다시 열면 번호를 이어 매긴다.
     """
 
     def __init__(self, directory: Path):
-        self.dir = frozen_export.ensure_private_destination(Path(directory))
+        self.dir = frozen_export.ensure_under(Path(directory), default_experiments_root(),
+                                              what="생성 저장본", strictly=True)
         old_umask = os.umask(0o077)
         try:
             self.dir.mkdir(parents=True, exist_ok=True)

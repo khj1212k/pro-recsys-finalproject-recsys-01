@@ -261,8 +261,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     from evaluation.llm import frozen_export
 
     try:
-        # 임베딩도 공개하지 않는다(ADR 0023 "남는 위험": 역변환). git이 추적할 수 있는 곳의 팩은 받지 않는다.
-        frozen_export.ensure_private_destination(Path(args.pack_dir))
+        # 임베딩도 공개하지 않는다(ADR 0023 "남는 위험": 역변환). 반출본 옆(data/exports 아래)이 아니거나
+        # git이 추적할 수 있는 곳의 팩은 받지 않는다.
+        frozen_export.ensure_export_location(Path(args.pack_dir))
         export = frozen_export.load_export(Path(args.export_dir))  # 여는 김에 만료된 본문을 지운다
         pack = load_embedding_pack(Path(args.pack_dir), export)
     except (EmbeddingPackError, frozen_export.ExportError) as e:
