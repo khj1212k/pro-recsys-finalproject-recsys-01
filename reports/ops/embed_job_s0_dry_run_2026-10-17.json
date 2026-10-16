@@ -9,7 +9,7 @@
  "command": "colab --config <임시 세션 상태> run --gpu T4 -s llm-wp2-s0 --timeout 1000 s0_launcher.py  (런처가 코드 tarball을 풀고 `colab_embed_articles.py run --synthetic 300 --cu-rate 1.07 --cu-cap 0.3`을 부른다)",
  "code": {
   "commit": "c616ebee028cad5d4f8d5889015bc081b6ebd6c3",
-  "commit_note": "리베이스 전 커밋. 같은 embed_job.py·colab_embed_articles.py·requirements-colab-embed.txt가 리베이스 뒤 9952ca7·2b04cff에 있다(같은 tarball 안의 m4_colab_driver.py는 main의 줄마다 flush 수정 전 판)",
+  "commit_note": "이 PR의 리베이스 전 커밋(지금은 어느 브랜치에도 없다 - 코드는 tarball_sha256으로 묶인다). embed_job.py·colab_embed_articles.py·embedding_pack.py·frozen_export.py는 PR의 HEAD와 바이트 단위로 같다. requirements-colab-embed.txt는 핀 9개가 같고 머리말 주석만 다르다(torch cu130 확인 표기, numpy를 고정하지 않는 이유). tarball 안에서 HEAD와 다른 것: m4_colab_driver.py(main의 줄마다 flush 수정 전 판), ai_workspace/config의 settings.py·retention.py와 pipeline/stages.py(뒤에 main에 들어온 본문 보존 잡 - BODY_RETENTION_DAYS와 Stage3 body_purged 집계; 임베딩 텍스트 식·_length_sorted_batches·모델 인자는 같다)",
   "tarball_sha256": "ed8d7ea054071b6f2bacd0c9e6ea3e30b2dec046081fd07b35dee7d905c7f120"
  },
  "runtime": {
