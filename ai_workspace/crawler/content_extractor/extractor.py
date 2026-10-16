@@ -63,15 +63,17 @@ def content_sha256(text: str) -> str:
 
 
 def _record_extraction(cur, raw_news_id, content, status, digest=None):
+    # 본문 길이(글자 수)는 해시처럼 본문을 쓸 때 함께 쓴다 - 보존 기한(ADR 0023)이 지나 본문을 비워도 남는다.
     cur.execute("""
         UPDATE news_raw
         SET raw_news_content = %s,
             raw_news_extract_status = %s,
             raw_news_content_sha256 = %s,
+            raw_news_content_length = %s,
             raw_news_extracted_at = now(),
             raw_news_extract_attempts = raw_news_extract_attempts + 1
         WHERE raw_news_id = %s
-    """, (content, status, digest, raw_news_id))
+    """, (content, status, digest, len(content), raw_news_id))
 
 
 def _record_ok_or_duplicate(conn, cur, raw_news_id, cleaned) -> str:
@@ -173,6 +175,10 @@ class ContentExtractor:
 
         # 1. 대상 조회 - 아직 추출을 시도하지 않은 기사 + 다운로드 실패/예외로 재시도 여지가 남은 기사.
         #    'dropped'/'empty'/'duplicate'는 다시 받아도 결과가 같으므로 제외한다.
+        #    본문 보존 기한(ADR 0023, 수집 후 Settings.BODY_RETENTION_DAYS일)이 지난 기사와 본문을 비운 기사는
+        #    내려받지 않는다 - 받으면 기한이 지난 본문을 새로 저장하게 된다. raw_news_crawled_at은 시간대 없는
+        #    UTC 값이라 기준도 UTC로 만든다(jobs/tasks/retention.py와 같은 식).
+        #    보존 잡(jobs/tasks/retention.py)은 여기서 고르는 행 가운데 본문이 빈 행을 건드리지 않는다.
         conn = get_connection()
         try:
             cur = conn.cursor()
@@ -180,11 +186,13 @@ class ContentExtractor:
                 SELECT N.raw_news_id, N.raw_news_url, P.press_name, N.raw_news_title
                 FROM news_raw N
                 JOIN press P ON N.press_id = P.press_id
-                WHERE N.raw_news_extract_status IS NULL
-                   OR (N.raw_news_extract_status IN ('fetch_failed', 'error')
-                       AND N.raw_news_extract_attempts < %s)
+                WHERE (N.raw_news_extract_status IS NULL
+                       OR (N.raw_news_extract_status IN ('fetch_failed', 'error')
+                           AND N.raw_news_extract_attempts < %s))
+                  AND N.raw_news_content_purged_at IS NULL
+                  AND N.raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - make_interval(days => %s)
                 ORDER BY N.raw_news_id
-            """, (Settings.MAX_EXTRACT_ATTEMPTS,))
+            """, (Settings.MAX_EXTRACT_ATTEMPTS, Settings.BODY_RETENTION_DAYS))
             articles = cur.fetchall()
         finally:
             release_connection(conn)

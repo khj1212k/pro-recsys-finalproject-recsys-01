@@ -92,6 +92,8 @@ class PolicyNewsRow:
     content: str
     url: str
     published_at: Optional[datetime]
+    # 공공누리 유형(normalize_kogl_type). 저장하는 행은 모두 1이다 - 스키마에 컬럼이 있으면 행마다 남긴다.
+    kogl_type: Optional[int] = None
 
 
 # --------------------------------------------------------------------------- 파싱
@@ -230,7 +232,7 @@ def select_rows(items: List[PolicyNewsItem], now: datetime) -> Tuple[List[Policy
             stats["too_short_or_filtered"] += 1
             continue
         rows.append(PolicyNewsRow(title=item.title, content=content, url=item.original_url,
-                                  published_at=item.approve_date))
+                                  published_at=item.approve_date, kogl_type=1))
         stats["kept"] += 1
     return rows, stats
 
@@ -284,6 +286,10 @@ _BASE_COLUMNS = ("press_id", "raw_news_title", "raw_news_content", "raw_news_url
 EXTRACT_STATUS_COLUMN = "raw_news_extract_status"
 EXTRACTED_AT_COLUMN = "raw_news_extracted_at"
 CONTENT_SHA256_COLUMN = "raw_news_content_sha256"
+# 마이그레이션 f1db3221e45f(본문 보존, ADR 0023)가 더한 컬럼. 본문 길이(글자 수)와 기사별 공공누리 유형 -
+# 보존 잡은 정책브리핑 행 가운데 유형이 1(또는 NULL)인 행만 기한에서 뺀다.
+CONTENT_LENGTH_COLUMN = "raw_news_content_length"
+KOGL_TYPE_COLUMN = "raw_news_kogl_type"
 
 
 def news_raw_columns(cur) -> set:
@@ -301,6 +307,7 @@ def build_insert(columns: set) -> Tuple[str, str, Callable[[int, PolicyNewsRow, 
     """스키마에 맞는 (INSERT 문, execute_values 템플릿, 행 -> 값 튜플 함수)를 만든다.
 
     - 추출 상태 컬럼이 있으면 'ok'와 now()를, 해시 컬럼이 있으면 본문 sha256을 채운다.
+    - 길이·공공누리 유형 컬럼(f1db3221e45f)이 있으면 본문 글자 수와 유형(1)을 채운다.
     - 해시 컬럼이 있는 스키마에는 'ok' 행끼리 본문 해시가 유일해야 하는 부분 unique 인덱스
       (uq_news_raw_content_sha256_ok)가 있다. ON CONFLICT (raw_news_url)로 대상을 좁히면
       본문이 같은 기사(URL만 다름) 하나 때문에 배치 전체가 UniqueViolation으로 롤백된다.
@@ -318,6 +325,14 @@ def build_insert(columns: set) -> Tuple[str, str, Callable[[int, PolicyNewsRow, 
     if with_hash:
         names.append(CONTENT_SHA256_COLUMN)
         placeholders.append("%s")
+    with_length = CONTENT_LENGTH_COLUMN in columns
+    if with_length:
+        names.append(CONTENT_LENGTH_COLUMN)
+        placeholders.append("%s")
+    with_kogl = KOGL_TYPE_COLUMN in columns
+    if with_kogl:
+        names.append(KOGL_TYPE_COLUMN)
+        placeholders.append("%s")
     conflict = "ON CONFLICT DO NOTHING" if with_hash else "ON CONFLICT (raw_news_url) DO NOTHING"
 
     sql = (
@@ -327,8 +342,14 @@ def build_insert(columns: set) -> Tuple[str, str, Callable[[int, PolicyNewsRow, 
     template = f"({', '.join(placeholders)})"
 
     def values(press_id: int, row: PolicyNewsRow, crawled_at: datetime) -> tuple:
-        base = (press_id, row.title, row.content, row.url, row.published_at, crawled_at)
-        return base + (content_sha256(row.content),) if with_hash else base
+        out = (press_id, row.title, row.content, row.url, row.published_at, crawled_at)
+        if with_hash:
+            out += (content_sha256(row.content),)
+        if with_length:
+            out += (len(row.content),)
+        if with_kogl:
+            out += (row.kogl_type,)
+        return out
 
     return sql, template, values
 
