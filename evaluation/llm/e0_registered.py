@@ -7,7 +7,8 @@ yaml이다. 셋이 어긋나지 않게 두 겹으로 묶는다.
 등록값을 바꾸려면 A8.x 개정 + yaml `amendments` + 이 모듈을 고치는 코드 PR이 함께 가야 한다(새 `code_sha`).
 
 시작 검사(A8.2 a~e)도 여기 있다: HEAD가 main에 있는 커밋인지, 작업 트리가 깨끗한지, 코드 경로가 `code_sha`와
-같은지, yaml의 규칙 키 변경이 `amendments`로 선언됐는지, `pre_run_record`가 다 채워졌는지.
+같은지, yaml의 규칙 키 변경이 `amendments`로 선언됐는지, `pre_run_record`가 다 채워졌는지, 그리고 러너가 읽은 사전 등록·
+표본 매니페스트가 HEAD에 커밋된 그 파일인지.
 """
 from __future__ import annotations
 
@@ -367,26 +368,37 @@ def undeclared_rule_changes(at_code_sha: Dict[str, Any], at_head: Dict[str, Any]
             if not any(k == d or k.startswith(d + ".") for d in declared)]
 
 
-def check_code_identity(repo: Path, code_sha: str, *, fetch: bool = True, remote_main: str = "origin/main",
-                        git: Callable[..., "subprocess.CompletedProcess[str]"] = _git) -> List[str]:
-    """A8.2 (a)~(d). 비어 있으면 통과. HEAD가 code_sha 자체일 필요는 없다(실행 전 기록 커밋은 자기 해시를 담을 수 없다)."""
-    problems: List[str] = []
+def head_problems(repo: Path, *, fetch: bool = True, remote_main: str = "origin/main",
+                  git: Callable[..., "subprocess.CompletedProcess[str]"] = _git) -> List[str]:
+    """A8.2 (a)(b): 직전에 fetch한 뒤 HEAD가 main에 있는 커밋인지, 작업 트리가 깨끗한지. 비어 있으면 통과.
+
+    fetch를 먼저 하는 까닭: 낡은 `origin/main` 참조로 재면 main에서 되감긴 커밋도 "main에 있다"로 보인다.
+    러너의 시작 검사와 `prepare`가 같이 쓴다."""
     if fetch:
         fetched = git(repo, "fetch", "--quiet", remote_main.split("/", 1)[0])
         if fetched.returncode != 0:
-            problems.append("(a) git fetch 실패 - main과의 관계를 확인할 수 없다")
-            return problems
+            return ["(a) git fetch 실패 - main과의 관계를 확인할 수 없다"]
+    problems: List[str] = []
+    if git(repo, "merge-base", "--is-ancestor", "HEAD", remote_main).returncode != 0:
+        problems.append(f"(a) HEAD가 {remote_main}에 있는 커밋이 아니다")
+    status = git(repo, "status", "--porcelain")
+    if status.returncode != 0 or status.stdout.strip():
+        problems.append("(b) 작업 트리가 깨끗하지 않다(git status --porcelain)")
+    return problems
+
+
+def check_code_identity(repo: Path, code_sha: str, *, fetch: bool = True, remote_main: str = "origin/main",
+                        git: Callable[..., "subprocess.CompletedProcess[str]"] = _git) -> List[str]:
+    """A8.2 (a)~(d). 비어 있으면 통과. HEAD가 code_sha 자체일 필요는 없다(실행 전 기록 커밋은 자기 해시를 담을 수 없다)."""
+    problems = head_problems(repo, fetch=fetch, remote_main=remote_main, git=git)
+    if problems and problems[0].startswith("(a) git fetch"):
+        return problems
     if not _SHA40.fullmatch(code_sha or ""):
         return problems + ["code_sha: 40자 커밋 sha가 아니다"]
     if git(repo, "cat-file", "-e", f"{code_sha}^{{commit}}").returncode != 0:
         return problems + [f"code_sha {code_sha[:12]}…: 이 저장소에 없는 커밋이다"]
     if git(repo, "merge-base", "--is-ancestor", code_sha, remote_main).returncode != 0:
         problems.append(f"code_sha {code_sha[:12]}…가 {remote_main}에 없다(병합 커밋이어야 한다)")
-    if git(repo, "merge-base", "--is-ancestor", "HEAD", remote_main).returncode != 0:
-        problems.append(f"(a) HEAD가 {remote_main}에 있는 커밋이 아니다")
-    status = git(repo, "status", "--porcelain")
-    if status.returncode != 0 or status.stdout.strip():
-        problems.append("(b) 작업 트리가 깨끗하지 않다(git status --porcelain)")
     spec = list(CODE_PATHS) + [f":(exclude){p}" for p in CODE_PATHS_EXCLUDE]
     diff = git(repo, "diff", "--quiet", code_sha, "HEAD", "--", *spec)
     if diff.returncode == 1:
@@ -401,6 +413,35 @@ def check_code_identity(repo: Path, code_sha: str, *, fetch: bool = True, remote
         undeclared = undeclared_rule_changes(yaml.safe_load(shown.stdout), yaml.safe_load(head_yaml.stdout))
         if undeclared:
             problems.append("(d) code_sha 뒤에 바뀐 규칙 키가 amendments.changed_keys에 없다: " + ", ".join(undeclared[:10]))
+    return problems
+
+
+def _git_show_bytes(repo: Path, rev_path: str) -> Optional[bytes]:
+    out = subprocess.run(["git", "-C", str(repo), "show", rev_path], capture_output=True,
+                         env={**os.environ, "LC_ALL": "C", "LANGUAGE": "C"})
+    return out.stdout if out.returncode == 0 else None
+
+
+def committed_input_problems(repo: Path, prereg: Dict[str, Any], manifest_path: Path,
+                             show: Callable[[Path, str], Optional[bytes]] = _git_show_bytes) -> List[str]:
+    """(e) 실행이 쓰는 사전 등록과 표본 매니페스트가 HEAD에 커밋된 바로 그 파일인가. 비어 있으면 통과.
+
+    실행 전 기록과 매니페스트는 main에 병합한 문서 전용 커밋으로만 들어간다(A8.0 4단계). (a)~(d)는 HEAD와 작업 트리를
+    보므로, 다른 경로의 사본이나 메모리에서 고친 값으로 시작하면 그 검사를 다 통과하고도 main에 없는 기록으로 유료
+    호출을 하게 된다. 그래서 러너가 실제로 읽은 값을 `git show HEAD:<경로>`와 바이트(yaml은 읽은 값) 단위로 대조한다."""
+    problems: List[str] = []
+    committed_yaml = show(repo, f"HEAD:{PREREG_REL}")
+    if committed_yaml is None:
+        problems.append(f"(e) HEAD에 {PREREG_REL}이 없다")
+    elif yaml.safe_load(committed_yaml.decode("utf-8")) != prereg:
+        problems.append(f"(e) 실행에 쓰는 사전 등록이 HEAD에 커밋된 {PREREG_REL}과 다르다 - "
+                        "실행 전 기록은 main에 병합한 것만 쓴다(A8.0 4단계)")
+    committed_manifest = show(repo, f"HEAD:{SAMPLE_MANIFEST_REL}")
+    path = Path(manifest_path)
+    if committed_manifest is None:
+        problems.append(f"(e) HEAD에 표본 매니페스트 {SAMPLE_MANIFEST_REL}이 없다(실행 전 기록 PR에 함께 커밋한다)")
+    elif not path.is_file() or path.read_bytes() != committed_manifest:
+        problems.append(f"(e) 실행에 쓰는 표본 매니페스트가 HEAD에 커밋된 {SAMPLE_MANIFEST_REL}과 다르다")
     return problems
 
 

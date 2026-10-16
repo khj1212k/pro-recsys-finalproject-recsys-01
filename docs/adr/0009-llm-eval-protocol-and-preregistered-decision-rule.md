@@ -525,6 +525,9 @@ n(eval / warmup / n_p / 중단·미시작), 버킷별 실제 배분, seed와 처
 A8이 등록된 뒤(`b64da14`) main에 들어온 코드와의 관계다. 구현은 `evaluation/llm/e0_baseline.py`(러너)·`e0_registered.py`(등록값·시작 검사)·
 `e0_sample.py`(표본)·`e0_instrument.py`(계측·가드)·`e0_report.py`(리포트)·`e0_labels.py`(블라인드 내보내기)·`embed_job.py`와
 `scripts/colab_embed_articles.py`(임베딩 잡)다. 러너는 시작할 때 yaml의 같은 자리와 실제 설정을 비교하고, 테스트도 같은 비교를 한다.
+- **시작 검사가 읽는 파일.** `run`은 등록한 경로의 yaml과 표본 매니페스트만 읽고(경로를 바꾸는 옵션이 없다), 읽은 값이 `git show HEAD:<경로>`와
+  같지 않으면 시작하지 않는다 - 커밋하지 않은 채운 사본으로는 (a)~(d)를 통과해도 유료 호출을 하지 않는다(A8.0 4단계, A8.2 e).
+  (a)의 "직전에 git fetch"는 `prepare`에도 같게 건다.
 - **지출 상한(ADR 0035)과의 결합.** A8 뒤에 병합된 클라이언트 안 지출 가드는 끌 수 없고, 기본 상한(런 $0.20, 일 $0.30)이 A8.5의 유효 실행
   상한 $1.00보다 낮아 그대로 두면 등록한 규칙보다 먼저 멈춘다. 러너는 E0 프로세스에서만 `LLM_RUN_ID = e0-baseline-v1:<run>`(재개해도 같은
   런), `LLM_BUDGET_RUN_USD = LLM_BUDGET_DAY_USD = 2.00`으로 두고, 전체 상한(`LLM_BUDGET_TOTAL_USD`)은 건드리지 않되 남은 여유가 $2.00

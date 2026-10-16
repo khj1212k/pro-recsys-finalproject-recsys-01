@@ -885,7 +885,8 @@ nice -n 19 env OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 PYTHON
      python -m evaluation.llm.e0_baseline run --export-dir data/exports/<T0> --pack-dir data/exports/<T0>/embeddings
    ```
    화면에는 `[e0] eval 3 처리 · 누적 $0.0123` 같은 줄만 나온다. 시작 검사가 하나라도 실패하면 사유 목록과 종료 코드 2로 끝나고 아무것도
-   만들지 않는다. 기록은 `data/experiments/e0/<run>/`(저장소 밖)이다.
+   만들지 않는다. 기록은 `data/experiments/e0/<run>/`(저장소 밖)이다. `run`에는 사전 등록·매니페스트 경로를 바꾸는 옵션이 없다 - 러너는
+   등록한 경로의 두 파일을 읽고, 그 내용이 `git show HEAD:<경로>`와 같지 않으면(커밋하지 않은 사본·고친 값) 시작하지 않는다(A8.2 e).
 4. 프로세스가 죽었을 때만(절전·크래시·네트워크·운영자 중지) 같은 명령에 `--resume <run> --resume-reason "<사유>"`를 붙여 다시 돌린다. 돌던
    클러스터는 `interrupted`로 닫히고 다시 돌지 않는다. 예산·인프라로 멈춘 run은 이어 돌지 않는다(부분 실행이거나 void다 - A8.5·A8.6).
 

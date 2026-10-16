@@ -240,3 +240,59 @@ def test_a_code_sha_that_is_not_on_main_is_refused(repo):
     problems = reg.check_code_identity(repo, local)
     assert any("code_sha" in p and "main에 없다" in p for p in problems)
     assert reg.check_code_identity(repo, "z" * 40)
+
+
+def test_head_check_fetches_first_so_a_stale_origin_main_cannot_accept_head(repo):
+    """main이 다른 곳에서 되감겼는데 이 클론의 origin/main은 낡았다: fetch 없이 재면 HEAD가 main에 있는 것처럼 보인다."""
+    _commit(repo, "docs/a.md", "pushed then rewound\n")
+    head = _git(repo, "rev-parse", "HEAD")
+    _git(repo.parent / "remote.git", "update-ref", "refs/heads/main", f"{head}~1")
+    assert reg.head_problems(repo, fetch=False) == []
+    assert any(p.startswith("(a) HEAD") for p in reg.head_problems(repo))
+    assert any(p.startswith("(a) HEAD") for p in reg.check_code_identity(repo, f"{head}"))
+
+
+# ---------------------------------------------------------------- 3-1. (e) 러너가 읽은 기록·매니페스트 = HEAD에 커밋된 파일
+
+
+def _committed_record_repo(repo):
+    """code_sha 뒤에 채운 기록과 매니페스트를 문서 전용 커밋으로 main에 올린 상태."""
+    data = yaml.safe_load((repo / reg.PREREG_REL).read_text())
+    data["pre_run_record"] = {**_filled_record(), "code_sha": _git(repo, "rev-parse", "HEAD")}
+    _commit(repo, reg.PREREG_REL, yaml.safe_dump(data, allow_unicode=True))
+    _commit(repo, reg.SAMPLE_MANIFEST_REL, '{"item_id": "w1", "order": 0}\n')
+    return data
+
+
+def test_the_committed_record_and_manifest_pass(repo):
+    data = _committed_record_repo(repo)
+    assert reg.committed_input_problems(repo, reg.load_prereg(repo / reg.PREREG_REL), repo / reg.SAMPLE_MANIFEST_REL) == []
+    assert reg.committed_input_problems(repo, data, repo / reg.SAMPLE_MANIFEST_REL) == []
+
+
+def test_a_filled_copy_elsewhere_is_refused_on_a_clean_main_tree(repo, tmp_path):
+    """리뷰가 짚은 우회: main의 yaml은 기록이 비어 있는데, 다른 경로의 채운 사본·매니페스트로 시작하려 한다."""
+    code_sha = _git(repo, "rev-parse", "HEAD")
+    filled = yaml.safe_load((repo / reg.PREREG_REL).read_text())
+    filled["pre_run_record"] = {**_filled_record(), "code_sha": code_sha}
+    copy_path = tmp_path / "filled.yaml"
+    copy_path.write_text(yaml.safe_dump(filled, allow_unicode=True))
+    manifest = tmp_path / "e0.jsonl"
+    manifest.write_text('{"item_id": "w1", "order": 0}\n')
+    assert reg.check_code_identity(repo, code_sha) == []          # (a)~(d)만으로는 막지 못한다
+    problems = reg.committed_input_problems(repo, reg.load_prereg(copy_path), manifest)
+    assert any(p.startswith("(e) 실행에 쓰는 사전 등록") for p in problems)
+    assert any(p.startswith("(e) HEAD에 표본 매니페스트") for p in problems)
+
+
+def test_a_manifest_or_record_that_differs_from_the_committed_one_is_refused(repo, tmp_path):
+    data = _committed_record_repo(repo)
+    other = tmp_path / "e0.jsonl"
+    other.write_text('{"item_id": "w2", "order": 0}\n')
+    assert any("표본 매니페스트가 HEAD에 커밋된" in p for p in reg.committed_input_problems(repo, data, other))
+    assert any("표본 매니페스트가 HEAD에 커밋된" in p
+               for p in reg.committed_input_problems(repo, data, tmp_path / "missing.jsonl"))
+    edited = yaml.safe_load(yaml.safe_dump(data))
+    edited["pre_run_record"]["colab_cu_used"] = 9.9
+    assert any(p.startswith("(e) 실행에 쓰는 사전 등록")
+               for p in reg.committed_input_problems(repo, edited, repo / reg.SAMPLE_MANIFEST_REL))

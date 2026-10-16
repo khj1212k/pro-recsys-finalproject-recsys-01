@@ -156,6 +156,34 @@ def test_code_identity_problems_and_dirty_tree_are_refused(inputs, monkeypatch):
     assert "(b)" in _refuse(inputs, check_code_identity=True)
 
 
+def test_a_filled_record_or_manifest_that_is_not_committed_at_head_is_refused(inputs, monkeypatch):
+    """(a)~(d)가 통과해도(깨끗한 main 체크아웃이라고 두고), 커밋되지 않은 채운 기록·다른 매니페스트로는 시작하지 않는다."""
+    monkeypatch.setattr(reg, "check_code_identity", lambda repo, sha, **kw: [])
+    problems = _refuse(inputs, check_code_identity=True)
+    assert "(e) 실행에 쓰는 사전 등록이 HEAD에 커밋된" in problems   # 이 저장소 HEAD의 yaml은 기록이 비어 있다
+    assert "표본 매니페스트" in problems
+
+
+@pytest.mark.parametrize("option", ["--prereg", "--manifest"])
+def test_run_cannot_be_pointed_at_another_record_or_manifest(option, capsys):
+    with pytest.raises(SystemExit) as exited:
+        base.main(["run", "--export-dir", "x", "--pack-dir", "y", option, "/somewhere/filled-copy"])
+    assert exited.value.code == 2 and "unrecognized arguments" in capsys.readouterr().err
+
+
+def test_prepare_refuses_outside_a_clean_main_checkout_after_fetching(monkeypatch, tmp_path):
+    seen = []
+
+    def head_problems(repo, **kw):
+        seen.append((repo, kw))
+        return ["(a) HEAD가 origin/main에 있는 커밋이 아니다"]
+
+    monkeypatch.setattr(reg, "head_problems", head_problems)
+    manifest = tmp_path / "e0.jsonl"
+    assert base.main(["prepare", "--export-dir", "x", "--pack-dir", "y", "--manifest", str(manifest)]) == 2
+    assert seen == [(reg.REPO_ROOT, {})] and not manifest.exists()   # 기본값 fetch=True
+
+
 def test_settings_kill_switch_and_missing_key_are_refused(inputs, monkeypatch):
     from config.settings import Settings
 

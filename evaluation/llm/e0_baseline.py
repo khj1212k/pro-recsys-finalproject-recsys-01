@@ -402,6 +402,9 @@ def start_problems(cfg: RunConfig, source: Optional[e0_store.FileArticleSource],
     record = (cfg.prereg or {}).get("pre_run_record") or {}
     problems = [f"(e) pre_run_record {p}" for p in reg.check_pre_run_record(record)]
     problems += [f"설정: {p}" for p in reg.config_differences(cfg.prereg)]
+    if cfg.check_code_identity:
+        # 실행 전 기록·매니페스트는 HEAD에 커밋된 것만 쓴다(A8.0 4단계, A8.6 c) - 다른 경로의 채운 사본으로는 시작하지 않는다
+        problems += reg.committed_input_problems(cfg.repo, cfg.prereg, cfg.manifest_path)
     if cfg.check_code_identity and record.get("code_sha"):
         problems += reg.check_code_identity(cfg.repo, record["code_sha"])
         amend = record.get("adr_0023_amendment_commit")
@@ -987,10 +990,6 @@ def dry_run(root: Path, *, faults: Optional[Any] = None, fake_transport: Optiona
 # ---------------------------------------------------------------- CLI
 
 
-def _prereg_with_manifest(args) -> Tuple[Dict[str, Any], Path]:
-    return reg.load_prereg(Path(args.prereg)), Path(args.manifest)
-
-
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="E0 기준선 측정 러너 (ADR 0009 A8)")
     parser.add_argument("--dry-run", action="store_true", help="합성 반출본 + 페이크 LLM 전송 계층으로 사슬 전체를 돈다")
@@ -1001,8 +1000,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     for sp in (p, r):
         sp.add_argument("--export-dir", required=True)
         sp.add_argument("--pack-dir", required=True)
-        sp.add_argument("--prereg", default=str(reg.PREREG_PATH))
-        sp.add_argument("--manifest", default=str(reg.REPO_ROOT / reg.SAMPLE_MANIFEST_REL))
+    # run에는 사전 등록·매니페스트 경로를 바꾸는 옵션이 없다: 실행은 HEAD에 커밋된 두 파일만 읽는다(A8.0 4단계).
+    p.add_argument("--manifest", default=str(reg.REPO_ROOT / reg.SAMPLE_MANIFEST_REL),
+                   help="표본 매니페스트를 쓸 곳(기본: 등록한 경로 - 실행 전 기록 PR에 이 파일을 커밋한다)")
     r.add_argument("--resume", default=None, help="이어서 돌 run 이름(data/experiments/e0/<run>)")
     r.add_argument("--resume-reason", default="")
     args = parser.parse_args(argv)
@@ -1024,10 +1024,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 shutil.rmtree(root, ignore_errors=True)
         return 0
     if args.command == "prepare":
-        head_ok = reg._git(reg.REPO_ROOT, "merge-base", "--is-ancestor", "HEAD", "origin/main").returncode == 0
-        clean = not reg._git(reg.REPO_ROOT, "status", "--porcelain").stdout.strip()
-        if not (head_ok and clean):
-            print("prepare는 main에 있는 커밋의 깨끗한 체크아웃(code_sha)에서 돈다(A8.0 3단계)", file=sys.stderr)
+        head = reg.head_problems(reg.REPO_ROOT)   # A8.2 (a)(b) - 직전에 fetch
+        if head:
+            print("prepare는 main에 있는 커밋의 깨끗한 체크아웃(code_sha)에서 돈다(A8.0 3단계): " + "; ".join(head),
+                  file=sys.stderr)
             return 2
         try:
             out = prepare(Path(args.export_dir), Path(args.pack_dir), manifest_out=Path(args.manifest))
@@ -1041,9 +1041,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(json.dumps(out, ensure_ascii=False, indent=1))
         return 0
     if args.command == "run":
-        prereg, manifest = _prereg_with_manifest(args)
-        cfg = RunConfig(export_dir=Path(args.export_dir), pack_dir=Path(args.pack_dir), prereg=prereg,
-                        manifest_path=manifest, resume=args.resume, resume_reason=args.resume_reason,
+        cfg = RunConfig(export_dir=Path(args.export_dir), pack_dir=Path(args.pack_dir), prereg=reg.load_prereg(),
+                        manifest_path=reg.REPO_ROOT / reg.SAMPLE_MANIFEST_REL, resume=args.resume,
+                        resume_reason=args.resume_reason,
                         command=" ".join(["python -m evaluation.llm.e0_baseline", *(argv or sys.argv[1:])]))
         try:
             summary = run_e0(cfg)
