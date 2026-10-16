@@ -39,6 +39,7 @@ def export(tmp_path):
 def _write(tmp_path, export, *, name="pack", **over):
     args = dict(
         ids=export.ids, vectors=_unit(), content_sha256=[r["content_sha256"] for r in export.rows],
+        title_sha256=[r["title_sha256"] for r in export.rows],
         export_identity_sha256=export.identity_sha256, model=dict(ep.EXPECTED_MODEL), dtype="float16",
     )
     args.update(over)
@@ -59,7 +60,7 @@ def test_pack_round_trip_returns_float32_vectors_in_export_order(tmp_path, expor
     directory = _write(tmp_path, export, dtype=dtype)
     manifest = json.loads((directory / ep.MANIFEST_FILE).read_text(encoding="utf-8"))
     assert manifest["dtype"] == dtype and manifest["rows"] == N and manifest["dim"] == 1024
-    assert set(manifest["files"]) == {file_name, ep.IDS_FILE, ep.HASHES_FILE}
+    assert set(manifest["files"]) == {file_name, ep.IDS_FILE, ep.HASHES_FILE, ep.TITLES_FILE}
     assert manifest["export_identity_sha256"] == export.identity_sha256
 
     pack = ep.load_embedding_pack(directory, export)
@@ -132,13 +133,14 @@ def test_load_refuses_a_pack_made_from_another_export(tmp_path, export):
 
 def test_load_refuses_missing_and_extra_ids(tmp_path, export):
     hashes = [r["content_sha256"] for r in export.rows]
+    titles = [r["title_sha256"] for r in export.rows]
     fewer = _write(tmp_path, export, name="fewer", ids=export.ids[:-1], vectors=_unit(n=N - 1),
-                   content_sha256=hashes[:-1])
+                   content_sha256=hashes[:-1], title_sha256=titles[:-1])
     with pytest.raises(ep.EmbeddingPackError, match="빠진 id 1") as err:
         ep.load_embedding_pack(fewer, export)
     assert _code(err) == "ids"
     more = _write(tmp_path, export, name="more", ids=export.ids + [9999], vectors=_unit(n=N + 1),
-                  content_sha256=hashes + ["a" * 64])
+                  content_sha256=hashes + ["a" * 64], title_sha256=titles + ["a" * 64])
     with pytest.raises(ep.EmbeddingPackError, match="남는 id 1") as err:
         ep.load_embedding_pack(more, export)
     assert _code(err) == "ids"
@@ -151,6 +153,19 @@ def test_load_refuses_vectors_computed_from_different_text(tmp_path, export):
     with pytest.raises(ep.EmbeddingPackError, match=str(export.ids[3])) as err:
         ep.load_embedding_pack(directory, export)
     assert _code(err) == "content_sha256"
+
+
+def test_load_refuses_vectors_computed_from_a_different_title(tmp_path, export):
+    """임베딩 텍스트는 제목 + 공백 + 본문이다. 본문이 같아도 제목이 다르면 다른 벡터다."""
+    titles = [r["title_sha256"] for r in export.rows]
+    titles[2] = "c" * 64
+    directory = _write(tmp_path, export, title_sha256=titles)
+    with pytest.raises(ep.EmbeddingPackError, match=f"제목.*{export.ids[2]}") as err:
+        ep.load_embedding_pack(directory, export)
+    assert _code(err) == "title_sha256"
+    with pytest.raises(ep.EmbeddingPackError) as err:
+        _write(tmp_path, export, name="short", title_sha256=titles[:-1])
+    assert _code(err) == "shape"
 
 
 def test_load_refuses_wrong_dimension(tmp_path, export):
@@ -191,6 +206,11 @@ def test_load_refuses_missing_files_and_unknown_format(tmp_path, export):
     (directory / ep.IDS_FILE).unlink()
     with pytest.raises(ep.EmbeddingPackError) as err:
         ep.load_embedding_pack(directory, export)
+    assert _code(err) == "file_missing"
+    titled = _write(tmp_path, export, name="no-titles")
+    (titled / ep.TITLES_FILE).unlink()
+    with pytest.raises(ep.EmbeddingPackError) as err:
+        ep.load_embedding_pack(titled, export)
     assert _code(err) == "file_missing"
     with pytest.raises(ep.EmbeddingPackError) as err:
         ep.load_embedding_pack(tmp_path / "nothing-here", export)

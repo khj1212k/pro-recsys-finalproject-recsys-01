@@ -329,6 +329,7 @@ def _pack_from_database(pg_conn, schema, export, directory, **over):
         stored = {row_id: np.array(json.loads(text), dtype=np.float32) for row_id, text in cur.fetchall()}
     args = dict(ids=export.ids, vectors=np.vstack([stored[i] for i in export.ids]),
                 content_sha256=[r["content_sha256"] for r in export.rows],
+                title_sha256=[r["title_sha256"] for r in export.rows],
                 export_identity_sha256=export.identity_sha256, model=dict(ep.EXPECTED_MODEL), dtype="float32")
     args.update(over)
     ep.write_embedding_pack(directory, **args)
@@ -354,9 +355,11 @@ def test_pack_built_for_the_database_export_validates_and_wrong_packs_are_refuse
     assert good.ids.tolist() == export.ids and good.vectors.shape == (9, 1024)
 
     hashes = [r["content_sha256"] for r in export.rows]
+    titles = [r["title_sha256"] for r in export.rows]
     cases = {
-        "ids": dict(ids=export.ids[1:], vectors=good.vectors[1:], content_sha256=hashes[1:]),
+        "ids": dict(ids=export.ids[1:], vectors=good.vectors[1:], content_sha256=hashes[1:], title_sha256=titles[1:]),
         "content_sha256": dict(content_sha256=["0" * 64] + hashes[1:]),
+        "title_sha256": dict(title_sha256=titles[:-1] + ["0" * 64]),
         "dim": dict(vectors=good.vectors[:, :512] / np.linalg.norm(good.vectors[:, :512], axis=1, keepdims=True)),
         "norm": dict(vectors=good.vectors * 1.5),
         "export_identity": dict(export_identity_sha256="e" * 64),

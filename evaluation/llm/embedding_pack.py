@@ -6,11 +6,13 @@ Tier 0 VM(1 GB)과 개발 Mac에서는 BGE-M3를 돌리지 않으므로 기사 �
     ids.npy                 int64 (N,)        raw_news_id, 오름차순
     emb.f16.npy | emb.f32.npy  float16|float32 (N, 1024)  L2 정규화된 dense 벡터, ids와 같은 순서
     content_sha256.txt      N줄               잡이 실제로 읽은 본문(UTF-8)의 sha256, ids와 같은 순서
+    title_sha256.txt        N줄               잡이 실제로 읽은 제목(UTF-8)의 sha256, ids와 같은 순서
+                                              (임베딩 텍스트는 f"{title} {content}"[:8000]이라 둘 다 대조한다)
     embeddings_manifest.json  형식, 행 수, 차원, dtype, 모델·파라미터, 파일별 sha256,
                               어느 반출본에서 만들었는지(export_identity_sha256), 잡이 남긴 수치(job)
 
 `write_embedding_pack`은 numpy와 표준 라이브러리만 쓴다 - 원격 잡이 이 파일 하나를 가져가 쓸 수 있다.
-`load_embedding_pack`은 팩을 반출본과 대조한다: 같은 반출본, 같은 id(빠짐·남음·순서), 같은 본문 해시,
+`load_embedding_pack`은 팩을 반출본과 대조한다: 같은 반출본, 같은 id(빠짐·남음·순서), 같은 본문·제목 해시,
 1,024차원, NaN·Inf 없음, 단위 길이, 운영과 같은 모델·파라미터. 하나라도 어긋나면 사유 코드와 함께 거절한다.
 원격에서 온 파일이므로 pickle은 읽지 않는다(`allow_pickle=False`).
 
@@ -34,6 +36,7 @@ FORMAT = "news-embedding-pack/1"
 MANIFEST_FILE = "embeddings_manifest.json"
 IDS_FILE = "ids.npy"
 HASHES_FILE = "content_sha256.txt"
+TITLES_FILE = "title_sha256.txt"
 VECTOR_FILES = {"float16": "emb.f16.npy", "float32": "emb.f32.npy"}
 EMBEDDING_DIM = 1024
 # 단위 길이에서 벗어나도 되는 폭. float16은 성분마다 상대 오차가 2^-11까지 생긴다.
@@ -88,8 +91,8 @@ def cosine_stats(reference: np.ndarray, other: np.ndarray) -> Dict[str, Any]:
 
 
 def write_embedding_pack(directory: Path, *, ids: Sequence[int], vectors: np.ndarray, content_sha256: Sequence[str],
-                         export_identity_sha256: str, model: Dict[str, Any], dtype: str = "float16",
-                         job: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                         title_sha256: Sequence[str], export_identity_sha256: str, model: Dict[str, Any],
+                         dtype: str = "float16", job: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """팩을 쓴다. 여기서 막는 것은 자기 모순뿐이다(모양, 순서, NaN) - 반출본과의 대조는 읽는 쪽이 한다.
 
     `job`에는 수치와 식별자만 넣는다(장치, 정밀도, 연산 단위, fp16/fp32 코사인). 기사 텍스트를 넣지 않는다.
@@ -102,9 +105,11 @@ def write_embedding_pack(directory: Path, *, ids: Sequence[int], vectors: np.nda
     id_array = np.asarray(list(ids), dtype=np.int64)
     matrix = np.asarray(vectors)
     hashes = [str(h) for h in content_sha256]
-    if matrix.ndim != 2 or matrix.shape[0] != len(id_array) or len(hashes) != len(id_array):
+    titles = [str(h) for h in title_sha256]
+    if matrix.ndim != 2 or matrix.shape[0] != len(id_array) or len(hashes) != len(id_array) or len(titles) != len(id_array):
         raise EmbeddingPackError(
-            "shape", f"id {len(id_array)}개, 해시 {len(hashes)}개, 벡터 모양 {matrix.shape}가 서로 맞지 않는다")
+            "shape", f"id {len(id_array)}개, 본문 해시 {len(hashes)}개, 제목 해시 {len(titles)}개, "
+                     f"벡터 모양 {matrix.shape}가 서로 맞지 않는다")
     if len(id_array) > 1 and not np.all(np.diff(id_array) > 0):
         raise EmbeddingPackError("ids", "id는 중복 없이 오름차순이어야 한다")
     if not np.all(np.isfinite(matrix)):
@@ -116,6 +121,7 @@ def write_embedding_pack(directory: Path, *, ids: Sequence[int], vectors: np.nda
     np.save(directory / vector_file, stored, allow_pickle=False)
     np.save(directory / IDS_FILE, id_array, allow_pickle=False)
     (directory / HASHES_FILE).write_text("".join(h + "\n" for h in hashes), encoding="ascii")
+    (directory / TITLES_FILE).write_text("".join(h + "\n" for h in titles), encoding="ascii")
     manifest = {
         "format": FORMAT,
         "rows": int(len(id_array)),
@@ -125,7 +131,7 @@ def write_embedding_pack(directory: Path, *, ids: Sequence[int], vectors: np.nda
         "export_identity_sha256": export_identity_sha256,
         "files": {
             name: {"sha256": sha256_file(directory / name), "bytes": (directory / name).stat().st_size}
-            for name in (vector_file, IDS_FILE, HASHES_FILE)
+            for name in (vector_file, IDS_FILE, HASHES_FILE, TITLES_FILE)
         },
         "norm": _norm_stats(stored),
         "job": dict(job or {}),
@@ -194,7 +200,7 @@ def load_embedding_pack(directory: Path, export: Any, *, expected_model: Optiona
         raise EmbeddingPackError("dtype", f"dtype은 {sorted(VECTOR_FILES)} 중 하나다: {dtype!r}")
     vector_file = VECTOR_FILES[dtype]
 
-    for name in (vector_file, IDS_FILE, HASHES_FILE):
+    for name in (vector_file, IDS_FILE, HASHES_FILE, TITLES_FILE):
         path = directory / name
         if not path.is_file() or name not in manifest.get("files", {}):
             raise EmbeddingPackError("file_missing", f"{name}이 없다")
@@ -229,13 +235,18 @@ def load_embedding_pack(directory: Path, export: Any, *, expected_model: Optiona
             detail = "id 집합은 같지만 순서가 다르거나 중복이 있다"
         raise EmbeddingPackError("ids", f"반출본의 id와 다르다: {detail}")
 
-    hashes = (directory / HASHES_FILE).read_text(encoding="ascii").split()
-    if len(hashes) != len(want):
-        raise EmbeddingPackError("content_sha256", f"해시가 {len(hashes)}줄이다 - {len(want)}줄이어야 한다")
-    differing = [row["id"] for row, digest in zip(export.rows, hashes) if row["content_sha256"] != digest]
-    if differing:
-        raise EmbeddingPackError(
-            "content_sha256", f"잡이 읽은 본문이 반출본과 다른 행이 {len(differing)}건이다(id {_some(differing)})")
+    # 임베딩 텍스트 = f"{title} {content}"[:8000]. 본문과 제목을 따로 대조한다(본문을 지운 뒤에도 해시는 남는다).
+    for name, key, what in ((HASHES_FILE, "content_sha256", "본문"), (TITLES_FILE, "title_sha256", "제목")):
+        try:
+            hashes = (directory / name).read_text(encoding="ascii").split()
+        except (OSError, UnicodeDecodeError) as e:
+            raise EmbeddingPackError(key, f"{name}을 읽을 수 없다({type(e).__name__})") from None
+        if len(hashes) != len(want):
+            raise EmbeddingPackError(key, f"{what} 해시가 {len(hashes)}줄이다 - {len(want)}줄이어야 한다")
+        differing = [row["id"] for row, digest in zip(export.rows, hashes) if row[key] != digest]
+        if differing:
+            raise EmbeddingPackError(
+                key, f"잡이 읽은 {what}이 반출본과 다른 행이 {len(differing)}건이다(id {_some(differing)})")
 
     if not np.all(np.isfinite(vectors)):
         raise EmbeddingPackError("non_finite", "벡터에 NaN 또는 Inf가 있다")

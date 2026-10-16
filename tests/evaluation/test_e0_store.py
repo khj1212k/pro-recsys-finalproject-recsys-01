@@ -51,7 +51,7 @@ def _source(tmp_path, rows, vectors, *, name="t0", dtype="float32", now=NOW):
     order = np.argsort([r["id"] for r in rows])
     ep.write_embedding_pack(
         dest / "embeddings", ids=export.ids, vectors=np.asarray(vectors)[order],
-        content_sha256=[r["content_sha256"] for r in export.rows],
+        content_sha256=[r["content_sha256"] for r in export.rows], title_sha256=[r["title_sha256"] for r in export.rows],
         export_identity_sha256=export.identity_sha256, model=dict(ep.EXPECTED_MODEL), dtype=dtype,
     )
     return e0.FileArticleSource.open(dest, dest / "embeddings", now=now)
