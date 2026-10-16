@@ -178,3 +178,54 @@ def test_load_evalset_rejects_bodies_whose_hash_changed(tmp_path):
 
     with pytest.raises(es.EvalsetIntegrityError):
         es.load_evalset(manifest_path, bodies_path)
+
+
+class _ScriptedCursor:
+    """load_candidates_from_db가 내는 세 조회(cluster_history, news_raw, 카테고리)에 차례로 답한다."""
+
+    def __init__(self, results):
+        self.results = list(results)
+        self.queries = []
+
+    def execute(self, sql, params=None):
+        self.queries.append(sql)
+
+    def fetchall(self):
+        return self.results.pop(0)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class _ScriptedConn:
+    def __init__(self, results):
+        self.cur = _ScriptedCursor(results)
+
+    def cursor(self):
+        return self.cur
+
+
+def test_db_loader_drops_clusters_with_purged_or_empty_bodies_and_reports_counts():
+    """보존 기한(ADR 0023)이 지나 본문을 비운 기사(NULL)나 빈 본문('')이 든 클러스터는 후보에서 빠지고,
+    빠진 수가 보고된다. 본문이 NULL인 기사를 빈 문자열로 바꿔 그대로 쓰지 않는다."""
+    log = {"0": [1, 2, 3], "1": [4, 5, 6], "2": [7, 8, 9]}
+    rows = [
+        (1, "u1", "언론A", "제목1", "본문 1", None), (2, "u2", "언론A", "제목2", "본문 2", None),
+        (3, "u3", "언론A", "제목3", "본문 3", None),
+        (4, "u4", "언론B", "제목4", None, None), (5, "u5", "언론B", "제목5", "본문 5", None),
+        (6, "u6", "언론B", "제목6", "본문 6", None),
+        (7, "u7", "언론C", "제목7", "", None), (8, "u8", "언론C", "제목8", "본문 8", None),
+        (9, "u9", "언론C", "제목9", "본문 9", None),
+    ]
+    conn = _ScriptedConn([[(11, log)], rows])
+    report = {}
+
+    candidates, articles = es.load_candidates_from_db(conn, report=report)
+
+    assert [c.cluster_id for c in candidates] == [0]
+    assert 4 not in articles and 7 not in articles
+    assert all(a.body for a in articles.values())
+    assert report == {"articles_body_purged": 1, "articles_body_empty": 1, "clusters_without_body": 2}
