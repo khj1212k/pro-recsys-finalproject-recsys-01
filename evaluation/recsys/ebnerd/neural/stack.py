@@ -141,9 +141,24 @@ def stacker_rows(chain: ForwardChain, cand_ptr: np.ndarray) -> np.ndarray:
     return chain.scored.copy()
 
 
-def neural_rank_column(scores: np.ndarray, cand_ptr: np.ndarray) -> np.ndarray:
-    """신경망 점수 -> 요청 안 평균 순위(0~1) float32 열. 점수가 NaN인 행은 NaN으로 남는다."""
-    return average_rank01(np.asarray(scores, dtype=np.float64), cand_ptr).astype(np.float32)
+def neural_rank_column(scores: np.ndarray, cand_ptr: np.ndarray, chunk_pairs: Optional[int] = None) -> np.ndarray:
+    """신경망 점수 -> 요청 안 평균 순위(0~1) float32 열. 점수가 NaN인 행은 NaN으로 남는다.
+
+    chunk_pairs를 주면 요청 경계에서 끊은 조각(쌍 chunk_pairs개 이하, 요청 하나가 더 크면 그 요청 하나)마다 계산한다.
+    순위는 그룹 안에서만 정해지고, 조각 안의 위치는 같은 양만큼 밀릴 뿐이라(정수·반정수라 float64에서 정확하다) 값이 같다.
+    """
+    if not chunk_pairs:
+        return average_rank01(np.asarray(scores, dtype=np.float64), cand_ptr).astype(np.float32)
+    cand_ptr = np.asarray(cand_ptr, dtype=np.int64)
+    out = np.empty(len(scores), dtype=np.float32)
+    n_req, a = len(cand_ptr) - 1, 0
+    while a < n_req:
+        b = int(np.searchsorted(cand_ptr, cand_ptr[a] + int(chunk_pairs), side="right")) - 1
+        b = min(max(b, a + 1), n_req)
+        lo, hi = int(cand_ptr[a]), int(cand_ptr[b])
+        out[lo:hi] = average_rank01(np.asarray(scores[lo:hi], dtype=np.float64), cand_ptr[a:b + 1] - lo).astype(np.float32)
+        a = b
+    return out
 
 
 def with_neural_rank(feats: pd.DataFrame, scores: np.ndarray, cand_ptr: np.ndarray, column: str) -> pd.DataFrame:

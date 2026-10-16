@@ -270,3 +270,22 @@ def test_scalar_block_in_row_chunks_equals_one_pass_bitwise():
             assert a.dtype == b.dtype and a.shape == b.shape and a.tobytes() == b.tobytes(), rows
     empty = scalar_block(x[:0], V2_FEATURES, spec, stats, 25)
     assert empty.cont.shape == (0, one.cont.shape[1]) and empty.category.shape == (0,)
+
+
+def test_neural_rank_column_in_request_chunks_equals_one_pass_bitwise():
+    """스태커의 순위 열: 요청 경계에서 끊은 조각마다 계산해도 한 번에 계산한 것과 비트 단위로 같다(동점·NaN·빈 요청 포함)."""
+    from evaluation.recsys.ebnerd.neural.stack import neural_rank_column
+
+    rng = np.random.default_rng(11)
+    counts = rng.integers(0, 30, size=400)
+    counts[[3, 50, 51]] = 0
+    counts[7] = 1
+    ptr = np.concatenate([[0], np.cumsum(counts)]).astype(np.int64)
+    scores = np.round(rng.normal(size=int(ptr[-1])), 1).astype(np.float32)        # 동점이 많다
+    scores[rng.random(len(scores)) < 0.03] = np.nan
+    scores[ptr[10]:ptr[11]] = np.nan                                                 # 전부 NaN인 요청
+    full = neural_rank_column(scores, ptr)
+    assert full.dtype == np.float32 and np.isnan(full).any()
+    for chunk in (1, 5, 29, 100, 1000, 10 ** 9):
+        got = neural_rank_column(scores, ptr, chunk)
+        assert got.dtype == full.dtype and got.tobytes() == full.tobytes(), chunk

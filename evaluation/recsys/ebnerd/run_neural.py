@@ -889,7 +889,7 @@ def _cold_unit_in_memory(run: Run, env: dict, family: str, spec, cond) -> tuple[
 
 # --- P2 콜드: 행 조각 경로 ----------------------------------------------------------------------
 # 한 번에 만드는 것은 피처 열(쌍마다 float32 한 값)과 요청별 지표뿐이다. LightGBM 입력 행렬, 신경망 스칼라 블록(float64 중간값),
-# 스태커 입력은 쌍 COLD_CHUNK_PAIRS개씩 만들어 쓰고 버린다. 피처 계산 자체는 조각으로 나누지 않는다 — recsys_core의 히스토리
+# 스태커 입력과 그 순위 열은 쌍 COLD_CHUNK_PAIRS개씩 만들어 쓰고 버린다. 피처 계산 자체는 조각으로 나누지 않는다 — recsys_core의 히스토리
 # 코사인은 요청 묶음 안의 누적합으로 계산돼서, 요청 일부로 다시 계산하면 마지막 자리가 달라질 수 있다.
 COLD_CHUNK_PAIRS = 1 << 19
 
@@ -986,7 +986,7 @@ def _cold_unit_bounded(run: Run, env: dict, family: str, spec, cond, chunk: Opti
         final, stats = _neural_model(run, env, family, spec, seed)
         scores = _score_neural_rows(run, env, final, stats, task, cols, pair_req, seq, chunk)
         _put(arrays, base, family, seed, scores, True)
-        ranked = {**cols, run.stack_col: stacking.neural_rank_column(scores, req.cand_ptr)}
+        ranked = {**cols, run.stack_col: stacking.neural_rank_column(scores, req.cand_ptr, chunk)}
         _put(arrays, base, D_ARM, seed, _predict_rows(run.store.load_model(f"{T}_n_{D_ARM}", seed), ranked, task,
                                                       pair_req, chunk), True)
         del ranked, scores
