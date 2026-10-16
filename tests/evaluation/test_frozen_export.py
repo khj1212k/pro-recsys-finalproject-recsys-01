@@ -31,9 +31,15 @@ KST = timezone(timedelta(hours=9))
 WINDOW = fx.Window.from_iso("2026-10-02T21:00:00", "2026-10-05T21:00:00")
 
 
+# 테스트의 "지금"(시계를 읽는 기본값들: CLI의 T0, verify의 만료 판단). 합성 머리말의 스냅숏(10-06 07:21:30 UTC)과
+# 같은 KST 날짜다. 실제 날짜가 지나도 결과가 바뀌지 않게 시계를 고정한다.
+CLOCK = datetime(2026, 10, 6, 7, 0, tzinfo=timezone.utc)
+
+
 @pytest.fixture(autouse=True)
 def _main_checkout(monkeypatch, tmp_path):
     """반출본은 메인 체크아웃의 data/exports 아래에만 쓰인다 - 테스트에서는 tmp_path/data가 그 자리다."""
+    monkeypatch.setattr(fx, "_utcnow", lambda: CLOCK)
     return use_tmp_main_checkout(monkeypatch, tmp_path)
 
 
@@ -113,6 +119,18 @@ def test_registered_day_windows_end_at_0600_kst_of_completed_days_before_t0():
         fx.registered_day_windows(datetime(2026, 10, 8, 14, 0), days=3)  # 시간대 없는 T0는 받지 않는다
     with pytest.raises(fx.WindowRefused):
         fx.registered_day_windows(t0, days=6)
+
+
+def test_plan_windows_is_the_registered_rule_and_its_union():
+    union, plan = fx.plan_windows(datetime(2026, 10, 6, 16, 0, tzinfo=KST), 3)
+    assert (union.start, union.end) == (datetime(2026, 10, 1, 21, 0), datetime(2026, 10, 4, 21, 0))
+    assert plan["day_windows_utc"] == [
+        ["2026-10-01T21:00:00.000000Z", "2026-10-02T21:00:00.000000Z"],
+        ["2026-10-02T21:00:00.000000Z", "2026-10-03T21:00:00.000000Z"],
+        ["2026-10-03T21:00:00.000000Z", "2026-10-04T21:00:00.000000Z"],
+    ]
+    assert (plan["t0_kst"], plan["days"], plan["hour_kst"], plan["lookback_hours"]) == (
+        "2026-10-06T16:00:00+09:00", 3, 6, 24)
 
 
 # ---------------------------------------------------------------- COPY 출력 읽기
@@ -539,6 +557,40 @@ def test_redistributable_rows_keep_their_bodies_after_thirty_days(tmp_path):
     assert [r["body"] is None for r in loaded.rows] == [False, True]
 
 
+# ---------------------------------------------------------------- E0 날짜 창: 계획과 서버 스냅숏
+
+
+def test_planned_export_records_the_plan_and_the_runner_gets_the_same_day_windows(tmp_path):
+    window, plan = fx.plan_windows(datetime(2026, 10, 6, 16, 0, tzinfo=KST), 3)  # 스냅숏 10-06 16:21 KST와 같은 날
+    bundle = fx.build_export(fx.parse_copy_stream(_stream([_server_row(1)])), window, code=CODE, plan=plan)
+    assert bundle.manifest["identity"]["plan"] == plan
+    dest = tmp_path / "data" / "exports" / "planned"
+    fx.write_export(dest, bundle)
+
+    loaded = fx.load_export(dest, now=datetime(2026, 10, 7, tzinfo=timezone.utc))
+    assert [(w.start, w.end) for w in loaded.day_windows()] == [
+        (datetime(2026, 10, 1, 21, 0), datetime(2026, 10, 2, 21, 0)),
+        (datetime(2026, 10, 2, 21, 0), datetime(2026, 10, 3, 21, 0)),
+        (datetime(2026, 10, 3, 21, 0), datetime(2026, 10, 4, 21, 0)),
+    ]
+    assert fx.summarize(dest, loaded.manifest)["plan"]["t0_kst"] == "2026-10-06T16:00:00+09:00"
+    unplanned = fx.load_export(_written(tmp_path), now=datetime(2026, 10, 7, tzinfo=timezone.utc))
+    with pytest.raises(fx.ExportError, match="--days"):
+        unplanned.day_windows()
+
+
+def test_export_planned_before_kst_midnight_and_run_after_it_is_refused_before_writing(tmp_path):
+    """런북 9.1·9.3대로면 생길 수 있던 일: KST 자정 전에 계획하고 자정 뒤에 반출하면 러너가 T0로 다시 계산한 마지막 창이 반출 밖에 놓인다."""
+    window, plan = fx.plan_windows(datetime(2026, 10, 5, 23, 50, tzinfo=KST), 3)  # 스냅숏은 10-06 16:21 KST
+    command = _fake_psql(tmp_path, _stream([_server_row(1)]))
+    with pytest.raises(fx.WindowRefused, match="KST 날짜가 다르다"):
+        fx.export_news_raw(window, root=tmp_path / "data" / "exports", psql_command=command, code=CODE, plan=plan)
+    assert not (tmp_path / "data" / "exports").exists() or not any((tmp_path / "data" / "exports").iterdir())
+    with pytest.raises(fx.WindowRefused):  # 계획과 다른 창을 함께 주는 것도 받지 않는다
+        fx.build_export(fx.parse_copy_stream(_stream([_server_row(1)])), WINDOW, code=CODE,
+                        plan=fx.plan_windows(datetime(2026, 10, 6, 16, 0, tzinfo=KST), 3)[1])
+
+
 # ---------------------------------------------------------------- 실행 경로: psql 명령, CLI
 
 
@@ -626,6 +678,25 @@ def test_cli_export_outside_the_gap_between_ingest_runs_is_refused_unless_overri
     assert ":20" in capsys.readouterr().err
     monkeypatch.setattr(fx, "_minute_now", lambda: 35)
     assert fx.main(argv) == 0
+
+
+def test_cli_export_with_days_computes_the_e0_windows_itself(tmp_path, capsys):
+    command = _fake_psql(tmp_path, _stream([_server_row(k) for k in (1, 2)]))
+    base = ["export", "--any-minute", "--psql-command", shlex.join(command)]
+
+    assert fx.main(base + ["--days", "3"]) == 0  # T0 = 지금(시계 10-06 16:00 KST)
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["window_utc"] == ["2026-10-01T21:00:00.000000Z", "2026-10-04T21:00:00.000000Z"]
+    assert summary["plan"]["days"] == 3 and summary["plan"]["t0_kst"] == "2026-10-06T16:00:00+09:00"
+    assert summary["dir"] == str((tmp_path / "data" / "exports" / "20261006T072130Z").resolve())
+
+    assert fx.main(base + ["--days", "3", "--t0-kst", "2026-10-05T23:50"]) == 2
+    assert "KST 날짜가 다르다" in capsys.readouterr().err
+    for wrong in (["--days", "3", "--start-utc", "2026-10-02T21:00:00", "--end-utc", "2026-10-05T21:00:00"],
+                  ["--t0-kst", "2026-10-06T16:00", "--start-utc", "2026-10-02T21:00:00", "--end-utc", "2026-10-05T21:00:00"],
+                  ["--start-utc", "2026-10-02T21:00:00"], []):
+        assert fx.main(base + wrong) == 2
+        assert "거절" in capsys.readouterr().err
 
 
 def test_cli_plan_window_prints_the_union_and_the_day_windows(capsys):

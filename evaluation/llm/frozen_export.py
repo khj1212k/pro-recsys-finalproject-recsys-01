@@ -15,8 +15,9 @@
 있는 곳이면 쓰지 않는다(`ensure_private_destination`). 이 모듈은 본문·제목·URL을 표준출력이나 로그에 내지 않는다 -
 요약에는 건수·해시·시각만 있다.
 
-    python scripts/export_news_raw.py plan-window --t0-kst 2026-10-08T14:00 --days 5
-    python scripts/export_news_raw.py export --start-utc ... --end-utc ... --psql-command "ssh ... psql ..."
+    python scripts/export_news_raw.py plan-window --days 3                      # 미리 보기
+    python scripts/export_news_raw.py export --days 3 --psql-command "ssh ... psql ..."   # E0: 창을 직접 계산
+    python scripts/export_news_raw.py export --start-utc ... --end-utc ... --psql-command "..."  # 그 밖의 반출
     python scripts/export_news_raw.py verify --dir data/exports/<T0>
     python scripts/export_news_raw.py purge  --dir data/exports/<T0> [--everything]
     python scripts/export_news_raw.py purge  --all          # data/exports 아래 전부
@@ -142,6 +143,39 @@ def union_window(windows: Sequence[Window]) -> Window:
         if a.end != b.start:
             raise WindowRefused("창들이 이어져 있지 않다 - 하나씩 따로 반출한다")
     return Window(ordered[0].start, ordered[-1].end)
+
+
+def plan_windows(t0: datetime, days: int) -> Tuple[Window, Dict[str, Any]]:
+    """E0의 날짜 창(ADR 0009 A8.1)을 T0에서 계산하고, 반출 창(합집합)과 매니페스트에 적을 계획을 돌려준다.
+
+    계획은 반출본의 신원에 들어간다. 반출은 서버 스냅숏 시각으로 같은 계산을 다시 해 계획과 다르면(T0와 스냅숏의
+    KST 날짜가 다르면) 쓰기 전에 거절한다(`build_export`). 그래서 러너가 반출본의 T0로 다시 계산한 창은 언제나
+    반출 창 안에 있다(`FrozenExport.day_windows`).
+    """
+    windows = registered_day_windows(t0, days=days)
+    plan = {
+        "rule": "ADR 0009 A8.1 - 의사 시각은 T0 직전에 완결된 KST 날짜들의 06:00 KST, 창은 그 앞 24시간",
+        "t0_kst": t0.astimezone(KST).isoformat(),
+        "days": days,
+        "hour_kst": 6,
+        "lookback_hours": 24,
+        "day_windows_utc": [[_fmt(w.start), _fmt(w.end)] for w in windows],
+    }
+    return union_window(windows), plan
+
+
+def _plan_check(plan: Dict[str, Any], window: Window, snapshot: datetime) -> None:
+    """서버 스냅숏 시각(T0)으로 다시 계산한 날짜 창이 계획과 같고, 그 합집합이 반출 창과 같아야 한다."""
+    again = registered_day_windows(snapshot.replace(tzinfo=timezone.utc), days=int(plan["days"]),
+                                   hour_kst=int(plan["hour_kst"]), lookback_hours=int(plan["lookback_hours"]))
+    union = union_window(again)
+    if [[_fmt(w.start), _fmt(w.end)] for w in again] != plan["day_windows_utc"] or \
+            (union.start, union.end) != (window.start, window.end):
+        snapshot_kst = snapshot.replace(tzinfo=timezone.utc).astimezone(KST)
+        raise WindowRefused(
+            f"서버 스냅숏 시각(KST {snapshot_kst:%Y-%m-%d %H:%M})으로 다시 계산한 날짜 창이 계획(T0 {plan['t0_kst']})과 "
+            "다르다 - 계획한 T0와 반출 시각의 KST 날짜가 다르다. 그 날짜로 다시 계획해 반출한다(아무것도 쓰지 않았다)"
+        )
 
 
 def _fmt(value: Optional[datetime]) -> Optional[str]:
@@ -395,8 +429,18 @@ class ExportBundle:
 
 
 def build_export(raw: RawExport, window: Window, *, code: Dict[str, Any],
-                 is_redistributable: Optional[Callable[[str], bool]] = None) -> ExportBundle:
-    """서버가 준 행을 파일의 행으로 바꾸고(본문 해시는 다시 계산한다) 매니페스트를 만든다."""
+                 is_redistributable: Optional[Callable[[str], bool]] = None,
+                 plan: Optional[Dict[str, Any]] = None) -> ExportBundle:
+    """서버가 준 행을 파일의 행으로 바꾸고(본문 해시는 다시 계산한다) 매니페스트를 만든다.
+
+    `plan`(`plan_windows`가 만든 E0 날짜 창 계획)을 주면 서버 스냅숏 시각으로 다시 계산해 대조하고 신원에 넣는다.
+    """
+    try:
+        snapshot = _parse(raw.header["snapshot_at_utc"])
+    except (KeyError, TypeError, ValueError):
+        raise ExportError("머리말에 서버 스냅숏 시각이 없다") from None
+    if plan is not None:
+        _plan_check(plan, window, snapshot)
     is_redistributable = is_redistributable or _license_lookup()
     rows: List[Dict[str, Any]] = []
     seen = set()
@@ -454,6 +498,7 @@ def build_export(raw: RawExport, window: Window, *, code: Dict[str, Any],
         "filter": ROW_FILTER,
         "window_utc": {"start": _fmt(window.start), "end": _fmt(window.end),
                        "bound": "start <= raw_news_crawled_at < end"},
+        "plan": dict(plan) if plan is not None else None,
         "rows": len(rows),
         "rows_sha256": rows_sha256(rows),
         "id_range": [rows[0]["id"], rows[-1]["id"]] if rows else None,
@@ -647,6 +692,16 @@ class FrozenExport:
     @property
     def ids(self) -> List[int]:
         return [r["id"] for r in self.rows]
+
+    def day_windows(self) -> List[Window]:
+        """E0의 날짜 창(ADR 0009 A8.1). 반출 때 적은 계획을 반출본의 T0(서버 스냅숏 시각)로 다시 계산해 대조한다."""
+        plan = self.identity.get("plan")
+        if not plan:
+            raise ExportError("날짜 창 계획 없이(--start-utc/--end-utc로) 만든 반출본이다 - E0에는 --days로 반출한 것을 쓴다")
+        snapshot = _parse(self.identity["source"]["snapshot_at_utc"])
+        window = self.identity["window_utc"]
+        _plan_check(plan, Window(_parse(window["start"]), _parse(window["end"])), snapshot)
+        return [Window(_parse(start), _parse(end)) for start, end in plan["day_windows_utc"]]
 
 
 def _read_manifest(directory: Path) -> Dict[str, Any]:
@@ -854,13 +909,19 @@ def summarize(directory: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
         "articles_bytes": entry["bytes"],
         "rows_with_body": entry["rows_with_body"],
         "purges": len(manifest.get("purges", [])),
+        "plan": ({k: identity["plan"][k] for k in ("t0_kst", "days", "day_windows_utc")}
+                 if identity.get("plan") else None),
     }
 
 
 def export_news_raw(window: Window, *, root: Optional[Path] = None, conn=None,
                     psql_command: Optional[Sequence[str]] = None, code: Optional[Dict[str, Any]] = None,
-                    statement_timeout_s: int = 120, lock_timeout_s: int = 5) -> Dict[str, Any]:
-    """창 하나를 반출해 `<root>/<T0>/`에 쓰고 요약을 돌려준다. T0는 서버의 트랜잭션 시작 시각(UTC)이다."""
+                    statement_timeout_s: int = 120, lock_timeout_s: int = 5,
+                    plan: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """창 하나를 반출해 `<root>/<T0>/`에 쓰고 요약을 돌려준다. T0는 서버의 트랜잭션 시작 시각(UTC)이다.
+
+    E0의 반출이면 `plan_windows(T0, days)`의 (창, 계획)을 준다 - 서버 T0의 KST 날짜가 계획과 다르면 쓰지 않는다.
+    """
     if (conn is None) == (psql_command is None):
         raise ExportError("DB에 닿는 길을 하나만 준다: conn 또는 psql_command")
     root = ensure_export_location(Path(root) if root is not None else default_exports_root())
@@ -869,7 +930,7 @@ def export_news_raw(window: Window, *, root: Optional[Path] = None, conn=None,
     else:
         raw = fetch_with_psql(psql_command, window, statement_timeout_s=statement_timeout_s,
                               lock_timeout_s=lock_timeout_s)
-    bundle = build_export(raw, window, code=code if code is not None else current_code())
+    bundle = build_export(raw, window, code=code if code is not None else current_code(), plan=plan)
     snapshot = _parse(bundle.manifest["identity"]["source"]["snapshot_at_utc"])
     dest = write_export(root / snapshot.strftime("%Y%m%dT%H%M%SZ"), bundle)
     manifest = _read_manifest(dest)
@@ -890,24 +951,47 @@ def _emit(obj: Dict[str, Any]) -> None:
     print(json.dumps(obj, ensure_ascii=False, indent=2))
 
 
+def _t0(value: Optional[str]) -> datetime:
+    """`--t0-kst` 값(시간대가 없으면 KST로 읽는다). 주지 않으면 지금."""
+    if not value:
+        return _utcnow().astimezone(KST)
+    try:
+        t0 = datetime.fromisoformat(value)
+    except ValueError:
+        raise WindowRefused(f"T0를 읽을 수 없다: {value!r}") from None
+    return t0.replace(tzinfo=KST) if t0.tzinfo is None else t0
+
+
 def _cmd_plan_window(args) -> int:
-    t0 = datetime.fromisoformat(args.t0_kst)
-    t0 = t0.replace(tzinfo=KST) if t0.tzinfo is None else t0
-    windows = registered_day_windows(t0, days=args.days)
-    union = union_window(windows)
+    t0 = _t0(args.t0_kst)
+    union, plan = plan_windows(t0, args.days)
     _emit({
-        "t0_kst": t0.astimezone(KST).isoformat(),
+        "t0_kst": plan["t0_kst"],
         "start_utc": union.start.isoformat(),
         "end_utc": union.end.isoformat(),
         "hours": union.hours,
-        "day_windows_utc": [[w.start.isoformat(), w.end.isoformat()] for w in windows],
-        "pseudo_now_kst": [w.end.replace(tzinfo=timezone.utc).astimezone(KST).isoformat() for w in windows],
+        "day_windows_utc": [[_parse(a).isoformat(), _parse(b).isoformat()] for a, b in plan["day_windows_utc"]],
+        "pseudo_now_kst": [_parse(b).replace(tzinfo=timezone.utc).astimezone(KST).isoformat()
+                           for _, b in plan["day_windows_utc"]],
+        "note": "미리 보기다. export --days가 같은 계산을 다시 하고 서버 스냅숏의 KST 날짜와 대조한다",
     })
     return 0
 
 
+def _export_window(args) -> Tuple[Window, Optional[Dict[str, Any]]]:
+    if args.days is not None:
+        if args.start_utc or args.end_utc:
+            raise WindowRefused("--days와 --start-utc/--end-utc 중 하나만 준다")
+        return plan_windows(_t0(args.t0_kst), args.days)
+    if args.t0_kst:
+        raise WindowRefused("--t0-kst는 --days와 함께 준다")
+    if not (args.start_utc and args.end_utc):
+        raise WindowRefused("--days(E0 날짜 창) 또는 --start-utc와 --end-utc를 준다")
+    return Window.from_iso(args.start_utc, args.end_utc), None
+
+
 def _cmd_export(args) -> int:
-    window = Window.from_iso(args.start_utc, args.end_utc)
+    window, plan = _export_window(args)
     root = _cli_root(args.root)
     if not args.any_minute and not INGEST_GAP_MINUTES[0] <= _minute_now() < INGEST_GAP_MINUTES[1]:
         raise ExportError(
@@ -927,7 +1011,7 @@ def _cmd_export(args) -> int:
             conn = psycopg2.connect(dsn, connect_timeout=10)
         command = shlex.split(args.psql_command) if args.psql_command else None
         _emit(export_news_raw(window, root=root, conn=conn, psql_command=command,
-                              statement_timeout_s=args.statement_timeout_s))
+                              statement_timeout_s=args.statement_timeout_s, plan=plan))
     finally:
         if conn is not None:
             conn.close()
@@ -973,13 +1057,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
 
     plan = sub.add_parser("plan-window", help="T0에서 등록된 날짜 창과 반출 창(UTC)을 계산한다")
-    plan.add_argument("--t0-kst", required=True, help="반출 예정 시각(KST), 예: 2026-10-08T14:00")
+    plan.add_argument("--t0-kst", help="반출 예정 시각(KST), 예: 2026-10-08T14:00. 기본은 지금")
     plan.add_argument("--days", type=int, default=3)
     plan.set_defaults(func=_cmd_plan_window)
 
     export = sub.add_parser("export", help="창 하나를 읽기 전용 트랜잭션으로 반출한다")
-    export.add_argument("--start-utc", required=True)
-    export.add_argument("--end-utc", required=True)
+    export.add_argument("--days", type=int,
+                        help="E0 날짜 창 수(ADR 0009 A8.1: 3, 모자라면 5). 창을 직접 계산하고 계획을 매니페스트에 적는다")
+    export.add_argument("--t0-kst", help="--days와 함께. 계획 T0(KST), 기본은 지금. 서버 스냅숏의 KST 날짜와 다르면 거절한다")
+    export.add_argument("--start-utc", help="--days 대신 창을 직접 줄 때(E0이 아닌 반출)")
+    export.add_argument("--end-utc")
     export.add_argument("--root", help="기본: <메인 체크아웃>/data/exports")
     export.add_argument("--dsn-env", help="DSN이 든 환경변수 이름(값을 명령줄에 적지 않는다)")
     export.add_argument("--psql-command", help="스크립트를 표준입력으로 받는 psql 명령 한 줄")
