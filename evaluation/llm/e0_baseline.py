@@ -1029,7 +1029,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if not (head_ok and clean):
             print("prepare는 main에 있는 커밋의 깨끗한 체크아웃(code_sha)에서 돈다(A8.0 3단계)", file=sys.stderr)
             return 2
-        out = prepare(Path(args.export_dir), Path(args.pack_dir), manifest_out=Path(args.manifest))
+        try:
+            out = prepare(Path(args.export_dir), Path(args.pack_dir), manifest_out=Path(args.manifest))
+        except e0_sample.FrameTooSmall as e:
+            # A8.1: 5개 창으로도 eval이 9개 미만 - void(프레임 부족)로 A8.10에 적고 반출을 다시 한다
+            print(json.dumps({"frame": "void_frame_too_small", "detail": str(e)}, ensure_ascii=False))
+            return 3
+        except e0_sample.ExportTooNarrow as e:
+            print(json.dumps({"frame": "export_too_narrow", "detail": str(e)}, ensure_ascii=False))
+            return 4
         print(json.dumps(out, ensure_ascii=False, indent=1))
         return 0
     if args.command == "run":
