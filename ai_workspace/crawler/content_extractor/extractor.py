@@ -14,6 +14,7 @@ import psycopg2
 import trafilatura
 from tqdm import tqdm
 from db.connection import get_connection, release_connection
+from config.retention import BODY_RETENTION_DAYS, RETRYABLE_EXTRACT_STATUSES
 from config.settings import Settings
 from .cleaners import clean_text_lite, is_drop_article
 
@@ -55,7 +56,8 @@ class ExtractionResult(NamedTuple):
 # raw_news_extract_status 값(d48994e9d26e의 CHECK 제약과 동일).
 _RECORDED_STATUSES = ("ok", "dropped", "empty", "fetch_failed", "error", "duplicate")
 # 다시 받으면 결과가 달라질 수 있는 상태 - Settings.MAX_EXTRACT_ATTEMPTS회까지만 다시 시도한다.
-RETRYABLE_STATUSES = ("fetch_failed", "error")
+# 보존 잡(jobs/tasks/retention.py)의 "추출 대기" 조건과 같아야 해서 가벼운 config.retention에 두고 함께 쓴다.
+RETRYABLE_STATUSES = RETRYABLE_EXTRACT_STATUSES
 
 
 def content_sha256(text: str) -> str:
@@ -175,9 +177,10 @@ class ContentExtractor:
 
         # 1. 대상 조회 - 아직 추출을 시도하지 않은 기사 + 다운로드 실패/예외로 재시도 여지가 남은 기사.
         #    'dropped'/'empty'/'duplicate'는 다시 받아도 결과가 같으므로 제외한다.
-        #    본문 보존 기한(ADR 0023, 수집 후 Settings.BODY_RETENTION_DAYS일)이 지난 기사와 본문을 비운 기사는
-        #    내려받지 않는다 - 받으면 기한이 지난 본문을 새로 저장하게 된다. raw_news_crawled_at은 시간대 없는
-        #    UTC 값이라 기준도 UTC로 만든다(jobs/tasks/retention.py와 같은 식).
+        #    본문 보존 기한(ADR 0023, 수집 후 config.retention.BODY_RETENTION_DAYS = 30일)이 지난 기사와 본문을 비운
+        #    기사는 내려받지 않는다 - 받으면 기한이 지난 본문을 새로 저장하게 된다. raw_news_crawled_at은 시간대 없는
+        #    UTC 값이라 기준도 UTC로 만든다(jobs/tasks/retention.py와 같은 식). 기한은 설정(.env)이 아니라 ADR의
+        #    상수를 쓴다 - 설정이 틀려도 기한이 지난 본문을 받지 않고, 수집을 멈추지도 않는다.
         #    보존 잡(jobs/tasks/retention.py)은 여기서 고르는 행 가운데 본문이 빈 행을 건드리지 않는다.
         conn = get_connection()
         try:
@@ -187,12 +190,12 @@ class ContentExtractor:
                 FROM news_raw N
                 JOIN press P ON N.press_id = P.press_id
                 WHERE (N.raw_news_extract_status IS NULL
-                       OR (N.raw_news_extract_status IN ('fetch_failed', 'error')
+                       OR (N.raw_news_extract_status = ANY(%s)
                            AND N.raw_news_extract_attempts < %s))
                   AND N.raw_news_content_purged_at IS NULL
                   AND N.raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - make_interval(days => %s)
                 ORDER BY N.raw_news_id
-            """, (Settings.MAX_EXTRACT_ATTEMPTS, Settings.BODY_RETENTION_DAYS))
+            """, (list(RETRYABLE_STATUSES), Settings.MAX_EXTRACT_ATTEMPTS, BODY_RETENTION_DAYS))
             articles = cur.fetchall()
         finally:
             release_connection(conn)

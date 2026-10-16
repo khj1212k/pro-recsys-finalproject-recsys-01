@@ -1,4 +1,4 @@
-"""retention: 보존 기한(기본 30일)이 지난 상업 언론사 본문을 비운다 - 해시·길이·제목·URL·임베딩은 남긴다 (ADR 0023).
+"""retention: 보존 기한(30일)이 지난 상업 언론사 본문을 비운다 - 해시·길이·제목·URL·임베딩은 남긴다 (ADR 0023).
 
 만료: `raw_news_crawled_at + days <= 지금(UTC)`. raw_news_crawled_at은 시간대 없는 UTC 값이라 기준 시각도
 `now() AT TIME ZONE 'UTC'`로 DB에서 한 번 만들고(세션 TimeZone과 무관), 그 실행 동안 고정한다.
@@ -16,8 +16,14 @@
 끝난 뒤 "기한이 지났는데 본문이 남은 행"을 다시 세어 0이 아니면 경고(알림)를 남긴다.
 멱등이다: 두 번째 실행은 0행을 비운다. 같은 잡의 동시 실행은 jobs.run의 advisory lock이 막는다.
 
+기한: 실제로 비우는 실행은 ADR 0023의 30일만 쓴다. `--days`를 주지 않으면 Settings.BODY_RETENTION_DAYS인데, 이 값이
+30이 아니면 실행이 실패하고 알림이 간다. 30일보다 짧은 `--days`(7~29)는 `--dry-run`과 함께일 때만 받는다 - 없으면
+인자 오류(종료 코드 2)로 아무것도 하지 않는다(config/retention.py).
+
 --dry-run은 세기만 한다(UPDATE 없음). job_runs.stats에 scanned(기한이 지났고 본문 칸이 비지 않은 행)·
 purgeable·purged·skipped_*·remaining_expired_bodies·oldest_remaining_body_crawled_at 등을 남긴다.
+skipped_awaiting_extraction은 기한이 지난 빈 행 중 추출 상태로는 아직 추출 대기인 행이다. 본문 추출기는 기한이 지난
+행을 고르지 않으므로 이 행들은 끝내 추출되지 않고 이 수는 줄지 않고 쌓일 수 있다 - 본문이 ''라 비울 것이 없다.
 """
 import argparse
 import logging
@@ -25,6 +31,10 @@ import math
 import time
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional, Sequence
+
+# 이 잡이 임포트하는 것은 config.retention·config.settings·db.connection뿐이다(함수 안에서, ai_workspace 경로는
+# jobs.run이 잡는다). 1 GB VM에서 ingest와 겹쳐 돌 수 있으므로 본문 추출기(trafilatura·lxml·tqdm)를 끌어오지 않는다 -
+# 추출기와 함께 쓰는 "추출 대기" 상태는 config.retention.RETRYABLE_EXTRACT_STATUSES에 있다.
 
 logger = logging.getLogger("jobs.retention")
 
@@ -127,24 +137,45 @@ def _bounded_int(name: str, low: int, high: int):
     return parse
 
 
-def _days_arg(value: str) -> int:
-    from config.retention import RetentionConfigError, validate_retention_days
-
-    try:
-        return validate_retention_days(value)
-    except RetentionConfigError as e:
-        raise argparse.ArgumentTypeError(str(e)) from None
-
-
 def add_arguments(parser) -> None:
-    parser.add_argument("--days", type=_days_arg, default=None,
-                        help="보존 기한(일, 수집 시각 기준). 기본: Settings.BODY_RETENTION_DAYS(30). 허용 7~30")
+    from config.retention import BODY_RETENTION_DAYS, DRY_RUN_MIN_DAYS
+
+    parser.add_argument("--days", type=_bounded_int("--days", DRY_RUN_MIN_DAYS, BODY_RETENTION_DAYS), default=None,
+                        help=f"보존 기한(일, 수집 시각 기준). 기본: Settings.BODY_RETENTION_DAYS({BODY_RETENTION_DAYS}, "
+                             f"다른 값이면 실패). 실제 실행은 {BODY_RETENTION_DAYS}만, "
+                             f"{DRY_RUN_MIN_DAYS}~{BODY_RETENTION_DAYS - 1}은 --dry-run과 함께일 때만(측정용)")
     parser.add_argument("--dry-run", action="store_true", help="비울 행을 세기만 하고 아무것도 쓰지 않는다")
     parser.add_argument("--batch-size", type=_bounded_int("--batch-size", 1, BATCH_SIZE_MAX),
                         default=BATCH_SIZE_DEFAULT, help=f"한 트랜잭션에서 비울 최대 행 수 (기본 {BATCH_SIZE_DEFAULT})")
     parser.add_argument("--statement-timeout-s", type=_bounded_int("--statement-timeout-s", 1, STATEMENT_TIMEOUT_S_MAX),
                         default=STATEMENT_TIMEOUT_S_DEFAULT,
                         help=f"문장 하나의 시간 제한(초, 기본 {STATEMENT_TIMEOUT_S_DEFAULT}). 락 대기는 {LOCK_TIMEOUT_S}초")
+
+
+def check_args(args) -> Optional[str]:
+    """인자끼리의 조합 검사 - jobs.run이 파싱한 뒤 부르고, 문장을 돌려주면 종료 코드 2로 끝낸다(실행 기록 없음).
+
+    30일보다 짧은 --days는 --dry-run과 함께일 때만 받는다: `--days 7`에서 --dry-run 하나만 빠져도 23일치 본문이
+    되돌릴 수 없게 사라진다."""
+    from config.retention import RetentionConfigError, validate_retention_days
+
+    if args.days is None:
+        return None
+    try:
+        validate_retention_days(args.days, dry_run=args.dry_run)
+    except RetentionConfigError as e:
+        return str(e)
+    return None
+
+
+def resolve_days(args) -> int:
+    """이번 실행의 기한(일). --days가 없으면 설정값이고, 30이 아니면 RetentionConfigError(실패·알림).
+    --days가 있으면 check_args와 같은 규칙으로 다시 확인한다(jobs.run을 거치지 않고 run을 부른 경우의 방어)."""
+    from config.retention import configured_retention_days, validate_retention_days
+
+    if args.days is None:
+        return configured_retention_days()
+    return validate_retention_days(args.days, dry_run=args.dry_run)
 
 
 def _begin(cur, statement_timeout_s: int) -> None:
@@ -172,7 +203,11 @@ def purge_expired_bodies(
 ) -> Dict[str, Any]:
     """기한이 지난 본문을 비우고 통계를 돌려준다. conn은 autocommit이 아닌 psycopg2 연결(전용)이다.
 
-    stats를 넘기면 그 dict를 배치마다 갱신한다(잡이 중간에 끊겨도 진행 상황이 job_runs에 남는다)."""
+    stats를 넘기면 그 dict를 배치마다 갱신한다(잡이 중간에 끊겨도 진행 상황이 job_runs에 남는다).
+    days는 실제 실행이면 30만, dry run이면 7~30만 받는다(아니면 RetentionConfigError, DB를 건드리기 전에)."""
+    from config.retention import validate_retention_days
+
+    days = validate_retention_days(days, dry_run=dry_run)
     stats = stats if stats is not None else {}
     stats.update({
         "days": days, "dry_run": dry_run, "batch_size": batch_size,
@@ -242,14 +277,14 @@ def purge_expired_bodies(
 
 
 def run(ctx) -> Dict[str, Any]:
-    from config.retention import exempt_press_names, validate_retention_days
+    from config.retention import RETRYABLE_EXTRACT_STATUSES, exempt_press_names
     from config.settings import Settings
-    from crawler.content_extractor.extractor import RETRYABLE_STATUSES
     from db.connection import connect_unpooled
 
     args = ctx.args
-    # --days를 주지 않으면 설정값. 설정값이 범위 밖이면 RetentionConfigError로 실패(알림)한다.
-    days = args.days if args.days is not None else validate_retention_days(Settings.BODY_RETENTION_DAYS)
+    # 연결을 열기 전에 기한부터 정한다 - 설정값이 30이 아니거나 짧은 --days에 --dry-run이 없으면 아무것도 하지 않고
+    # RetentionConfigError로 실패(알림)한다.
+    days = resolve_days(args)
     # 락·실행 기록용 연결(jobs/store.py)과 따로 쓰는 작업 연결. 중간에 끊기면(예외, SIGTERM) 닫는 것으로
     # 진행 중이던 배치 하나만 되돌려지고, 앞 배치들은 이미 커밋돼 있다.
     conn = connect_unpooled(application_name="jobs.run:retention:work")
@@ -258,7 +293,7 @@ def run(ctx) -> Dict[str, Any]:
             conn,
             days=days,
             exempt_presses=exempt_press_names(),
-            retryable_statuses=RETRYABLE_STATUSES,
+            retryable_statuses=RETRYABLE_EXTRACT_STATUSES,
             max_extract_attempts=Settings.MAX_EXTRACT_ATTEMPTS,
             dry_run=args.dry_run,
             batch_size=args.batch_size,

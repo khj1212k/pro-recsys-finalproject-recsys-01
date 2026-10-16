@@ -214,11 +214,12 @@ def test_extract_parallel_uses_spawn_pool_selects_pending_and_aggregates_stats()
     get_ctx.assert_called_once_with("spawn")
     select_sql, select_params = cur.execute.call_args[0]
     assert "raw_news_extract_status IS NULL" in select_sql
-    assert "fetch_failed" in select_sql and "'error'" in select_sql
-    # 본문 보존 기한(ADR 0023)이 지난 기사와 본문을 비운 기사는 내려받지 않는다 - (재시도 상한, 보존 일 수)
+    assert "N.raw_news_extract_status = ANY(%s)" in select_sql
+    # 본문 보존 기한(ADR 0023)이 지난 기사와 본문을 비운 기사는 내려받지 않는다
+    # - (재시도할 상태, 재시도 상한, 보존 일 수 = ADR 상수 30)
     assert "raw_news_content_purged_at IS NULL" in select_sql
     assert "raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - make_interval(days => %s)" in select_sql
-    assert select_params == (3, 30)
+    assert select_params == (["fetch_failed", "error"], 3, 30)
 
     assert stats["targets"] == 4
     assert (stats["ok"], stats["dropped"], stats["fetch_failed"], stats["empty"], stats["error"]) == (1, 2, 1, 0, 0)

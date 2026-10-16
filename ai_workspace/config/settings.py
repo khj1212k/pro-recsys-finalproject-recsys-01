@@ -165,9 +165,10 @@ class BaseSettings:
     # 본문 다운로드가 (위 재시도까지) 실패한 기사를 이후 실행에서 다시 시도하는 총 횟수 상한.
     # news_raw.raw_news_extract_attempts로 센다 - 막힌 URL을 2시간마다 영원히 두드리지 않게.
     MAX_EXTRACT_ATTEMPTS: int = int(os.getenv("MAX_EXTRACT_ATTEMPTS", "3"))
-    # 상업 언론사 본문 보존 기한(일, 수집 시각 기준 - ADR 0023). `jobs.run retention`의 --days 기본값이고,
-    # 본문 추출기는 이보다 오래된 기사를 내려받지 않는다. 허용 범위는 config/retention.py(7~30) - 30보다 늘리는
-    # 예외는 없다.
+    # 상업 언론사 본문 보존 기한(일, 수집 시각 기준 - ADR 0023). `jobs.run retention`의 --days 기본값이다.
+    # ADR 0023이 바뀌기 전에는 30만 받는다 - 다른 값이면 retention 잡이 아무것도 하지 않고 실패한다(알림,
+    # config/retention.py의 configured_retention_days). 본문 추출기와 일일 리포트는 이 값이 아니라 ADR 상수
+    # config.retention.BODY_RETENTION_DAYS를 쓴다.
     BODY_RETENTION_DAYS: int = int(os.getenv("BODY_RETENTION_DAYS", "30"))
     # LLM 채팅 API(HyperCLOVA/OpenAI) 호출 재시도 최대 횟수 (감사에서 발견: HyperCLOVA
     # 클라이언트의 `while True` 루프가 이 상한 없이 무제한 재시도했음)

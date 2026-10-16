@@ -17,7 +17,9 @@ from jobs.runtime import JobTerminated, resolve_git_sha, run_job
 
 setup_import_paths()
 
-# 잡 이름 -> 모듈. 모듈은 run(ctx)와 선택적으로 add_arguments(parser)를 제공한다.
+# 잡 이름 -> 모듈. 모듈은 run(ctx)와 선택적으로 add_arguments(parser), check_args(args)를 제공한다.
+# check_args는 인자끼리의 조합을 본다(예: retention의 짧은 --days는 --dry-run과 함께만) - 문장을 돌려주면
+# 잘못된 인자와 같이 종료 코드 2로 끝나고 실행 기록도 남기지 않는다.
 # 무거운 의존성(torch 등)은 각 모듈의 run() 안에서만 임포트한다 - 인자 파싱을 위해
 # 모든 모듈을 임포트하므로.
 JOBS = {
@@ -65,7 +67,12 @@ def _raise_terminated(signum, frame):
 
 def main(argv: Optional[List[str]] = None) -> int:
     _configure_logging()
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    check_args = getattr(importlib.import_module(JOBS[args.job]), "check_args", None)
+    problem = check_args(args) if check_args else None
+    if problem:
+        parser.error(f"{args.job}: {problem}")  # 종료 코드 2
     if args.job in disabled_jobs():
         # 실행 기록을 남기지 않는다 - 매시 도는 줄이면 job_runs가 skipped 행으로 채워진다.
         logging.getLogger("jobs.run").info(f"job={args.job}: JOBS_DISABLED에 있어 실행하지 않음")

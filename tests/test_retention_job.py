@@ -237,22 +237,125 @@ def test_run_closes_the_work_connection_when_a_statement_fails(monkeypatch):
     assert conn.closed
 
 
-def test_settings_value_outside_the_allowed_range_fails_the_run(monkeypatch):
+@pytest.mark.parametrize("configured", [7, 29, 31, 45, "x"])
+@pytest.mark.parametrize("argv", [[], ["--dry-run"]])
+def test_scheduled_run_fails_unless_the_setting_is_the_adr_value(monkeypatch, configured, argv):
+    """스케줄 경로(--days 없음)는 설정값이 ADR 0023의 30일이 아니면 연결을 열기 전에 실패한다(실패 = 알림).
+    잘못된 .env 값(예: BODY_RETENTION_DAYS=7) 하나로 매일 7일 기준으로 비우지 않는다 - dry run이어도 같다."""
     from config.retention import RetentionConfigError
     from config.settings import Settings
 
-    monkeypatch.setattr(Settings, "BODY_RETENTION_DAYS", 45)
-    _patch_connection(monkeypatch, FakeConn(counts=COUNTS))
-    with pytest.raises(RetentionConfigError, match="45일"):
-        retention.run(_ctx([]))
+    monkeypatch.setattr(Settings, "BODY_RETENTION_DAYS", configured)
+    opened = _patch_connection(monkeypatch, FakeConn(counts=COUNTS))
+    with pytest.raises(RetentionConfigError, match="BODY_RETENTION_DAYS"):
+        retention.run(_ctx(argv))
+    assert opened == []
+
+
+def test_a_wrong_setting_fails_the_job_and_alerts_through_the_runner(monkeypatch):
+    """jobs.run을 거친 스케줄 실행: job_runs에 failed, 알림 한 번, 종료 코드 1."""
+    from config.settings import Settings
+    from jobs.runtime import run_job
+
+    monkeypatch.setattr(Settings, "BODY_RETENTION_DAYS", 7)
+    opened = _patch_connection(monkeypatch, FakeConn(counts=COUNTS))
+    alerts, finished = [], []
+
+    class Store:
+        def try_lock(self, job):
+            return True
+
+        def abandon_stale(self, job):
+            return 0
+
+        def start(self, job, git_sha):
+            return 1
+
+        def finish(self, run_id, status, stats, error):
+            finished.append((status, error))
+
+        def unlock(self, job):
+            pass
+
+        def close(self):
+            pass
+
+    args = build_parser().parse_args(["retention"])
+    result = run_job("retention", retention.run, args=args, store_factory=Store, notify=alerts.append)
+
+    assert result.exit_code == 1 and result.status == "failed"
+    assert finished and finished[0][0] == "failed" and "BODY_RETENTION_DAYS" in finished[0][1]
+    assert len(alerts) == 1 and "retention" in alerts[0]
+    assert opened == []
 
 
 @pytest.mark.parametrize("argv", [["--days", "6"], ["--days", "31"], ["--days", "x"], ["--batch-size", "0"],
-                                  ["--batch-size", "5001"], ["--statement-timeout-s", "601"]])
-def test_out_of_range_arguments_are_usage_errors(argv):
+                                  ["--batch-size", "5001"], ["--statement-timeout-s", "601"],
+                                  # 30일보다 짧은 기한은 --dry-run 없이는 받지 않는다(23일치 본문이 사라진다)
+                                  ["--days", "7"], ["--days", "29"], ["--days", "7", "--batch-size", "10"],
+                                  ["--days", "6", "--dry-run"], ["--days", "31", "--dry-run"]])
+def test_out_of_range_arguments_are_usage_errors(argv, monkeypatch):
+    import jobs.store
+
+    def no_db(*a, **k):
+        raise AssertionError("인자 오류인데 실행 기록 연결을 열었다")
+
+    monkeypatch.setattr(jobs.store.PostgresJobRunStore, "connect", no_db)
     with pytest.raises(SystemExit) as exc:
         main(["retention", *argv])
     assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("argv,expected", [
+    ([], None),
+    (["--dry-run"], None),
+    (["--days", "30"], None),
+    (["--days", "30", "--dry-run"], None),
+    (["--days", "7", "--dry-run"], None),
+    (["--dry-run", "--days", "29"], None),
+    (["--days", "7"], "--dry-run"),
+    (["--days", "29"], "--dry-run"),
+])
+def test_short_retention_is_accepted_only_with_dry_run(argv, expected):
+    problem = retention.check_args(build_parser().parse_args(["retention", *argv]))
+    if expected is None:
+        assert problem is None
+    else:
+        assert problem and expected in problem and "ADR 0023" in problem
+
+
+def test_short_days_without_dry_run_is_refused_even_when_run_is_called_directly(monkeypatch):
+    """jobs.run의 인자 검사를 거치지 않고 run(ctx)를 불러도(다른 진입점, 테스트) 연결을 열기 전에 멈춘다."""
+    from config.retention import RetentionConfigError
+
+    opened = _patch_connection(monkeypatch, FakeConn(counts=COUNTS))
+    with pytest.raises(RetentionConfigError, match="--dry-run"):
+        retention.run(_ctx(["--days", "7"]))
+    assert opened == []
+
+
+def test_purge_function_refuses_a_short_real_run_before_touching_the_database():
+    from config.retention import RetentionConfigError
+
+    conn = FakeConn(counts=COUNTS)
+    with pytest.raises(RetentionConfigError):
+        _purge(conn, days=7)
+    assert conn.log == []
+    # 같은 기한의 dry run은 센다
+    stats = _purge(FakeConn(counts=COUNTS), days=7, dry_run=True)
+    assert stats["days"] == 7 and stats["purged"] == 0
+
+
+def test_dry_run_with_short_days_counts_against_the_shorter_cutoff(monkeypatch):
+    conn = FakeConn(counts=COUNTS)
+    _patch_connection(monkeypatch, conn)
+    ctx = _ctx(["--dry-run", "--days", "7"])
+
+    retention.run(ctx)
+
+    assert conn.executed(retention.CUTOFF_SQL)[0]["days"] == 7
+    assert conn.executed(retention.PURGE_BATCH_SQL) == []
+    assert ctx.stats["days"] == 7 and ctx.stats["dry_run"] is True
 
 
 def test_argument_defaults():
@@ -260,21 +363,33 @@ def test_argument_defaults():
     assert args.days is None and args.dry_run is False
     assert args.batch_size == retention.BATCH_SIZE_DEFAULT == 1000
     assert args.statement_timeout_s == 60
-    assert build_parser().parse_args(["retention", "--days", "7"]).days == 7
+    # 파서는 7~30을 받고, 30 미만이면 check_args가 --dry-run을 요구한다(위 테스트)
+    assert build_parser().parse_args(["retention", "--days", "7", "--dry-run"]).days == 7
 
 
 # --------------------------------------------------------------------------- 설정과 출처
 
 
-def test_retention_days_bounds():
-    from config.retention import (BODY_RETENTION_MAX_DAYS, BODY_RETENTION_MIN_DAYS, RetentionConfigError,
-                                  validate_retention_days)
+def test_retention_days_rules():
+    from config.retention import (BODY_RETENTION_DAYS, DRY_RUN_MIN_DAYS, RetentionConfigError,
+                                  configured_retention_days, validate_retention_days)
 
-    assert (BODY_RETENTION_MIN_DAYS, BODY_RETENTION_MAX_DAYS) == (7, 30)
-    assert validate_retention_days("30") == 30 and validate_retention_days(7) == 7
-    for bad in (6, 31, None, "삼십"):
+    assert (DRY_RUN_MIN_DAYS, BODY_RETENTION_DAYS) == (7, 30)
+    # 실제 실행: ADR 0023의 30일만
+    assert validate_retention_days("30") == 30 and validate_retention_days(30, dry_run=True) == 30
+    for bad in (7, 29, 6, 31, None, "삼십"):
         with pytest.raises(RetentionConfigError):
             validate_retention_days(bad)
+    # dry run(세기만): 7~30
+    assert validate_retention_days(7, dry_run=True) == 7 and validate_retention_days("29", dry_run=True) == 29
+    for bad in (6, 31, None):
+        with pytest.raises(RetentionConfigError):
+            validate_retention_days(bad, dry_run=True)
+    # 설정값: 30만
+    assert configured_retention_days(30) == 30 and configured_retention_days("30") == 30
+    for bad in (7, 29, 31, "x"):
+        with pytest.raises(RetentionConfigError, match="BODY_RETENTION_DAYS"):
+            configured_retention_days(bad)
 
 
 def test_only_redistributable_sources_are_exempt():
@@ -287,9 +402,11 @@ def test_only_redistributable_sources_are_exempt():
 
 
 def test_settings_default_is_thirty_days():
+    from config.retention import BODY_RETENTION_DAYS, configured_retention_days
     from config.settings import Settings
 
-    assert Settings.BODY_RETENTION_DAYS == 30
+    assert Settings.BODY_RETENTION_DAYS == BODY_RETENTION_DAYS == 30
+    assert configured_retention_days() == 30
 
 
 # --------------------------------------------------------------------------- SQL 계약 (의미는 integration이 확인)
@@ -332,13 +449,70 @@ def test_awaiting_extraction_rule_matches_the_extractor_selection():
 
     from crawler.content_extractor import extractor
 
+    from config.retention import BODY_RETENTION_DAYS, RETRYABLE_EXTRACT_STATUSES
+
     source = inspect.getsource(extractor.ContentExtractor.extract_parallel_with_stats)
     assert "N.raw_news_extract_status IS NULL" in source
-    assert "N.raw_news_extract_status IN ('fetch_failed', 'error')" in source
+    assert "N.raw_news_extract_status = ANY(%s)" in source
     assert "N.raw_news_extract_attempts < %s" in source
-    assert extractor.RETRYABLE_STATUSES == ("fetch_failed", "error")
+    assert "list(RETRYABLE_STATUSES), Settings.MAX_EXTRACT_ATTEMPTS, BODY_RETENTION_DAYS" in source
+    # 두 잡이 같은 상수를 쓴다(보존 잡은 추출기를 임포트하지 않고 config.retention에서 읽는다)
+    assert extractor.RETRYABLE_STATUSES is RETRYABLE_EXTRACT_STATUSES == ("fetch_failed", "error")
+    assert extractor.BODY_RETENTION_DAYS is BODY_RETENTION_DAYS
     assert "n.raw_news_extract_status IS NULL" in retention.COUNT_SQL
+    assert "n.raw_news_extract_status = ANY(%(retryable)s)" in retention.COUNT_SQL
     assert "n.raw_news_extract_attempts < %(max_attempts)s" in retention.COUNT_SQL
+
+
+def test_retention_run_does_not_load_the_extractor_stack():
+    """1 GB VM에서 ingest와 겹쳐 돌 수 있으므로 보존 잡 프로세스는 trafilatura·lxml·tqdm을 올리지 않는다
+    (예전에는 상수 하나 때문에 추출기를 임포트해 RSS가 약 18 MiB 늘었다). 새 프로세스에서 jobs.run의 파서를 만들고
+    run()을 연결 직전까지 돌린 뒤 sys.modules를 본다."""
+    import subprocess
+    import sys
+    import textwrap
+
+    code = textwrap.dedent("""
+        import sys
+        import jobs.run
+        import db.connection
+
+        class Stop(Exception):
+            pass
+
+        def stop(**kwargs):
+            raise Stop()
+
+        db.connection.connect_unpooled = stop
+        from jobs.runtime import JobContext
+        from jobs.tasks import retention
+
+        args = jobs.run.build_parser().parse_args(["retention", "--dry-run"])
+        try:
+            retention.run(JobContext(job="retention", args=args))
+        except Stop:
+            pass
+        heavy = ("trafilatura", "lxml", "tqdm", "crawler.content_extractor", "torch", "numpy")
+        print(",".join(sorted(m for m in heavy if m in sys.modules)) or "-")
+    """)
+    out = subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT, capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().splitlines()[-1] == "-"
+
+
+def test_docs_and_crontabs_never_run_a_short_retention_without_dry_run():
+    """런북·crontab에 적힌 retention 명령 중 30일보다 짧은 --days는 모두 --dry-run과 함께다(코드도 강제한다)."""
+    paths = [REPO_ROOT / "docker" / "crontab", REPO_ROOT / "docker" / "crontab.micro",
+             *sorted((REPO_ROOT / "docs").rglob("*.md"))]
+    found = 0
+    for path in paths:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            for m in re.finditer(r"retention((?:\s+--?[a-z-]+(?:\s+\d+)?)*)", line):
+                days = re.search(r"--days\s+(\d+)", m.group(1))
+                if days and int(days.group(1)) < 30:
+                    found += 1
+                    assert "--dry-run" in m.group(1), (path, line)
+    assert found >= 1  # 런북 4.1 6단계의 측정 명령
 
 
 # --------------------------------------------------------------------------- 스케줄

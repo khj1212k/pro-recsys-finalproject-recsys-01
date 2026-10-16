@@ -8,31 +8,76 @@
 #   expires_at = crawled_at + N일, now >= expires_at 이면 만료(같은 순간부터 만료).
 # raw_news_crawled_at은 시간대 없는 timestamp이고 값은 UTC다 - 수집기가 datetime.now()로 쓰고 컨테이너의 TZ가
 # UTC다(ADR 0026). 그래서 기준 시각도 DB에서 `now() AT TIME ZONE 'UTC'`로 만든다(세션 TimeZone과 무관).
+#
+# 이 모듈은 가벼워야 한다 - 보존 잡(jobs/tasks/retention.py)이 임포트하므로 trafilatura·lxml 같은 추출기 의존성을
+# 끌어오지 않는다(1 GB VM에서 ingest와 겹쳐 도는 프로세스다).
 from typing import List, Optional
 
-# ADR 0023: 30일. 늘리는 예외는 없다(반출 도구의 BODY_RETENTION_DAYS와 같은 값).
-BODY_RETENTION_MAX_DAYS = 30
-# 이보다 짧게는 잘못 쳐도 돌지 않는다. 클러스터링 lookback(24~72시간)과 재시도, ADR 0023이 검토한 가장 짧은
-# 대안(7일)을 기준으로 정했다. 더 짧게 하려면 ADR 0023을 먼저 고친다.
-BODY_RETENTION_MIN_DAYS = 7
+# ADR 0023: 30일. 실제로 비우는 실행은 이 값만 쓴다 - 늘리는 예외도 줄이는 예외도 없다(반출 도구의
+# BODY_RETENTION_DAYS와 같은 값). 바꾸려면 ADR 0023을 먼저 고치고 이 상수를 바꾼다.
+# 30일은 평가셋 추출·라벨링·재생성 한 사이클이다. 더 짧게 비우면 진행 중인 사이클의 본문이 되돌릴 수 없게 사라진다
+# (덤프에서 본문을 되살리지 않는다 - 런북).
+BODY_RETENTION_DAYS = 30
+# 30일보다 짧은 기한은 --dry-run(세기만 함)에서만 받는다. 배포 때 실제 규모에서 세는 쿼리의 시간을 미리 재는 용도이고
+# (docs/runbook-hosting.md 4.1 6단계), 이보다 짧은 값은 그 용도에도 필요 없다.
+DRY_RUN_MIN_DAYS = 7
+
+# 본문 추출기가 다시 시도하는 추출 상태(다시 받으면 결과가 달라질 수 있는 것) - Settings.MAX_EXTRACT_ATTEMPTS회까지.
+# 본문 추출기(crawler/content_extractor/extractor.py)의 대상 조회와 보존 잡의 "추출 대기" 조건이 함께 쓴다.
+# 두 조건이 같아야 두 잡이 같은 행을 두고 다투지 않는다.
+RETRYABLE_EXTRACT_STATUSES = ("fetch_failed", "error")
 
 
 class RetentionConfigError(ValueError):
-    """보존 기한 설정이 허용 범위 밖이다."""
+    """보존 기한 설정이나 인자가 허용 범위 밖이다."""
 
 
-def validate_retention_days(days) -> int:
-    """일 수를 정수로 검증한다. 범위 밖이면 RetentionConfigError."""
+def _as_int(days) -> int:
     try:
-        value = int(days)
+        return int(days)
     except (TypeError, ValueError):
         raise RetentionConfigError(f"보존 기한은 정수(일)여야 한다: {days!r}") from None
-    if not BODY_RETENTION_MIN_DAYS <= value <= BODY_RETENTION_MAX_DAYS:
+
+
+def validate_retention_days(days, *, dry_run: bool = False) -> int:
+    """보존 기한(일)을 검증한다. 실제로 비우는 실행은 ADR 0023의 30일만, dry run은 7~30일을 받는다.
+
+    아니면 RetentionConfigError. `--days 7`을 --dry-run 없이 주면 23일치 본문이 사라지므로 막는다."""
+    value = _as_int(days)
+    if value == BODY_RETENTION_DAYS:
+        return value
+    if DRY_RUN_MIN_DAYS <= value < BODY_RETENTION_DAYS:
+        if dry_run:
+            return value
         raise RetentionConfigError(
-            f"보존 기한 {value}일은 허용 범위({BODY_RETENTION_MIN_DAYS}~{BODY_RETENTION_MAX_DAYS}일) 밖이다 "
-            "(ADR 0023: 30일보다 늘리는 예외는 없고, 7일보다 짧게 하려면 ADR을 먼저 고친다)"
+            f"보존 기한 {value}일은 --dry-run과 함께일 때만 쓸 수 있다 - 실제로 비우는 실행은 ADR 0023의 "
+            f"{BODY_RETENTION_DAYS}일만 받는다(더 짧게 비우려면 ADR 0023을 먼저 고친다)"
         )
-    return value
+    raise RetentionConfigError(
+        f"보존 기한 {value}일은 허용 범위 밖이다 - 실제 실행은 {BODY_RETENTION_DAYS}일, dry run은 "
+        f"{DRY_RUN_MIN_DAYS}~{BODY_RETENTION_DAYS}일(ADR 0023: 30일보다 늘리는 예외는 없다)"
+    )
+
+
+def configured_retention_days(value=None) -> int:
+    """설정값(Settings.BODY_RETENTION_DAYS, 환경변수 BODY_RETENTION_DAYS)을 검증해 돌려준다.
+
+    ADR 0023이 바뀌기 전에는 30만 받는다 - dry run이어도 같다. 다르면 RetentionConfigError를 던져 스케줄 실행을
+    실패시키고 알림이 가게 한다(잘못된 .env 값 하나로 매일 더 짧은 기한으로 비우지 않게)."""
+    if value is None:
+        from config.settings import Settings
+
+        value = Settings.BODY_RETENTION_DAYS
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        days = None
+    if days != BODY_RETENTION_DAYS:
+        raise RetentionConfigError(
+            f"설정 BODY_RETENTION_DAYS={value!r}는 ADR 0023의 {BODY_RETENTION_DAYS}일과 다르다 - 이 값만 받는다. "
+            ".env에서 그 줄을 지우거나 30으로 고친다(기한을 바꾸려면 ADR 0023을 먼저 고친다)"
+        )
+    return days
 
 
 def exempt_press_names(licenses: Optional[dict] = None) -> List[str]:
