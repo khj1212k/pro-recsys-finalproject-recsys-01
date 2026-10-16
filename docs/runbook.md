@@ -25,6 +25,7 @@ Airflow는 쓰지 않는다. 팀 시절 DAG은 `backend/airflow/dags/`에 보관
 | `popularity` | 매시 35분 | 뉴스레터가 아직 없어서 빈 랭킹이 저장되는 게 정상 |
 | `cluster` | 매일 14:50 UTC (23:50 KST) | LLM 호출 없이 클러스터 통계만 `job_runs`에 기록 |
 | `daily_report` | 매일 00:10 UTC (09:10 KST) | 최근 24시간 요약 (로그, `SLACK_WEBHOOK_URL`이 있으면 Slack) |
+| `retention` | 매일 17:50 UTC (02:50 KST) | 수집 후 30일 지난 상업 언론사 본문을 비운다(해시·길이·제목·URL·임베딩 유지, 정책브리핑 면제 - [ADR 0023](adr/0023-data-sources-copyright-retention.md)). `--dry-run`은 세기만 한다. 배포·확인·되돌리기는 [runbook-hosting.md](runbook-hosting.md) 4.1 |
 | `generate`, `batch_fallback` | **꺼져 있음** | LLM 평가 프로토콜·사실성 게이트 결정 전까지 켜지 않는다 |
 | `rebuild_user_state --check` | **꺼져 있음** | 장기 프로필 상태가 클릭 로그와 맞는지 점검(쓰지 않음). 사용자가 생기면 켠다 (ADR 0033) |
 | `train` | **은퇴** | 팀 시절 학습 레시피. 불려도 아무것도 실행하지 않고 `skipped`로 남는다. 모델은 `scripts/register_model.py`로 올린다 (ADR 0033) |
@@ -249,6 +250,20 @@ docker compose up -d
 docker compose exec -T db pg_dump -U newsletter -d newsletter -Fc > backup_$(date +%Y%m%d).dump
 # 복원: docker compose exec -T db pg_restore -U newsletter -d newsletter --clean < backup_YYYYMMDD.dump
 ```
+
+**덤프의 본문도 30일 규칙을 따른다**([ADR 0023](adr/0023-data-sources-copyright-retention.md) 개정 2026-10-17). 덤프는 DB 전체의
+본문을 담고 행 단위로 지울 수 없으므로, 덤프 안에서 가장 오래된 상업 언론사 본문의 수집일 + 30일에 파일을 통째로 지운다.
+그 날짜를 파일 이름(`<이름>.expires-YYYY-MM-DD.dump`)에 적는다. 보존 잡이 날마다 도는 DB라면 전체 덤프는 뜬 지 하루 안팎에
+만료된다. Mac에는 상주 작업을 두지 않으므로(지우는 데몬도 없다) 덤프를 다룰 때마다 사람이 확인한다:
+
+```bash
+# 만료일(UTC 날짜)이 오늘이거나 지난 덤프를 보여 준다 - 보이면 지운다(사본이 있는 곳도 같은 날)
+for f in data/backups/*.expires-*.dump; do d=${f##*.expires-}; d=${d%.dump}; \
+  [[ ! "$d" > "$(date -u +%F)" ]] && echo "만료: $f ($d)"; done
+# 만료일이 이름에 없는 예전 덤프: mac-compose-2026-09-26.dump 2026-10-25, tier0-micro-2026-09-26T2218.dump 2026-10-26
+```
+
+덤프를 복원한 DB에는 덤프 시점의 본문이 다시 들어 있다. 복원한 뒤에는 다른 잡보다 먼저 `docker compose run --rm worker retention`을 돌린다.
 
 ## 9. generate 켜기 (나중에)
 

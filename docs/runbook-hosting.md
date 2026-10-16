@@ -155,6 +155,155 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 ssh -F .ops/micro/ssh_config micro 'free -m; sudo docker stats --no-stream'
 ```
 
+### 4.1 본문 보존 잡 배포·확인·되돌리기 ([ADR 0023](adr/0023-data-sources-copyright-retention.md))
+
+`python -m jobs.run retention`이 매일 17:50 UTC(02:50 KST)에 수집 후 30일이 지난 상업 언론사 본문을 비운다(본문만 NULL,
+해시·길이·제목·URL·임베딩은 남김, 정책브리핑 면제). 만료는 `raw_news_crawled_at + 30일 <= 지금(UTC)`이다.
+**VM의 첫 만료는 2026-10-26 02:36 UTC(11:36 KST)** - 그 전에 아래 배포를 끝낸다. 첫 만료분이 실제로 비워지는 것은
+10-26 17:50 UTC 실행이다(하루 한 번이라 최대 보존은 30일 + 24시간 남짓, ADR 0023 개정 2026-10-17).
+
+이 배포는 VM의 코드를 09-26 스냅숏에서 병합 커밋으로 올린다. Alembic은 `d48994e9d26e` → `8b7f830013b7` → `c4d2a91e7f30`
+→ `a6f1e83b0d57` → `f1db3221e45f`로 오른다. 가운데 셋은 VM에서 비어 있는 추천용 테이블만 만들거나 바꾼다. 마지막이
+본문 보존 스키마이고 기존 행의 길이를 2,000행씩 채운다(락·I/O는 ADR 0023 개정의 "마이그레이션의 락과 I/O"). 언론사
+시드에 `정책브리핑`이 더해진다(인증키가 없으면 수집하지 않는다).
+
+아래 명령은 Mac의 **메인 체크아웃**에서 돌린다(`data/`가 gitignore인 곳).
+
+```bash
+MICRO="ssh -F .ops/micro/ssh_config micro"
+VMPSQL="cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -U newsletter -d newsletter"
+```
+
+**배포**
+
+0. 하기 전에 - 하나라도 아니면 하지 않는다.
+
+   ```bash
+   git fetch origin && MERGE=$(git rev-parse origin/main) && git log -1 --oneline $MERGE   # 보존 잡 PR의 병합 커밋
+   gh run list --repo khj1212k/pro-recsys-finalproject-recsys-01 --branch main --limit 1   # 그 커밋의 CI가 success
+   $MICRO "$VMPSQL -At -c \"SELECT job, started_at FROM job_runs WHERE status = 'running'\""   # 비어 있어야 한다(6.6)
+   $MICRO 'free -m; df -h / | tail -1'   # MemAvailable ≥ 300 MiB, 디스크 여유 ≥ 2 GB
+   ```
+
+1. 스케줄러를 멈춘다(마이그레이션 동안 잡이 쓰지 않게). ingest가 돌고 있으면 끝날 때까지 기다린 뒤에 한다.
+
+   ```bash
+   $MICRO 'cd ~/newsletter-recsys && sudo docker compose stop scheduler'
+   ```
+
+2. 백업을 당겨 온다(6.5). 만료일을 파일 이름에 적는다 - 이 덤프에는 본문이 들어 있다.
+
+   ```bash
+   EXP=$($MICRO "$VMPSQL -At -c \"SELECT (min(n.raw_news_crawled_at) + interval '30 days')::date FROM news_raw n \
+     JOIN press p USING (press_id) WHERE n.raw_news_content <> '' AND p.press_name <> '정책브리핑'\"")
+   DUMP=data/backups/tier0-micro-$(date -u +%Y-%m-%dT%H%MZ).expires-$EXP.dump
+   ( umask 077; $MICRO 'cd ~/newsletter-recsys && sudo docker compose exec -T db pg_dump -U newsletter -d newsletter -Fc' > $DUMP )
+   pg_restore -l $DUMP | grep -c "TABLE DATA"
+   pg_restore -a -t news_raw -f - $DUMP | awk '/^COPY/{f=1;next} /^\\\./{f=0} f{n++} END{print n}'   # = 아래 VM 값
+   $MICRO "$VMPSQL -At -c 'SELECT count(*) FROM news_raw'"
+   ```
+
+3. 코드를 바꾼다. 이전 스냅숏은 `~/newsletter-recsys.prev`로 옆에 두고(되돌리기 R3), `.env`·`.ops`만 옮긴다.
+   디렉터리 이름은 그대로라 compose 프로젝트(`name: newsletter-recsys`)와 `pgdata` 볼륨이 이어진다.
+
+   ```bash
+   git archive --format=tar.gz -o /tmp/tier0.tar.gz $MERGE
+   scp -F .ops/micro/ssh_config /tmp/tier0.tar.gz micro: && rm /tmp/tier0.tar.gz
+   $MICRO "set -e; cd ~; rm -rf newsletter-recsys.prev; mv newsletter-recsys newsletter-recsys.prev; mkdir newsletter-recsys; \
+     tar -xzf tier0.tar.gz -C newsletter-recsys; rm tier0.tar.gz; cp -a newsletter-recsys.prev/.env newsletter-recsys/.env; \
+     if [ -d newsletter-recsys.prev/.ops ]; then cp -a newsletter-recsys.prev/.ops newsletter-recsys/; fi; \
+     sed -i 's/^GIT_SHA=.*/GIT_SHA=$MERGE/' newsletter-recsys/.env; grep '^GIT_SHA=' newsletter-recsys/.env"
+   ```
+
+4. 수집 전용 이미지를 다시 빌드한다(1 GB 안에서). 스케줄러가 멈춰 있어 빌드가 쓸 메모리는 DB 몫을 뺀 나머지다
+   (09-26 첫 빌드 121초). `migrate`·`worker`·`scheduler`는 같은 이미지 태그를 쓴다.
+
+   ```bash
+   $MICRO 'free -m && cd ~/newsletter-recsys && time sudo docker compose build migrate && free -m'
+   ```
+
+5. 마이그레이션. 스케줄러를 켜기 전에 따로 돌려 결과를 본다.
+
+   ```bash
+   $MICRO 'cd ~/newsletter-recsys && time sudo docker compose run --rm migrate'
+   # 기대: "Running upgrade ... -> f1db3221e45f", "[migrate] f1db3221e45f: 본문 길이 N행 채움 (...배치...)", "[migrate] 완료"
+   $MICRO "$VMPSQL -At -c 'SELECT version_num FROM alembic_version'"   # f1db3221e45f
+   ```
+
+6. 잡을 손으로 먼저 돌린다 - dry run 두 번(세기만), 그다음 실제 실행. 마지막 줄의 JSON이 `job_runs.stats`와 같다.
+
+   ```bash
+   $MICRO 'cd ~/newsletter-recsys && sudo docker compose run --rm worker retention --dry-run'
+   # 10-26 02:36 UTC 전이면 scanned 0, purgeable 0, oldest_remaining_body_crawled_at 2026-09-26T02:36:41...
+   $MICRO 'cd ~/newsletter-recsys && sudo docker compose run --rm worker retention --dry-run --days 7'
+   # 읽기만 한다: 실제 규모에서 세는 쿼리가 얼마나 걸리는지(duration_s)와 7일 기준 대상 수(purgeable)를 본다
+   $MICRO 'cd ~/newsletter-recsys && sudo docker compose run --rm worker retention'
+   # 만료 전이면 purged 0. 만료 뒤에 배포했다면 여기서 첫 비움이 일어난다(remaining_expired_bodies 0이어야 한다)
+   ```
+
+7. 스케줄러를 다시 켠다. `up`은 `migrate`도 한 번 더 돌린다(아무것도 바꾸지 않는다).
+
+   ```bash
+   $MICRO 'cd ~/newsletter-recsys && sudo docker compose up -d && sudo docker compose ps'
+   $MICRO 'cd ~/newsletter-recsys && sudo docker compose logs --tail 40 scheduler | grep -i "retention\|crontab"'
+   ```
+
+**확인**
+
+```bash
+# 배포 직후: 리비전, 길이 채움, 손으로 돌린 실행
+$MICRO "$VMPSQL -c \"SELECT count(*) FILTER (WHERE raw_news_content IS NOT NULL AND raw_news_content_length IS NULL) AS no_length, \
+  count(*) FILTER (WHERE raw_news_content_purged_at IS NOT NULL) AS purged FROM news_raw\""          # no_length 0
+$MICRO "$VMPSQL -c \"SELECT id, status, started_at, stats->>'purged' AS purged, stats->>'remaining_expired_bodies' AS remaining, \
+  stats->>'oldest_remaining_body_crawled_at' AS oldest, stats->>'duration_s' AS s FROM job_runs WHERE job = 'retention' \
+  ORDER BY id DESC LIMIT 5\""
+# 다음 정시 ingest(:05)가 끝난 뒤: 성공, 새로 추출한 본문에 길이가 있다
+$MICRO "$VMPSQL -c \"SELECT id, status, finished_at - started_at FROM job_runs WHERE job = 'ingest' ORDER BY id DESC LIMIT 2\" \
+  -c \"SELECT count(*) FROM news_raw WHERE raw_news_extracted_at > now() - interval '2 hours' AND raw_news_content_length IS NULL\""   # 0
+$MICRO 'free -m; sudo docker stats --no-stream'
+# 2026-10-26 17:50 UTC 실행 뒤(10-27 02:50 KST 이후): 마지막 실행과 준수 확인(0이어야 한다)
+$MICRO "$VMPSQL -c \"SELECT status, stats->>'purged' AS purged, stats->>'purged_bodies' AS bodies, \
+  stats->>'remaining_expired_bodies' AS remaining, stats->>'duration_s' AS s FROM job_runs WHERE job = 'retention' \
+  ORDER BY id DESC LIMIT 1\" -c \"SELECT count(*) FROM news_raw n JOIN press p USING (press_id) WHERE n.raw_news_content <> '' \
+  AND p.press_name <> '정책브리핑' AND n.raw_news_crawled_at <= (now() AT TIME ZONE 'UTC') - interval '30 days 26 hours'\""
+```
+
+일일 리포트(00:10 UTC)에 "본문 보존(30일): 기한 지난 본문 N건(하루 넘게 밀린 것 M건) ..." 줄이 생긴다. M이 0이 아니면
+경고(Slack)가 간다 - 잡이 돌지 않았거나 실패한 것이다.
+
+**되돌리기** - 비운 본문은 어느 경우에도 되살리지 않는다(덤프에 남은 본문을 다시 넣지 않는다).
+
+- R1 잡만 끈다(코드·스키마 유지). 끈 동안 만료된 본문은 남으므로 ADR 0023을 어긴다 - 고친 뒤 바로 다시 켠다.
+
+  ```bash
+  $MICRO "cd ~/newsletter-recsys && echo 'SCHEDULER_JOBS_DISABLED=retention' >> .env && sudo docker compose up -d scheduler"
+  # 다시 켜기: .env에서 그 줄을 지우고 같은 up -d scheduler
+  ```
+
+- R2 마이그레이션이 중간에 실패했다(예: `lock_timeout`). DDL은 다시 돌려도 되게 쓰여 있고 길이 채우기는 빈 행만 채운다.
+  막은 연결을 찾아 끝낸 뒤 5단계를 다시 한다. 스케줄러는 그때까지 멈춰 둔다.
+
+  ```bash
+  $MICRO "$VMPSQL -c \"SELECT pid, state, now() - xact_start AS age, left(query, 80) FROM pg_stat_activity \
+    WHERE datname = 'newsletter' AND pid <> pg_backend_pid()\""
+  ```
+
+- R3 새 코드에서 수집이 깨진다 - 이전 스냅숏으로. 09-26 코드는 `d48994e9d26e`까지만 알아서, 그 `migrate`는 더 새 리비전의
+  DB에서 "Can't locate revision"으로 멈춘다. 그래서 **새 이미지로 먼저 내린다**. 내리면 비운 행은 ''가 되고(본문은 돌아오지
+  않는다) 길이·비운 시각·유형 열과 비어 있는 추천 테이블이 사라진다. 이전 코드에는 보존 잡이 없으므로 짧게만 쓴다.
+
+  ```bash
+  $MICRO 'cd ~/newsletter-recsys && sudo docker compose stop scheduler && \
+    sudo docker compose run --rm --entrypoint sh migrate -c "cd /app/backend && alembic downgrade d48994e9d26e"'
+  $MICRO 'set -e; cd ~; mv newsletter-recsys newsletter-recsys.bad; mv newsletter-recsys.prev newsletter-recsys; \
+    cd newsletter-recsys && sudo docker compose up -d --build'
+  ```
+
+- R4 DB가 망가졌다 - 2단계 덤프를 6.2의 명령으로 복원한 뒤 `up -d`(migrate가 head로 올린다). 복원한 DB에는 덤프 시점의
+  본문이 다시 들어 있으므로, 만료 뒤라면 스케줄러를 켜기 전에 `sudo docker compose run --rm worker retention`부터 돌린다.
+
+배포를 마치면 2단계 덤프는 이름의 만료일에 지운다(6.5). `~/newsletter-recsys.prev`는 다음 배포 때 지워진다.
+
 ## 5. 유휴 회수 점검
 
 공식 기준(Always Free Resources 문서): 7일 동안 CPU p95 < 20%, 네트워크 사용률 < 20%,
@@ -233,9 +382,9 @@ Tier 0는 고친 코드로 재배포돼 있어야 한다(아니면 A1과 Tier 0�
 1. `scripts/oci/micro_bootstrap.sh`를 그대로 실행한다(아키텍처 무관). 12 GB에서도 스왑 2 GB는 모델 로드 피크 흡수용으로 둔다.
 2. 코드 스냅숏을 보내고 `.env`는 `COMPOSE_FILE`을 기본값(`docker-compose.yml`만)으로 둔다 - 전체 worker 이미지를
    arm64로 직접 빌드한다. `sudo docker compose up -d db`로 **DB만** 올린다(스케줄러는 아직 끈다).
-3. Mac 덤프를 복원한다(Alembic 리비전까지 덤프에 들어 있다 — Tier 0와 같은 `d48994e9d26e`인지 확인).
-   배포하는 코드의 head가 그보다 뒤여도(2026-10-06 기준 `8b7f830013b7`) 여기서는 올리지 않는다 - 6단계의
-   `up -d`에서 `migrate`가 올린다. `8b7f830013b7`은 `news_raw`·`press`를 바꾸지 않아 5단계 병합에 영향이 없다:
+3. Mac 덤프를 복원한다(Alembic 리비전까지 덤프에 들어 있다 — Mac 덤프는 `d48994e9d26e`). 5단계 병합 SQL은
+   본문 보존 열(`f1db3221e45f`, ADR 0023)을 쓰므로 **복원한 뒤 병합 전에** `sudo docker compose run --rm migrate`로
+   head까지 올린다. Tier 0도 4.1의 배포 뒤라면 `f1db3221e45f`다:
 
    ```bash
    scp -F <a1 ssh_config> data/backups/mac-compose-2026-09-26.dump a1:mac.dump
@@ -251,7 +400,8 @@ Tier 0는 고친 코드로 재배포돼 있어야 한다(아니면 A1과 Tier 0�
    ssh -F .ops/micro/ssh_config micro 'cd ~/newsletter-recsys && umask 077 && sudo docker compose exec -T db \
      psql -U newsletter -d newsletter -v ON_ERROR_STOP=1 -c "COPY (SELECT p.press_name, n.raw_news_title, \
      n.raw_news_content, n.raw_news_url, n.raw_news_created_at, n.raw_news_crawled_at, n.raw_news_extract_status, \
-     n.raw_news_extracted_at, n.raw_news_extract_attempts, n.raw_news_content_sha256 FROM news_raw n \
+     n.raw_news_extracted_at, n.raw_news_extract_attempts, n.raw_news_content_sha256, n.raw_news_content_length, \
+     n.raw_news_content_purged_at, n.raw_news_kogl_type FROM news_raw n \
      JOIN press p USING (press_id) ORDER BY n.raw_news_id) TO STDOUT WITH (FORMAT csv, HEADER)" > ~/tier0_news_raw.csv'
    ```
 
@@ -278,7 +428,9 @@ Tier 0는 고친 코드로 재배포돼 있어야 한다(아니면 A1과 Tier 0�
 
    이 스크립트의 동작(같은 URL 유지, 이름 매핑, `duplicate` 분기, 재실행 0행, 위 두 중단)은
    `tests/integration/test_merge_tier0_news_raw_sql.py`가 CI의 Postgres에서 같은 `psql` 명령으로 확인한다.
-6. A1 스케줄러를 켠다(`sudo docker compose up -d`). 첫 embed가 병합된 ok 행의 임베딩을 채운다
+6. 스케줄러를 켜기 전에 보존 잡을 한 번 돌린다(`sudo docker compose run --rm worker retention`) - 덤프와 CSV에서 들어온
+   본문 가운데 이미 만료된 것을 비운다(ADR 0023). 비운 행은 병합 SQL이 비운 채 옮긴다.
+   그다음 A1 스케줄러를 켠다(`sudo docker compose up -d`). 첫 embed가 병합된 ok 행의 임베딩을 채운다
    (`SELECT count(*) FROM news_raw WHERE raw_news_extract_status='ok' AND embedding_result IS NULL`이 0으로 수렴).
    2026-10-06 기준 Tier 0의 ok 행은 12,823건이라 채울 임베딩이 약 1.3만 건이다. embed 잡은 회차마다 시간
    예산(`--time-budget-s 2400`)만큼만 돌므로 여러 회차에 걸친다 - A1 CPU 처리량은 재 본 적이 없다(ADR 0006).
@@ -290,15 +442,18 @@ Tier 0는 고친 코드로 재배포돼 있어야 한다(아니면 A1과 Tier 0�
 
 ### 6.5 Tier 0 호스트 밖 백업 (Mac이 당겨 옴)
 
-Tier 0가 유일한 수집기인 동안의 유일한 호스트 밖 사본이다. 자동화는 Mac에서 상주 작업을 돌리지 않기로 한
-동안 보류이므로 사람이 돌린다(가벼운 작업: 2026-09-26 22:18 기준 1.1 MB, 몇 초. 2026-10-06에는 DB가 49 MB라
+Tier 0가 유일한 수집기인 동안의 유일한 호스트 밖 사본이다. **덤프에는 본문이 들어 있어 본문 30일 규칙을 따른다**
+(ADR 0023): 덤프 안에서 가장 오래된 상업 언론사 본문의 수집일 + 30일을 파일 이름(`.expires-YYYY-MM-DD`)에 적고 그날
+통째로 지운다. 보존 잡(4.1)이 날마다 돌면 전체 덤프는 뜬 지 하루 안팎에 만료된다. 만료일을 읽는 조회와 이름은 4.1의
+2단계와 같다. Mac에는 상주 작업을 두지 않으므로 지우는 것은 사람이다 - 확인은 [runbook.md](runbook.md) 8절의 한 줄.
+자동화는 Mac에서 상주 작업을 돌리지 않기로 한 동안 보류이므로 사람이 돌린다(가벼운 작업: 2026-09-26 22:18 기준 1.1 MB, 몇 초. 2026-10-06에는 DB가 49 MB라
 덤프도 그만큼 커진다). **2026-10-06 현재 마지막 백업은 09-26 22:18이다** - 주기를 정하지 않은 채 10일이 지났다
 (ADR 0026 결정 6의 재검토 항목).
 
 ```bash
 ( umask 077; ssh -F .ops/micro/ssh_config micro \
     'cd ~/newsletter-recsys && sudo docker compose exec -T db pg_dump -U newsletter -d newsletter -Fc' \
-    > data/backups/tier0-micro-$(date +%Y-%m-%dT%H%M).dump )
+    > data/backups/tier0-micro-$(date +%Y-%m-%dT%H%M).expires-<만료일>.dump )   # 만료일: 4.1의 2단계 조회
 # 서버 없이 확인: 목차가 읽히고 news_raw 행 수가 VM의 count(*)와 같은지
 pg_restore -l data/backups/tier0-micro-<시각>.dump | grep -c "TABLE DATA"
 pg_restore -a -t news_raw -f - data/backups/tier0-micro-<시각>.dump | awk '/^COPY/{f=1;next} /^\\\./{f=0} f{n++} END{print n}'
