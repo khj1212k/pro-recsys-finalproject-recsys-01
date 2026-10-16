@@ -1,7 +1,9 @@
 """daily_report: 최근 24시간 잡 실행/수집/추천 응답 현황 요약을 로그(+Slack 웹훅)로 남긴다(읽기 전용)."""
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 WINDOW_HOURS = 24
+# 본문 보존 잡(retention)은 하루 한 번 돈다. 만료된 지 이보다 오래된 본문이 남아 있으면 잡이 돌지 않은 것이다.
+RETENTION_OVERDUE_HOURS = 26
 
 
 def format_report(report: Dict[str, Any]) -> str:
@@ -24,6 +26,15 @@ def format_report(report: Dict[str, Any]) -> str:
         f"- 누적 기사 {totals['news_raw']}건 / 임베딩 {totals['embedded']}건 / "
         f"최근 {WINDOW_HOURS}시간 뉴스레터 {totals['newsletters_24h']}건"
     )
+    retention = report.get("retention")
+    if retention is not None:
+        oldest = retention["oldest_body_crawled_at"]
+        lines.append(
+            f"- 본문 보존({retention['days']}일): 기한 지난 본문 {retention['expired_bodies']}건"
+            f"(하루 넘게 밀린 것 {retention['overdue_bodies']}건), 최근 {WINDOW_HOURS}시간 비움 "
+            f"{retention['purged_24h']}건 / 누적 {retention['purged_total']}건, 가장 오래된 본문 수집 "
+            f"{oldest + ' UTC' if oldest else '없음'}"
+        )
     recsys = report.get("recsys_24h")
     if recsys is not None:
         by_source = sorted(recsys["by_source"].items(), key=lambda kv: (-kv[1]["responses"], kv[0]))
@@ -34,6 +45,47 @@ def format_report(report: Dict[str, Any]) -> str:
         else:
             lines.append("- 추천 응답 0건 (노출 로그 기준)")
     return "\n".join(lines)
+
+
+def retention_warning(retention: Optional[Dict[str, Any]]) -> Optional[str]:
+    """보존 잡이 밀렸으면 사람이 볼 경고 문장, 아니면 None."""
+    if not retention or not retention.get("overdue_bodies"):
+        return None
+    return (
+        f"본문 보존 기한({retention['days']}일)이 {RETENTION_OVERDUE_HOURS}시간 넘게 지난 본문이 "
+        f"{retention['overdue_bodies']}건 남아 있다 - retention 잡이 돌지 않았거나 실패했다 "
+        "(job_runs의 retention 행, docs/runbook-hosting.md 4.1)"
+    )
+
+
+def retention_status(cur, window: str) -> Dict[str, Any]:
+    """본문 보존(ADR 0023) 상태. 기한·면제 규칙은 jobs/tasks/retention.py와 같은 식이다(읽기만 한다)."""
+    from config.retention import exempt_press_names
+    from config.settings import Settings
+    from jobs.tasks.retention import EXEMPT_SQL
+
+    days = int(Settings.BODY_RETENTION_DAYS)
+    cutoff = "(now() AT TIME ZONE 'UTC') - make_interval(days => %(days)s)"
+    overdue = f"{cutoff} - make_interval(hours => %(overdue_hours)s)"
+    body = f"n.raw_news_content <> '' AND NOT {EXEMPT_SQL}"
+    cur.execute(
+        f"""
+        SELECT count(*) FILTER (WHERE {body} AND n.raw_news_crawled_at <= {cutoff}),
+               count(*) FILTER (WHERE {body} AND n.raw_news_crawled_at <= {overdue}),
+               count(*) FILTER (WHERE n.raw_news_content_purged_at >= now() - %(window)s::interval),
+               count(*) FILTER (WHERE n.raw_news_content_purged_at IS NOT NULL),
+               min(n.raw_news_crawled_at) FILTER (WHERE {body})
+        FROM news_raw n JOIN press p ON p.press_id = n.press_id
+        """,
+        {"days": days, "overdue_hours": RETENTION_OVERDUE_HOURS, "window": window,
+         "exempt_presses": exempt_press_names()},
+    )
+    expired_bodies, overdue, purged_24h, purged_total, oldest = cur.fetchone()
+    return {
+        "days": days, "expired_bodies": expired_bodies, "overdue_bodies": overdue,
+        "purged_24h": purged_24h, "purged_total": purged_total,
+        "oldest_body_crawled_at": oldest.isoformat(sep=" ", timespec="minutes") if oldest else None,
+    }
 
 
 def impression_sources(cur, window: str) -> Dict[str, Dict[str, int]]:
@@ -104,14 +156,19 @@ def run(ctx) -> Dict[str, Any]:
             (window,),
         )
         total, embedded, newsletters = cur.fetchone()
+        retention = retention_status(cur, window)
         recsys_by_source = impression_sources(cur, window)
 
     report = {
         "job_runs": job_runs,
         "news_raw_24h": news_24h,
         "totals": {"news_raw": total, "embedded": embedded, "newsletters_24h": newsletters},
+        "retention": retention,
         "recsys_24h": {"by_source": recsys_by_source},
     }
+    warning = retention_warning(retention)
+    if warning:
+        ctx.warn(warning)
     text = format_report(report)
     print(text)
     report["slack_posted"] = post_message(text)

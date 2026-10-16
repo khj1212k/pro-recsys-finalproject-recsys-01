@@ -30,6 +30,7 @@ JOBS = {
     "train": "jobs.tasks.train",
     "batch_fallback": "jobs.tasks.batch_fallback",
     "daily_report": "jobs.tasks.daily_report",
+    "retention": "jobs.tasks.retention",
 }
 
 

@@ -11,3 +11,9 @@
 
 # 일일 리포트, 매일 00:10 UTC = 09:10 KST
 10 0 * * * python -m jobs.run daily_report
+
+# 본문 보존(ADR 0023): 수집 후 30일이 지난 상업 언론사 본문을 비운다(해시·길이·제목·URL은 남김).
+# 매일 17:50 UTC = 02:50 KST - 수집량이 가장 적은 새벽, ingest(:05)·popularity(:35)의 시작과 겹치지 않고
+# unattended-upgrades 재부팅 창(18:40 UTC)보다 앞이다. ingest가 길어져 같은 시각에 돌아도 두 잡은 서로 다른 행만
+# 쓴다(retention은 추출이 끝난 만료 행만, 추출기는 추출 대기 행만). 끄려면 .env에 SCHEDULER_JOBS_DISABLED=retention.
+50 17 * * * python -m jobs.run retention
