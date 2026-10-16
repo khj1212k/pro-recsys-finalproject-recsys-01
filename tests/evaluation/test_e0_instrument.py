@@ -344,8 +344,14 @@ def test_instrumentation_attaches_to_the_production_client_without_rebuilding_it
     rec = recorder(tmp_path)
     real = adapter(Script())
     sdk_before, http_before = real._client, real._client._client
+    transport_before = http_before._transport
     ins.attach_http_instrumentation(real, rec)
     ins.attach_http_instrumentation(real, rec)  # 두 번 달아도 한 번만
     assert real._client is sdk_before and real._client._client is http_before
     assert http_before.event_hooks["request"].count(rec.on_request) == 1
     assert real._client.max_retries == 0 and real._client.timeout == 60
+    other = recorder(tmp_path, name="run-b")
+    ins.attach_http_instrumentation(real, other)   # 새 기록기로 옮겨 단다(이어 돌기)
+    assert http_before.event_hooks["request"] == [other.on_request]
+    ins.detach_http_instrumentation(real)
+    assert http_before.event_hooks["request"] == [] and http_before._transport is transport_before

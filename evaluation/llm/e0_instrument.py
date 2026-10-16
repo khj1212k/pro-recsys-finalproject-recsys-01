@@ -645,17 +645,35 @@ def attach_http_instrumentation(llm_client: Any, recorder: Recorder) -> None:
     http = getattr(sdk, "_client", None)
     if http is None or not hasattr(http, "event_hooks") or not hasattr(http, "_transport"):
         raise RuntimeError("어댑터의 OpenAI 클라이언트에 httpx 훅을 달 수 없다(SDK 구조가 바뀌었다)")
-    if getattr(http, "_e0_instrumented", False):
-        return
+    if getattr(http, "_e0_original", None) is not None:
+        if http._e0_original["recorder"] is recorder:
+            return
+        detach_http_instrumentation(llm_client)
     hooks = http.event_hooks
+    mounts = getattr(http, "_mounts", {}) or {}
+    http._e0_original = {"recorder": recorder, "hooks": {k: list(v) for k, v in hooks.items()},
+                         "transport": http._transport, "mounts": dict(mounts)}
     http.event_hooks = {"request": list(hooks.get("request", [])) + [recorder.on_request],
                         "response": list(hooks.get("response", [])) + [recorder.on_response]}
     http._transport = ObservingTransport(http._transport, recorder)
-    mounts = getattr(http, "_mounts", {}) or {}
     for pattern, transport in list(mounts.items()):
         if transport is not None:
             mounts[pattern] = ObservingTransport(transport, recorder)
-    http._e0_instrumented = True
+
+
+def detach_http_instrumentation(llm_client: Any) -> None:
+    """attach_http_instrumentation을 되돌린다(같은 프로세스에서 run을 이어 돌 때 새 기록기에 다시 달려고)."""
+    http = getattr(getattr(llm_client, "_client", None), "_client", None)
+    original = getattr(http, "_e0_original", None)
+    if original is None:
+        return
+    http.event_hooks = original["hooks"]
+    http._transport = original["transport"]
+    mounts = getattr(http, "_mounts", None)
+    if mounts is not None:
+        mounts.clear()
+        mounts.update(original["mounts"])
+    http._e0_original = None
 
 
 CLIENT_MODULES = ("core.reconstruction.generator", "workflow.evaluators", "core.tone_converter")
@@ -718,6 +736,9 @@ class Instrumentation:
         for module, name, original in reversed(self._patches):
             setattr(module, name, original)
         self._patches.clear()
+        for client in self.clients:
+            detach_http_instrumentation(client)
+        self.clients.clear()
 
     def __enter__(self):
         self.install()

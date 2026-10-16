@@ -196,7 +196,8 @@ class FakeLLMTransport:
             paragraphs = [sentences[i % len(sentences)] for i in range(4)]
             return {"content": "\n\n".join(paragraphs)}
         if schema_name == "NewsletterMeta":
-            words = [w for w in re.findall(r"[가-힣]{2,}", prompt) if w not in ("다음", "본문", "제목")]
+            body = prompt.split("작성된 본문(content):", 1)[-1].split("━", 1)[0]
+            words = [w for w in re.findall(r"[가-힣]{2,}", body) if w not in ("다음", "본문", "제목")]
             title = " ".join(words[:2])[:15] or "합성 소식"
             return {"title": title, "sentence": f"{title} 소식을 정리했다", "keywords": list(dict.fromkeys(words))[:5],
                     "categories": ["사회"]}
