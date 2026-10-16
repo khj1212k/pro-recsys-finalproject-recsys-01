@@ -3,12 +3,14 @@
 ADR 0023 개정(2026-10-17)의 "CI에서 잰 값"이 이 테스트의 리포트다. RETENTION_REPORT(경로)가 있을 때만 돈다 -
 CI의 "Write retention measurement report" 단계가 JSON을 아티팩트(retention-measurement)로 남긴다.
 
-재는 것: 걸린 시간, 만든 WAL 바이트, 테이블(힙·TOAST) 크기, 그리고 그동안 다른 연결에서 20 ms마다 넣는
+재는 것: 걸린 시간, 만든 WAL 바이트, 테이블(힙·TOAST) 크기, 그리고 그동안 다른 연결에서 10 ms마다 넣는
 INSERT(수집기 역할)와 추출 대기 행 UPDATE(본문 추출기 역할)의 지연. CI 러너는 Tier 0(1/8 OCPU, 1 GB)가 아니다 -
 시간은 그대로 옮길 수 없고, 행 수·WAL·크기·락 동작이 옮겨지는 값이다.
 
-본문은 지어낸 것이다: 한글 음절을 무작위로 이은 "낱말" 2,000개에서 고른 낱말열(행마다 다른 시드). Tier 0 실측의
-평균 1,768자(2026-10-16)에 맞췄다. 압축률은 실제 기사와 다르다 - 리포트에 실제 값과 함께 적는다.
+본문은 지어낸 것이다: 한글 음절을 무작위로 이은 "낱말" 어휘에서 고른 낱말열. 길이는 Tier 0 실측의 평균 1,768자
+(2026-10-16)에 맞추고, 어휘 크기는 이 DB의 pglz로 표본 100개를 압축해 보아 Tier 0의 저장/원문 비(64.5 MB / 114 MB =
+0.565)에 가장 가까운 것을 고른다 - 압축률이 힙에 인라인으로 남는 본문과 TOAST로 나가는 본문의 비율을 정하고, 그것이
+길이 채우기의 I/O를 정한다. 고른 크기와 비는 리포트에 남는다.
 """
 import hashlib
 import io
@@ -49,15 +51,39 @@ def _vocabulary(rng, size=2000):
     return ["".join(chr(0xAC00 + rng.randrange(11172)) for _ in range(rng.randint(1, 4))) for _ in range(size)]
 
 
-def _copy_rows(press_id, now_utc, tag):
+TIER0_STORED_RATIO = TIER0["stored_bytes"] / TIER0["body_bytes"]
+VOCABULARY_SIZES = (2000, 800, 400, 200, 120, 80, 50)
+
+
+def _body(rng, words, i):
+    return f"{i}번 합성 기사. " + " ".join(rng.choice(words) for _ in range(rng.randint(250, 760)))
+
+
+def _pick_vocabulary(cur):
+    """어휘 크기마다 표본 본문 100개를 임시 테이블에 넣어 pglz 저장/원문 비를 재고, Tier 0 비에 가장 가까운 것을 고른다."""
+    trials = {}
+    for size in VOCABULARY_SIZES:
+        rng = random.Random(size)
+        words = _vocabulary(rng, size)
+        cur.execute("CREATE TEMP TABLE IF NOT EXISTS probe (b text)")
+        cur.execute("TRUNCATE probe")
+        for i in range(100):
+            cur.execute("INSERT INTO probe VALUES (%s)", (_body(rng, words, i),))
+        trials[size] = round(_scalar(cur, "SELECT sum(pg_column_size(b))::float / sum(octet_length(b)) FROM probe"), 3)
+    cur.execute("DROP TABLE probe")
+    size = min(trials, key=lambda k: abs(trials[k] - TIER0_STORED_RATIO))
+    return size, trials
+
+
+def _copy_rows(press_id, now_utc, tag, vocabulary_size):
     """COPY 텍스트 형식(탭 구분, NULL = \\N). 본문에는 탭·줄바꿈·역슬래시가 없다. 빈 본문('')은 빈 칸이다."""
     rng = random.Random(20261017)
-    words = _vocabulary(rng)
+    words = _vocabulary(rng, vocabulary_size)
     buf = io.StringIO()
     for i in range(N_ROWS):
         crawled = now_utc - timedelta(days=i % DAYS_SPAN, seconds=(i * 37) % 86400)
         if rng.random() < OK_SHARE:
-            body = f"{i}번 합성 기사. " + " ".join(rng.choice(words) for _ in range(rng.randint(250, 760)))
+            body = _body(rng, words, i)
             status, sha = "ok", hashlib.sha256(body.encode("utf-8")).hexdigest()
         else:
             body, status, sha = "", rng.choice(["dropped", "fetch_failed"]), None
@@ -86,11 +112,12 @@ def _sizes(cur):
 
 
 class _Writer(threading.Thread):
-    """수집기·본문 추출기 역할: 20 ms마다 새 행 INSERT와 추출 대기 행 UPDATE를 번갈아 하고 지연을 잰다."""
+    """수집기·본문 추출기 역할: 10 ms마다 새 행 INSERT와 추출 대기 행 UPDATE를 번갈아 하고 지연을 잰다."""
 
     def __init__(self, url, press_id, tag, pending_ids):
         super().__init__(daemon=True)
-        self.url, self.press_id, self.tag, self.pending_ids = url, press_id, tag, pending_ids
+        self.url, self.press_id, self.pending_ids = url, press_id, pending_ids
+        self.tag = f"{tag}/{uuid.uuid4().hex[:6]}"  # 측정 구간마다 새 URL
         self.latencies_ms = {"insert": [], "update_pending": []}
         self.errors = []
         self.stop = threading.Event()
@@ -124,7 +151,7 @@ class _Writer(threading.Thread):
                         self.latencies_ms[kind].append((time.monotonic() - started) * 1000)
                     except psycopg2.Error as e:  # 컬럼이 없어지는 순간 등 - 세고 계속한다
                         self.errors.append(type(e).__name__)
-                    time.sleep(0.02)
+                    time.sleep(0.01)
         finally:
             conn.close()
 
@@ -135,7 +162,7 @@ class _Writer(threading.Thread):
             out[kind] = {
                 "n": len(values),
                 "p50_ms": round(statistics.median(values), 2) if values else None,
-                "p99_ms": round(values[int(len(values) * 0.99) - 1], 2) if len(values) >= 100 else None,
+                "p95_ms": round(values[max(int(len(values) * 0.95) - 1, 0)], 2) if len(values) >= 20 else None,
                 "max_ms": round(values[-1], 2) if values else None,
             }
         return out
@@ -181,13 +208,16 @@ def test_measure_backfill_and_retention_at_tier0_scale(database_url, pg_conn, is
         }
     try:
         with pg_conn.cursor() as cur:
+            vocabulary_size, trials = _pick_vocabulary(cur)
+            report["synthetic_text"] = {"vocabulary_size": vocabulary_size, "pglz_stored_ratio_by_vocabulary": trials,
+                                        "tier0_stored_ratio": round(TIER0_STORED_RATIO, 3)}
             now_utc = _scalar(cur, "SELECT now() AT TIME ZONE 'UTC'")
             started = time.monotonic()
             cur.copy_expert(
                 "COPY news_raw (press_id, raw_news_title, raw_news_content, raw_news_url, raw_news_created_at, "
                 "raw_news_crawled_at, raw_news_extract_status, raw_news_extracted_at, raw_news_extract_attempts, "
                 "raw_news_content_sha256) FROM STDIN",
-                _copy_rows(press_id, now_utc, tag),
+                _copy_rows(press_id, now_utc, tag, vocabulary_size),
             )
             report["seed_seconds"] = round(time.monotonic() - started, 3)
             cur.execute("ANALYZE news_raw")
