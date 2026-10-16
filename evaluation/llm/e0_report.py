@@ -144,6 +144,9 @@ def root_cause(end: Dict[str, Any], calls: Sequence[Dict[str, Any]]) -> Optional
             "judge_unavailable": "judge_unavailable"}.get(reason or "", "exception")
 
 
+RUN_STOP_EVENTS = ("circuit_breaker", "in_client_cap", "in_client_refusal")
+
+
 def cluster_events(calls: Sequence[Dict[str, Any]], http: Sequence[Dict[str, Any]], end: Dict[str, Any]) -> Dict[str, int]:
     """클러스터 안에서 일어난 유형별 사건 건수(A8.3 #13 끝)."""
     c: Counter = Counter()
@@ -167,6 +170,9 @@ def cluster_events(calls: Sequence[Dict[str, Any]], http: Sequence[Dict[str, Any
         if str(call.get("error") or "").startswith("deadline"):
             c["deadline"] += 1
     c["tone_local_fallback"] += int(end.get("tone_local_fallbacks") or 0)
+    for ev in end.get("events") or []:
+        if ev.get("type") in RUN_STOP_EVENTS:   # 운영 코드(ADR 0035)가 이 클러스터에서 런을 멈춘 사건
+            c[ev["type"]] += 1
     return dict(sorted((k, v) for k, v in c.items() if v))
 
 

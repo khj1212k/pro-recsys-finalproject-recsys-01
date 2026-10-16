@@ -57,7 +57,8 @@ class E0InfraStop(LLMRunStop):
 
 
 def stop_kind(stop: BaseException) -> str:
-    """중단 예외 → "budget" | "infra". 클라이언트 안의 상한 거부도 예산이고, 서킷브레이커(402 포함)는 인프라다."""
+    """중단 예외 → "budget" | "infra". 클라이언트 안의 상한 거부도 예산이고, 서킷브레이커(402 포함)는 인프라다
+    (yaml `budget.stop_on_infra`의 `circuit_breaker`, A8.10 덧붙임 2026-10-17의 개정)."""
     if isinstance(stop, LLMBudgetRefusal):
         return "budget"
     if isinstance(stop, (LLMCircuitOpen, E0InfraStop)):
@@ -301,6 +302,30 @@ class Recorder:
             latch_run_stop(stop_exc)
         if self.on_stop:
             self.on_stop(reason, detail)
+
+    def note_run_stop(self, stop: BaseException, cluster: Optional["ClusterContext"]) -> None:
+        """운영 코드(ADR 0035)가 낸 런 중단 - 서킷브레이커, 클라이언트 안 상한 거부 - 도 E0 중단 플래그로 세운다.
+
+        어댑터가 이미 래치를 세웠으므로 다른 워커는 원장·네트워크에 닿지 않는다. 여기서는 run 요약·void 판정·미시작
+        사유가 그 중단을 보게 할 뿐이다(A8.10 덧붙임 2026-10-17의 개정, yaml `amendments`). E0 자신의 중단과, 플래그가
+        이미 선 뒤 다른 워커에서 다시 난 같은 중단은 건너뛴다."""
+        if isinstance(stop, (E0BudgetStop, E0InfraStop)) or self.stop is not None:
+            return
+        kind = stop_kind(stop)
+        code = getattr(stop, "code", type(stop).__name__)
+        if isinstance(stop, LLMCircuitOpen):
+            trigger = "circuit_breaker"
+        elif kind == "budget":
+            trigger = "in_client_cap" if code == "llm_budget_exceeded" else "in_client_refusal"
+        else:
+            trigger = str(code)
+        details = getattr(stop, "details", {}) or {}
+        detail = {"detail": trigger, "stop_code": code, "item_id": getattr(cluster, "item_id", None),
+                  **{k: details[k] for k in ("scope", "http_status", "consecutive_failures", "last_outcome")
+                     if k in details}}
+        if cluster is not None:
+            cluster.events.append({"type": trigger})
+        self.set_stop(kind, detail)
 
     def _raise_for_stop(self) -> None:
         stop = self.stop or {}
@@ -569,6 +594,7 @@ class RecordingClient:
             stop = e
             if call.cluster.stopped is None:
                 call.cluster.stopped = stop_kind(e)
+            rec.note_run_stop(e, call.cluster)
             raise
         finally:
             _call_var.reset(token)

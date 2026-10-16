@@ -239,6 +239,45 @@ def test_402_aborts_the_cluster_as_infra_not_skipped_and_the_run_is_void_below_e
     assert "labels" not in out   # void 실행에는 라벨을 달지 않는다
 
 
+def test_the_production_breaker_stops_the_run_as_infra_and_is_void_below_eight(tmp_path, monkeypatch):
+    """연속 5xx로 운영 서킷브레이커(ADR 0035)가 열린 run: 중단 기록·미시작 사유·void가 그 중단을 본다(yaml amendments)."""
+    _no_wait(monkeypatch)
+    out = base.dry_run(tmp_path, t0=T0, faults=syn.FaultPlan(always=500, after_requests=16))
+    summary = out["summary"]
+    assert summary["stop"]["reason"] == "infra" and summary["stop"]["detail"] == "circuit_breaker"
+    assert summary["stop"]["stop_code"] == "llm_circuit_open"
+    assert summary["void"] == {"reason": "infra_below_8", "n_processed": summary["n_processed"]}
+    ends = [r for r in _read(Path(out["run_dir"]) / ins.CLUSTERS_FILE) if r["kind"] == "end"]
+    assert [r["reason"] for r in ends if r["outcome"] == "not_started"] and \
+        all(r["reason"] == "stop:infra" for r in ends if r["outcome"] == "not_started")
+    aborted = [r for r in ends if r["outcome"] == "aborted_infra"]
+    assert aborted and all(r["root_cause"] == "aborted_infra" for r in aborted)
+    rows = out["report_json"]["metrics"]["13_failure_taxonomy"]["clusters"]
+    assert sum(t["events"].get("circuit_breaker", 0) for t in rows) == 1
+    assert "labels" not in out
+
+
+def test_a_breaker_in_preflight_is_a_preflight_infra_failure_and_not_void(tmp_path, monkeypatch):
+    _no_wait(monkeypatch)
+    out = base.dry_run(tmp_path, t0=T0, faults=syn.FaultPlan(always=503), run_report=False)
+    summary = out["summary"]
+    assert summary["reason"] == "preflight_infra_failure" and summary["void"] is None
+    assert summary["stop"]["detail"] == "circuit_breaker" and summary["outcomes"] == {"not_started": 15}
+    assert out["fake_requests"] == 5   # 첫 pre-flight 호출의 다섯 번째 5xx에서 브레이커가 열리고 그 뒤 보내지 않았다
+
+
+def test_an_in_client_cap_refusal_is_a_budget_stop_and_a_partial_run(tmp_path, monkeypatch):
+    _no_wait(monkeypatch)
+    monkeypatch.setattr(reg, "IN_CLIENT_RUN_DAY_CAP_USD", "0.05")   # 클라이언트 안 상한이 E0 가드($1.00)보다 먼저 닿게
+    out = base.dry_run(tmp_path, t0=T0, faults=syn.FaultPlan(), run_report=False)
+    summary = out["summary"]
+    assert summary["stop"]["reason"] == "budget" and summary["stop"]["detail"] == "in_client_cap"
+    assert summary["void"] is None and summary["refusals"] == 0   # E0 가드는 거부하지 않았다
+    ends = [r for r in _read(Path(out["run_dir"]) / ins.CLUSTERS_FILE) if r["kind"] == "end"]
+    assert any(r["outcome"] == "aborted_budget" for r in ends)
+    assert all(r["reason"] == "stop:budget" for r in ends if r["outcome"] == "not_started")
+
+
 def test_an_infra_failure_in_preflight_stops_before_warmup_and_is_not_void(tmp_path, monkeypatch):
     _no_wait(monkeypatch)
     out = base.dry_run(tmp_path, t0=T0, faults=syn.FaultPlan(always=401), run_report=False)

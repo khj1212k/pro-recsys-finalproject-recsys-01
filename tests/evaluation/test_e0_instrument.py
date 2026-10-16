@@ -265,6 +265,40 @@ def test_402_stops_the_run_as_infra_through_the_in_client_breaker(tmp_path):
     assert ins.stop_kind(budget.run_stop()) == "infra"
 
 
+def test_the_production_breaker_on_consecutive_5xx_becomes_the_e0_infra_stop(tmp_path):
+    """ADR 0035의 서킷브레이커(연속 5회 5xx)는 운영 코드가 런을 멈추는 것이다. E0 중단 플래그도 infra로 서야
+    남은 클러스터가 not_started(stop:infra)가 되고 void 규칙이 적용된다(A8.10 개정, yaml amendments)."""
+    from core.llm import budget
+
+    script = Script(500, 500, 500, 500, 500, 500, 500)
+    rec, client = instrumented(tmp_path, script)
+    ctx = ins.ClusterContext(item_id="r1-c1", cluster_id=1, run_k=1, split="eval")
+    with pytest.raises(budget.LLMCircuitOpen):
+        call(client, ctx=ctx)
+    assert script.calls == 5
+    assert rec.stop["reason"] == "infra" and rec.stop["detail"] == "circuit_breaker"
+    assert rec.stop["stop_code"] == "llm_circuit_open" and rec.stop["item_id"] == "r1-c1"
+    assert {"type": "circuit_breaker"} in ctx.events and ctx.stopped == "infra"
+    with pytest.raises(budget.LLMRunStop):
+        call(client, ctx=ins.ClusterContext(item_id="r1-c2", cluster_id=2, run_k=1, split="eval"))
+    assert script.calls == 5   # 중단 뒤에는 보내지 않는다
+    assert [e["kind"] for e in rows(rec, ins.EVENTS_FILE)].count("stop") == 1
+
+
+def test_an_in_client_cap_refusal_becomes_the_e0_budget_stop(tmp_path, monkeypatch):
+    from core.llm import budget
+
+    monkeypatch.setenv("LLM_BUDGET_RUN_USD", "0.000001")
+    script = Script(_body())
+    rec, client = instrumented(tmp_path, script)
+    ctx = ins.ClusterContext(item_id="r1-c1", cluster_id=1, run_k=1, split="eval")
+    with pytest.raises(budget.LLMBudgetRefusal):
+        call(client, ctx=ctx)
+    assert script.calls == 0
+    assert rec.stop["reason"] == "budget" and rec.stop["detail"] == "in_client_cap"
+    assert rec.stop["scope"] == "run" and {"type": "in_client_cap"} in ctx.events and ctx.stopped == "budget"
+
+
 @pytest.mark.parametrize("status", [401, 403, 404])
 def test_auth_and_model_errors_stop_the_run_and_the_next_call_sends_nothing(tmp_path, status):
     from core.llm import budget
