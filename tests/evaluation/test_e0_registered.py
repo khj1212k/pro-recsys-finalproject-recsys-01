@@ -104,6 +104,14 @@ def test_every_rule_key_changed_since_the_pre_runner_main_is_declared():
 # ---------------------------------------------------------------- 2. 실행 중 환경의 차이
 
 
+def test_size_buckets_are_read_from_the_sampling_code_not_a_copy(monkeypatch):
+    """표본 코드(evalset.SIZE_BUCKETS)의 버킷이 바뀌면 러너의 시작 비교가 잡는다(상수 사본끼리의 비교가 아니다)."""
+    from evaluation.llm import evalset
+
+    monkeypatch.setattr(evalset, "SIZE_BUCKETS", ((3, 5, "3-5"), (6, 9, "6-9"), (10, None, "10+")))
+    assert any(p.startswith("sample.stratified_sample") for p in reg.config_differences(PREREG))
+
+
 def test_a_settings_override_is_reported(monkeypatch):
     from config.settings import Settings
 

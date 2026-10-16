@@ -144,7 +144,10 @@ IN_CLIENT_MIN_TOTAL_HEADROOM_USD = 2.00
 
 
 def _bucket_spec() -> List[List[Optional[int]]]:
-    return [list(b) for b in SAMPLE["size_buckets"]]
+    """표본 코드가 실제로 쓰는 버킷(evalset.SIZE_BUCKETS). SAMPLE["size_buckets"]는 등록값의 사본일 뿐이라 비교에 쓰지 않는다."""
+    from evaluation.llm import evalset
+
+    return [[lo, hi] for lo, hi, _name in evalset.SIZE_BUCKETS]
 
 
 # ---------------------------------------------------------------- 실제 값
