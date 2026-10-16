@@ -1,9 +1,14 @@
 # 원격 GPU 런타임(Colab T4)에서 기사 임베딩 잡(evaluation/llm/embed_job.py)을 돌릴 때 설치하는 고정 버전.
-# 임베딩 결과에 닿는 패키지는 운영 워커 이미지의 잠금 파일(docker/requirements-worker.txt)과 같은 값이다:
+# 임베딩 모델 경로의 패키지는 운영 워커 이미지의 잠금 파일(docker/requirements-worker.txt)과 같은 값이다:
 # FlagEmbedding·transformers·tokenizers·sentence-transformers·huggingface-hub·safetensors·accelerate. python-dotenv는
-# config.settings가 임포트한다. torch는 확인만 한다: 런타임에 미리 깔린 2.11.0+cu130(2026-10-17 S0에서 확인)이 이 핀을 만족하므로 다시 내려받지
-# 않고, 다른 버전이 깔려 있으면 scripts/colab_embed_articles.py가 잡을 시작하지 않는다. 운영 워커의 torch는 2.14.0(CPU)이라
-# 장치·정밀도·torch 빌드가 운영과 다르다(ADR 0009 A8.2 이탈 5) — 그래서 잡이 fp32 대조를 함께 남긴다.
+# config.settings가 임포트한다. 잠금 파일과 다른 것이 둘 있다.
+# - torch는 확인만 한다: 런타임에 미리 깔린 2.11.0+cu130(2026-10-17 S0에서 확인)이 이 핀을 만족하므로 다시 내려받지
+#   않고, 다른 버전이 깔려 있으면 scripts/colab_embed_articles.py가 잡을 시작하지 않는다. 운영 워커의 torch는 2.14.0(CPU)이라
+#   장치·정밀도·torch 빌드가 운영과 다르다(ADR 0009 A8.2 이탈 5) — 그래서 잡이 fp32 대조를 함께 남긴다.
+# - numpy는 일부러 고정하지 않는다: 런타임에 미리 깔린 것을 쓴다(S0에서 2.1.3, 운영 워커 잠금은 2.5.3). 다른 numpy를 깔면
+#   미리 깔린 torch 등과의 호환을 세션에서 다시 확인해야 하는데 그 확인은 하지 않았다. numpy는 L2 정규화와 f16 변환을
+#   하므로 버전이 다르면 저장 벡터가 반올림 자리에서 달라질 수 있다 - [추정] 이탈 5의 장치·정밀도 차이보다 작다. 잡이 쓴
+#   numpy 버전은 job.json의 package_versions에, 결과 벡터는 embeddings_sha256으로 실행 전 기록에 남는다.
 # 모델 가중치의 리비전은 embed_job.MODEL_REVISION으로 고정하고, 잡이 실제로 읽은 스냅숏과 대조한다.
 flagembedding==1.2.5
 transformers==4.38.2

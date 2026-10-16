@@ -145,6 +145,11 @@ def test_embedding_pins_are_the_production_worker_lock_values():
     assert pins.pop("torch") == "2.11.0"  # 런타임에 미리 깔린 것을 확인만 한다(운영 워커는 2.14.0 CPU - 이탈 5)
     for name, version in pins.items():
         assert re.search(rf"^{re.escape(name)}=={re.escape(version)}\b", lock, flags=re.MULTILINE | re.IGNORECASE), name
+    # numpy는 일부러 고정하지 않는다(파일 머리말) - 대신 잡이 쓴 버전을 job.json에 남긴다
+    assert "numpy" not in {k.lower() for k in pins}
+    from evaluation.llm import embed_job
+
+    assert "numpy" in embed_job.package_versions()
 
 
 # ---------------------------------------------------------------- 입력
