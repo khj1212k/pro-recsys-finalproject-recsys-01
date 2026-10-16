@@ -1,8 +1,12 @@
 """사람 라벨 저장소 - ADR 0009, 라벨 정의는 docs/eval/labeling-guide.md.
 
 data/labels/<run>/ 아래(gitignore):
-  clusters.jsonl, outputs.jsonl, relabel.json   <- evaluation/llm/bakeoff.py export-blind가 만든 입력
+  clusters.jsonl, outputs.jsonl, relabel.json   <- evaluation/llm/bakeoff.py export-blind 또는 e0_labels가 만든 입력
+  retention.json                                <- 라벨 마감(본문 보존 기한, ADR 0023 개정). E0 내보내기가 쓴다
   cluster_labels.jsonl, output_labels.jsonl     <- 이 모듈이 쓰는 라벨 (append-only)
+
+마감(retention.json의 expires_at_utc)이 지나면 LabelStore를 열 때 clusters.jsonl의 기사 본문을 지운다(제목·URL·id와
+라벨은 남는다). 라벨링 UI는 마감 뒤에는 과제를 내주지 않는다.
 
 라벨 행: {"target_id", "round": 1|2, "labeled_at": ISO8601, "label": {...}}. 같은 (target, round)를
 다시 저장하면 마지막 행이 이긴다(이력은 남는다). 2차(round 2)는 intra-rater 재라벨이다:
@@ -10,6 +14,7 @@ relabel.json에 있는 대상만, 1차 라벨 후 min_hours_between_rounds가 �
 """
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Literal, Optional
@@ -17,6 +22,7 @@ from typing import Callable, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 FIELDS = ("title", "sentence", "content")
+RETENTION_FILE = "retention.json"
 
 
 class LabelError(ValueError):
@@ -71,10 +77,51 @@ def _parse_ts(s: str) -> datetime:
     return datetime.fromisoformat(s)
 
 
+def read_retention(labels_dir: Path) -> Optional[dict]:
+    path = Path(labels_dir) / RETENTION_FILE
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+def has_bodies(labels_dir: Path) -> bool:
+    return any(a.get("body") for r in _read_jsonl(Path(labels_dir) / "clusters.jsonl") for a in r.get("articles", []))
+
+
+def is_expired(labels_dir: Path, now: datetime) -> bool:
+    retention = read_retention(labels_dir)
+    if not retention:
+        return False
+    expires = datetime.fromisoformat(retention["expires_at_utc"].replace("Z", "+00:00"))
+    return now >= expires
+
+
+def purge_expired_bodies(labels_dir: Path, now: datetime) -> int:
+    """마감이 지났으면 clusters.jsonl의 본문을 지우고 지운 건수를 돌려준다(여러 번 불러도 같다)."""
+    labels_dir = Path(labels_dir)
+    if not is_expired(labels_dir, now):
+        return 0
+    rows = _read_jsonl(labels_dir / "clusters.jsonl")
+    blanked = 0
+    for row in rows:
+        for article in row.get("articles", []):
+            if article.get("body"):
+                article["body"] = None
+                blanked += 1
+    if blanked:
+        tmp = labels_dir / "clusters.jsonl.tmp"
+        tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, labels_dir / "clusters.jsonl")
+    return blanked
+
+
 class LabelStore:
     def __init__(self, labels_dir: Path, now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)):
         self.dir = Path(labels_dir)
         self.now = now
+        # 마감이 지났으면 여는 김에 본문을 지운다(ADR 0023 개정: 열 때마다 정리)
+        self.expired = is_expired(self.dir, self.now())
+        if self.expired:
+            purge_expired_bodies(self.dir, self.now())
         self.clusters: Dict[str, dict] = {r["item_id"]: r for r in _read_jsonl(self.dir / "clusters.jsonl")}
         self.outputs: List[dict] = _read_jsonl(self.dir / "outputs.jsonl")
         self.outputs_by_id: Dict[str, dict] = {o["output_id"]: o for o in self.outputs}
