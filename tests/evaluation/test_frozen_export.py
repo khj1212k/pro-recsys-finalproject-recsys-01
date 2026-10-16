@@ -14,6 +14,7 @@ import subprocess
 import sys
 import textwrap
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -393,18 +394,143 @@ def test_purge_everything_blanks_all_bodies_before_expiry(tmp_path):
     assert json.loads((dest / fx.MANIFEST_FILE).read_text(encoding="utf-8"))["purges"][-1]["reason"] == "everything"
 
 
-def test_load_repairs_the_manifest_after_a_purge_that_was_interrupted_between_the_two_files(tmp_path):
+def _stop_before_writing(monkeypatch, name):
+    """`_write_private`가 `name` 파일을 쓰기 직전에 프로세스가 죽은 것처럼 멈추게 한다."""
+    original = fx._write_private
+
+    def write(path, data):
+        if path.name == name:
+            raise KeyboardInterrupt("여기서 끊겼다")
+        original(path, data)
+
+    monkeypatch.setattr(fx, "_write_private", write)
+
+
+def test_a_purge_cut_off_after_the_manifest_is_finished_on_the_next_open(tmp_path, monkeypatch):
+    dest = _mixed_ages(tmp_path)
+    now = datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc)
+    before = (dest / fx.ARTICLES_FILE).read_bytes()
+    with monkeypatch.context() as m:
+        _stop_before_writing(m, fx.ARTICLES_FILE)
+        with pytest.raises(KeyboardInterrupt):
+            fx.purge_export(dest, now=now)
+    assert (dest / fx.ARTICLES_FILE).read_bytes() == before  # 매니페스트만 바뀌었다
+    manifest = json.loads((dest / fx.MANIFEST_FILE).read_text(encoding="utf-8"))
+    assert manifest["purges"][-1]["sha256_before"] == hashlib.sha256(before).hexdigest()
+
+    stale = fx.load_export(dest, now=now, purge_expired=False)  # 고치지 않고 열어도 지워졌어야 할 본문은 안 나온다
+    assert [r["body"] is None for r in stale.rows] == [True, True, False] and stale.expired_unpurged == 2
+    assert (dest / fx.ARTICLES_FILE).read_bytes() == before
+
+    loaded = fx.load_export(dest, now=now)
+
+    assert [r["body"] is None for r in loaded.rows] == [True, True, False]
+    on_disk = (dest / fx.ARTICLES_FILE).read_bytes()
+    assert on_disk.decode("utf-8").count(BODY_MARK) == 1
+    after = json.loads((dest / fx.MANIFEST_FILE).read_text(encoding="utf-8"))
+    assert after == manifest  # 같은 정리를 끝냈을 뿐 새 기록은 없다
+    assert after["files"][fx.ARTICLES_FILE]["sha256"] == hashlib.sha256(on_disk).hexdigest()
+    assert {r["body_purged_at"] for r in loaded.rows if r["body"] is None} == {"2026-11-02T12:00:00.000000Z"}
+
+
+def test_a_file_ahead_of_its_manifest_is_refused_instead_of_adopted(tmp_path):
+    """정리는 매니페스트를 먼저 쓰므로 "본문 파일만 바뀐" 상태는 끊긴 정리로 생기지 않는다 - 손으로 고친 것이다."""
     dest = _mixed_ages(tmp_path)
     manifest_before = (dest / fx.MANIFEST_FILE).read_bytes()
     fx.purge_export(dest, now=datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc))
-    (dest / fx.MANIFEST_FILE).write_bytes(manifest_before)  # 본문 파일만 바뀌고 매니페스트는 옛것
+    (dest / fx.MANIFEST_FILE).write_bytes(manifest_before)
+    for opened in (lambda: fx.load_export(dest, now=datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc)),
+                   lambda: fx.purge_export(dest, now=datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc))):
+        with pytest.raises(fx.ExportIntegrityError, match="설명되지 않는다"):
+            opened()
+    assert (dest / fx.MANIFEST_FILE).read_bytes() == manifest_before  # 매니페스트를 새 파일에 맞춰 고쳐 쓰지 않는다
 
-    loaded = fx.load_export(dest, now=datetime(2026, 11, 2, 12, 0, tzinfo=timezone.utc))
 
-    assert [r["body"] is None for r in loaded.rows] == [True, True, False]
-    manifest = json.loads((dest / fx.MANIFEST_FILE).read_text(encoding="utf-8"))
-    assert manifest["purges"][-1]["reason"] == "recovered"
-    assert manifest["files"][fx.ARTICLES_FILE]["rows_with_body"] == 1
+def test_bodies_restored_from_before_an_earlier_purge_are_refused(tmp_path):
+    dest = _mixed_ages(tmp_path)
+    original = (dest / fx.ARTICLES_FILE).read_bytes()
+    fx.purge_export(dest, now=datetime(2026, 11, 2, 0, 0, tzinfo=timezone.utc))   # 1번 행
+    fx.purge_export(dest, now=datetime(2026, 11, 3, 0, 0, tzinfo=timezone.utc))   # 2번 행
+    (dest / fx.ARTICLES_FILE).write_bytes(original)
+    with pytest.raises(fx.ExportIntegrityError, match="설명되지 않는다"):
+        fx.load_export(dest, now=datetime(2026, 11, 3, 0, 0, tzinfo=timezone.utc))
+
+
+def _edit_row(dest, row_id, **changes):
+    """본문 파일의 한 행을 고친다. `sync_manifest`면 매니페스트의 파일 sha256도 새 파일에 맞춘다(꼼꼼한 변조)."""
+    sync = changes.pop("sync_manifest", False)
+    path = dest / fx.ARTICLES_FILE
+    rows = [json.loads(line) for line in path.read_bytes().split(b"\n") if line.strip()]
+    for row in rows:
+        if row["id"] == row_id:
+            for key, value in changes.items():
+                if value is _DROP:
+                    row.pop(key)
+                else:
+                    row[key] = value
+    data = "".join(fx.canonical_json(r) + "\n" for r in rows).encode("utf-8")
+    path.write_bytes(data)
+    if sync:
+        manifest = json.loads((dest / fx.MANIFEST_FILE).read_text(encoding="utf-8"))
+        manifest["files"][fx.ARTICLES_FILE]["sha256"] = hashlib.sha256(data).hexdigest()
+        (dest / fx.MANIFEST_FILE).write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+
+_DROP = object()
+
+
+@pytest.mark.parametrize("sync_manifest", [False, True])
+@pytest.mark.parametrize("changes, reason", [
+    ({"title": f"{TITLE_MARK} 다른 제목"}, "제목"),                       # 제목은 클러스터 분할·프롬프트·임베딩 텍스트에 들어간다
+    ({"note": "덧붙인 열"}, "열 구성"),
+    ({"body_purged_at": _DROP}, "열 구성"),
+    ({"body": None}, "정리 기록"),                                        # 정리 시각 없이 비운 본문
+    ({"body_purged_at": "2026-10-07T00:00:00.000000Z"}, "정리 기록"),    # 본문이 있는데 정리됐다고 적은 행
+])
+def test_load_refuses_a_row_edited_outside_the_tool(tmp_path, changes, reason, sync_manifest):
+    dest = _written(tmp_path)
+    identity = json.loads((dest / fx.MANIFEST_FILE).read_text(encoding="utf-8"))["identity_sha256"]
+    _edit_row(dest, 1002, sync_manifest=sync_manifest, **changes)
+    for opened in (lambda: fx.load_export(dest, now=datetime(2026, 10, 7, tzinfo=timezone.utc)),
+                   lambda: fx.purge_export(dest, now=datetime(2026, 10, 7, tzinfo=timezone.utc), everything=True)):
+        with pytest.raises(fx.ExportIntegrityError, match=reason):
+            opened()
+    assert json.loads((dest / fx.MANIFEST_FILE).read_text(encoding="utf-8"))["identity_sha256"] == identity
+
+
+def test_a_body_blanked_by_hand_with_a_purge_time_is_not_adopted(tmp_path):
+    """정리 기록 없이 본문만 비운 파일(매니페스트의 sha256과 다르다)은 끊긴 정리가 아니다."""
+    dest = _written(tmp_path)
+    _edit_row(dest, 1002, body=None, body_purged_at="2026-10-07T00:00:00.000000Z")
+    with pytest.raises(fx.ExportIntegrityError, match="설명되지 않는다"):
+        fx.load_export(dest, now=datetime(2026, 10, 7, tzinfo=timezone.utc))
+
+
+def test_an_export_cut_off_before_the_body_file_never_opens_and_is_flagged_by_purge_all(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "data" / "exports"
+    with monkeypatch.context() as m:
+        _stop_before_writing(m, fx.ARTICLES_FILE)
+        with pytest.raises(KeyboardInterrupt):
+            fx.write_export(root / "cut", _bundle())
+    assert (root / "cut" / fx.MANIFEST_FILE).exists()  # 매니페스트가 먼저라 정리가 이 디렉터리를 찾는다
+    assert not (root / "cut" / fx.ARTICLES_FILE).exists()
+    with pytest.raises(fx.ExportIntegrityError, match="읽을 수 없다"):
+        fx.load_export(root / "cut", now=datetime(2026, 10, 7, tzinfo=timezone.utc))
+
+    orphan = root / "orphan"  # 매니페스트 없이 본문 파일만 남은 디렉터리
+    orphan.mkdir()
+    (orphan / fx.ARTICLES_FILE).write_text("{}\n", encoding="utf-8")
+    assert fx.main(["purge", "--all", "--root", str(root)]) == 1
+    swept = {Path(r["dir"]).name: r for r in json.loads(capsys.readouterr().out)["exports"]}
+    assert set(swept) == {"cut", "orphan"} and all("error" in r for r in swept.values())
+
+
+def test_opening_removes_temporary_files_left_by_an_interrupted_write(tmp_path):
+    dest = _written(tmp_path)
+    leftover = dest / (fx.ARTICLES_FILE + ".tmp")
+    leftover.write_text(_body(1), encoding="utf-8")
+    fx.load_export(dest, now=datetime(2026, 10, 7, tzinfo=timezone.utc))
+    assert not leftover.exists()
 
 
 def test_redistributable_rows_keep_their_bodies_after_thirty_days(tmp_path):

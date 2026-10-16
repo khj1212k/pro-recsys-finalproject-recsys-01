@@ -38,7 +38,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,9 @@ ROW_FILTER = (
 _IDENTITY_KEYS = ("id", "press", "url", "title_sha256", "content_sha256", "body_chars",
                   "created_at", "crawled_at", "extracted_at", "extract_status",
                   "redistributable", "body_expires_at")
+# 파일의 한 행이 가진 열 전부. 신원 밖의 열은 셋뿐이고 각각 대조된다: 제목은 title_sha256과, 본문은
+# content_sha256·body_chars와, body_purged_at은 본문이 비었는지와. 이 밖의 열이 있거나 빠지면 읽지 않는다.
+_ROW_KEYS = frozenset(_IDENTITY_KEYS) | {"title", "body", "body_purged_at"}
 
 
 class ExportError(RuntimeError):
@@ -598,7 +601,13 @@ def _file_entry(data: bytes, rows: Sequence[Dict[str, Any]], *, at_export: Optio
     }
 
 
+def _manifest_bytes(manifest: Dict[str, Any]) -> bytes:
+    return (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
+
 def write_export(dest: Path, bundle: ExportBundle) -> Path:
+    """반출본을 쓴다. 매니페스트가 먼저다 - 본문 파일이 있는 디렉터리에는 언제나 매니페스트가 있어
+    정리(`purge --all`)가 그 디렉터리를 찾는다. 본문 파일을 쓰다 끊기면 반출본은 열리지 않는다(다시 반출한다)."""
     dest = ensure_export_location(Path(dest))
     if (dest / MANIFEST_FILE).exists() or (dest / ARTICLES_FILE).exists():
         raise DestinationRefused(f"{dest}: 이미 반출본이 있다 - 동결된 반출본을 덮어쓰지 않는다")
@@ -609,8 +618,8 @@ def write_export(dest: Path, bundle: ExportBundle) -> Path:
         data = _articles_bytes(bundle.rows)
         manifest = dict(bundle.manifest)
         manifest["files"] = {ARTICLES_FILE: _file_entry(data, bundle.rows)}
+        _write_private(dest / MANIFEST_FILE, _manifest_bytes(manifest))
         _write_private(dest / ARTICLES_FILE, data)
-        _write_private(dest / MANIFEST_FILE, (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
     finally:
         os.umask(old_umask)
     return dest
@@ -652,36 +661,48 @@ def _read_manifest(directory: Path) -> Dict[str, Any]:
     return manifest
 
 
-def _read_rows(directory: Path, manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """파일의 행을 읽고 매니페스트의 신원과 맞는지 확인한다. 남아 있는 본문은 전부 해시와 대조한다."""
-    rows: List[Dict[str, Any]] = []
+def _read_rows(directory: Path, manifest: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], str]:
+    """파일의 행을 읽고 매니페스트의 신원과 맞는지 확인한다. 돌려주는 것: 행과 파일의 sha256.
+
+    행마다 확인한다: 열 구성이 정해진 그대로다, 제목이 title_sha256과 같다, 남아 있는 본문이 content_sha256·
+    body_chars와 같다, 본문이 비었으면 정리 시각이 있고 본문이 있으면 없다. 그다음 신원(rows_sha256)을 대조한다.
+    그래서 identity_sha256이 같으면 남아 있는 제목·본문·URL·시각은 반출 때와 같은 바이트다.
+    """
     try:
-        with open(directory / ARTICLES_FILE, "rb") as f:
-            for number, line in enumerate(f, start=1):
-                if not line.strip():
-                    continue
-                try:
-                    rows.append(json.loads(line.decode("utf-8")))
-                except (UnicodeDecodeError, ValueError):
-                    raise ExportIntegrityError(f"{directory}: 본문 파일 {number}번째 줄을 읽을 수 없다") from None
+        data = (directory / ARTICLES_FILE).read_bytes()
     except OSError as e:
         raise ExportIntegrityError(f"{directory}: 본문 파일을 읽을 수 없다({type(e).__name__})") from None
+    rows: List[Dict[str, Any]] = []
+    for number, line in enumerate(data.split(b"\n"), start=1):
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line.decode("utf-8")))
+        except (UnicodeDecodeError, ValueError):
+            raise ExportIntegrityError(f"{directory}: 본문 파일 {number}번째 줄을 읽을 수 없다") from None
     identity = manifest["identity"]
     if len(rows) != identity["rows"]:
         raise ExportIntegrityError(f"{directory}: 행 수 {len(rows)} ≠ 매니페스트 {identity['rows']}")
-    for row in rows:
-        body = row.get("body")
+    for number, row in enumerate(rows, start=1):
+        if not isinstance(row, dict) or set(row) != _ROW_KEYS:
+            raise ExportIntegrityError(f"{directory}: {number}번째 행의 열 구성이 반출 형식과 다르다")
+        title = row["title"]
+        if not isinstance(title, str) or _sha256_text(title) != row["title_sha256"]:
+            raise ExportIntegrityError(f"{directory}: id {row['id']}의 제목이 기록된 해시와 다르다")
+        body = row["body"]
+        if (body is None) != (row["body_purged_at"] is not None):
+            raise ExportIntegrityError(f"{directory}: id {row['id']}의 본문과 정리 기록(body_purged_at)이 맞지 않는다")
         if body is None:
             continue
-        if _sha256_text(body) != row["content_sha256"] or len(body) != row["body_chars"]:
-            raise ExportIntegrityError(f"{directory}: id {row.get('id')}의 본문이 기록된 해시와 다르다")
+        if not isinstance(body, str) or _sha256_text(body) != row["content_sha256"] or len(body) != row["body_chars"]:
+            raise ExportIntegrityError(f"{directory}: id {row['id']}의 본문이 기록된 해시와 다르다")
     try:
         digest = rows_sha256(rows)
-    except KeyError:
-        raise ExportIntegrityError(f"{directory}: 행에 필요한 열이 없다") from None
+    except (TypeError, ValueError):
+        raise ExportIntegrityError(f"{directory}: 행의 값을 신원으로 읽을 수 없다") from None
     if digest != identity["rows_sha256"]:
         raise ExportIntegrityError(f"{directory}: 행의 신원(rows_sha256)이 매니페스트와 다르다")
-    return rows
+    return rows, hashlib.sha256(data).hexdigest()
 
 
 def _is_expired(row: Dict[str, Any], now: datetime) -> bool:
@@ -690,7 +711,12 @@ def _is_expired(row: Dict[str, Any], now: datetime) -> bool:
 
 def _rewrite(directory: Path, manifest: Dict[str, Any], rows: List[Dict[str, Any]], *, now: datetime,
              blanked: int, reason: str) -> Dict[str, Any]:
-    """본문 파일을 먼저, 매니페스트를 나중에 바꾼다. 사이에서 끊기면 다음 load가 'recovered'로 맞춘다."""
+    """정리 결과를 쓴다. **매니페스트가 먼저, 본문 파일이 나중이다.**
+
+    매니페스트의 정리 기록에는 시각·사유·전후 sha256이 있다. 둘 사이에서 끊기면 디스크의 본문 파일은 정리 전
+    그대로(`sha256_before`)이고, 다음에 열 때 `_open`이 같은 시각·사유로 같은 정리를 다시 해 `sha256_after`와
+    같은지 확인하고 끝낸다. 반대 순서(본문 파일이 매니페스트보다 앞선 상태)는 생기지 않으므로 그런 파일은 거절한다.
+    """
     previous = manifest["files"][ARTICLES_FILE]
     data = _articles_bytes(rows)
     entry = _file_entry(data, rows, at_export=previous.get("sha256_at_export") or previous["sha256"])
@@ -702,10 +728,8 @@ def _rewrite(directory: Path, manifest: Dict[str, Any], rows: List[Dict[str, Any
     }]
     old_umask = os.umask(0o077)
     try:
-        if entry["sha256"] != _sha256_file(directory / ARTICLES_FILE):
-            _write_private(directory / ARTICLES_FILE, data)
-        _write_private(directory / MANIFEST_FILE,
-                       (json.dumps(manifest, ensure_ascii=False, indent=2) + "\n").encode("utf-8"))
+        _write_private(directory / MANIFEST_FILE, _manifest_bytes(manifest))
+        _write_private(directory / ARTICLES_FILE, data)
     finally:
         os.umask(old_umask)
     return manifest
@@ -721,43 +745,68 @@ def _blank(rows: List[Dict[str, Any]], now: datetime, *, everything: bool) -> in
     return blanked
 
 
+def _open(directory: Path, *, repair: bool = True) -> Tuple[Dict[str, Any], List[Dict[str, Any]], int]:
+    """매니페스트와 행을 읽어 검증한다. 돌려주는 것: 매니페스트, 행, 디스크에 아직 남은 "지워졌어야 할" 본문 수.
+
+    디스크의 본문 파일은 매니페스트에 적힌 sha256과 같아야 한다. 다르면 받아들이는 경우는 하나뿐이다: 마지막
+    정리가 매니페스트를 쓴 뒤 본문 파일을 쓰기 전에 끊긴 경우(`_rewrite`). 그때 파일은 마지막 정리의
+    `sha256_before`와 같고, 같은 시각·사유로 정리를 다시 하면 `sha256_after`가 나와야 한다. 그러면 그 정리를
+    끝낸다(`repair=False`면 메모리에서만 비운다). 그 밖의 불일치는 손댄 파일로 보고 거절한다.
+    """
+    if repair:
+        for name in (ARTICLES_FILE, MANIFEST_FILE):  # 끊긴 쓰기가 남긴 임시 파일(진짜 파일이 기준이다)
+            (directory / (name + ".tmp")).unlink(missing_ok=True)
+    manifest = _read_manifest(directory)
+    rows, on_disk = _read_rows(directory, manifest)
+    entry = manifest["files"].get(ARTICLES_FILE) or {}
+    if on_disk == entry.get("sha256"):
+        return manifest, rows, 0
+    purges = manifest.get("purges") or []
+    last = purges[-1] if purges else {}
+    if not last or on_disk != last.get("sha256_before") or last.get("sha256_after") != entry.get("sha256"):
+        raise ExportIntegrityError(f"{directory}: 본문 파일이 매니페스트와 다르다(끊긴 정리로 설명되지 않는다)")
+    pending = _blank(rows, _parse(last["at_utc"]), everything=last.get("reason") == "everything")
+    data = _articles_bytes(rows)
+    if hashlib.sha256(data).hexdigest() != entry["sha256"]:
+        raise ExportIntegrityError(f"{directory}: 끊긴 정리를 다시 해도 매니페스트의 본문 파일과 같아지지 않는다")
+    if not repair:
+        return manifest, rows, pending
+    old_umask = os.umask(0o077)
+    try:
+        _write_private(directory / ARTICLES_FILE, data)
+    finally:
+        os.umask(old_umask)
+    logger.info("끊겼던 정리를 마쳤다: %s (본문 %d건)", directory, pending)
+    return manifest, rows, 0
+
+
 def load_export(directory: Path, *, now: Optional[datetime] = None, purge_expired: bool = True) -> FrozenExport:
     """반출본을 검증해 읽는다. 만료된 본문은 돌려주지 않고, 기본으로 디스크에서도 지운다.
 
     `purge_expired=False`는 파일을 고칠 수 없는 경우를 위한 것이다. 그때도 만료된 본문은 메모리로 나오지
-    않고(`body=None`), `expired_unpurged`에 남은 건수가 적힌다.
+    않고(`body=None`), 디스크에 남은 그런 본문의 수가 `expired_unpurged`에 적힌다.
     """
     directory = Path(directory)
     now_utc = _naive_utc(now)
-    manifest = _read_manifest(directory)
-    rows = _read_rows(directory, manifest)
-
-    entry = manifest["files"].get(ARTICLES_FILE) or {}
-    with_body = sum(1 for r in rows if r["body"] is not None)
-    stale = entry.get("sha256") != _sha256_file(directory / ARTICLES_FILE)
-    if stale and (entry.get("rows_with_body") is None or with_body > entry["rows_with_body"]):
-        # 신원과 본문 해시는 맞는데 매니페스트보다 본문이 많다 - 정리로는 생길 수 없는 상태다.
-        raise ExportIntegrityError(f"{directory}: 본문 파일이 매니페스트와 다르다")
-
-    expired = sum(1 for r in rows if r["body"] is not None and _is_expired(r, now_utc))
+    manifest, rows, pending = _open(directory, repair=purge_expired)
     if purge_expired:
         blanked = _blank(rows, now_utc, everything=False)
-        if blanked or stale:
-            manifest = _rewrite(directory, manifest, rows, now=now_utc, blanked=blanked,
-                                reason="expired" if blanked else "recovered")
+        if blanked:
+            manifest = _rewrite(directory, manifest, rows, now=now_utc, blanked=blanked, reason="expired")
         return FrozenExport(directory, manifest, rows)
+    expired = 0
     for row in rows:
         if row["body"] is not None and _is_expired(row, now_utc):
             row["body"] = None  # 디스크는 그대로지만 호출자에게는 주지 않는다
-    return FrozenExport(directory, manifest, rows, expired_unpurged=expired)
+            expired += 1
+    return FrozenExport(directory, manifest, rows, expired_unpurged=expired + pending)
 
 
 def purge_export(directory: Path, *, now: Optional[datetime] = None, everything: bool = False) -> Dict[str, Any]:
     """만료된 본문(또는 `everything`이면 전부)을 지우고 해시·길이·제목·URL은 남긴다. 여러 번 돌려도 같다."""
     directory = Path(directory)
     now_utc = _naive_utc(now)
-    manifest = _read_manifest(directory)
-    rows = _read_rows(directory, manifest)
+    manifest, rows, _ = _open(directory)
     blanked = _blank(rows, now_utc, everything=everything)
     if blanked:
         manifest = _rewrite(directory, manifest, rows, now=now_utc, blanked=blanked,
@@ -892,13 +941,19 @@ def _cmd_verify(args) -> int:
 
 
 def purge_all(root: Path, *, now: Optional[datetime] = None, everything: bool = False) -> List[Dict[str, Any]]:
-    """`root` 아래의 모든 반출본을 정리한다. 읽을 수 없는 반출본은 건너뛰지 않고 그 사실을 적는다."""
+    """`root` 바로 아래의 모든 반출본을 정리한다. 읽을 수 없는 반출본과, 매니페스트 없이 본문 파일만 남은
+    디렉터리는 건너뛰지 않고 그 사실을 적는다(본문이 남아 있을 수 있으니 사람이 확인한다)."""
     results: List[Dict[str, Any]] = []
-    for manifest_path in sorted(Path(root).glob(f"*/{MANIFEST_FILE}")):
-        try:
-            results.append(purge_export(manifest_path.parent, now=now, everything=everything))
-        except ExportError as e:
-            results.append({"dir": str(manifest_path.parent), "error": str(e)})
+    root = Path(root)
+    children = sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []
+    for child in children:
+        if (child / MANIFEST_FILE).exists():
+            try:
+                results.append(purge_export(child, now=now, everything=everything))
+            except ExportError as e:
+                results.append({"dir": str(child), "error": str(e)})
+        elif any((child / name).exists() for name in (ARTICLES_FILE, ARTICLES_FILE + ".tmp")):
+            results.append({"dir": str(child), "error": "매니페스트 없이 본문 파일이 남아 있다 - 직접 확인하고 지운다"})
     return results
 
 
