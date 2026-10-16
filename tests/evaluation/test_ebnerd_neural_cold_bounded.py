@@ -33,7 +33,7 @@ def _has_torch() -> bool:
     return getattr(torch, "__file__", None) is not None
 
 
-pytestmark = pytest.mark.skipif(not _has_torch(), reason="torch가 없다(신경망 단계는 torch가 있는 CI job과 로컬에서 돈다)")
+torch_only = pytest.mark.skipif(not _has_torch(), reason="torch가 없다(신경망 단계는 torch가 있는 CI job과 로컬에서 돈다)")
 
 
 def _run_p2_until_cold(argv_base: list, out) -> None:
@@ -91,6 +91,8 @@ def _cold_with(monkeypatch, argv_base: list, src, dst, *, in_memory: bool, chunk
 @pytest.fixture(scope="module")
 def p2_store(synth_root, tmp_path_factory):
     """합성 데이터로 P2를 cold 앞까지 돌린 체크포인트(cold 단위 없음)."""
+    if not _has_torch():
+        pytest.skip("torch가 없다")
     out = tmp_path_factory.mktemp("e15_p2_store")
     base = ["--dataset", "ebnerd_synth", "--root", str(synth_root), *SMALL]
     _run_p2_until_cold(base, out)
@@ -98,6 +100,7 @@ def p2_store(synth_root, tmp_path_factory):
     return base, out
 
 
+@torch_only
 def test_p2_cold_rows_path_equals_the_in_memory_path_bitwise(p2_store, tmp_path, monkeypatch):
     base, out = p2_store
     ref = _cold_with(monkeypatch, base, out, tmp_path / "in_memory", in_memory=True)
@@ -106,6 +109,7 @@ def test_p2_cold_rows_path_equals_the_in_memory_path_bitwise(p2_store, tmp_path,
                                          chunk=chunk), ref)
 
 
+@torch_only
 def test_p2_cold_rows_path_equals_the_in_memory_path_with_many_scoring_batches(p2_store, tmp_path, monkeypatch):
     """채점 배치가 여러 개일 때(배치 묶음이 조각마다 다를 때)도 같다."""
     base, out = p2_store
@@ -137,6 +141,7 @@ def test_p1_cold_keeps_the_in_memory_path(monkeypatch):
         assert calls == [path] * len(cold_conditions())
 
 
+@torch_only
 def test_row_helpers_match_the_whole_matrix_helpers(p2_store, tmp_path):
     """조각 도구 하나하나: 피처 열, 입력 행렬의 sha256, LightGBM 예측, 신경망 점수가 한 번에 만든 것과 같다."""
     import argparse
@@ -183,8 +188,9 @@ def test_row_helpers_match_the_whole_matrix_helpers(p2_store, tmp_path):
             == full.tobytes()
 
 
+@torch_only
 @pytest.mark.parametrize("max_pairs,chunk", [(256, 1), (256, 700), (256, 10 ** 9), (65536, 300)])
-def test_predict_streamed_equals_predict_bitwise(p2_store, max_pairs, chunk):
+def test_predict_streamed_equals_predict_bitwise(max_pairs, chunk):
     """신경망 채점: 배치 계획(eval_batches)이 같으면 스칼라 블록을 조각으로 만들어도 점수가 비트 단위로 같다."""
     from evaluation.recsys.ebnerd.neural import train as TR
     from evaluation.recsys.ebnerd.neural.datasets import NeuralInputs
@@ -222,6 +228,7 @@ def test_predict_streamed_equals_predict_bitwise(p2_store, max_pairs, chunk):
         assert got.dtype == full.dtype and got.tobytes() == full.tobytes(), family
 
 
+@torch_only
 @pytest.mark.skipif(not (ebnerd_root() / "ebnerd_demo" / "articles.parquet").exists(),
                     reason="EB-NeRD demo 데이터가 없다(로컬 전용, 라이선스상 저장소·CI에 두지 않는다)")
 def test_demo_p2_cold_rows_path_equals_the_in_memory_path_bitwise(tmp_path_factory, monkeypatch):
@@ -235,3 +242,31 @@ def test_demo_p2_cold_rows_path_equals_the_in_memory_path_bitwise(tmp_path_facto
     for chunk in (1013, R.COLD_CHUNK_PAIRS):
         _assert_bitwise_equal(_cold_with(monkeypatch, base, out, tmp / f"rows_{chunk}", in_memory=False, chunk=chunk,
                                          max_pairs=4096), ref)
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")       # 입력의 inf가 float32로 바뀌며 넘치는 경고(두 경로가 같다)
+def test_scalar_block_in_row_chunks_equals_one_pass_bitwise():
+    """스칼라 블록은 원소별 변환이라 행 조각으로 나눠 만들어도 한 번에 만든 것과 비트 단위로 같다(NaN·음수·inf 포함)."""
+    from evaluation.recsys.ebnerd.neural.sequences import ScalarSpec, _scalar_rows, scalar_block, standardization_stats
+
+    spec = ScalarSpec.from_prereg(R.load_prereg()["neural"]["scalar_block"])
+    rng = np.random.default_rng(3)
+
+    def raw(n, inf=False):
+        x = (rng.lognormal(0.0, 2.0, size=(n, len(V2_FEATURES))) * rng.choice([-1.0, 1.0], size=(n, len(V2_FEATURES))))
+        x = x.astype(np.float32)
+        x[rng.random(x.shape) < 0.05] = np.nan
+        if inf:
+            x[rng.random(x.shape) < 0.001] = np.inf
+        return x
+
+    stats = standardization_stats(raw(2000), V2_FEATURES, spec)
+    assert stats["missing"]                                   # 결측 지표 열이 있는 경우를 본다
+    x = raw(3001, inf=True)
+    one = _scalar_rows(x, V2_FEATURES, spec, stats, 25)
+    for rows in (1, 7, 1000, 3001, 10 ** 9, None):
+        got = scalar_block(x, V2_FEATURES, spec, stats, 25, chunk_rows=rows)
+        for a, b in ((got.cont, one.cont), (got.category, one.category), (got.gender, one.gender)):
+            assert a.dtype == b.dtype and a.shape == b.shape and a.tobytes() == b.tobytes(), rows
+    empty = scalar_block(x[:0], V2_FEATURES, spec, stats, 25)
+    assert empty.cont.shape == (0, one.cont.shape[1]) and empty.category.shape == (0,)
