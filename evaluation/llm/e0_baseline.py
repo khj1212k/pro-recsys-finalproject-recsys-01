@@ -623,7 +623,7 @@ class Runner:
                 closed.append(r["item_id"])
         return closed
 
-    def finalize(self, reason: str) -> Dict[str, Any]:
+    def finalize(self, reason: str, *, void: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         ins = self.ins
         rows = self.recorder.read(ins.CLUSTERS_FILE)
         ended = {r["item_id"] for r in rows if r["kind"] == "end"}
@@ -640,8 +640,9 @@ class Runner:
         ends = {r["item_id"]: r for r in rows if r["kind"] == "end"}
         eval_ends = [ends[r["item_id"]] for r in self.plan.eval_items]
         natural = [e for e in eval_ends if e["outcome"].split(":")[0] in reg.NATURAL_OUTCOMES]
-        void = None
-        if stop and stop.get("reason") == "infra" and len(natural) < reg.BUDGET["void_if_processed_eval_clusters_below"]:
+        # pre-flight의 인프라 실패는 실행 시작 전이라 void가 아니다(A8.5). 그 뒤의 인프라 중단은 n_p < 8이면 void.
+        if void is None and stop and stop.get("reason") == "infra" and reason != "preflight_infra_failure" and \
+                len(natural) < reg.BUDGET["void_if_processed_eval_clusters_below"]:
             void = {"reason": "infra_below_8", "n_processed": len(natural)}
         try:
             self.store.assert_clean()
@@ -651,7 +652,8 @@ class Runner:
         from core.llm import budget
 
         summary = {
-            "run": self.dir.name, "finished_at": _iso(_utc_now()), "reason": why, "stop": stop, "void": void,
+            "run": self.dir.name, "finished_at": _iso(_utc_now()), "reason": reason, "not_started_reason": why,
+            "stop": stop, "void": void,
             "n_eval": len(self.plan.eval_items), "n_warmup": len(self.plan.warmup_items), "n_processed": len(natural),
             "outcomes": {o: sum(1 for e in eval_ends if e["outcome"] == o) for o in sorted({e["outcome"] for e in eval_ends})},
             "ledger": ins.Ledger.totals(self.dir / ins.LEDGER_FILE) | {"open_ids": None},
@@ -703,6 +705,13 @@ def _run_e0(cfg: RunConfig) -> Dict[str, Any]:
     root = e0_root()
     with e0_lock(root):
         now = cfg.now or _utc_now()
+        name, seq = (cfg.resume, None) if cfg.resume else _new_run_name(root, now)
+        # 지출 가드(ADR 0035)를 E0 run에 맞춰 두고 쓸 수 있는지 본다 - 막히면 run 디렉터리를 만들기 전에 멈춘다
+        run_label = f"{reg.PREREG_ID}:{name}"
+        in_client = configure_in_client_cap(run_label)
+        cap_problems = in_client_problems()
+        if cap_problems:
+            raise Refused(cap_problems)
         if cfg.resume:
             run_dir = root / cfg.resume
             if not (run_dir / RUN_STATE).exists():
@@ -722,7 +731,6 @@ def _run_e0(cfg: RunConfig) -> Dict[str, Any]:
                 state.data["eval_segment_started"] = None
             state.save()
         else:
-            name, seq = _new_run_name(root, now)
             run_dir = root / name
             store = e0_store.FileGenerationStore(run_dir)  # 경로 확인(메인 체크아웃 data/experiments, git 제외)
             state = RunState(run_dir)
@@ -734,11 +742,6 @@ def _run_e0(cfg: RunConfig) -> Dict[str, Any]:
             state.save()
         store = e0_store.FileGenerationStore(run_dir)
         head = reg._git(cfg.repo, "rev-parse", "HEAD").stdout.strip() or None
-        run_label = f"{reg.PREREG_ID}:{run_dir.name}"
-        in_client = configure_in_client_cap(run_label)
-        cap_problems = in_client_problems()
-        if cap_problems:
-            raise Refused(cap_problems)
         if not (run_dir / RUN_MANIFEST).exists():
             _write_json(run_dir / RUN_MANIFEST, {
                 "prereg": reg.PREREG_ID, "command": cfg.command, "code_sha": cfg.prereg["pre_run_record"]["code_sha"],
@@ -793,8 +796,10 @@ def _run_e0(cfg: RunConfig) -> Dict[str, Any]:
                     if pre["infra_failure"]:
                         return runner.finalize("preflight_infra_failure")
                     if pre["call_params_mismatch"]:
-                        on_stop("config", {"detail": f"call_params_mismatch:{pre['call_params_mismatch']}"})
-                        return runner.finalize("preflight_call_params_mismatch")
+                        recorder.set_stop("config", {"detail": f"call_params_mismatch:{pre['call_params_mismatch']}"})
+                        return runner.finalize("preflight_call_params_mismatch",
+                                               void={"reason": "settings_mismatch",
+                                                     "detail": pre["call_params_mismatch"]})
                 if phases.get("warmup") != "done":
                     started = {r["item_id"] for r in recorder.read(ins.CLUSTERS_FILE) if r["kind"] == "start"}
                     runner.run_phase("warmup", [r for r in plan.warmup_items if r["item_id"] not in started])
@@ -805,7 +810,7 @@ def _run_e0(cfg: RunConfig) -> Dict[str, Any]:
                     if recorder.stop is not None:
                         return runner.finalize("stopped_in_warmup")
                     if problems:
-                        on_stop("warmup_audit", {"detail": "; ".join(problems[:5])})
+                        recorder.set_stop("warmup_audit", {"detail": "; ".join(problems[:5])})
                         return runner.finalize("warmup_audit_failed")
                 started = {r["item_id"] for r in recorder.read(ins.CLUSTERS_FILE) if r["kind"] == "start"}
                 todo = [r for r in plan.eval_items if r["item_id"] not in started]

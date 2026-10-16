@@ -172,6 +172,14 @@ def test_settings_kill_switch_and_missing_key_are_refused(inputs, monkeypatch):
 # ---------------------------------------------------------------- 중단·재개
 
 
+def test_an_unusable_in_client_spend_cap_is_refused_before_any_run_directory(inputs, monkeypatch):
+    monkeypatch.setenv("LLM_BUDGET_TOTAL_USD", "1.00")   # 전체 상한 여유 < $2.00 - E0 가드보다 먼저 막힌다
+    assert "전체 상한 여유" in _refuse(inputs)
+    monkeypatch.setenv("LLM_BUDGET_TOTAL_USD", "3.00")
+    monkeypatch.setenv("LLM_SPEND_LEDGER_FILE", str(inputs.root / "missing-ledger.jsonl"))
+    assert "지출 가드" in _refuse(inputs)
+
+
 def test_budget_cap_makes_a_partial_run_with_aborted_and_not_started_clusters(tmp_path, monkeypatch):
     _no_wait(monkeypatch)
     out = base.dry_run(tmp_path, t0=T0, faults=syn.FaultPlan(), cap_run_usd=0.06, run_report=True)
@@ -201,6 +209,17 @@ def test_402_aborts_the_cluster_as_infra_not_skipped_and_the_run_is_void_below_e
     assert aborted and all(r["root_cause"] == "aborted_infra" for r in aborted)
     assert not any(r["outcome"] == "skipped" for r in ends)
     assert "labels" not in out   # void 실행에는 라벨을 달지 않는다
+
+
+def test_an_infra_failure_in_preflight_stops_before_warmup_and_is_not_void(tmp_path, monkeypatch):
+    _no_wait(monkeypatch)
+    out = base.dry_run(tmp_path, t0=T0, faults=syn.FaultPlan(always=401), run_report=False)
+    summary = out["summary"]
+    assert summary["reason"] == "preflight_infra_failure" and summary["void"] is None
+    assert summary["stop"]["reason"] == "infra" and summary["outcomes"] == {"not_started": 15}
+    assert out["fake_requests"] == 1   # 첫 pre-flight 호출이 401 - 그 뒤 아무것도 보내지 않았다
+    pre = json.loads((Path(out["run_dir"]) / base.PREFLIGHT_FILE).read_text())
+    assert pre["infra_failure"] is True
 
 
 def test_resume_closes_the_in_flight_cluster_as_interrupted_and_continues_in_order(tmp_path, monkeypatch):
