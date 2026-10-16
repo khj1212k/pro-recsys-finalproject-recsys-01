@@ -141,10 +141,15 @@ def stacker_rows(chain: ForwardChain, cand_ptr: np.ndarray) -> np.ndarray:
     return chain.scored.copy()
 
 
+def neural_rank_column(scores: np.ndarray, cand_ptr: np.ndarray) -> np.ndarray:
+    """신경망 점수 -> 요청 안 평균 순위(0~1) float32 열. 점수가 NaN인 행은 NaN으로 남는다."""
+    return average_rank01(np.asarray(scores, dtype=np.float64), cand_ptr).astype(np.float32)
+
+
 def with_neural_rank(feats: pd.DataFrame, scores: np.ndarray, cand_ptr: np.ndarray, column: str) -> pd.DataFrame:
     """신경망 점수를 요청 안 평균 순위(0~1)로 바꿔 열로 더한 사본. 점수가 NaN인 행은 NaN으로 남는다."""
     out = feats.copy()
-    out[column] = average_rank01(np.asarray(scores, dtype=np.float64), cand_ptr).astype(np.float32)
+    out[column] = neural_rank_column(scores, cand_ptr)
     return out
 
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import json
 import logging
 import os
@@ -29,13 +30,13 @@ from typing import Callable, Optional
 import numpy as np
 import pandas as pd
 
-from recsys_core import compute_features
+from recsys_core import compute_feature_columns, compute_features, schema
 
 from ..metrics import cluster_bootstrap, paired_bootstrap_diff, ranking_metrics
 from .loaders import ebnerd_root
 from .models import ABLATION, ALL_GROUPS, NEGATIVE_VARIANTS, V2_FEATURES, ModelSpec, feature_matrix, train
 from .neural import stack as stacking
-from .neural.cold import cold_conditions, pop_mask_raw, truncate_logs
+from .neural.cold import POP_RAW_COLUMNS, cold_conditions, pop_mask_raw, truncate_logs
 from .neural.datasets import NeuralInputs, build_inputs
 from .neural.report import (DEMO_GRADE, EVIDENCE_GRADE, diff_key, load_prereg, neural_verdict, prereg_commit,
                             prereg_sha256, render)
@@ -853,30 +854,145 @@ def stage_cold(run: Run):
     family = s["family"]
     spec = _spec(run, family, s["table"][family]["config"])
     names = set(run.prereg["cold"]["conditions"])
+    # P2 콜드 표본(60,000 요청 x 풀 약 235 ≈ 1,410만 쌍)은 한 번에 채점하면 12.7 GB RAM에서 죽는다(크기 리허설, ADR 0013
+    # A3.12 2026-10-17). P2만 행 조각으로 채점하는 경로를 쓴다 — 같은 배열·같은 메타를 낸다(테스트가 비트 단위로 대조한다).
+    cold_unit = _cold_unit_bounded if T == "p2" else _cold_unit_in_memory
     for cond in [c for c in cold_conditions() if c.name in names]:
-        def compute(cond=cond):
-            base = run.eval_set("cold")
-            req = base.task.req
-            if cond.pop_zero:
-                feats, seq = pop_mask_raw(base.feats), base.seq
-            else:
-                ctx_k, req_k = truncate_logs(base.ctx, req, cond.truncate_k)
-                seq = last_n_clicks(ctx_k.user_log, req_k.user, req_k.profile_cutoff, run.seq_n)
-                feats = run.with_seq(run.features(ctx_k, req_k, f"{T}-cold-{cond.name}"), seq, req)
-            arrays = {"clusters": base.clusters}
-            for seed in run.seeds:
-                for arm in (A_STAR, A_PLUS):
-                    _put(arrays, base, arm, seed, run.store.load_model(f"{T}_{arm}", seed).predict(feats, base.task), True)
-                final, stats = _neural_model(run, env, family, spec, seed)
-                scores = _score_neural(run, env, final, stats, base.task, feats, seq)
-                _put(arrays, base, family, seed, scores, True)
-                ranked = stacking.with_neural_rank(feats, scores, req.cand_ptr, run.stack_col)
-                _put(arrays, base, D_ARM, seed, run.store.load_model(f"{T}_n_{D_ARM}", seed).predict(ranked, base.task), True)
-            # 두 학습기가 받은 스칼라 행렬은 이 한 벌이다(한 프로세스에서 한 번 계산해 모든 arm에 넣었다).
-            return arrays, {"condition": cond.name, "n_requests": int(req.n), "n_pairs": int(len(base.task.labels)),
-                            "scalar_matrix_sha256": keys_sha256(feature_matrix(feats, base.task, V2_FEATURES)),
-                            "sequences_nonempty_share": float(seq.mask.any(axis=1).mean())}
-        _unit(run, neural_unit(T, f"cold_{cond.name}"), compute)
+        _unit(run, neural_unit(T, f"cold_{cond.name}"), lambda cond=cond: cold_unit(run, env, family, spec, cond))
+
+
+def _cold_unit_in_memory(run: Run, env: dict, family: str, spec, cond) -> tuple[dict, dict]:
+    """콜드 조건 하나: 표본 전체의 피처 사본·입력 행렬을 메모리에 한 번에 만든다(P1, 그리고 P2의 대조 기준)."""
+    T = run.task
+    base = run.eval_set("cold")
+    req = base.task.req
+    if cond.pop_zero:
+        feats, seq = pop_mask_raw(base.feats), base.seq
+    else:
+        ctx_k, req_k = truncate_logs(base.ctx, req, cond.truncate_k)
+        seq = last_n_clicks(ctx_k.user_log, req_k.user, req_k.profile_cutoff, run.seq_n)
+        feats = run.with_seq(run.features(ctx_k, req_k, f"{T}-cold-{cond.name}"), seq, req)
+    arrays = {"clusters": base.clusters}
+    for seed in run.seeds:
+        for arm in (A_STAR, A_PLUS):
+            _put(arrays, base, arm, seed, run.store.load_model(f"{T}_{arm}", seed).predict(feats, base.task), True)
+        final, stats = _neural_model(run, env, family, spec, seed)
+        scores = _score_neural(run, env, final, stats, base.task, feats, seq)
+        _put(arrays, base, family, seed, scores, True)
+        ranked = stacking.with_neural_rank(feats, scores, req.cand_ptr, run.stack_col)
+        _put(arrays, base, D_ARM, seed, run.store.load_model(f"{T}_n_{D_ARM}", seed).predict(ranked, base.task), True)
+    # 두 학습기가 받은 스칼라 행렬은 이 한 벌이다(한 프로세스에서 한 번 계산해 모든 arm에 넣었다).
+    return arrays, {"condition": cond.name, "n_requests": int(req.n), "n_pairs": int(len(base.task.labels)),
+                    "scalar_matrix_sha256": keys_sha256(feature_matrix(feats, base.task, V2_FEATURES)),
+                    "sequences_nonempty_share": float(seq.mask.any(axis=1).mean())}
+
+
+# --- P2 콜드: 행 조각 경로 ----------------------------------------------------------------------
+# 한 번에 만드는 것은 피처 열(쌍마다 float32 한 값)과 요청별 지표뿐이다. LightGBM 입력 행렬, 신경망 스칼라 블록(float64 중간값),
+# 스태커 입력은 쌍 COLD_CHUNK_PAIRS개씩 만들어 쓰고 버린다. 피처 계산 자체는 조각으로 나누지 않는다 — recsys_core의 히스토리
+# 코사인은 요청 묶음 안의 누적합으로 계산돼서, 요청 일부로 다시 계산하면 마지막 자리가 달라질 수 있다.
+COLD_CHUNK_PAIRS = 1 << 19
+
+
+def _cold_requests(run: Run) -> EvalSet:
+    """P2 콜드 게이트 표본의 과제·시퀀스(eval_set("cold")와 같은 호출) — 기준 피처는 만들지 않는다."""
+    key = ("eval", "cold_requests")
+    if key not in run._cache:
+        ctx = run.bench.ctx["validation"]
+        task = p2_task(run.bench, "validation", run.cold_idx(),
+                       window_h=run.prereg["tasks"]["p2"]["fit_negatives"]["window_h"], exclude_seen=True)
+        run._cache[key] = EvalSet("p2", task, None, ctx, run.sequences(ctx, task.req),
+                                  tuple(run.prereg["tasks"][run.task]["metrics"]))
+    return run._cache[key]
+
+
+def _feature_columns(run: Run, ctx, req, label: str, seq: Sequences, seq_req) -> dict:
+    """run.with_seq(run.features(ctx, req, label), seq, seq_req)와 같은 값의 {열: 쌍 배열}. DataFrame 사본을 만들지 않는다."""
+    t0 = time.time()
+    cols = compute_feature_columns(ctx, req, groups=ALL_GROUPS)
+    log.info("features %s: %d requests, %d pairs, %.1fs", label, req.n, len(req.cand_item), time.time() - t0)
+    cfg = run.prereg["gbdt"]["seq_scalars"]
+    n = int(cfg["n_hist"])
+    sq = seq_scalars(Sequences(seq.items[:, -n:], seq.mask[:, -n:], seq.pos[:, -n:]), seq_req, run.emb, cfg["columns"],
+                     float(cfg["empty_value"]))
+    cols.update({c: sq[c].to_numpy() for c in sq.columns})
+    return cols
+
+
+def _rows_matrix(cols: dict, task: RankTask, pair_req: np.ndarray, columns: list, rows) -> np.ndarray:
+    """feature_matrix(feats, task, columns)의 행 일부(rows = slice 또는 쌍 위치 배열). 같은 값·같은 dtype·같은 행 순서."""
+    extra = {"user_age": task.extra["age"][pair_req[rows]], "user_gender": task.extra["gender"][pair_req[rows]]}
+    return schema.assemble({c: cols[c][rows] for c in columns if c not in extra}, extra, columns)
+
+
+def _row_slices(n: int, chunk: int):
+    for a in range(0, n, chunk):
+        yield slice(a, min(a + chunk, n))
+
+
+def _predict_rows(model, cols: dict, task: RankTask, pair_req: np.ndarray, chunk: int) -> np.ndarray:
+    """StoredModel.predict(feats, task)와 같은 점수. LightGBM의 예측은 행마다 독립이라 행 조각으로 나눠도 같다."""
+    out = np.empty(len(pair_req), dtype=np.float64)
+    for r in _row_slices(len(pair_req), chunk):
+        out[r] = model.booster.predict(_rows_matrix(cols, task, pair_req, model.features, r),
+                                       num_iteration=model.best_iteration)
+    return out
+
+
+def _rows_sha256(cols: dict, task: RankTask, pair_req: np.ndarray, columns: list, chunk: int) -> str:
+    """keys_sha256(feature_matrix(feats, task, columns))와 같은 값. C 순서 행렬의 바이트는 행 조각 바이트를 이어 붙인 것이다."""
+    h = hashlib.sha256()
+    for r in _row_slices(len(pair_req), chunk):
+        h.update(np.ascontiguousarray(_rows_matrix(cols, task, pair_req, columns, r)).tobytes())
+    return h.hexdigest()
+
+
+def _score_neural_rows(run: Run, env: dict, trained, stats: dict, task: RankTask, cols: dict, pair_req: np.ndarray,
+                       seq: Sequences, chunk: int) -> np.ndarray:
+    """_score_neural과 같은 점수. 스칼라 블록(행마다 독립인 변환)을 채점 배치 묶음의 쌍에 대해서만 만든다."""
+    tr, _ = _torch()
+    n_hist = trained.spec.n_hist
+    s = Sequences(seq.items[:, -n_hist:], seq.mask[:, -n_hist:], seq.pos[:, -n_hist:])
+
+    def block_rows(pairs: np.ndarray):
+        return scalar_block(_rows_matrix(cols, task, pair_req, V2_FEATURES, pairs), V2_FEATURES, run.scalar_spec, stats,
+                            run.n_categories)
+    return tr.predict_streamed(trained, task.req.cand_ptr, task.req.cand_item, task.labels, s, block_rows, run.emb,
+                               device=env["device"], fixed=run.fixed, chunk_pairs=chunk)
+
+
+def _cold_unit_bounded(run: Run, env: dict, family: str, spec, cond, chunk: Optional[int] = None) -> tuple[dict, dict]:
+    """_cold_unit_in_memory와 같은 배열·메타를, 표본 전체 크기의 중간 행렬 없이 만든다(P2)."""
+    chunk = int(chunk or COLD_CHUNK_PAIRS)
+    T = run.task
+    base = _cold_requests(run)
+    task, req = base.task, base.task.req
+    pair_req = req.pair_req
+    if cond.pop_zero:
+        seq = base.seq
+        cols = _feature_columns(run, base.ctx, req, f"{T}-cold", seq, req)
+        zero = np.zeros(len(pair_req), dtype=np.float32)          # pop_mask_raw(feats)와 같은 값(float32 0)
+        cols.update({c: zero for c in POP_RAW_COLUMNS if c in cols})
+    else:
+        ctx_k, req_k = truncate_logs(base.ctx, req, cond.truncate_k)
+        seq = last_n_clicks(ctx_k.user_log, req_k.user, req_k.profile_cutoff, run.seq_n)
+        cols = _feature_columns(run, ctx_k, req_k, f"{T}-cold-{cond.name}", seq, req)
+        del ctx_k, req_k
+    arrays = {"clusters": base.clusters}
+    for seed in run.seeds:
+        for arm in (A_STAR, A_PLUS):
+            _put(arrays, base, arm, seed, _predict_rows(run.store.load_model(f"{T}_{arm}", seed), cols, task, pair_req,
+                                                        chunk), True)
+        final, stats = _neural_model(run, env, family, spec, seed)
+        scores = _score_neural_rows(run, env, final, stats, task, cols, pair_req, seq, chunk)
+        _put(arrays, base, family, seed, scores, True)
+        ranked = {**cols, run.stack_col: stacking.neural_rank_column(scores, req.cand_ptr)}
+        _put(arrays, base, D_ARM, seed, _predict_rows(run.store.load_model(f"{T}_n_{D_ARM}", seed), ranked, task,
+                                                      pair_req, chunk), True)
+        del ranked, scores
+    return arrays, {"condition": cond.name, "n_requests": int(req.n), "n_pairs": int(len(task.labels)),
+                    "scalar_matrix_sha256": _rows_sha256(cols, task, pair_req, V2_FEATURES, chunk),
+                    "sequences_nonempty_share": float(seq.mask.any(axis=1).mean())}
 
 
 def stage_narrative(run: Run):
