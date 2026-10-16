@@ -446,6 +446,7 @@ def build_export(raw: RawExport, window: Window, *, code: Dict[str, Any],
     seen = set()
     hash_mismatch: List[int] = []
     hash_missing: List[int] = []
+    expired_at_export: List[int] = []
     for src in raw.rows:
         row_id = int(src["id"])
         if row_id in seen:
@@ -467,6 +468,8 @@ def build_export(raw: RawExport, window: Window, *, code: Dict[str, Any],
             hash_mismatch.append(row_id)
         press = str(src["press"])
         exempt = bool(is_redistributable(press))
+        if not exempt and crawled + timedelta(days=BODY_RETENTION_DAYS) <= snapshot:
+            expired_at_export.append(row_id)
         rows.append({
             "id": row_id,
             "press": press,
@@ -484,6 +487,12 @@ def build_export(raw: RawExport, window: Window, *, code: Dict[str, Any],
             "body_expires_at": None if exempt else _fmt(crawled + timedelta(days=BODY_RETENTION_DAYS)),
             "body_purged_at": None,
         })
+    if expired_at_export:
+        # 사본의 기한은 원본과 같다(ADR 0023 개정). 이미 지난 본문으로 새 사본을 만들지 않는다.
+        raise ExportError(
+            f"반출 시점(서버 스냅숏)에 이미 본문 보존 기한(수집 + {BODY_RETENTION_DAYS}일)이 지난 행이 "
+            f"{len(expired_at_export)}건이다 - 그 본문은 내보내지 않는다. 창을 더 최근으로 잡는다(아무것도 쓰지 않았다)"
+        )
     rows.sort(key=lambda r: r["id"])
 
     by_press: Dict[str, int] = {}
@@ -917,14 +926,21 @@ def summarize(directory: Path, manifest: Dict[str, Any]) -> Dict[str, Any]:
 def export_news_raw(window: Window, *, root: Optional[Path] = None, conn=None,
                     psql_command: Optional[Sequence[str]] = None, code: Optional[Dict[str, Any]] = None,
                     statement_timeout_s: int = 120, lock_timeout_s: int = 5,
-                    plan: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                    plan: Optional[Dict[str, Any]] = None, now: Optional[datetime] = None) -> Dict[str, Any]:
     """창 하나를 반출해 `<root>/<T0>/`에 쓰고 요약을 돌려준다. T0는 서버의 트랜잭션 시작 시각(UTC)이다.
 
     E0의 반출이면 `plan_windows(T0, days)`의 (창, 계획)을 준다 - 서버 T0의 KST 날짜가 계획과 다르면 쓰지 않는다.
+    창의 시작 + 30일이 이미 지났으면 DB에 닿기 전에 거절한다(그 창의 본문은 만료됐다). 서버 스냅숏 시각으로 행마다
+    한 번 더 확인한다(`build_export`).
     """
     if (conn is None) == (psql_command is None):
         raise ExportError("DB에 닿는 길을 하나만 준다: conn 또는 psql_command")
     root = ensure_export_location(Path(root) if root is not None else default_exports_root())
+    if window.start + timedelta(days=BODY_RETENTION_DAYS) <= _naive_utc(now):
+        raise WindowRefused(
+            f"창의 시작({_fmt(window.start)}) + {BODY_RETENTION_DAYS}일이 이미 지났다 - 그 창의 본문은 보존 기한이 "
+            "지나 반출하지 않는다(ADR 0023). 창을 더 최근으로 잡는다"
+        )
     if conn is not None:
         raw = fetch_with_connection(conn, window, statement_timeout_s=statement_timeout_s, lock_timeout_s=lock_timeout_s)
     else:

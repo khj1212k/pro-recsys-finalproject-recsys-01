@@ -219,6 +219,31 @@ def test_build_export_refuses_rows_outside_the_window_duplicates_and_empty_bodie
         _bundle([_server_row(1, text="")])
 
 
+def test_build_export_refuses_bodies_already_past_thirty_days_at_the_server_snapshot():
+    late = _header(snapshot_at_utc="2026-11-02T01:00:00.000000Z")  # 10-03 01:00 수집분의 만료 시각과 같은 순간
+    with pytest.raises(fx.ExportError, match="1건"):
+        fx.build_export(fx.parse_copy_stream(_stream([_server_row(1), _server_row(2, press="정책브리핑")], head=late)),
+                        WINDOW, code=CODE)
+    # 재배포 가능 출처는 30일 규칙 밖이고, 만료 직전이면 반출된다
+    fx.build_export(fx.parse_copy_stream(_stream([_server_row(2, press="정책브리핑")], head=late)), WINDOW, code=CODE)
+    fx.build_export(fx.parse_copy_stream(_stream([_server_row(1)], head=_header(
+        snapshot_at_utc="2026-11-02T00:59:59.999999Z"))), WINDOW, code=CODE)
+
+
+def test_export_of_a_window_whose_bodies_have_expired_is_refused_before_touching_the_database(tmp_path, capsys,
+                                                                                            monkeypatch):
+    command = _fake_psql(tmp_path, _stream([_server_row(1)]))
+    with pytest.raises(fx.WindowRefused, match="30일"):
+        fx.export_news_raw(WINDOW, psql_command=command, code=CODE, now=datetime(2026, 11, 1, 21, 0, tzinfo=timezone.utc))
+    assert not (tmp_path / "received.sql").exists()  # psql은 불리지 않았다
+
+    monkeypatch.setattr(fx, "_utcnow", lambda: datetime(2026, 11, 2, tzinfo=timezone.utc))
+    argv = ["export", "--start-utc", "2026-10-02T21:00:00", "--end-utc", "2026-10-05T21:00:00", "--any-minute",
+            "--psql-command", shlex.join(command)]
+    assert fx.main(argv) == 2
+    assert "보존 기한" in capsys.readouterr().err and not (tmp_path / "received.sql").exists()
+
+
 def test_redistributable_sources_are_exempt_from_expiry_and_unknown_sources_are_not():
     rows = [_server_row(1, press="정책브리핑"), _server_row(2, press="처음 보는 출처")]
     bundle = _bundle(rows)

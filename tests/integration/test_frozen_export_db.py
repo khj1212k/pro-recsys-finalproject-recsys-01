@@ -33,9 +33,25 @@ from evaluation.llm import embedding_pack as ep
 from evaluation.llm import frozen_export as fx
 from tests.frozen_news_fakes import use_tmp_main_checkout
 
-WINDOW = fx.Window.from_iso("2026-10-02T21:00:00", "2026-10-05T21:00:00")
+def _utc_naive_now():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _sql_ts(value):
+    return value.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+
+def _file_ts(value):
+    return value.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+# 창의 시작: 실행일 열흘쯤 전의 21:00 UTC. 반출 도구는 반출 시점(서버의 now())에 이미 30일이 지난 본문을 내보내지
+# 않으므로, 고정 날짜를 쓰면 시간이 지나면서 이 테스트가 깨진다. 창 안팎의 행은 이 시작에서 잰 오프셋에 둔다.
+START = (_utc_naive_now() - timedelta(days=10)).replace(hour=21, minute=0, second=0, microsecond=0)
+WINDOW = fx.Window(START, START + timedelta(days=3))
+TRICKY_AT = START + timedelta(hours=15, minutes=34, seconds=56, microseconds=789012)
 CODE = {"git_sha": "c" * 40, "dirty": False}
-READ_AT = datetime(2026, 10, 7, tzinfo=timezone.utc)  # 만료 전의 "지금"
+READ_AT = (START + timedelta(days=4)).replace(tzinfo=timezone.utc)  # 만료 전의 "지금"
 TRICKY = (
     "가람시청은 새 도서관 계획을 내놓았다. \"따옴표\"와 역슬래시 \\ 가 있다.\n"
     "둘째 줄에는 탭\t과 \\N 과 \\. 이 있고\r\n셋째 줄에는 줄 구분 문자   와 그림 문자 📚, 한자 漢字가 있다."
@@ -106,22 +122,25 @@ def _news(pg_conn, schema, press_id, slug, *, crawled, status="ok", body=None, c
 
 @pytest.fixture
 def seeded(pg_conn, schema):
-    """창 [10-02 21:00, 10-05 21:00) UTC를 기준으로 안팎의 행을 넣는다. 돌려주는 것: 이름 -> raw_news_id."""
+    """창 [START, START + 3일) UTC를 기준으로 안팎의 행을 넣는다. 돌려주는 것: 이름 -> raw_news_id."""
     daily = _press(pg_conn, schema, "가람일보")
     policy = _press(pg_conn, schema, "정책브리핑")
+
+    def at(**delta):
+        return _sql_ts(START + timedelta(**delta))
+
     ids = {
-        "at_start": _news(pg_conn, schema, daily, "at-start", crawled="2026-10-02 21:00:00"),
-        "tricky": _news(pg_conn, schema, daily, "tricky", crawled="2026-10-03 12:34:56.789012", body=TRICKY),
-        "no_dates": _news(pg_conn, schema, daily, "no-dates", crawled="2026-10-04 00:00:00", created=None,
-                          extracted=None),
-        "policy": _news(pg_conn, schema, policy, "policy", crawled="2026-10-04 06:00:00"),
-        "before_end": _news(pg_conn, schema, daily, "before-end", crawled="2026-10-05 20:59:59.999999"),
+        "at_start": _news(pg_conn, schema, daily, "at-start", crawled=at()),
+        "tricky": _news(pg_conn, schema, daily, "tricky", crawled=_sql_ts(TRICKY_AT), body=TRICKY),
+        "no_dates": _news(pg_conn, schema, daily, "no-dates", crawled=at(hours=27), created=None, extracted=None),
+        "policy": _news(pg_conn, schema, policy, "policy", crawled=at(hours=33)),
+        "before_end": _news(pg_conn, schema, daily, "before-end", crawled=at(days=3, microseconds=-1)),
         # 아래는 반출되면 안 되는 행
-        "at_end": _news(pg_conn, schema, daily, "at-end", crawled="2026-10-05 21:00:00"),
-        "before_start": _news(pg_conn, schema, daily, "before-start", crawled="2026-10-02 20:59:59.999999"),
-        "dropped": _news(pg_conn, schema, daily, "dropped", crawled="2026-10-03 03:00:00", status="dropped", body=""),
-        "failed": _news(pg_conn, schema, daily, "failed", crawled="2026-10-03 04:00:00", status="fetch_failed", body=""),
-        "pending": _news(pg_conn, schema, daily, "pending", crawled="2026-10-03 05:00:00", status=None, body="",
+        "at_end": _news(pg_conn, schema, daily, "at-end", crawled=at(days=3)),
+        "before_start": _news(pg_conn, schema, daily, "before-start", crawled=at(microseconds=-1)),
+        "dropped": _news(pg_conn, schema, daily, "dropped", crawled=at(hours=6), status="dropped", body=""),
+        "failed": _news(pg_conn, schema, daily, "failed", crawled=at(hours=7), status="fetch_failed", body=""),
+        "pending": _news(pg_conn, schema, daily, "pending", crawled=at(hours=8), status=None, body="",
                          extracted=None),
     }
     return ids
@@ -158,9 +177,9 @@ def test_export_writes_exactly_the_ok_rows_of_the_window_and_leaves_the_table_un
     tricky = by_id[seeded["tricky"]]
     assert tricky["body"] == TRICKY  # COPY·json을 거쳐도 글자 그대로다
     assert tricky["content_sha256"] == hashlib.sha256(TRICKY.encode("utf-8")).hexdigest()
-    assert tricky["crawled_at"] == "2026-10-03T12:34:56.789012Z"
+    assert tricky["crawled_at"] == _file_ts(TRICKY_AT)
     assert tricky["created_at"] == "2026-10-03T00:30:00.000000Z"  # +09:00으로 넣은 값이 UTC로 나온다
-    assert tricky["body_expires_at"] == "2026-11-02T12:34:56.789012Z"
+    assert tricky["body_expires_at"] == _file_ts(TRICKY_AT + timedelta(days=30))
     assert tricky["press"] == "가람일보" and tricky["title"] == "합성 제목 tricky"
     assert by_id[seeded["no_dates"]]["created_at"] is None and by_id[seeded["no_dates"]]["extracted_at"] is None
     assert by_id[seeded["policy"]]["redistributable"] is True and by_id[seeded["policy"]]["body_expires_at"] is None
@@ -172,7 +191,7 @@ def test_export_writes_exactly_the_ok_rows_of_the_window_and_leaves_the_table_un
     assert identity["source"]["transaction_isolation"] == "repeatable read"
     assert identity["source"]["statement_timeout"] == "2min"
     assert identity["db_hash_check"] == {"mismatch": 0, "missing": 0, "ids": []}  # 파이썬 해시 = DB의 SQL 식
-    assert identity["retention"]["first_body_expiry_utc"] == "2026-11-01T21:00:00.000000Z"
+    assert identity["retention"]["first_body_expiry_utc"] == _file_ts(START + timedelta(days=30))
     assert identity["retention"]["exempt_rows"] == 1
     assert identity["code"] == CODE
     snapshot = datetime.strptime(identity["source"]["snapshot_at_utc"], "%Y-%m-%dT%H:%M:%S.%fZ")
@@ -188,6 +207,19 @@ def test_export_reports_rows_whose_stored_hash_does_not_match_the_body(pg_conn, 
                     (seeded["before_end"],))
     summary = fx.export_news_raw(WINDOW, root=tmp_path / "data" / "exports", conn=conn, code=CODE)
     assert summary["db_hash_check"] == {"mismatch": 1, "missing": 1}
+
+
+def test_bodies_already_past_thirty_days_at_the_server_snapshot_are_not_exported(pg_conn, conn, schema):
+    press_id = _press(pg_conn, schema, "가람일보")
+    now = _utc_naive_now()
+    _news(pg_conn, schema, press_id, "expired", crawled=_sql_ts(now - timedelta(days=31)))
+    window = fx.Window(now - timedelta(days=33), now - timedelta(days=29))
+    with pytest.raises(fx.WindowRefused, match="30일"):
+        fx.export_news_raw(window, conn=conn, code=CODE)  # 창의 시작 + 30일이 지났다: DB에 닿기 전에 멈춘다
+    raw = fx.fetch_with_connection(conn, window)          # 서버 스냅숏 시각으로 행마다 다시 본다
+    assert len(raw.rows) == 1
+    with pytest.raises(fx.ExportError, match="보존 기한"):
+        fx.build_export(raw, window, code=CODE)
 
 
 # ---------------------------------------------------------------- 읽기 전용, 스냅숏, 시간 제한
@@ -219,7 +251,7 @@ def test_rows_committed_by_another_session_during_the_export_are_not_mixed_in(pg
     buffer = io.BytesIO()
     with fx.read_only_snapshot(conn) as cur:
         cur.copy_expert(header_sql, buffer)  # 첫 문장에서 스냅숏이 잡힌다
-        late = _news(pg_conn, schema, press_id, "late", crawled="2026-10-04 12:00:00")  # 다른 세션, 자동 커밋
+        late = _news(pg_conn, schema, press_id, "late", crawled=_sql_ts(START + timedelta(hours=39)))  # 다른 세션, 자동 커밋
         cur.copy_expert(rows_sql, buffer)
         cur.copy_expert(trailer_sql, buffer)
     raw = fx.parse_copy_stream(buffer.getvalue().split(b"\n"))
@@ -284,7 +316,7 @@ def test_cli_exports_with_a_dsn_taken_from_the_environment(schema, seeded, tmp_p
     separator = "&" if "?" in database_url else "?"
     monkeypatch.setenv("FROZEN_EXPORT_TEST_DSN",
                        f"{database_url}{separator}options={quote(f'-c search_path={schema},public')}")
-    code = fx.main(["export", "--start-utc", "2026-10-02T21:00:00", "--end-utc", "2026-10-05T21:00:00",
+    code = fx.main(["export", "--start-utc", WINDOW.start.isoformat(), "--end-utc", WINDOW.end.isoformat(),
                     "--root", str(tmp_path / "data" / "exports"), "--any-minute",
                     "--dsn-env", "FROZEN_EXPORT_TEST_DSN"])
     shown = capsys.readouterr()
