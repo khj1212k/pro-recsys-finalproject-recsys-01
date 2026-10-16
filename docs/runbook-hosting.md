@@ -873,7 +873,9 @@ nice -n 19 env OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 PYTHON
 (`void_frame_too_small`, 5개 창으로도 eval 9개 미만)이면 void(프레임 부족)를 A8.10에 적고 10.1부터 다시, 4(`export_too_narrow`)면 `--days 5`로
 다시 반출한다. 이 값과 `colab_cu_used`,
 `adr_0023_amendment_commit`, 사용자 결정 두 개(`newsletter_embedder`, `label_subset`)를 yaml `pre_run_record`와 A8.10에 적어 **문서 전용 PR**
-(yaml·매니페스트·ADR만)로 main에 넣는다. 그 PR이 병합되기 전에는 생성 호출을 하지 않는다.
+(yaml·매니페스트·ADR만)로 main에 넣는다. 그 PR이 병합되기 전에는 생성 호출을 하지 않는다. 시각 값(`export_t0_kst`, `export_body_expires_at`,
+`day_windows_utc`의 각 끝점)은 출력 그대로 **따옴표로 감싼 문자열**로 적는다 - 따옴표가 없으면 yaml이 날짜로 읽어 러너가 시작하지 않는다
+(`yaml.safe_dump`로 옮기면 알아서 감싼다).
 
 ### 10.4 실행 (pre-flight → warmup 2 → eval 15, 상한 $1.00, 누적 $1.50, 벽시계 2시간)
 1. 실행 직전에 선불 잔액(AI Studio 결제 화면, ₩)과 읽은 시각을 적는다. `PYTHONPATH=ai_workspace python -m core.llm.spend_cli summary`로 지출

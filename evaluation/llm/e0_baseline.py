@@ -400,7 +400,8 @@ class RunConfig:
 def start_problems(cfg: RunConfig, source: Optional[e0_store.FileArticleSource],
                    plan: Optional[e0_sample.SamplePlan]) -> List[str]:
     record = (cfg.prereg or {}).get("pre_run_record") or {}
-    problems = [f"(e) pre_run_record {p}" for p in reg.check_pre_run_record(record)]
+    record_problems = reg.check_pre_run_record(record)
+    problems = [f"(e) pre_run_record {p}" for p in record_problems]
     problems += [f"설정: {p}" for p in reg.config_differences(cfg.prereg)]
     if cfg.check_code_identity:
         # 실행 전 기록·매니페스트는 HEAD에 커밋된 것만 쓴다(A8.0 4단계, A8.6 c) - 다른 경로의 채운 사본으로는 시작하지 않는다
@@ -410,9 +411,10 @@ def start_problems(cfg: RunConfig, source: Optional[e0_store.FileArticleSource],
         amend = record.get("adr_0023_amendment_commit")
         if amend and reg._git(cfg.repo, "merge-base", "--is-ancestor", str(amend), "origin/main").returncode != 0:
             problems.append("adr_0023_amendment_commit이 origin/main에 없다(A8.0 2단계)")
-    if source is not None:
+    # 기록 자체가 비었거나 형식이 틀리면 입력과의 대조는 오해만 낳는다(예: 따옴표 없는 시각이 "다르다"로 보인다)
+    if source is not None and not record_problems:
         problems += compare_inputs(source, record)
-    if plan is not None:
+    if plan is not None and not record_problems:
         problems += e0_sample.compare_with_record(plan, record, cfg.manifest_path)
     decisions = record.get("user_decisions") or {}
     if decisions.get("newsletter_embedder") == "real_colab_cpu":

@@ -171,6 +171,20 @@ def test_a_filled_record_passes_and_each_malformed_value_is_named():
     assert reg.check_pre_run_record(record)
 
 
+def test_a_record_written_by_safe_dump_round_trips_and_unquoted_times_are_named():
+    record = _filled_record()
+    back = yaml.safe_load(yaml.safe_dump({"pre_run_record": record}, allow_unicode=True))["pre_run_record"]
+    assert back == record and reg.check_pre_run_record(back) == []
+    # 사람이 prepare 출력을 옮기며 따옴표를 빼면 yaml이 datetime으로 읽는다
+    by_hand = yaml.safe_load(
+        "export_t0_kst: 2026-10-20T21:45:00+09:00\n"
+        "export_body_expires_at: 2026-11-15T03:00:00Z\n"
+        "day_windows_utc:\n" + "".join(f"  - [{a}, {b}]\n" for a, b in record["day_windows_utc"]))
+    problems = reg.check_pre_run_record({**record, **by_hand})
+    for key in ("export_t0_kst", "export_body_expires_at", "day_windows_utc"):
+        assert sum(p.startswith(f"{key}: 시각이 문자열이 아니다") for p in problems) == 1, key
+
+
 # ---------------------------------------------------------------- 3. 코드 동일성 (a)~(d)
 
 

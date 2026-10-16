@@ -303,6 +303,13 @@ def check_pre_run_record(record: Optional[Dict[str, Any]]) -> List[str]:
             problems.append(f"{key}: 비어 있다")
     if problems:
         return problems
+    # prepare 출력의 시각은 문자열이다. 따옴표 없이 옮기면 yaml이 datetime으로 읽어 대조가 "다르다"로만 끝난다.
+    times = [("export_t0_kst", record["export_t0_kst"]), ("export_body_expires_at", record["export_body_expires_at"])]
+    if isinstance(record["day_windows_utc"], list):
+        times += [("day_windows_utc", v) for w in record["day_windows_utc"] if isinstance(w, (list, tuple)) for v in w]
+    for key in dict.fromkeys(k for k, v in times if not isinstance(v, str)):
+        problems.append(f"{key}: 시각이 문자열이 아니다 - yaml이 따옴표 없는 값을 날짜로 읽었다. "
+                        "prepare 출력 그대로 따옴표로 감싸 적는다")
     for key in ("code_sha", "adr_0023_amendment_commit"):
         if not _SHA40.fullmatch(str(record[key])):
             problems.append(f"{key}: 40자 커밋 sha가 아니다")

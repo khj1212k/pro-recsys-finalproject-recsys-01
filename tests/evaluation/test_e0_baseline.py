@@ -143,6 +143,18 @@ def test_missing_pre_run_record_fields_are_refused(inputs):
     assert "code_sha" in problems and "snapshot_sha256" in problems
 
 
+def test_prepare_output_copied_through_yaml_starts_but_unquoted_times_are_refused_by_name(inputs):
+    """실행 전 기록은 prepare 출력을 yaml로 옮긴 것이다. safe_dump로 옮기면 그대로 통과하고, 따옴표 없이 손으로 옮긴
+    시각은 '입력 ≠ 기록'이 아니라 따옴표 문제로 거절된다."""
+    import yaml
+
+    record = inputs.prereg["pre_run_record"]
+    assert yaml.safe_load(yaml.safe_dump(record, allow_unicode=True)) == record
+    assert base.start_problems(base.dry_config(inputs, syn.FakeLLMTransport()), None, None) == []
+    problems = _refuse(inputs, lambda r: r.update(yaml.safe_load(f"export_t0_kst: {r['export_t0_kst']}")))
+    assert "export_t0_kst: 시각이 문자열이 아니다" in problems and "≠ 실행 전 기록" not in problems
+
+
 def test_hash_mismatches_are_refused(inputs):
     assert "embeddings_sha256" in _refuse(inputs, lambda r: r.update(embeddings_sha256="0" * 64))
     assert "export_manifest_sha256" in _refuse(inputs, lambda r: r.update(export_manifest_sha256="1" * 64))
