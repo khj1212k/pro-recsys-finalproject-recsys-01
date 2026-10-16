@@ -10,7 +10,16 @@ registered_at: "2026-10-06"
 adr: docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md#A8
 plan: docs/design/2026-10-06-llm-v2-execution-plan.md
 kind: descriptive_baseline  # 가설 없음, 결정 규칙 없음
-amendments: []              # 항목 형식: {date, reason, results_viewed, changed_keys: [...]}
+amendments:                 # 항목 형식: {date, reason, results_viewed, changed_keys: [...]}
+  - date: "2026-10-17"
+    reason: >-
+      A8.10 덧붙임(2026-10-17)의 개정. A8 뒤에 병합된 ADR 0035의 운영 어댑터가 스스로 런을 멈추는 두 경로를 등록한다.
+      연속 인프라 실패(5xx·타임아웃·연결, 기본 5회)로 서킷브레이커가 열리면 인프라 중단(stop_on_infra에 circuit_breaker,
+      n_p < 8이면 void), 클라이언트 안 지출 상한의 거부는 예산 중단(aborted_budget, 부분 실행). root_cause_first_match는
+      값이 그대로이고 정의만 넓힌다: aborted_infra에 브레이커, aborted_budget에 클라이언트 안 거부, transport에 재시도하지
+      않는 그 밖의 4xx와 분류하지 못한 오류.
+    results_viewed: "no"           # E0 실행 전, reports/llm/ 없음
+    changed_keys: [budget.stop_on_infra, metrics.failure_taxonomy.root_cause_first_match]
 
 # A8.0 순서: 러너 PR 병합(code_sha) -> ADR 0023 개정 확인 -> 반출·임베딩·스냅숏·표본(LLM 호출 없음)
 #            -> 이 블록을 채우는 문서 전용 커밋(A8.10) -> pre-flight -> warmup -> eval -> 리포트 -> 라벨
@@ -219,7 +228,7 @@ budget:
   after_stop_flag: {send_requests: false, unstarted_clusters: not_started,
                     refused_clusters: "aborted_budget | aborted_infra (집계·라벨 제외)"}
   budget_stop: partial_run_not_void
-  stop_on_infra: [401, 402, 403, 404, kill_switch, missing_api_key]
+  stop_on_infra: [401, 402, 403, 404, kill_switch, missing_api_key, circuit_breaker]   # circuit_breaker: amendments[0]
   void_if_processed_eval_clusters_below: 8   # 인프라 실패일 때만
   wall_clock_cap_hours: 2                  # eval 시작부터, 재개 구간 합산. 넘으면 새 클러스터를 시작하지 않는다
   rate_limit_429: measure_only

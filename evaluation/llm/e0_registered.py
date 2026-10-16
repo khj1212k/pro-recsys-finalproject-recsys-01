@@ -109,7 +109,8 @@ BUDGET = {
     "cap_usd_e0_cumulative": 1.50,
     "expected_usd": 0.54,
     "worst_case_tokens_per_char": 1.5,
-    "stop_on_infra": [401, 402, 403, 404, "kill_switch", "missing_api_key"],
+    # circuit_breaker: 2026-10-17 개정(yaml amendments[0]) - ADR 0035 어댑터의 서킷브레이커가 런을 멈추면 인프라 중단이다
+    "stop_on_infra": [401, 402, 403, 404, "kill_switch", "missing_api_key", "circuit_breaker"],
     "void_if_processed_eval_clusters_below": 8,
     "wall_clock_cap_hours": 2,
     "rate_limit_429": "measure_only",

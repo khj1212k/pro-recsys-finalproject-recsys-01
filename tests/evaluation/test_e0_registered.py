@@ -77,6 +77,30 @@ def test_call_parameters_registered_are_the_ones_in_production_code():
         assert f'purpose="{purpose}"' in src, purpose
 
 
+# A8 빈칸을 닫은 뒤(러너 PR 전) main의 사전 등록. 그 뒤의 규칙 키 변경은 전부 amendments로 선언돼야 한다.
+BEFORE_RUNNER_PR = "d11c53d51f56d6f6b1fe10adc1626b3eeb255b4d"
+
+
+def test_amendments_are_well_formed_and_point_at_existing_rule_keys():
+    assert PREREG["amendments"], "2026-10-17 개정(서킷브레이커)이 선언돼 있다"
+    for amendment in PREREG["amendments"]:
+        assert set(amendment) == {"date", "reason", "results_viewed", "changed_keys"}
+        assert amendment["results_viewed"] == "no" and amendment["reason"].strip()
+        for key in amendment["changed_keys"]:
+            reg._get(PREREG, key)   # 없는 자리를 적으면 KeyError
+    assert "circuit_breaker" in PREREG["budget"]["stop_on_infra"]
+
+
+def test_every_rule_key_changed_since_the_pre_runner_main_is_declared():
+    shown = subprocess.run(["git", "-C", str(REPO_ROOT), "show", f"{BEFORE_RUNNER_PR}:{reg.PREREG_REL}"],
+                           capture_output=True, text=True)
+    if shown.returncode != 0:
+        pytest.skip("러너 PR 전 커밋이 이 체크아웃에 없다(얕은 클론)")
+    before = yaml.safe_load(shown.stdout)
+    assert reg.rule_key_changes(before, PREREG) == ["budget.stop_on_infra"]
+    assert reg.undeclared_rule_changes(before, PREREG) == []
+
+
 # ---------------------------------------------------------------- 2. 실행 중 환경의 차이
 
 
