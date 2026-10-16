@@ -218,8 +218,13 @@ def test_measure_backfill_and_retention_at_tier0_scale(database_url, pg_conn, is
             report["upgrade"]["filled"] = _scalar(
                 cur, "SELECT count(*) FROM news_raw WHERE raw_news_content_length IS NOT NULL")
             report["upgrade"]["sizes_after"] = _sizes(cur)
-            assert _scalar(cur, "SELECT count(*) FROM news_raw WHERE raw_news_content IS NOT NULL "
+            # 시드한 행은 모두 채워졌다. 마이그레이션 중에 동시 쓰기 역할이 (예전 코드처럼 길이 없이) 넣은 행 가운데
+            # 길이 채우기가 지나간 뒤에 들어온 행은 비어 있다 - 보존 잡이 비울 때 길이를 쓴다.
+            assert _scalar(cur, "SELECT count(*) FROM news_raw WHERE raw_news_title <> '동시 수집' "
+                                "AND raw_news_content IS NOT NULL "
                                 "AND raw_news_content_length IS DISTINCT FROM char_length(raw_news_content)") == 0
+            report["upgrade"]["concurrent_rows_left_without_length"] = _scalar(
+                cur, "SELECT count(*) FROM news_raw WHERE raw_news_title = '동시 수집' AND raw_news_content_length IS NULL")
             cur.execute("VACUUM news_raw")
             report["upgrade"]["sizes_after_vacuum"] = _sizes(cur)
             expected = _scalar(
@@ -234,7 +239,9 @@ def test_measure_backfill_and_retention_at_tier0_scale(database_url, pg_conn, is
             cur.execute("SELECT status, stats FROM job_runs WHERE job = 'retention' ORDER BY id DESC LIMIT 1")
             status, stats = cur.fetchone()
             assert status == "succeeded" and stats["remaining_expired_bodies"] == 0
-            assert stats["purged"] == expected
+            # 세고 나서 잡이 시작하기까지 몇 초 사이에 경계를 넘는 행이 있을 수 있다(늘기만 한다)
+            assert stats["purged"] >= expected
+            assert stats["purged"] == _scalar(cur, "SELECT count(*) FROM news_raw WHERE raw_news_content_purged_at IS NOT NULL")
             report["retention_first"]["job_stats"] = {k: stats[k] for k in (
                 "purged", "purged_bodies", "purged_bytes", "batches", "batch_size", "purge_s", "scanned",
                 "skipped_awaiting_extraction", "oldest_remaining_body_age_days")}
