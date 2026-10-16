@@ -315,3 +315,20 @@ def test_header_carries_the_registered_fields(report):
             assert key in header, key
     assert header["resume_count"] == 1 and header["processing_order"][0] == "r1-c9"
     assert report["human_labels"] == {"status": "pending"}
+
+
+def test_429_ratio_is_reported_over_n_p_and_over_every_sent_attempt(built):
+    """A8.3 #3의 429 비율은 "보낸 HTTP 시도 전체"가 분모다. pre-flight·warmup·중단 클러스터의 시도도 보낸 시도라
+    그 분모의 값을 따로 싣고, n_p 클러스터만의 값과 분모 이름을 함께 적는다."""
+    r, manifest, prereg = built
+    sent = [json.loads(l) for l in (r.dir / ins.HTTP_FILE).read_text(encoding="utf-8").splitlines()]
+    extra_429 = {**sent[0], "status": 429, "prompt_tokens": None, "completion_tokens": None, "total_tokens": None,
+                 "hidden_tokens": None, "cost_usd": 0.0, "cost_kind": "error_response", "finish_reason": None}
+    r._w(ins.HTTP_FILE, {**extra_429, "cluster_id": None, "run_k": None, "purpose": "cluster_eval"})   # pre-flight
+    r._w(ins.HTTP_FILE, {**extra_429, "cluster_id": 5, "run_k": 3})                                    # 예산 중단 클러스터
+    m3 = rep.build_report(r.dir, prereg=prereg, manifest_path=manifest)["metrics"]["3_retries"]
+    assert m3["rate_429"]["k"] == 1                                    # n_p 클러스터의 시도만
+    assert m3["rate_429_all_sent"] == rep.ratio(3, len(sent) + 2)      # 보낸 시도 전체
+    assert m3["http_status_counts_all_sent"]["429"] == 3 and m3["http_status_counts"]["429"] == 1
+    assert set(m3["denominators"]) == {"rate_429", "http_status_counts", "rate_429_all_sent",
+                                       "http_status_counts_all_sent"}

@@ -319,6 +319,7 @@ def build_report(run_dir: Path, *, prereg: Dict[str, Any], manifest_path: Path, 
 
     # 3. 재시도
     status_counts = Counter(str(h.get("status")) for h in p_http)
+    all_status_counts = Counter(str(h.get("status")) for h in http)
     transport = Counter(h["transport_error"] for h in p_http if h.get("transport_error"))
     proc_ends = [ends[r["item_id"]] for r in processed]
     m3 = {
@@ -327,6 +328,15 @@ def build_report(run_dir: Path, *, prereg: Dict[str, Any], manifest_path: Path, 
         "schema_failures_sum": sum(int(c.get("schema_failures") or 0) for c in p_calls),
         "http_status_counts": dict(sorted(status_counts.items())),
         "rate_429": ratio(sum(1 for h in p_http if h.get("status") == 429), len(p_http)),
+        # A8.3 #3의 문장("보낸 HTTP 시도 전체")대로 pre-flight·warmup·중단·미완 클러스터의 시도까지 넣은 값
+        "http_status_counts_all_sent": dict(sorted(all_status_counts.items())),
+        "rate_429_all_sent": ratio(sum(1 for h in http if h.get("status") == 429), len(http)),
+        "denominators": {
+            "rate_429": "처리 완료 eval 클러스터(n_p)의 HTTP 시도",
+            "http_status_counts": "처리 완료 eval 클러스터(n_p)의 HTTP 시도",
+            "rate_429_all_sent": "이 run에서 보낸 HTTP 시도 전체(pre-flight·warmup·중단·미완 클러스터 포함, A8.3 #3)",
+            "http_status_counts_all_sent": "이 run에서 보낸 HTTP 시도 전체(pre-flight·warmup·중단·미완 클러스터 포함)",
+        },
         "transport_failures": {"timeout": transport.get("timeout", 0), "connection": transport.get("connection", 0),
                                "5xx": sum(1 for h in p_http if (h.get("status") or 0) >= 500),
                                "other": sum(v for k, v in transport.items() if k not in ("timeout", "connection"))},
@@ -701,8 +711,11 @@ def render_md(report: Dict[str, Any]) -> str:
     lines += ["", "## 3. 재시도", "", f"- complete()당 attempts: {d(m3['attempts_per_call'])}",
               f"- complete()당 HTTP 시도: {d(m3['http_attempts_per_call'])}",
               f"- 스키마 실패 합: {m3['schema_failures_sum']}",
-              f"- HTTP 상태: {json.dumps(m3['http_status_counts'], ensure_ascii=False)}",
-              f"- 429 비율(상태 429 / 보낸 시도): {r(m3['rate_429'])}",
+              f"- HTTP 상태(n_p 클러스터의 시도): {json.dumps(m3['http_status_counts'], ensure_ascii=False)}",
+              f"- HTTP 상태(이 run에서 보낸 시도 전체): {json.dumps(m3['http_status_counts_all_sent'], ensure_ascii=False)}",
+              f"- 429 비율(상태 429 / n_p 클러스터의 시도): {r(m3['rate_429'])}",
+              f"- 429 비율(상태 429 / 이 run에서 보낸 시도 전체 - pre-flight·warmup·중단 포함, A8.3 #3): "
+              f"{r(m3['rate_429_all_sent'])}",
               f"- 전송 실패: {json.dumps(m3['transport_failures'], ensure_ascii=False)}, deadline 도달 호출 {m3['deadline_reached_calls']}",
               f"- 클러스터당 생성 시도: {d(m3['graph']['generation_attempts_per_cluster'])}",
               f"- 클러스터 평가 재시도: {d(m3['graph']['cluster_eval_retries_per_cluster'])}",
