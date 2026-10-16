@@ -64,20 +64,24 @@ def news_raw_snapshot() -> Dict[str, Any]:
             """
             SELECT P.press_name,
                    COUNT(*) AS total,
-                   COUNT(*) FILTER (WHERE N.raw_news_extract_status = 'ok') AS with_content,
+                   COUNT(*) FILTER (WHERE N.raw_news_extract_status = 'ok'
+                                      AND N.raw_news_content_purged_at IS NULL) AS with_content,
+                   COUNT(*) FILTER (WHERE N.raw_news_content_purged_at IS NOT NULL) AS body_purged,
                    COUNT(*) FILTER (WHERE N.embedding_result IS NOT NULL) AS embedded
             FROM news_raw N JOIN press P ON P.press_id = N.press_id
             GROUP BY P.press_name
             ORDER BY P.press_name
             """
         )
+        # with_content = 지금 본문이 있는 'ok' 행. 보존 기한(ADR 0023)이 지나 본문을 비운 행은 body_purged로 따로 센다.
         per_press = {
-            name: {"total": total, "with_content": with_content, "embedded": embedded}
-            for name, total, with_content, embedded in cur.fetchall()
+            name: {"total": total, "with_content": with_content, "body_purged": body_purged, "embedded": embedded}
+            for name, total, with_content, body_purged, embedded in cur.fetchall()
         }
     return {
         "total": sum(p["total"] for p in per_press.values()),
         "with_content": sum(p["with_content"] for p in per_press.values()),
+        "body_purged": sum(p["body_purged"] for p in per_press.values()),
         "embedded": sum(p["embedded"] for p in per_press.values()),
         "per_press": per_press,
     }

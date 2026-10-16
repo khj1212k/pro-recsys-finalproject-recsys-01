@@ -174,6 +174,54 @@ def test_dry_run_then_purge_then_idempotent_rerun(pg_conn, world):
     assert _state(pg_conn, ids) == after
 
 
+def test_boundary_is_the_same_when_the_session_time_zone_is_kst(pg_conn, world, monkeypatch):
+    """세션 TimeZone이 UTC가 아니어도(PGTZ=Asia/Seoul) 경계가 같다. 기준 시각을 `now() AT TIME ZONE 'UTC'`로 만들어
+    시간대 없는 수집 시각과 시간대 없는 UTC 값끼리 비교하기 때문이다 - KST 세션에서 `now()`와 바로 비교했다면
+    9시간 어긋나 29일 23시간 전 행까지 비워진다. 일일 리포트의 보존 상태도 같은 식이다."""
+    from db.connection import connect_unpooled
+    from jobs.run import main
+    from jobs.tasks.daily_report import retention_status
+
+    ids = world["ids"]
+    before = _state(pg_conn, ids)
+    monkeypatch.setenv("PGTZ", "Asia/Seoul")  # 잡이 여는 연결(실행 기록·작업)이 모두 KST 세션이 된다
+    probe = connect_unpooled(application_name="itest:retention:pgtz")
+    try:
+        with probe.cursor() as cur:
+            cur.execute("SHOW TimeZone")
+            assert cur.fetchone()[0] == "Asia/Seoul"
+            cur.execute("SELECT now() AT TIME ZONE 'UTC'")
+            (now_utc,) = cur.fetchone()
+            status_kst = retention_status(cur, "24 hours")
+    finally:
+        probe.close()
+    assert (status_kst["expired_bodies"], status_kst["overdue_bodies"]) == (3, 1)
+
+    assert main(["retention"]) == 0
+    status, stats, error = _last_run(pg_conn)
+    assert status == "succeeded", error
+    after = _state(pg_conn, ids)
+    assert {key for key, row in after.items() if row["purged_at"] is not None} == PURGED_BY_RUN
+    assert after["fresh_ok"] == before["fresh_ok"]  # 29일 23시간 전 행은 KST 세션에서도 남는다
+    # 기준 시각은 UTC 지금 - 30일(KST로 읽었다면 9시간 차이)
+    cutoff = datetime.fromisoformat(stats["cutoff_utc"])
+    assert abs(cutoff - (now_utc - timedelta(days=30))) < timedelta(minutes=5)
+
+
+def test_ingest_snapshot_counts_purged_ok_rows_separately(pg_conn, world):
+    """ingest 잡의 news_raw 누적 현황: with_content는 지금 본문이 있는 'ok' 행만, 비운 행은 body_purged."""
+    from jobs.run import main
+    from jobs.tasks.ingest import news_raw_snapshot
+
+    assert main(["retention"]) == 0
+    per_press = news_raw_snapshot()["per_press"]
+    commercial, policy = per_press[world["names"]["commercial"]], per_press[world["names"]["policy"]]
+    # 상업: 'ok' 세 행 중 fresh_ok만 본문이 남는다. 비운 행 = expired_ok, legacy_no_hash, dropped, gave_up
+    assert (commercial["with_content"], commercial["body_purged"]) == (1, 4)
+    # 정책 출처: 유형 1·미기록은 면제, 유형 2는 비움
+    assert (policy["with_content"], policy["body_purged"]) == (2, 1)
+
+
 def test_purged_row_cannot_get_a_body_back(pg_conn, world):
     """비운 행에 본문을 다시 쓰면 CHECK(ck_news_raw_purged_body_gone)가 막는다."""
     from jobs.run import main
@@ -296,7 +344,7 @@ def test_extractor_never_selects_purged_or_expired_rows(pg_conn, world, monkeypa
     ids = world["ids"]
     assert main(["retention"]) == 0
     with pg_conn.cursor() as cur:
-        # 비운 지 오래되지 않은(보존 기한 안의) 행을 하나 만든다: --days 7로 비운 경우와 같은 상태
+        # 보존 기한 안인데 비운 표시가 있는 행을 하나 만든다(예: 비운 뒤 수집 시각이 고쳐진 행)
         cur.execute(
             "UPDATE news_raw SET raw_news_crawled_at = (now() AT TIME ZONE 'UTC') - interval '10 days' "
             "WHERE raw_news_id = %s",

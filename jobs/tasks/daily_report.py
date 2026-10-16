@@ -59,12 +59,12 @@ def retention_warning(retention: Optional[Dict[str, Any]]) -> Optional[str]:
 
 
 def retention_status(cur, window: str) -> Dict[str, Any]:
-    """본문 보존(ADR 0023) 상태. 기한·면제 규칙은 jobs/tasks/retention.py와 같은 식이다(읽기만 한다)."""
-    from config.retention import exempt_press_names
-    from config.settings import Settings
+    """본문 보존(ADR 0023) 상태. 기한·면제 규칙은 jobs/tasks/retention.py와 같은 식이다(읽기만 한다).
+    기한은 설정이 아니라 ADR의 상수(30일)로 잰다 - 이 줄은 ADR을 지키는지 보는 것이다."""
+    from config.retention import BODY_RETENTION_DAYS, exempt_press_names
     from jobs.tasks.retention import EXEMPT_SQL
 
-    days = int(Settings.BODY_RETENTION_DAYS)
+    days = BODY_RETENTION_DAYS
     cutoff = "(now() AT TIME ZONE 'UTC') - make_interval(days => %(days)s)"
     overdue = f"{cutoff} - make_interval(hours => %(overdue_hours)s)"
     body = f"n.raw_news_content <> '' AND NOT {EXEMPT_SQL}"
