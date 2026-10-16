@@ -50,7 +50,10 @@ ARTICLES_FILE = "articles.jsonl"
 MANIFEST_FILE = "manifest.json"
 BODY_RETENTION_DAYS = 30          # ADR 0023. 이 값을 늘리는 예외는 없다.
 MAX_WINDOW_HOURS = 5 * 24         # 실험에 필요한 창만 내보낸다(ADR 0009 A8.1: 날짜 창 최대 5개).
-INGEST_GAP_MINUTES = (20, 50)     # 정시 ingest 사이. docs/runbook-hosting.md의 반출 절.
+# Tier 0에서 반출해도 되는 분(매시). docker/crontab.micro: ingest :05(소요 중앙 15분, p95 73분 - ADR 0026 증거 8),
+# popularity :35(4~6초). :40~:55는 popularity 뒤이고 중앙값의 ingest가 끝난 뒤다. ingest가 길어진 회차는 분만으로
+# 피할 수 없으므로 런북 9.2의 running 확인을 반출 직전에 다시 한다.
+INGEST_GAP_MINUTES = (40, 55)
 KST = timezone(timedelta(hours=9))
 
 _TS = "%Y-%m-%dT%H:%M:%S.%f"
@@ -1023,8 +1026,8 @@ def _cmd_export(args) -> int:
     root = _cli_root(args.root)
     if not args.any_minute and not INGEST_GAP_MINUTES[0] <= _minute_now() < INGEST_GAP_MINUTES[1]:
         raise ExportError(
-            f"지금은 매시 :{INGEST_GAP_MINUTES[0]}~:{INGEST_GAP_MINUTES[1]} 밖이다 - 정시 ingest와 겹치지 않게 그 사이에 "
-            "돌린다(다른 DB라면 --any-minute)"
+            f"지금은 매시 :{INGEST_GAP_MINUTES[0]}~:{INGEST_GAP_MINUTES[1]} 밖이다 - ingest(:05)·popularity(:35)와 겹치지 "
+            "않게 그 사이에, 돌고 있는 잡이 없음을 확인하고 돌린다(Tier 0가 아닌 DB라면 --any-minute)"
         )
     if bool(args.dsn_env) == bool(args.psql_command):
         raise ExportError("--dsn-env와 --psql-command 중 하나만 준다")
@@ -1099,7 +1102,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     export.add_argument("--dsn-env", help="DSN이 든 환경변수 이름(값을 명령줄에 적지 않는다)")
     export.add_argument("--psql-command", help="스크립트를 표준입력으로 받는 psql 명령 한 줄")
     export.add_argument("--statement-timeout-s", type=int, default=120)
-    export.add_argument("--any-minute", action="store_true", help="매시 :20~:50 확인을 건너뛴다(Tier 0가 아닌 DB)")
+    export.add_argument("--any-minute", action="store_true", help="매시 :40~:55 확인을 건너뛴다(Tier 0가 아닌 DB)")
     export.set_defaults(func=_cmd_export)
 
     verify = sub.add_parser("verify", help="반출본을 검증하고(만료 본문은 지운다) 요약을 낸다")

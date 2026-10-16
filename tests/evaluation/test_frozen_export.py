@@ -711,11 +711,14 @@ def test_cli_export_outside_the_gap_between_ingest_runs_is_refused_unless_overri
     command = _fake_psql(tmp_path, _stream([_server_row(1)]))
     argv = ["export", "--start-utc", "2026-10-02T21:00:00", "--end-utc", "2026-10-05T21:00:00",
             "--root", str(tmp_path / "data" / "exports"), "--psql-command", shlex.join(command)]
-    monkeypatch.setattr(fx, "_minute_now", lambda: 5)  # 정시 ingest가 도는 시간대
-    assert fx.main(argv) == 2
-    assert ":20" in capsys.readouterr().err
-    monkeypatch.setattr(fx, "_minute_now", lambda: 35)
+    for minute in (5, 20, 35, 39, 55):  # ingest(:05~), popularity(:35), 그 앞뒤
+        monkeypatch.setattr(fx, "_minute_now", lambda minute=minute: minute)
+        assert fx.main(argv) == 2
+        assert ":40~:55" in capsys.readouterr().err
+    assert not (tmp_path / "received.sql").exists()
+    monkeypatch.setattr(fx, "_minute_now", lambda: 45)
     assert fx.main(argv) == 0
+    assert fx.INGEST_GAP_MINUTES == (40, 55)
 
 
 def test_cli_export_with_days_computes_the_e0_windows_itself(tmp_path, capsys):
