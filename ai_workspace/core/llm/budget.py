@@ -1,0 +1,824 @@
+# LLM 지출 상한과 런 서킷브레이커 (docs/adr/0035)
+#
+# 프로바이더에 나가는 모든 요청(재시도는 시도마다)이 이 가드를 거친다:
+#
+#   guard = get_budget_guard()
+#   spend = guard.begin_attempt(provider=..., model=..., purpose=..., messages=..., schema=..., max_tokens=...)
+#   try:
+#       ... 네트워크 요청 ...
+#       spend.settle("ok", usage)
+#   except ...:
+#       spend.settle("timeout")        # 또는 "http_503", "schema_invalid" 등
+#   finally:
+#       spend.ensure_settled()         # 어느 분기도 정산하지 않았으면 예약액 그대로 지출로 잡는다
+#
+# begin_attempt는 "입력 토큰 상한 추정 x 입력 단가 + max_tokens x 출력 단가"를 지출 원장
+# (core/llm/spend_ledger.py)에 예약한다. 런·일·전체 상한 중 하나라도 넘으면 네트워크 요청 전에
+# LLMBudgetExceeded를 낸다. 일·전체 상한이면 킬 스위치 파일도 만든다(다른 프로세스도 멈추게).
+#
+# 닫힌 쪽으로 실패한다: 단가표에 없는 모델, 숫자로 읽히지 않는 설정, 쓸 수 없는 원장, 그리고
+# 지금까지의 지출을 증명하지 못하는 원장(없음, 헤더 없음, 해석 못 할 줄, 원장 밖 누계 기록보다 작음)은
+# 전부 "호출 거부"다. 가드는 원장을 만들지 않는다 - 사람이 `spend_cli init`으로 만든다.
+# 상한을 올리는 것 말고 가드를 끄는 설정은 없다.
+#
+# 중단 예외(LLMRunStop)는 BaseException이다. 이 파이프라인에는 LLM 실패를 `except Exception`으로
+# 받아 로컬 초안이나 원문 그대로를 대신 쓰는 곳이 여럿 있다(문체 변환 노드, 레거시 클라이언트,
+# Stage5의 클러스터별 예외 처리). 예산 초과가 그 경로로 들어가면 "LLM 없이 만든 글"이 발행될 수
+# 있으므로, 중단은 그 처리기들을 통과해 Stage5까지 올라가야 한다. jobs.runtime.JobTerminated가
+# 같은 이유로 BaseException이다.
+
+import json
+import logging
+import math
+import os
+import threading
+import time
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal, InvalidOperation
+from typing import Any, Dict, List, Optional, Tuple
+from zoneinfo import ZoneInfo
+
+from config.settings import Settings
+from core.llm.client import LLMUsage
+from core.llm.pricing import CURRENCY, DEFAULT_PRICING_PATH, MIN_PLAUSIBLE_PER_1M, PriceTable, load_pricing
+from core.llm.spend_ledger import (
+    NUSD_PER_USD,
+    CallKey,
+    Caps,
+    LedgerError,
+    Refusal,
+    Reservation,
+    SpendLedger,
+    default_state_dir,
+    usd,
+)
+from core.llm_metrics import get_metrics_collector
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# 중단 예외
+# ---------------------------------------------------------------------------
+
+class LLMRunStop(BaseException):
+    """이번 런은 더 이상 LLM을 부르면 안 된다. 호출 하나의 실패가 아니라 런 전체의 중단 신호다."""
+
+    code = "llm_run_stop"
+
+    def __init__(self, message: str, **details: Any):
+        super().__init__(message)
+        self.details: Dict[str, Any] = dict(details)
+
+    def as_note(self) -> Dict[str, Any]:
+        """job_runs.stats, cluster_outcomes, 메트릭 요약에 그대로 넣는 기록."""
+        return {"code": self.code, "message": str(self), **self.details}
+
+    def again(self) -> "LLMRunStop":
+        """같은 중단을 다른 스레드·다음 호출에서 다시 낼 때 쓰는 새 인스턴스."""
+        return type(self)(str(self), **self.details)
+
+
+class LLMBudgetRefusal(LLMRunStop):
+    """지출 가드가 요청을 보내기 전에 거부했다."""
+
+    code = "llm_budget_refused"
+
+
+class LLMBudgetExceeded(LLMBudgetRefusal):
+    """이 요청의 최악 비용을 더하면 런·일·전체 상한 중 하나를 넘는다. details["scope"]가 그 범위다."""
+
+    code = "llm_budget_exceeded"
+
+
+class LLMUnpricedModel(LLMBudgetRefusal):
+    """단가표에 없는 모델이다. 비용을 0으로 치지 않고 거부한다."""
+
+    code = "llm_unpriced_model"
+
+
+class LLMBudgetUnavailable(LLMBudgetRefusal):
+    """설정이나 원장을 읽고 쓸 수 없어 지출을 확인하지 못한다."""
+
+    code = "llm_budget_unavailable"
+
+
+class LLMCircuitOpen(LLMRunStop):
+    """연속 인프라 실패 또는 결제 불가(HTTP 402)로 런을 멈춘다."""
+
+    code = "llm_circuit_open"
+
+
+# ---------------------------------------------------------------------------
+# 설정
+# ---------------------------------------------------------------------------
+
+class BudgetConfigError(ValueError):
+    """상한 설정을 해석할 수 없다. 기본값으로 넘어가지 않는다 - 오타 하나가 상한을 조용히 바꾸면 안 된다."""
+
+
+def _setting(name: str) -> str:
+    """환경변수(호출 시점) > Settings.<name>_DEFAULT."""
+    value = os.getenv(name)
+    if value is None or not value.strip():
+        value = getattr(Settings, f"{name}_DEFAULT")
+    return str(value).strip()
+
+
+def _decimal(name: str, raw: str, *, minimum: Decimal, exclusive: bool = False) -> Decimal:
+    try:
+        value = Decimal(raw)
+    except InvalidOperation:
+        raise BudgetConfigError(f"{name}={raw!r}: 숫자가 아닙니다") from None
+    if not value.is_finite():
+        raise BudgetConfigError(f"{name}={raw!r}: 유한한 숫자가 아닙니다")
+    if value < minimum or (exclusive and value == minimum):
+        raise BudgetConfigError(f"{name}={raw!r}: {minimum}{'보다 커야' if exclusive else ' 이상이어야'} 합니다")
+    return value
+
+
+def _cap_nusd(name: str) -> int:
+    value = _decimal(name, _setting(name), minimum=Decimal(0))
+    return int((value * NUSD_PER_USD).to_integral_value(rounding=ROUND_FLOOR))
+
+
+@dataclass(frozen=True)
+class BudgetConfig:
+    caps: Caps
+    ledger_path: str
+    # 원장의 누계 기록(워터마크)을 두는 디렉터리. 원장 디렉터리 밖이어야 한다(spend_ledger.py).
+    state_dir: str
+    day_tz: str
+    reservation_ttl_s: float
+    bytes_per_token: float
+    krw_per_usd: Decimal
+    breaker_threshold: int
+    # 단가표에 없는 모델에 적용할 (입력, 출력) USD/1M. None이면 그런 모델은 거부한다.
+    fallback_price: Optional[Tuple[Decimal, Decimal]]
+
+    @classmethod
+    def from_env(cls) -> "BudgetConfig":
+        caps = Caps(
+            run_nusd=_cap_nusd("LLM_BUDGET_RUN_USD"),
+            day_nusd=_cap_nusd("LLM_BUDGET_DAY_USD"),
+            total_nusd=_cap_nusd("LLM_BUDGET_TOTAL_USD"),
+        )
+        day_tz = _setting("LLM_BUDGET_DAY_TZ")
+        try:
+            ZoneInfo(day_tz)
+        except Exception:  # noqa: BLE001 - 잘못된 키는 ZoneInfoNotFoundError/ValueError 등으로 온다
+            raise BudgetConfigError(f"LLM_BUDGET_DAY_TZ={day_tz!r}: 알 수 없는 시간대입니다") from None
+
+        threshold_raw = _setting("LLM_CIRCUIT_BREAKER_THRESHOLD")
+        try:
+            threshold = int(threshold_raw)
+        except ValueError:
+            raise BudgetConfigError(f"LLM_CIRCUIT_BREAKER_THRESHOLD={threshold_raw!r}: 정수가 아닙니다") from None
+        if threshold < 0:
+            raise BudgetConfigError(f"LLM_CIRCUIT_BREAKER_THRESHOLD={threshold_raw!r}: 0 이상이어야 합니다")
+
+        fb_in = os.getenv("LLM_BUDGET_FALLBACK_INPUT_PER_1M", "").strip()
+        fb_out = os.getenv("LLM_BUDGET_FALLBACK_OUTPUT_PER_1M", "").strip()
+        fallback = None
+        if fb_in or fb_out:
+            if not (fb_in and fb_out):
+                raise BudgetConfigError(
+                    "LLM_BUDGET_FALLBACK_INPUT_PER_1M과 LLM_BUDGET_FALLBACK_OUTPUT_PER_1M은 둘 다 있어야 합니다"
+                )
+            # 단가표와 같은 하한: 0이면 예약이 0원이고, 1K 토큰당 단가를 적으면 1000배 적게 잡힌다.
+            floor = Decimal(str(MIN_PLAUSIBLE_PER_1M))
+            fallback = (
+                _decimal("LLM_BUDGET_FALLBACK_INPUT_PER_1M", fb_in, minimum=floor),
+                _decimal("LLM_BUDGET_FALLBACK_OUTPUT_PER_1M", fb_out, minimum=floor),
+            )
+
+        # 상대 경로는 실행한 디렉터리를 따라간다. 이 저장소는 jobs.run을 저장소 루트에서, main.py와
+        # spend_cli를 ai_workspace/에서 돌리므로 원장이 둘로 갈려 전체 상한이 두 배가 되고 CLI는 다른
+        # 원장을 보여준다. 어느 쪽으로도 해석하지 않고 거부한다.
+        ledger_path = os.getenv("LLM_SPEND_LEDGER_FILE", "").strip() or Settings.LLM_SPEND_LEDGER_FILE_DEFAULT
+        if not os.path.isabs(ledger_path):
+            raise BudgetConfigError(
+                f"LLM_SPEND_LEDGER_FILE={ledger_path!r}: 절대 경로여야 합니다(상대 경로는 실행한 디렉터리마다 "
+                "다른 원장이 되어 상한이 갈립니다)"
+            )
+        state_dir = default_state_dir()
+        if not os.path.isabs(state_dir):
+            raise BudgetConfigError(f"LLM_SPEND_STATE_DIR={state_dir!r}: 절대 경로여야 합니다")
+
+        return cls(
+            caps=caps,
+            ledger_path=ledger_path,
+            state_dir=state_dir,
+            day_tz=day_tz,
+            reservation_ttl_s=float(_decimal(
+                "LLM_BUDGET_RESERVATION_TTL_S", _setting("LLM_BUDGET_RESERVATION_TTL_S"),
+                minimum=Decimal(0), exclusive=True,
+            )),
+            bytes_per_token=float(_decimal(
+                "LLM_BUDGET_BYTES_PER_TOKEN", _setting("LLM_BUDGET_BYTES_PER_TOKEN"),
+                minimum=Decimal(0), exclusive=True,
+            )),
+            krw_per_usd=_decimal(
+                "LLM_BUDGET_KRW_PER_USD", _setting("LLM_BUDGET_KRW_PER_USD"), minimum=Decimal(0), exclusive=True,
+            ),
+            breaker_threshold=threshold,
+            fallback_price=fallback,
+        )
+
+    def day_of(self, ts: float) -> str:
+        return datetime.fromtimestamp(ts, ZoneInfo(self.day_tz)).date().isoformat()
+
+
+# ---------------------------------------------------------------------------
+# 비용 산술
+# ---------------------------------------------------------------------------
+
+# 메시지마다 붙는 역할 표시·구분 토큰과 요청 전체의 고정 토큰에 대한 여유분. 프로바이더가 공개한
+# 수치가 아니라 넉넉히 잡은 값이다(OpenAI 계열은 메시지당 3~4토큰).
+PER_MESSAGE_OVERHEAD_TOKENS = 16
+BASE_OVERHEAD_TOKENS = 64
+
+
+def estimate_prompt_tokens(messages: List[Dict[str, Any]], schema: Any = None, *, bytes_per_token: float = 1.0) -> int:
+    """요청을 보내기 전에 쓰는 입력 토큰 수의 상한.
+
+    토크나이저를 돌리지 않는다(Gemini 토크나이저는 로컬에 없다). BPE/SentencePiece의 토큰은 최소
+    1바이트를 덮으므로 UTF-8 바이트 수가 토큰 수를 넘지 못한다 - bytes_per_token=1.0이 그 상한이다.
+    한국어는 글자당 3바이트라 실제의 몇 배로 잡히지만, 예약은 정산 때 실제 값으로 바뀐다.
+    구조화 출력 스키마도 입력으로 세는 프로바이더가 있어 JSON 스키마 길이를 더한다.
+    """
+    n_bytes = 0
+    for message in messages:
+        content = message.get("content") if isinstance(message, dict) else message
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False, default=str)
+        role = str(message.get("role", "")) if isinstance(message, dict) else ""
+        n_bytes += len(content.encode("utf-8")) + len(role.encode("utf-8"))
+    if schema is not None:
+        spec = schema.model_json_schema() if hasattr(schema, "model_json_schema") else schema
+        n_bytes += len(json.dumps(spec, ensure_ascii=False, default=str).encode("utf-8"))
+    return math.ceil(n_bytes / bytes_per_token) + PER_MESSAGE_OVERHEAD_TOKENS * len(messages) + BASE_OVERHEAD_TOKENS
+
+
+def token_cost_nusd(tokens: int, usd_per_1m: Decimal) -> int:
+    """토큰 수 x 단가(USD/1M)를 nUSD로. 1 nUSD 미만은 올린다(상한 쪽으로)."""
+    # USD/1M 토큰 = 1e-6 USD/토큰 = 1,000 nUSD/토큰
+    return int((Decimal(int(tokens)) * usd_per_1m * 1000).to_integral_value(rounding=ROUND_CEILING))
+
+
+def billable_tokens(usage: Optional[LLMUsage]) -> Optional[Tuple[int, int]]:
+    """응답 usage에서 과금 대상 (입력, 출력) 토큰을 구한다. usage가 비었으면 None(= 알 수 없음).
+
+    출력은 thinking 토큰까지다. 프로바이더가 thinking을 어디에 넣어 보고하는지는 세 가지가 있다:
+      (1) completion에 포함(OpenAI)            -> completion
+      (2) completion에는 없고 total에만 포함   -> total - prompt
+      (3) 둘 다에 없고 reasoning_tokens로만    -> completion + thinking
+    어느 방식인지 모르므로 셋 중 가장 큰 값을 쓴다. (1)이면 thinking만큼 많이 잡힌다 - Gemini 호환 계층이
+    어느 쪽인지는 첫 유료 응답으로 확인한 뒤 프로바이더별로 좁힌다(docs/adr/0035 한계). 캐시된 입력은
+    할인 단가를 적용하지 않고 전부 정가로 센다(단가표에 캐시 단가가 없다). 둘 다 과대 계상 쪽이다.
+    """
+    if usage is None or (not usage.input_tokens and not usage.output_tokens):
+        return None
+    output = usage.output_tokens + (usage.thinking_tokens or 0)
+    if usage.total_tokens is not None:
+        output = max(output, usage.total_tokens - usage.input_tokens)
+    return usage.input_tokens, output
+
+
+# 원장의 역할(role) 열. 클라이언트 인스턴스는 (provider, model)당 하나를 여러 역할이 함께 쓰므로
+# (generator와 tone의 기본 모델이 같다) 인스턴스로는 역할을 알 수 없다 - 호출부가 넘기는 purpose로 정한다.
+ROLE_BY_PURPOSE = {
+    "newsletter_content_gen": "generator",
+    "newsletter_meta_gen": "generator",
+    "cluster_eval": "judge",
+    "newsletter_eval": "judge",
+    "tone_convert": "tone",
+}
+
+
+def role_for_purpose(purpose: str) -> str:
+    return ROLE_BY_PURPOSE.get(purpose, "other")
+
+
+# ---------------------------------------------------------------------------
+# 시도 결과 -> 과금 근거 / 브레이커 효과
+# ---------------------------------------------------------------------------
+
+# 프로바이더가 응답을 돌려준 결과(200). 토큰이 과금됐고, 프로바이더는 살아 있다.
+RESPONSE_OUTCOMES = frozenset({"ok", "schema_invalid", "length", "content_filter"})
+
+# HTTP 오류로 실패한 요청은 과금하지 않는다고 공식 문서로 확인한 프로바이더.
+# - gemini: https://ai.google.dev/gemini-api/docs/billing (문서 갱신 2026-09-28 UTC, 접근 2026-10-06)
+#   "400 또는 500 오류로 실패한 요청은 사용한 토큰이 과금되지 않는다"는 취지의 FAQ.
+# 여기에 없는 프로바이더의 HTTP 오류는 "알 수 없음"으로 보고 예약액을 그대로 지출로 잡는다.
+HTTP_ERROR_NOT_BILLED_PROVIDERS = frozenset({"gemini"})
+
+
+def billing_basis(outcome: str, provider: str, usage: Optional[LLMUsage]) -> str:
+    """"actual"(보고된 사용량) / "not_billed"(0) / "reserved"(알 수 없어 예약액 그대로)."""
+    if outcome in RESPONSE_OUTCOMES:
+        return "actual" if billable_tokens(usage) is not None else "reserved"
+    if outcome.startswith("http_"):
+        return "not_billed" if provider in HTTP_ERROR_NOT_BILLED_PROVIDERS else "reserved"
+    return "reserved"  # timeout, connection, body_5xx, error, unsettled: 요청이 처리됐는지 모른다
+
+
+def _http_status(outcome: str) -> Optional[int]:
+    if outcome.startswith("http_"):
+        try:
+            return int(outcome[5:])
+        except ValueError:
+            return None
+    return None
+
+
+def breaker_effect(outcome: str) -> str:
+    """"healthy"(카운트 0으로) / "failure"(+1) / "fatal"(즉시 중단) / "neutral"."""
+    if outcome in RESPONSE_OUTCOMES:
+        return "healthy"
+    status = _http_status(outcome)
+    if status == 402:
+        return "fatal"  # 선불 잔액 소진 - 같은 런 안에서는 회복되지 않는다
+    if status is not None and status >= 500:
+        return "failure"
+    if outcome in ("timeout", "connection", "body_5xx"):  # body_5xx: HTTP 200 본문의 서버 오류 코드(HyperCLOVA)
+        return "failure"
+    return "neutral"  # 429, 그 밖의 4xx, 분류 못 한 오류
+
+
+# ---------------------------------------------------------------------------
+# 런 상태 (프로세스 전역)
+# ---------------------------------------------------------------------------
+
+_state_lock = threading.RLock()
+_run_label: Optional[str] = None
+_run_stop: Optional[LLMRunStop] = None
+_consecutive_failures = 0
+_ledgers: Dict[Tuple[str, str], SpendLedger] = {}
+_pricing_cache: Optional[Tuple[float, PriceTable]] = None
+
+
+def _default_run_label() -> str:
+    return f"run-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}"
+
+
+def current_run_id() -> str:
+    """런 상한이 묶는 단위. LLM_RUN_ID가 있으면 그 값(여러 프로세스가 한 상한을 나눠 쓴다)."""
+    global _run_label
+    env = os.getenv("LLM_RUN_ID", "").strip()
+    if env:
+        return env
+    with _state_lock:
+        if _run_label is None:
+            _run_label = _default_run_label()
+        return _run_label
+
+
+def begin_run(label: Optional[str] = None) -> str:
+    """새 런을 시작한다: 런 상한의 범위를 바꾸고, 중단 래치와 브레이커 카운트를 지운다."""
+    global _run_label, _run_stop, _consecutive_failures
+    with _state_lock:
+        _run_label = label or _default_run_label()
+        _run_stop = None
+        _consecutive_failures = 0
+    return current_run_id()
+
+
+def run_stop() -> Optional[LLMRunStop]:
+    """이번 런이 멈췄으면 그 사유(예외 인스턴스), 아니면 None."""
+    with _state_lock:
+        return _run_stop
+
+
+def raise_if_run_stopped() -> None:
+    stop = run_stop()
+    if stop is not None:
+        raise stop.again()
+
+
+def reset_run_state() -> None:
+    """테스트 전용: 런 상태와 캐시(원장 객체, 단가표)를 모두 지운다."""
+    global _run_label, _run_stop, _consecutive_failures, _pricing_cache
+    with _state_lock:
+        _run_label = None
+        _run_stop = None
+        _consecutive_failures = 0
+        _ledgers.clear()
+        _pricing_cache = None
+
+
+def _latch(stop: LLMRunStop) -> Optional[LLMRunStop]:
+    """런을 멈춘 것으로 표시한다. 이 호출이 표시를 세웠으면 보관한 사본을, 이미 멈춰 있었으면 None을 돌려준다."""
+    global _run_stop
+    with _state_lock:
+        if _run_stop is not None:
+            return None
+        # 던져진 인스턴스가 아니라 사본을 보관한다 - 원본의 트레이스백이 호출 스택(프롬프트를 든
+        # 지역 변수 포함)을 프로세스가 끝날 때까지 붙잡지 않게.
+        _run_stop = stop.again()
+        return _run_stop
+
+
+def latch_run_stop(stop: LLMRunStop) -> None:
+    """런을 멈춘 것으로 표시한다(이미 멈췄으면 첫 사유를 유지). 가드 밖에서 중단을 받은 쪽
+    (Stage5의 클러스터 루프)이 다른 워커에게 알릴 때 쓴다."""
+    _latch(stop)
+
+
+def _ledger_for(cfg: BudgetConfig) -> SpendLedger:
+    # 같은 파일을 다른 철자(심볼릭 링크 등)로 가리켜도 원장 객체는 하나다.
+    cache_key = (os.path.realpath(cfg.ledger_path), os.path.realpath(cfg.state_dir))
+    with _state_lock:
+        ledger = _ledgers.get(cache_key)
+        if ledger is None:
+            ledger = _ledgers[cache_key] = SpendLedger(cfg.ledger_path, state_dir=cfg.state_dir)
+        ledger.reservation_ttl_s = cfg.reservation_ttl_s
+        return ledger
+
+
+def _pricing() -> PriceTable:
+    """단가표. 파일이 바뀌면 다시 읽는다(실행 중 단가 수정이 다음 호출부터 반영되게)."""
+    global _pricing_cache
+    mtime = os.stat(DEFAULT_PRICING_PATH).st_mtime
+    with _state_lock:
+        if _pricing_cache is None or _pricing_cache[0] != mtime:
+            table = load_pricing(DEFAULT_PRICING_PATH)  # 0·음수·하한 미만 단가, 겹치는 항목, 다른 통화는 여기서 거부된다
+            if table.currency != CURRENCY:
+                raise BudgetConfigError(f"단가표의 통화가 {CURRENCY}가 아닙니다: {table.currency!r}")
+            _pricing_cache = (mtime, table)
+        return _pricing_cache[1]
+
+
+# ---------------------------------------------------------------------------
+# 킬 스위치 연동
+# ---------------------------------------------------------------------------
+
+KILL_SWITCH_OWNER = "llm_spend_cap"
+
+
+def engage_kill_switch(reason: Dict[str, Any]) -> Optional[str]:
+    """킬 스위치 파일을 만든다. 이미 있으면 그대로 둔다(먼저 켠 쪽의 사유를 지우지 않는다).
+
+    만든(또는 이미 있던) 파일 경로를 돌려주고, 만들 수 없으면 None이다 - 그래도 이 프로세스의
+    호출은 원장이 막고, 같은 원장을 쓰는 다른 프로세스도 같은 상한에서 막힌다.
+
+    내용을 다 쓴 임시 파일을 하드 링크로 제자리에 놓는다: 다른 프로세스가 "파일은 있는데 내용이 아직
+    없는" 순간을 보면 이 가드가 켠 것인지 알 수 없어 ADR 0005의 킬 스위치 경로(로컬 폴백)로 빠진다.
+    """
+    path = Settings.LLM_KILL_SWITCH_FILE
+    if not path:
+        return None
+    payload = {"engaged_by": KILL_SWITCH_OWNER, **reason,
+               "ts_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"), "pid": os.getpid()}
+    data = json.dumps(payload, ensure_ascii=False) + "\n"
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    except OSError as e:  # 부모가 파일이거나(FileExistsError 포함) 읽기 전용 마운트
+        logger.error("LLM 킬 스위치 디렉터리를 만들지 못했습니다 (%s): %s", path, e)
+        return None
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(data)
+        try:
+            os.link(tmp, path)  # 이미 있으면 FileExistsError - 덮어쓰지 않는다
+        except FileExistsError:
+            return path
+        except OSError:
+            # 하드 링크가 안 되는 파일시스템: 배타 생성으로 만든다(내용이 비어 보이는 순간이 생길 수 있다)
+            try:
+                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+            except FileExistsError:
+                return path
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(data)
+    except OSError as e:
+        logger.error("LLM 킬 스위치 파일을 만들지 못했습니다 (%s): %s", path, e)
+        return None
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+    logger.error("LLM 지출 상한(%s)에 닿아 킬 스위치를 켰습니다: %s", reason.get("scope"), path)
+    return path
+
+
+def spend_cap_kill_switch() -> Optional[Dict[str, Any]]:
+    """킬 스위치 파일이 이 가드가 켠 것이면({"engaged_by": "llm_spend_cap", ...}) 그 내용을, 아니면 None.
+
+    파일이 없거나, 비었거나, 다른 주체(저장소 밖 비용 감시 등)가 만든 것이면 None이다 - 그 경우는
+    ADR 0005의 킬 스위치 동작 그대로다. 환경변수 LLM_KILL_SWITCH도 여기서 보지 않는다.
+    """
+    path = Settings.LLM_KILL_SWITCH_FILE
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            payload = json.loads(f.read() or "null")
+    except (OSError, ValueError):
+        return None
+    if not isinstance(payload, dict) or payload.get("engaged_by") != KILL_SWITCH_OWNER:
+        return None
+    return {**payload, "kill_switch_file": path}
+
+
+# ---------------------------------------------------------------------------
+# 가드
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class _Price:
+    input_per_1m: Decimal
+    output_per_1m: Decimal
+    source: str  # "table" | "fallback_override"
+
+
+class Attempt:
+    """예약 하나. 네트워크 요청이 끝나면 settle로 닫는다."""
+
+    def __init__(self, guard: "BudgetGuard", cfg: BudgetConfig, ledger: SpendLedger,
+                 reservation: Reservation, price: _Price):
+        self._guard = guard
+        self._cfg = cfg
+        self._ledger = ledger
+        self._price = price
+        self._settled = False
+        self.reservation = reservation
+
+    def settle(self, outcome: str, usage: Optional[LLMUsage] = None) -> None:
+        """시도 결과를 원장에 정산하고 브레이커에 알린다. 두 번째 호출부터는 아무것도 하지 않는다.
+
+        이 결과로 서킷이 열리면 LLMCircuitOpen을 낸다(재시도 루프가 백오프를 기다리지 않고 멈추게).
+        그 밖의 예외는 내지 않는다 - 정산 중 오류가 호출부의 재시도 분기로 들어가 요청을 한 번 더
+        보내게 되면 안 된다. 정산을 못 쓰면 예약이 열린 채 남아 예약액으로 계속 잡힌다(상한 쪽).
+        """
+        if self._settled:
+            return
+        self._settled = True
+        key = self.reservation.key
+        try:
+            self._write_settlement(outcome, usage)
+        except Exception as e:  # noqa: BLE001
+            logger.error("%s/%s: 지출 정산을 원장에 쓰지 못했습니다(예약 $%.6f은 열린 채 남습니다): %s",
+                         key.provider, key.model, usd(self.reservation.nusd), e)
+        self._guard._note_outcome(outcome, self._cfg, key)
+
+    def _write_settlement(self, outcome: str, usage: Optional[LLMUsage]) -> None:
+        key = self.reservation.key
+        basis = billing_basis(outcome, key.provider, usage)
+        extra: Dict[str, Any] = {}
+        if basis == "actual":
+            tokens_in, tokens_out = billable_tokens(usage)
+            nusd = token_cost_nusd(tokens_in, self._price.input_per_1m) + token_cost_nusd(
+                tokens_out, self._price.output_per_1m)
+            extra = {
+                "input_tokens": usage.input_tokens, "output_tokens": usage.output_tokens,
+                "thinking_tokens": usage.thinking_tokens, "cached_tokens": usage.cached_tokens,
+                "total_tokens": usage.total_tokens, "billable_output_tokens": tokens_out,
+            }
+            if nusd > self.reservation.nusd:
+                logger.warning(
+                    "%s/%s: 실제 비용이 예약을 넘었습니다 ($%.6f > $%.6f) - 토큰 추정이나 max_tokens 가정을 확인하세요",
+                    key.provider, key.model, usd(nusd), usd(self.reservation.nusd),
+                )
+        elif basis == "not_billed":
+            nusd = 0
+        else:
+            nusd = self.reservation.nusd
+        self._ledger.settle(self.reservation, nusd=nusd, outcome=outcome, basis=basis, extra=extra)
+
+    def ensure_settled(self) -> None:
+        """어느 분기도 정산하지 않고 빠져나온 경우(예상 못 한 예외, Ctrl-C)의 안전망."""
+        self.settle("unsettled")
+
+
+class BudgetGuard:
+    def ensure_run_active(self, provider: str, model: str, purpose: str) -> None:
+        """이미 멈춘 런이면 같은 중단을 다시 낸다(원장·네트워크를 건드리지 않는다).
+
+        다른 프로세스의 가드가 일·전체 상한으로 켠 킬 스위치 파일이 있으면 이 런도 같은 사유로 멈춘다.
+        클라이언트는 이 검사를 킬 스위치 검사보다 먼저 부른다 - 그렇지 않으면 상한에 닿은 프로세스만
+        깨끗이 멈추고, 원장을 함께 쓰는 다른 프로세스는 "kill_switch" 결과를 받아 로컬 폴백 초안을 만들고
+        (재생성 루프) 이미 게이트를 통과한 글에 규칙 기반 문체 변환본을 저장한 뒤 종료 코드 0으로 끝난다.
+        """
+        stop = run_stop()
+        if stop is not None:
+            self._record_block(stop, provider, model, purpose)
+            raise stop.again()
+        engaged = spend_cap_kill_switch()
+        if engaged is not None:
+            scope = engaged.get("scope")
+            details = {k: engaged.get(k) for k in ("scope", "day", "cap_usd", "spent_usd", "reserved_usd",
+                                                   "requested_usd", "ledger", "kill_switch_file")}
+            self._stop(LLMBudgetExceeded(
+                f"LLM 지출 상한({scope})으로 켜진 킬 스위치가 있어 런을 멈춥니다: {engaged['kill_switch_file']} "
+                f"(켠 프로세스 {engaged.get('pid')}, {engaged.get('ts_utc')})",
+                **details, engaged_run_id=engaged.get("run_id"), engaged_pid=engaged.get("pid"),
+                via="kill_switch_file",
+            ), provider, model, purpose)
+
+    def begin_attempt(self, *, provider: str, model: str, purpose: str, messages: List[Dict[str, Any]],
+                      schema: Any = None, max_tokens: Optional[int]) -> Attempt:
+        """요청 한 번의 최악 비용을 예약한다. 상한을 넘거나 지출을 확인할 수 없으면 예외를 낸다."""
+        self.ensure_run_active(provider, model, purpose)
+        try:
+            cfg = BudgetConfig.from_env()
+            if max_tokens is None or int(max_tokens) <= 0:
+                raise BudgetConfigError("max_tokens 없이 보낸 요청은 최악 비용을 계산할 수 없습니다")
+            now = time.time()
+            day = cfg.day_of(now)
+            price = self._price(cfg, model, day)
+            est_input = estimate_prompt_tokens(messages, schema, bytes_per_token=cfg.bytes_per_token)
+            nusd = token_cost_nusd(est_input, price.input_per_1m) + token_cost_nusd(int(max_tokens), price.output_per_1m)
+            key = CallKey(run_id=current_run_id(), day=day, provider=provider, model=model,
+                          role=role_for_purpose(purpose), purpose=purpose)
+            ledger = _ledger_for(cfg)
+            result = ledger.reserve(caps=cfg.caps, key=key, nusd=nusd, extra={
+                "est_input_tokens": est_input, "max_output_tokens": int(max_tokens),
+                "price_in_per_1m": str(price.input_per_1m), "price_out_per_1m": str(price.output_per_1m),
+                "price_source": price.source,
+            })
+        except LLMRunStop as stop:
+            self._stop(stop, provider, model, purpose)
+        except Exception as e:  # noqa: BLE001 - 설정·단가표·원장의 어떤 실패든 "허용"이 되면 안 된다
+            self._stop(LLMBudgetUnavailable(
+                f"LLM 지출을 확인할 수 없어 호출을 거부합니다: {e}", reason=f"{type(e).__name__}: {e}",
+            ), provider, model, purpose)
+
+        if isinstance(result, Refusal):
+            stop, engage = self._exceeded(result, cfg, key)
+            self._stop(stop, provider, model, purpose, engage=engage)
+        return Attempt(self, cfg, ledger, result, price)
+
+    # ------------------------------------------------------------------ 내부
+
+    @staticmethod
+    def _price(cfg: BudgetConfig, model: str, day: str) -> _Price:
+        try:
+            entry = _pricing().price(model, on=datetime.strptime(day, "%Y-%m-%d").date())
+        except KeyError as e:
+            if cfg.fallback_price is None:
+                raise LLMUnpricedModel(
+                    f"단가표(config/llm_pricing.yaml)에 없는 모델이라 호출을 거부합니다: {model} "
+                    "(단가를 추가하거나 LLM_BUDGET_FALLBACK_INPUT_PER_1M/OUTPUT_PER_1M을 명시)",
+                    model=model, reason=str(e.args[0]) if e.args else "unpriced",
+                ) from None
+            return _Price(cfg.fallback_price[0], cfg.fallback_price[1], "fallback_override")
+        return _Price(Decimal(str(entry.input_per_1m)), Decimal(str(entry.output_per_1m)), "table")
+
+    @staticmethod
+    def _exceeded(refusal: Refusal, cfg: BudgetConfig, key: CallKey) -> Tuple[LLMBudgetExceeded, Optional[Dict[str, Any]]]:
+        """상한 초과 예외와, 일·전체 범위면 킬 스위치 파일에 적을 사유(런 범위면 None)."""
+        details: Dict[str, Any] = {
+            "scope": refusal.scope,
+            "cap_usd": usd(refusal.cap_nusd),
+            "spent_usd": usd(refusal.committed_nusd),
+            "reserved_usd": usd(refusal.open_nusd),
+            "requested_usd": usd(refusal.requested_nusd),
+            "run_id": key.run_id, "day": key.day, "model": key.model, "purpose": key.purpose,
+            "ledger": cfg.ledger_path,
+        }
+        engage = None
+        if refusal.scope in ("day", "total"):
+            engage = {k: details[k] for k in ("scope", "day", "cap_usd", "spent_usd", "reserved_usd",
+                                              "requested_usd", "run_id", "ledger")}
+        return LLMBudgetExceeded(
+            f"LLM 지출 상한({refusal.scope}) ${usd(refusal.cap_nusd):.4f}: 정산 ${usd(refusal.committed_nusd):.6f}"
+            f" + 예약 ${usd(refusal.open_nusd):.6f} + 이번 요청 최악 ${usd(refusal.requested_nusd):.6f}",
+            **details,
+        ), engage
+
+    def _stop(self, stop: LLMRunStop, provider: str, model: str, purpose: str,
+              *, engage: Optional[Dict[str, Any]] = None):
+        """런을 멈춘 것으로 표시하고 stop을 낸다. engage가 있으면 킬 스위치 파일도 만든다.
+
+        표시가 먼저다: 킬 스위치 파일이 먼저 생기면, 그 사이에 complete()에 들어온 같은 프로세스의 다른
+        워커가 멈춘 런 검사를 통과하고 킬 스위치 검사에서 "kill_switch" 결과를 받는다(로컬 폴백 경로).
+        """
+        latched = _latch(stop)
+        if engage is not None:
+            kill_switch_file = engage_kill_switch(engage)
+            stop.details["kill_switch_file"] = kill_switch_file
+            if latched is not None:
+                latched.details["kill_switch_file"] = kill_switch_file
+        self._record_block(stop, provider, model, purpose)
+        logger.error("%s/%s: LLM 런 중단 (%s, purpose=%s): %s", provider, model, stop.code, purpose, stop)
+        raise stop
+
+    @staticmethod
+    def _record_block(stop: LLMRunStop, provider: str, model: str, purpose: str) -> None:
+        get_metrics_collector().record_call(
+            purpose=purpose, input_tokens=0, output_tokens=0, latency_seconds=0.0, success=False,
+            provider=provider, model=model, error_type=stop.code,
+        )
+
+    def _note_outcome(self, outcome: str, cfg: BudgetConfig, key: CallKey) -> None:
+        global _consecutive_failures
+        effect = breaker_effect(outcome)
+        with _state_lock:
+            if effect == "healthy":
+                _consecutive_failures = 0
+                return
+            if effect == "neutral":
+                return
+            if effect == "failure":
+                _consecutive_failures += 1
+                if cfg.breaker_threshold <= 0 or _consecutive_failures < cfg.breaker_threshold:
+                    return
+            count = _consecutive_failures
+        status = _http_status(outcome)
+        if effect == "fatal":
+            message = f"HTTP {status}: 결제가 필요한 상태라 런을 멈춥니다(선불 잔액 확인)"
+        else:
+            message = f"연속 인프라 실패 {count}회({outcome})로 런을 멈춥니다"
+        self._stop(LLMCircuitOpen(
+            message, last_outcome=outcome, consecutive_failures=count, threshold=cfg.breaker_threshold,
+            http_status=status, run_id=key.run_id,
+        ), key.provider, key.model, key.purpose)
+
+
+_guard = BudgetGuard()
+
+
+def get_budget_guard() -> BudgetGuard:
+    return _guard
+
+
+# ---------------------------------------------------------------------------
+# 조회 (잡 통계·사전 점검용)
+# ---------------------------------------------------------------------------
+
+def spend_snapshot() -> Dict[str, Any]:
+    """현재 런·오늘·전체의 사용액(정산 + 열린 예약)과 상한. 읽기만 한다. 실패해도 예외를 내지 않는다.
+
+    원장이 없거나 무결성 문제가 있으면 수치 대신 {"error": ...}다 - 믿을 수 없는 합계를 싣지 않는다.
+    """
+    try:
+        cfg = BudgetConfig.from_env()
+        run_id = current_run_id()
+        day = cfg.day_of(time.time())
+        totals = _ledger_for(cfg).totals(run_id=run_id, day=day)
+    except (BudgetConfigError, LedgerError, OSError, ValueError) as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+    return {
+        "run_id": run_id,
+        "day": day,
+        "ledger": cfg.ledger_path,
+        "run_usd": usd(totals.used("run")),
+        "day_usd": usd(totals.used("day")),
+        "total_usd": usd(totals.used("total")),
+        "caps_usd": {"run": usd(cfg.caps.run_nusd), "day": usd(cfg.caps.day_nusd), "total": usd(cfg.caps.total_nusd)},
+        "open_reservations": totals.open_count,
+        "corrupt_ledger_lines": totals.corrupt_lines,
+    }
+
+
+def preflight_problem() -> Optional[str]:
+    """지금 설정으로는 어떤 LLM 호출도 거부될 이유(설정 오류, 단가표를 읽을 수 없음, 원장이 없거나
+    쓸 수 없거나 무결성 문제가 있음)가 있으면 그 설명을, 없으면 None을 돌려준다. 지출은 기록하지 않는다."""
+    try:
+        cfg = BudgetConfig.from_env()
+        _pricing()
+        _ledger_for(cfg).probe()
+    except Exception as e:  # noqa: BLE001 - begin_attempt가 거부할 모든 경우를 같은 범위로 잡는다
+        return f"{type(e).__name__}: {e}"
+    return None
+
+
+def unpriced_models(models) -> Dict[str, str]:
+    """주어진 모델 중 단가가 없어 호출이 거부될 모델 -> 사유. 대체 단가가 명시돼 있으면 비어 있다.
+
+    잡이 준비 작업(클러스터링, 배치 행 생성) 전에 지금 설정된 역할별 모델을 확인하는 용도다. 설정이나
+    단가표를 읽을 수 없으면 예외가 난다 - 호출부는 preflight_problem()을 먼저 본다.
+    """
+    cfg = BudgetConfig.from_env()
+    day = cfg.day_of(time.time())
+    missing: Dict[str, str] = {}
+    for model in models:
+        try:
+            BudgetGuard._price(cfg, model, day)
+        except LLMUnpricedModel as e:
+            missing[model] = str(e.details.get("reason") or e)
+    return missing
+
+
+def exhausted_scope() -> Optional[Dict[str, Any]]:
+    """일·전체 상한이 이미 찼으면(1 nUSD도 더 못 쓰면) 그 범위와 수치를, 아니면 None.
+
+    잡이 클러스터링 같은 준비 작업을 하기 전에 미리 확인하는 용도다. 런 상한은 보지 않는다
+    (잡은 새 런으로 시작한다). 설정·원장 오류는 여기서 판단하지 않는다 - 첫 호출이 거부한다.
+    """
+    try:
+        cfg = BudgetConfig.from_env()
+        day = cfg.day_of(time.time())
+        totals = _ledger_for(cfg).totals(run_id=current_run_id(), day=day)
+    except (BudgetConfigError, LedgerError, OSError, ValueError):
+        return None
+    for scope in ("total", "day"):
+        cap = cfg.caps.for_scope(scope)
+        if totals.used(scope) >= cap:
+            return {"scope": scope, "cap_usd": usd(cap), "used_usd": usd(totals.used(scope)),
+                    "day": day, "ledger": cfg.ledger_path}
+    return None

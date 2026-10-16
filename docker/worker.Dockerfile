@@ -63,11 +63,11 @@ COPY jobs ./jobs
 COPY docker/crontab docker/scheduler-entrypoint.sh ./docker/
 
 RUN useradd --system --uid 10001 --home-dir /app --shell /usr/sbin/nologin app \
-    && mkdir -p /hf /app/logs /app/ai_workspace/logs \
+    && mkdir -p /hf /spend-state /app/logs /app/ai_workspace/logs \
        /app/ai_workspace/recommend_engine/checkpoints \
        /app/ai_workspace/recommend_engine/results \
        /app/ai_workspace/recommend_engine/logs \
-    && chown -R app:app /hf /app/logs /app/ai_workspace/logs /app/ai_workspace/recommend_engine
+    && chown -R app:app /hf /spend-state /app/logs /app/ai_workspace/logs /app/ai_workspace/recommend_engine
 USER app
 
 # job_runs.git_sha에 남는 값. 커밋마다 바뀌므로 의존성 레이어 캐시를 깨지 않게 맨 끝에 둔다.

@@ -1,6 +1,7 @@
 """`python -m jobs.run <job> [옵션]` - 스케줄러(supercronic)·launchd 에이전트가 호출하는 유일한 진입점.
 
-종료 코드: 0 = 성공 또는 정상 건너뜀(락 점유, 킬 스위치 등), 1 = 실패, 2 = 잘못된 인자.
+종료 코드: 0 = 성공 또는 정상 건너뜀(락 점유, 킬 스위치 등), 1 = 실패, 2 = 잘못된 인자,
+3 = 가드가 잡을 멈춤(LLM 지출 상한·서킷브레이커 - job_runs에는 failed, stats.reason에 사유; docs/adr/0035).
 """
 import argparse
 import importlib

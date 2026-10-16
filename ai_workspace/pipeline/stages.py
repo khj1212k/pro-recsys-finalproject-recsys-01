@@ -14,6 +14,29 @@ logger = logging.getLogger(__name__)
 # 늘지 않는다. DB 커넥션 풀(dev 최대 5)도 넘지 않게 4로 묶는다 (ADR 0010).
 MAX_NEWSLETTER_WORKERS = 4
 
+# LLM 지출 상한·서킷브레이커로 멈춘 실행의 종료 코드(main.py). 일반 실패(1)·잘못된 인자(2)와
+# 구분한다 - jobs.runtime.EXIT_STOPPED와 같은 값이다 (docs/adr/0035).
+PIPELINE_STOPPED_EXIT_CODE = 3
+
+
+class PipelineStopped(Exception):
+    """LLM 가드(지출 상한, 서킷브레이커)가 런을 멈췄다. 크래시가 아니다.
+
+    Stage5가 이 예외를 낼 때는 정리가 끝난 뒤다: 멈추기 전에 만든 뉴스레터는 저장돼 있고,
+    클러스터별 결과와 메트릭 요약에 사유가 남았으며, 그 뒤로 프로바이더에 나간 요청은 없다.
+    """
+
+    exit_code = PIPELINE_STOPPED_EXIT_CODE
+
+    def __init__(self, reason: str, detail: str, *, newsletters_created: int, run_id, details: Dict[str, Any]):
+        super().__init__(f"{reason}: {detail}")
+        self.reason = reason
+        self.detail = detail
+        self.newsletters_created = newsletters_created
+        self.run_id = run_id
+        self.details = details
+
+
 class PipelineStage(ABC):
     """파이프라인 단계 기본 클래스"""
     def __init__(self, settings):
@@ -265,12 +288,28 @@ def run_clusters_bounded(
     min_target이 있으면 attempt 처리 후 모자란 만큼만 fill에서 보충한다. 한 번에
     min(부족분, max_workers)개씩만 띄우므로 목표를 넘겨 LLM 비용을 쓰지 않는다
     (각 클러스터는 뉴스레터를 최대 1개 만든다).
+
+    LLM 가드가 런을 멈추면(LLMRunStop - 지출 상한, 서킷브레이커) 그 클러스터는 "stopped", 아직
+    시작하지 않은 클러스터는 "not_started"로 남기고 더 시작하지 않는다. 다른 워커가 처리 중인
+    클러스터는 다음 LLM 호출에서 같은 중단을 받는다. 멈췄는지는 호출자가
+    core.llm.budget.run_stop()으로 확인한다 (docs/adr/0035).
     """
+    # LLM SDK가 없는 수집 전용 이미지도 이 모듈을 임포트한다 - 가드는 생성 경로에서만 불러온다.
+    from core.llm.budget import LLMRunStop, latch_run_stop, run_stop
 
     def safe(item):
         cid, idx = item
+        stopped = run_stop()
+        if stopped is not None:
+            return cid, {"status": "not_started", "failure_reason": stopped.code}
         try:
             return cid, process(cid, idx)
+        except LLMRunStop as stop:
+            # BaseException이라 아래 `except Exception`에는 걸리지 않는다. 여기서 받아야 풀의 나머지
+            # 작업이 정리되고, 이미 끝난 클러스터의 결과가 반환된다.
+            latch_run_stop(stop)
+            logger.error(f"Cluster {cid}: LLM 런 중단 ({stop.code}) - 남은 클러스터는 시작하지 않습니다: {stop}")
+            return cid, {"status": "stopped", "failure_reason": stop.code, "error": str(stop)}
         except Exception as e:  # noqa: BLE001 - 한 클러스터 실패가 배치 전체를 멈추면 안 된다
             logger.error(f"Cluster {cid} 처리 중 에러: {e}")
             return cid, {"status": "error", "error": str(e)}
@@ -281,7 +320,7 @@ def run_clusters_bounded(
             outcomes[cid] = outcome
 
         remaining = list(fill)
-        while min_target and remaining:
+        while min_target and remaining and run_stop() is None:
             done = sum(1 for o in outcomes.values() if o.get("status") == "completed")
             need = min_target - done
             if need <= 0:
@@ -298,6 +337,7 @@ class Stage5_NewsletterGeneration(PipelineStage):
                 min_target=None, lookback_hours=None, **kwargs) -> int:
         from core.clusterer import NewsClusterer
         from workflow.graph import compile_workflow
+        from core.llm import budget as llm_budget
         from core.llm_metrics import get_metrics_collector
         from db.batch_manager import create_new_batch, update_cluster_log
 
@@ -361,6 +401,12 @@ class Stage5_NewsletterGeneration(PipelineStage):
         run_id = create_new_batch(cluster_log)
         logger.info(f"🆔 배치 run_id={run_id} 발급 완료")
 
+        # 이 배치를 LLM 지출의 "런"으로 삼는다: 런 상한과 서킷브레이커가 이 배치 단위로 걸리고,
+        # 같은 프로세스의 앞선 배치가 남긴 중단 표시는 지워진다(일·전체 상한은 원장에 남아 있다).
+        # run_id는 DB를 새로 만들면 1부터 다시 시작하므로 시각을 붙여 원장의 옛 런과 겹치지 않게 한다.
+        llm_run = llm_budget.begin_run(f"stage5-{run_id}-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}")
+        logger.info(f"💳 LLM 지출 런: {llm_run}")
+
         # 3. 워크플로우 실행 (뉴스레터 생성)
         app = compile_workflow()
         count = 0
@@ -403,10 +449,20 @@ class Stage5_NewsletterGeneration(PipelineStage):
         )
         count = sum(1 for o in outcomes.values() if o.get("status") == "completed")
 
+        # LLM 가드가 런을 멈췄는가(지출 상한, 서킷브레이커). 멈췄어도 아래 기록은 평소대로 남긴다.
+        stop = llm_budget.run_stop()
+        stop_note = stop.as_note() if stop is not None else None
+        metrics.note("llm_spend", llm_budget.spend_snapshot())
+        if stop_note is not None:
+            metrics.note("llm_stop", stop_note)
+
         # 클러스터별 결과를 cluster_history에 남긴다(평가셋의 "어려운 사례" 추출용, ADR 0009).
         # 부가 메타데이터라 저장 실패가 이미 끝난 생성 결과를 무르게 하지 않는다.
         try:
-            update_cluster_log(run_id, {**cluster_log, "cluster_outcomes": outcomes})
+            log_update = {**cluster_log, "cluster_outcomes": outcomes}
+            if stop_note is not None:
+                log_update["llm_stop"] = stop_note
+            update_cluster_log(run_id, log_update)
         except Exception as e:  # noqa: BLE001
             logger.warning(f"cluster_outcomes 저장 실패 (무시): {e}")
 
@@ -414,6 +470,14 @@ class Stage5_NewsletterGeneration(PipelineStage):
         metrics.end_batch()
         metrics.print_summary()
         metrics.save_summary(os.path.join("logs", f"llm_metrics_run{run_id}.json"))
+
+        if stop is not None:
+            not_started = sum(1 for o in outcomes.values() if o.get("status") == "not_started")
+            logger.error(
+                f"⛔ 뉴스레터 생성 중단 ({stop.code}): {count}건 생성 후 멈춤, "
+                f"시작하지 않은 클러스터 {not_started}개 (run_id={run_id}) - {stop}"
+            )
+            raise PipelineStopped(stop.code, str(stop), newsletters_created=count, run_id=run_id, details=stop_note)
 
         logger.info(f"✨ 뉴스레터 생성 완료: {count}건 (run_id={run_id})")
         return count

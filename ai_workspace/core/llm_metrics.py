@@ -62,6 +62,12 @@ class LLMMetricsCollector:
             self.batch_start_time: Optional[float] = None
             self.batch_end_time: Optional[float] = None
             self._purpose_counts: Dict[str, int] = defaultdict(int)
+            self._notes: Dict[str, object] = {}
+
+    def note(self, key: str, value) -> None:
+        """숫자 집계에 들어가지 않는 실행 단위 기록(예: 지출 상한으로 멈춘 사유)을 요약에 싣는다."""
+        with self._lock:
+            self._notes[key] = value
     
     def start_batch(self):
         """Mark batch start time"""
@@ -102,6 +108,14 @@ class LLMMetricsCollector:
             self._purpose_counts[purpose] += 1
     
     def get_summary(self) -> Dict:
+        """집계 요약. note()로 남긴 기록이 있으면 "notes" 키로 덧붙인다(없으면 키 자체가 없다)."""
+        summary = self._aggregate()
+        with self._lock:
+            if self._notes:
+                summary["notes"] = dict(self._notes)
+        return summary
+
+    def _aggregate(self) -> Dict:
         """Get summary statistics.
 
         self.calls는 성공한 호출뿐 아니라 재시도/실패한 호출도 포함한다(record_call이

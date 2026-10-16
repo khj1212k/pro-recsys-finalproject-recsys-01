@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config.settings import Settings
 from pipeline.runner import PipelineRunner
+from pipeline.stages import PipelineStopped
 from db.schema import full_reset
 from utils.logger import setup_logger
 
@@ -103,6 +104,13 @@ def main():
     except KeyboardInterrupt:
         logger.warning("\n⚠️ Pipeline interrupted by user")
         sys.exit(130)
+    except PipelineStopped as stop:
+        # LLM 지출 상한·서킷브레이커가 멈춘 실행(docs/adr/0035). 멈추기 전 결과는 저장돼 있다.
+        logger.error(
+            f"⛔ Pipeline stopped by the LLM guard: {stop} "
+            f"(newsletters_created={stop.newsletters_created}, run_id={stop.run_id})"
+        )
+        sys.exit(stop.exit_code)
     except Exception as e:
         logger.error(f"❌ Pipeline failed: {e}", exc_info=True)
         sys.exit(1)

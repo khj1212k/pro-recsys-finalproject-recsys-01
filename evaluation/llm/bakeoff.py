@@ -10,7 +10,7 @@
   export-blind  라벨링용 블라인드 파일(불투명 id·무작위 순서)과, UI가 읽지 않는
                 blind_key.json을 따로 쓴다.
 
-인프라 실패(킬 스위치, HTTP 401/402/403/404, API 키 없음)는 결과로 기록하지 않고 실행을
+인프라 실패(킬 스위치, 지출 상한·서킷브레이커, HTTP 401/402/403/404, API 키 없음)는 결과로 기록하지 않고 실행을
 멈춘다 - 다시 실행하면 멈춘 곳부터 이어간다. 모델 품질에 속하는 실패(스키마 검증 소진,
 length, content_filter, 생성기 로컬 폴백)는 결과로 기록한다.
 
@@ -125,8 +125,14 @@ class RecordingClient(LLMClient):
         self.calls: List[CallRecord] = []
 
     def complete(self, messages, *, schema=None, purpose="unknown", temperature=0.2, max_tokens=4096):
-        r = self.inner.complete(messages, schema=schema, purpose=purpose,
-                                temperature=temperature, max_tokens=max_tokens)
+        from core.llm.budget import LLMRunStop
+
+        try:
+            r = self.inner.complete(messages, schema=schema, purpose=purpose,
+                                    temperature=temperature, max_tokens=max_tokens)
+        except LLMRunStop as stop:
+            # 지출 상한·서킷브레이커(HTTP 402 포함)가 런을 멈췄다 - 결과로 기록하지 않고 멈춘다(재개 가능).
+            raise InfraFailure(f"{self.provider}/{self.model}: {stop.code} ({stop})") from stop
         if r.error == "kill_switch":
             raise InfraFailure(f"{self.provider}/{self.model}: LLM kill switch 활성화")
         if r.http_status in INFRA_HTTP_STATUSES:

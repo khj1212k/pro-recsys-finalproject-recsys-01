@@ -182,6 +182,56 @@ Mac이 잠자기에 들어가면 VM도 멈추고, 그동안 예정된 실행은 
 docker compose run --rm worker generate   # 킬 스위치가 켜져 있으면 status=skipped
 ```
 
+### LLM 지출 상한 (ADR 0035)
+
+킬 스위치를 켜는 주체가 하나 더 있다. LLM 클라이언트는 요청마다 최악 비용을 지출 원장에 예약하고, 런·일·전체 상한 중
+하나를 넘으면 요청을 보내지 않고 멈춘다. 일·전체 상한이면 킬 스위치 파일도 만든다(파일 내용이
+`{"engaged_by": "llm_spend_cap", ...}`이면 이 가드가 켠 것이다).
+
+- 원장은 `<OPS_DIR>/llm_spend_ledger.jsonl`이다(compose가 `LLM_SPEND_LEDGER_FILE=/ops/llm_spend_ledger.jsonl`로 준다).
+  호스트에서 직접 돌리는 실행의 기본 원장도 메인 체크아웃의 `.ops/llm_spend_ledger.jsonl`이라 같은 파일을 쓴다.
+  `LLM_SPEND_LEDGER_FILE`을 직접 지정한다면 절대 경로여야 한다(상대 경로는 거부한다).
+- **원장은 자동으로 생기지 않는다.** `spend_cli init`으로 한 번 만든다. 원장이 없으면 모든 LLM 호출이 거부되고
+  `generate`는 클러스터링 전에 `failed`(종료 코드 3, `stats.reason=llm_budget_unavailable`)로 끝난다. 지워진 원장이
+  0부터 다시 세지 않게 하려는 것이다.
+- 원장의 **누계 기록**(원장 id·크기·정산 누계·열린 예약)은 원장과 다른 곳에 있다. 호스트는
+  `~/.local/state/newsletter-recsys/llm-spend/`(`LLM_SPEND_STATE_DIR`로 바꾼다), 컨테이너는 이름 있는 볼륨
+  `llm_spend_state`(`/spend-state`). 원장이 그 기록과 어긋나면(다른 파일, 줄어듦, 누계가 작음) 호출이 거부된다.
+- `/ops`는 기본이 읽기 전용이다. 그 상태에서는 원장을 쓸 수 없어 **컨테이너 안의 LLM 호출이 전부 거부된다**.
+  generate를 켤 때 `.env`에 `OPS_MOUNT_MODE=rw`를 넣는다 - 그러면 컨테이너가 `.ops/`의 다른 파일도 고칠 수 있게 된다.
+- 호스트와 컨테이너는 누계 기록이 따로다. 호스트에서 만든 원장을 컨테이너가 처음 쓸 때는 컨테이너 안에서
+  `adopt --yes`를 한 번 해야 한다(이어받을 금액 0, 지금 원장을 기준으로 삼는다). 호스트 사용자가 0600으로 만든 원장을
+  컨테이너 사용자(uid 10001)가 열 수 있는지는 호스트에 따라 다르다 - **컨테이너에서 실제로 돌려 본 적은 없다.**
+- Mac(colima)에서 호스트와 컨테이너가 같은 원장을 **동시에** 쓰지 않는다. 바인드 마운트를 건너는 파일 잠금은
+  보장되지 않는다(Linux 호스트는 같은 커널이라 문제없다).
+
+```bash
+# 호스트에서(ai_workspace/에서 실행). 컨테이너에서는 앞에 `docker compose run --rm --entrypoint python worker`를 붙인다
+python -m core.llm.spend_cli init --note "첫 유료 실험"                    # 처음 한 번
+python -m core.llm.spend_cli summary                                        # 오늘·전체 사용액, 상한, 원장 무결성
+python -m core.llm.spend_cli estimate --plan generator:15:17000:8192        # 0원. 계획한 호출의 최악 비용
+# 일 상한에 닿아 멈춘 뒤, 콘솔 청구액을 확인하고 그날 창만 비울 때(전체 누계는 그대로):
+python -m core.llm.spend_cli reset-day --yes --clear-kill-switch --note "사유"
+```
+
+**"LLM 지출을 확인할 수 없어 호출을 거부합니다"가 뜰 때.** 메시지에 사유와 다음 명령이 들어 있다. `summary`의
+"무결성" 줄도 같은 내용을 보여 준다. 전부 `--yes` 없이 실행하면 무엇을 할지만 보여 준다.
+
+| 사유 | 무슨 일이 있었나 | 조치 |
+|---|---|---|
+| `missing` | 원장 파일이 없다(처음이거나 `.ops/`가 지워졌다. `git clean -fdx`는 gitignore된 `.ops/`도 지운다) | `init`. 전에 쓰던 원장이었다면 이어서 `adopt --yes` |
+| `uninitialized` | 파일은 있는데 첫 줄이 init 헤더가 아니다(0바이트로 잘림, 다른 파일) | 파일을 다른 이름으로 옮기고 `init` → `adopt --yes` |
+| `corrupt` | 해석할 수 없는 줄이 있다(끝의 끊긴 한 줄은 저절로 처리된다) | 줄을 확인하고 `repair --yes`. 누계가 내려갔다고 나오면 `adopt --yes` |
+| `replaced` · `shrunk` · `behind` | 원장이 다른 파일로 바뀌었거나, 줄었거나, 정산 누계가 누계 기록보다 작다 | `adopt --yes` - 누계 기록의 사용액(정산 + 그때 열려 있던 예약)을 지금 원장에 이어받는다 |
+| `no_watermark` · `bad_watermark` | 누계 기록이 없거나 읽을 수 없다(상태 디렉터리를 지웠다, 다른 기기·컨테이너에서 처음 쓴다) | `adopt --yes` - 이어받을 금액은 알 수 없어 0이다. 실제로 더 썼다면 `LLM_BUDGET_TOTAL_USD`를 그만큼 낮춘다 |
+
+`adopt`는 누계를 올리기만 한다. 원장과 누계 기록을 **둘 다** 지우면 상한이 처음부터 다시 시작한다 - 그 경우의 방어는
+AI Studio의 프로젝트 지출 상한과 선불 잔액뿐이다.
+
+상한에 닿은 `generate`는 그때까지 만든 뉴스레터를 남기고 `failed`(종료 코드 3)로 끝나며, `job_runs.stats`의
+`reason`·`llm_stop`·`llm_spend`에 사유와 사용액이 남는다. 상한 값은 `ai_workspace/.env.example`의
+`LLM_BUDGET_*_USD`를 본다(기본 런 $0.20 / 일 $0.30 / 전체 $3.00).
+
 ## 7. 비밀번호를 잃어버렸을 때
 
 컨테이너 안 로컬 소켓 접속은 비밀번호가 필요 없다.
@@ -204,7 +254,11 @@ docker compose exec -T db pg_dump -U newsletter -d newsletter -Fc > backup_$(dat
 
 1. `docker/crontab`에서 해당 줄의 주석을 푼다.
 2. `.env`에 `AI_ENV_FILE=<LLM 키가 든 파일 경로>`를 넣는다(키는 generate에만 필요).
-3. `GIT_SHA=$(git rev-parse HEAD) docker compose up -d --build scheduler`
+3. `.env`에 `OPS_MOUNT_MODE=rw`를 넣는다 - LLM 지출 원장을 쓸 수 있어야 호출이 허용된다(6절 "LLM 지출 상한").
+   원장이 아직 없으면 `docker compose run --rm --entrypoint python worker -m core.llm.spend_cli init`으로 만들고,
+   호스트에서 이미 만든 원장이면 같은 방식으로 `adopt --yes`를 한 번 한다(컨테이너의 누계 기록이 따로라서).
+   상한(`LLM_BUDGET_RUN_USD`·`LLM_BUDGET_DAY_USD`·`LLM_BUDGET_TOTAL_USD`)을 기본값과 다르게 쓰려면 `AI_ENV_FILE`에 넣는다.
+4. `GIT_SHA=$(git rev-parse HEAD) docker compose up -d --build scheduler`
 
 ## 9-1. 랭커 모델과 장기 프로필 상태 (ADR 0033)
 

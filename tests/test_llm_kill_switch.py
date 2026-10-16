@@ -148,10 +148,46 @@ def test_check_kill_switch_logs_one_error_line(monkeypatch, caplog):
 
 def test_default_kill_switch_file_path_is_relative_to_repo_root_not_cwd():
     """기본값은 config/settings.py의 위치를 기준으로 계산되어야 하고, pytest를
-    어느 디렉터리에서 실행하든(CWD와 무관하게) 항상 이 저장소를 가리켜야 한다."""
+    어느 디렉터리에서 실행하든(CWD와 무관하게) 항상 이 저장소를 가리켜야 한다.
+    git 워크트리에서 실행하면 메인 체크아웃의 .ops/다(지출 원장과 같은 디렉터리, ADR 0005 부록)."""
     import config.settings as settings_module
 
     repo_root = Path(__file__).resolve().parents[1]  # tests/ -> 저장소 루트
-    expected = str(repo_root / ".ops" / "LLM_KILL_SWITCH")
+    expected = str(settings_module.shared_ops_root(repo_root) / ".ops" / "LLM_KILL_SWITCH")
 
+    assert settings_module.resolve_kill_switch_file(None, repo_root) == expected
     assert settings_module.BaseSettings.LLM_KILL_SWITCH_FILE == expected
+    assert Path(expected).parent == Path(settings_module.BaseSettings.LLM_SPEND_LEDGER_FILE_DEFAULT).parent
+
+
+def _fake_worktree(tmp_path):
+    main = tmp_path / "repo"
+    worktree = tmp_path / "worktrees" / "exp"
+    admin = main / ".git" / "worktrees" / "exp"
+    admin.mkdir(parents=True)
+    worktree.mkdir(parents=True)
+    (admin / "commondir").write_text("../..\n")
+    (worktree / ".git").write_text(f"gitdir: {admin}\n")
+    return main.resolve(), worktree
+
+
+def test_kill_switch_default_in_a_worktree_is_the_main_checkout_file(tmp_path):
+    """저장소 밖 감시가 메인 체크아웃의 .ops/에 켠 킬 스위치를 워크트리에서 돌리는 실험도 본다."""
+    from config.settings import resolve_kill_switch_file
+
+    main, worktree = _fake_worktree(tmp_path)
+
+    assert resolve_kill_switch_file(None, worktree) == str(main / ".ops" / "LLM_KILL_SWITCH")
+    assert resolve_kill_switch_file(None, main) == str(main / ".ops" / "LLM_KILL_SWITCH")
+
+
+def test_relative_kill_switch_path_is_anchored_to_the_main_checkout_not_the_cwd(tmp_path, monkeypatch):
+    """.env의 `LLM_KILL_SWITCH_FILE=.ops/LLM_KILL_SWITCH`가 실행한 디렉터리마다 다른 파일이 되지 않는다."""
+    from config.settings import resolve_kill_switch_file
+
+    main, worktree = _fake_worktree(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    assert resolve_kill_switch_file(".ops/LLM_KILL_SWITCH", worktree) == str(main / ".ops" / "LLM_KILL_SWITCH")
+    assert resolve_kill_switch_file("/ops/LLM_KILL_SWITCH", worktree) == "/ops/LLM_KILL_SWITCH"  # 절대 경로는 그대로
+    assert resolve_kill_switch_file("", worktree) == ""  # 빈 값: 파일을 보지 않는 기존 동작
