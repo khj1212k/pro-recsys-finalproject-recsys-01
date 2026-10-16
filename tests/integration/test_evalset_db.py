@@ -106,3 +106,54 @@ def test_load_candidates_from_db_reads_cluster_log_and_newsletter_categories(con
                 cur.execute("DELETE FROM category WHERE category_id = %s", (ids["category"],))
             if "press" in ids:
                 cur.execute("DELETE FROM press WHERE press_id = %s", (ids["press"],))
+
+
+def test_db_loader_leaves_out_clusters_whose_bodies_were_purged(conn):
+    """보존 기한(ADR 0023)이 지나 본문을 비운 기사(NULL, 비운 시각·길이 있음)가 든 클러스터는 후보에서 빠지고 수가
+    보고된다. 비운 본문을 빈 문자열로 바꿔 생성·판정 입력에 넣지 않는다."""
+    from evaluation.llm.evalset import load_candidates_from_db
+
+    suffix = uuid.uuid4().hex[:10]
+    run_id = int(uuid.uuid4().int % 900_000_000) + 100_000_000
+    ids = {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO press (press_name) VALUES (%s) RETURNING press_id", (f"보존일보-{suffix}",))
+            press_id = cur.fetchone()[0]
+            ids["press"] = press_id
+            article_ids = []
+            for k in range(6):
+                purged = k == 4
+                cur.execute(
+                    "INSERT INTO news_raw (press_id, raw_news_title, raw_news_content, raw_news_url, "
+                    "raw_news_crawled_at, raw_news_extract_status, raw_news_content_length, raw_news_content_purged_at) "
+                    "VALUES (%s, %s, %s, %s, (now() AT TIME ZONE 'UTC') - interval '31 days', 'ok', %s, %s) "
+                    "RETURNING raw_news_id",
+                    (press_id, f"제목{k}", None if purged else f"합성 본문{k}", f"https://news.example/{suffix}/{k}",
+                     12 if purged else len(f"합성 본문{k}"), "2026-10-26T17:50:00+00:00" if purged else None),
+                )
+                article_ids.append(cur.fetchone()[0])
+            ids["articles"] = article_ids
+            log = {"0": article_ids[:3], "1": article_ids[3:6]}
+            cur.execute(
+                "INSERT INTO cluster_history (run_id, cluster_log, created_at) VALUES (%s, %s, NOW()) "
+                "RETURNING history_id",
+                (run_id, json.dumps(log)),
+            )
+            ids["history"] = cur.fetchone()[0]
+
+        report = {}
+        candidates, articles = load_candidates_from_db(conn, report=report)
+
+        mine = {c.cluster_id for c in candidates if c.run_id == run_id}
+        assert mine == {0}
+        assert article_ids[4] not in articles
+        assert report["articles_body_purged"] >= 1 and report["clusters_without_body"] >= 1
+    finally:
+        with conn.cursor() as cur:
+            if "history" in ids:
+                cur.execute("DELETE FROM cluster_history WHERE history_id = %s", (ids["history"],))
+            if "articles" in ids:
+                cur.execute("DELETE FROM news_raw WHERE raw_news_id = ANY(%s)", (ids["articles"],))
+            if "press" in ids:
+                cur.execute("DELETE FROM press WHERE press_id = %s", (ids["press"],))

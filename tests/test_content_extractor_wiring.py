@@ -62,7 +62,7 @@ def test_process_single_article_drops_low_quality_content():
     # 다음 실행에서 같은 기사를 다시 내려받지 않는다.
     executed_sql, executed_params = cur.execute.call_args[0]
     assert "raw_news_extract_status" in executed_sql
-    assert executed_params == ("", "dropped", None, 1)
+    assert executed_params == ("", "dropped", None, 0, 1)
 
 
 def _run_single(fetch_return=None, extract_return=None, fetch_exc=None):
@@ -89,9 +89,11 @@ def test_process_single_article_records_ok_status_with_cleaned_content():
     assert result.status == "ok"
     assert result.press_name == "동아일보"
     _, params = cur.execute.call_args[0]
-    content, status, digest, raw_news_id = params
+    content, status, digest, length, raw_news_id = params
     assert status == "ok" and raw_news_id == 7
     assert len(content) > 350
+    # 본문 길이(글자 수)를 함께 쓴다 - 보존 기한이 지나 본문을 비워도 남는다(ADR 0023)
+    assert length == len(content)
     # 정제된 본문의 sha256 - URL만 다른 같은 기사를 DB의 부분 unique 인덱스로 걸러낸다
     assert digest == hashlib.sha256(content.encode("utf-8")).hexdigest()
     conn.commit.assert_called_once()
@@ -116,7 +118,7 @@ def test_process_single_article_marks_duplicate_when_same_body_already_saved():
     assert result.status == "duplicate"
     (_, first), (_, second) = [c[0] for c in cur.execute.call_args_list]
     assert first[1] == "ok"
-    assert second == ("", "duplicate", first[2], 8)
+    assert second == ("", "duplicate", first[2], 0, 8)
     conn.rollback.assert_called_once()
     conn.commit.assert_called_once()
 
@@ -126,7 +128,7 @@ def test_process_single_article_marks_fetch_failure_for_bounded_retry():
 
     assert result.status == "fetch_failed"
     _, params = cur.execute.call_args[0]
-    assert params == ("", "fetch_failed", None, 7)
+    assert params == ("", "fetch_failed", None, 0, 7)
 
 
 def test_process_single_article_marks_empty_when_nothing_extracted():
@@ -134,7 +136,7 @@ def test_process_single_article_marks_empty_when_nothing_extracted():
 
     assert result.status == "empty"
     _, params = cur.execute.call_args[0]
-    assert params == ("", "empty", None, 7)
+    assert params == ("", "empty", None, 0, 7)
 
 
 def test_process_single_article_records_error_so_retries_are_bounded():
@@ -147,7 +149,7 @@ def test_process_single_article_records_error_so_retries_are_bounded():
     conn.rollback.assert_called_once()
     sql, params = cur.execute.call_args[0]
     assert "raw_news_extract_attempts + 1" in sql
-    assert params == ("", "error", None, 7)
+    assert params == ("", "error", None, 0, 7)
     conn.commit.assert_called_once()
 
 
@@ -212,8 +214,12 @@ def test_extract_parallel_uses_spawn_pool_selects_pending_and_aggregates_stats()
     get_ctx.assert_called_once_with("spawn")
     select_sql, select_params = cur.execute.call_args[0]
     assert "raw_news_extract_status IS NULL" in select_sql
-    assert "fetch_failed" in select_sql and "'error'" in select_sql
-    assert select_params == (3,)
+    assert "N.raw_news_extract_status = ANY(%s)" in select_sql
+    # 본문 보존 기한(ADR 0023)이 지난 기사와 본문을 비운 기사는 내려받지 않는다
+    # - (재시도할 상태, 재시도 상한, 보존 일 수 = ADR 상수 30)
+    assert "raw_news_content_purged_at IS NULL" in select_sql
+    assert "raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - make_interval(days => %s)" in select_sql
+    assert select_params == (["fetch_failed", "error"], 3, 30)
 
     assert stats["targets"] == 4
     assert (stats["ok"], stats["dropped"], stats["fetch_failed"], stats["empty"], stats["error"]) == (1, 2, 1, 0, 0)

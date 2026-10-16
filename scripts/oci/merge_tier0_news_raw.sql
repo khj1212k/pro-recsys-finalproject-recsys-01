@@ -6,15 +6,19 @@
 --   * 새 URL인데 정제 본문 해시가 대상의 'ok' 행과 같으면 'duplicate'로 넣고 본문을 비운다
 --     (부분 UNIQUE uq_news_raw_content_sha256_ok, Alembic d48994e9d26e와 같은 규칙).
 --   * 병합된 행의 embedding_result는 NULL이다 - 대상 호스트의 embed 잡이 채운다.
+--   * 보존 기한(ADR 0023)이 지나 원본에서 본문을 비운 행(본문 NULL, raw_news_content_purged_at 있음)은 본문 없이
+--     비운 시각·길이·해시와 함께 들어간다 - 본문이 되살아나지 않는다. 원본에서 아직 비우지 않은 만료 본문은
+--     대상의 retention 잡이 비운다(런북 6.4의 6단계에서 바로 돌린다).
 --   * 기대 행 수(병합 전 + 대상에 없는 URL 수)와 결과가 다르거나 매핑되지 않는 언론사가 있으면 전체를 되돌린다.
 --   * 대상 press 테이블에 같은 이름이 둘 이상이면(press_name에는 UNIQUE가 없다) 중단한다 - 이름 JOIN이 URL마다
 --     후보를 두 개 만들고 ON CONFLICT DO NOTHING이 그중 하나를 조용히 고르면, 행 수 검증은 통과하는데
 --     press_id가 임의로 정해지기 때문이다.
 --
--- 입력: Tier 0에서 뽑은 CSV (열 순서 고정, 헤더 포함)
+-- 입력: Tier 0에서 뽑은 CSV (열 순서 고정, 헤더 포함). 원본과 대상 모두 Alembic f1db3221e45f 이상이어야 한다.
 --   psql -d newsletter -c "COPY (SELECT p.press_name, n.raw_news_title, n.raw_news_content, n.raw_news_url,
 --       n.raw_news_created_at, n.raw_news_crawled_at, n.raw_news_extract_status, n.raw_news_extracted_at,
---       n.raw_news_extract_attempts, n.raw_news_content_sha256
+--       n.raw_news_extract_attempts, n.raw_news_content_sha256, n.raw_news_content_length,
+--       n.raw_news_content_purged_at, n.raw_news_kogl_type
 --     FROM news_raw n JOIN press p USING (press_id) ORDER BY n.raw_news_id) TO STDOUT WITH (FORMAT csv, HEADER)"
 --
 -- 실행: 대상 DB에서, 스케줄러를 멈춘 상태로(동시 쓰기 없음). CSV는 psql의 표준 입력으로 준다.
@@ -24,14 +28,17 @@
 CREATE TEMP TABLE tier0_news_raw (
     press_name                text        NOT NULL,
     raw_news_title            text        NOT NULL,
-    raw_news_content          text        NOT NULL,
+    raw_news_content          text,
     raw_news_url              text        NOT NULL,
     raw_news_created_at       timestamptz,
     raw_news_crawled_at       timestamp   NOT NULL,
     raw_news_extract_status   varchar(16),
     raw_news_extracted_at     timestamptz,
     raw_news_extract_attempts smallint    NOT NULL,
-    raw_news_content_sha256   varchar(64)
+    raw_news_content_sha256   varchar(64),
+    raw_news_content_length   integer,
+    raw_news_content_purged_at timestamptz,
+    raw_news_kogl_type        smallint
 ) ON COMMIT DROP;
 
 \copy tier0_news_raw FROM pstdin WITH (FORMAT csv, HEADER)
@@ -66,19 +73,24 @@ END $$;
 WITH ins AS (
     INSERT INTO news_raw (
         press_id, raw_news_title, raw_news_content, raw_news_url, raw_news_created_at, raw_news_crawled_at,
-        raw_news_extract_status, raw_news_extracted_at, raw_news_extract_attempts, raw_news_content_sha256
+        raw_news_extract_status, raw_news_extracted_at, raw_news_extract_attempts, raw_news_content_sha256,
+        raw_news_content_length, raw_news_content_purged_at, raw_news_kogl_type
     )
     SELECT
         p.press_id,
         t.raw_news_title,
-        CASE WHEN dup.hit THEN '' ELSE t.raw_news_content END,
+        -- 비운 본문(NULL)은 NULL 그대로: 'duplicate'로 들어가도 본문 칸을 ''로 바꾸지 않는다(비운 행의 CHECK).
+        CASE WHEN dup.hit AND t.raw_news_content IS NOT NULL THEN '' ELSE t.raw_news_content END,
         t.raw_news_url,
         t.raw_news_created_at,
         t.raw_news_crawled_at,
         CASE WHEN dup.hit THEN 'duplicate' ELSE t.raw_news_extract_status END,
         t.raw_news_extracted_at,
         t.raw_news_extract_attempts,
-        t.raw_news_content_sha256
+        t.raw_news_content_sha256,
+        CASE WHEN dup.hit AND t.raw_news_content IS NOT NULL THEN 0 ELSE t.raw_news_content_length END,
+        t.raw_news_content_purged_at,
+        t.raw_news_kogl_type
     FROM tier0_news_raw t
     JOIN press p ON p.press_name = t.press_name
     CROSS JOIN LATERAL (

@@ -36,7 +36,7 @@ def _make_cursor(rows):
     cursor.__exit__ = MagicMock(return_value=False)
     # 첫 execute -> rows(SELECT), 두번째 execute -> COUNT(*) 조회에 대한 fetchone
     cursor.fetchall.return_value = rows
-    cursor.fetchone.return_value = (0, 0)
+    cursor.fetchone.return_value = (0, 0, 0)
     return cursor
 
 
@@ -161,8 +161,8 @@ def test_embed_pending_articles_reports_throughput_stats_and_binds_numpy_vectors
 
     rows = [(1, "제목1", "본문1"), (2, "제목2", "본문2"), (3, "제목3", "본문3")]
     cursor = _make_cursor(rows=rows)
-    # (본문 추출 대기, 추출했지만 본문 없음(dropped/empty/재시도 소진)) 건수
-    cursor.fetchone.return_value = (4, 26)
+    # (본문 추출 대기, 추출했지만 본문 없음(dropped/empty/재시도 소진), 보존 기한으로 비운 본문) 건수
+    cursor.fetchone.return_value = (4, 26, 3)
     conn = MagicMock()
     conn.cursor.return_value = cursor
 
@@ -178,6 +178,8 @@ def test_embed_pending_articles_reports_throughput_stats_and_binds_numpy_vectors
     assert stats["failed_batches"] == 0
     assert stats["awaiting_extraction"] == 4
     assert stats["no_content"] == 26
+    # 보존 기한이 지나 본문을 비운 'ok' 행(임베딩 전에 비워짐)은 따로 센다 - 대상이 아니다
+    assert stats["body_purged"] == 3
     assert stats["device"] == "cpu"
     assert stats["batch_size"] == 2
     assert stats["encode_s"] == 0.75

@@ -116,6 +116,7 @@ def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=Non
     stats = stats if stats is not None else {}
     stats.update({
         "targets": 0, "embedded": 0, "failed_batches": 0, "awaiting_extraction": 0, "no_content": 0,
+        "body_purged": 0,
         "batch_size": batch_size, "device": None, "model_load_s": 0.0, "encode_s": 0.0,
         "articles_per_s": None, "stopped_by_budget": False, "remaining": 0,
     })
@@ -139,6 +140,8 @@ def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=Non
 
             # 본문이 없어 임베딩하지 않는 기사: 아직 추출 전(다음 실행에서 채워질 수 있음)과
             # 추출했지만 본문이 없는 것(dropped/empty/duplicate/재시도 소진 - 영구 제외)을 나눠 센다.
+            # 'ok'인데 본문이 NULL인 행은 보존 기한(ADR 0023)이 지나 본문을 비운 기사다 - 임베딩되기 전에
+            # 비워졌으면 영영 임베딩할 수 없다(다시 내려받지 않는다). 따로 센다.
             cur.execute("""
                 SELECT
                     COUNT(*) FILTER (
@@ -148,12 +151,14 @@ def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=Non
                     COUNT(*) FILTER (
                         WHERE raw_news_extract_status IN ('dropped', 'empty', 'duplicate')
                            OR (raw_news_extract_status IN ('fetch_failed', 'error')
-                               AND raw_news_extract_attempts >= %s))
+                               AND raw_news_extract_attempts >= %s)),
+                    COUNT(*) FILTER (
+                        WHERE raw_news_extract_status = 'ok' AND raw_news_content IS NULL)
                 FROM news_raw
                 WHERE embedding_result IS NULL
                   AND (raw_news_content IS NULL OR raw_news_content = '')
             """, (settings.MAX_EXTRACT_ATTEMPTS, settings.MAX_EXTRACT_ATTEMPTS))
-            stats["awaiting_extraction"], stats["no_content"] = cur.fetchone()
+            stats["awaiting_extraction"], stats["no_content"], stats["body_purged"] = cur.fetchone()
             if stats["awaiting_extraction"]:
                 logger.info(
                     f"⏭️  본문 추출 전이라 임베딩 보류: {stats['awaiting_extraction']}건 "

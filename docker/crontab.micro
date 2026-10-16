@@ -11,3 +11,11 @@
 
 # 일일 리포트, 매일 00:10 UTC = 09:10 KST
 10 0 * * * python -m jobs.run daily_report
+
+# 본문 보존(ADR 0023): 수집 후 30일이 지난 상업 언론사 본문을 비운다(해시·길이·제목·URL은 남김).
+# 매일 17:50 UTC = 02:50 KST - 수집량이 가장 적은 새벽, ingest(:05)·popularity(:35)의 시작과 겹치지 않고
+# unattended-upgrades 재부팅 창(18:40 UTC)보다 앞이다. 실행은 겹칠 수 있다(ingest p50 27분, p95 약 2시간 - 17:05
+# 회차가 자주 17:50을 넘긴다). 겹쳐도 두 잡은 서로 다른 행만 쓴다(retention은 추출이 끝난 만료 행만, 추출기는 추출
+# 대기 행만). retention 프로세스는 추출기 의존성(trafilatura·lxml)을 올리지 않아 scheduler 한도(512 MiB) 안에서
+# ingest에 더해지는 몫이 작다. 끄려면 .env에 SCHEDULER_JOBS_DISABLED=retention.
+50 17 * * * python -m jobs.run retention

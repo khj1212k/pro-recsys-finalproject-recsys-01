@@ -21,6 +21,13 @@
 # 일일 리포트, 매일 00:10 UTC = 09:10 KST
 10 0 * * * python -m jobs.run daily_report
 
+# 본문 보존(ADR 0023): 수집 후 30일이 지난 상업 언론사 본문을 비운다(해시·길이·제목·URL·임베딩은 남김).
+# 매일 17:50 UTC = 02:50 KST(수집량이 가장 적은 새벽). 시작 시각은 ingest(:05)·embed(:20)·popularity(:35)와
+# 겹치지 않지만, 실행은 겹칠 수 있다 - 17:05 ingest는 길면 2시간 넘게, 17:20 embed는 40분 예산이라 18:00까지 돈다.
+# 겹쳐도 두 잡은 서로 다른 행·열만 쓴다: retention은 추출이 끝난 만료 행의 본문 열만(다른 트랜잭션이 잡은 행은
+# 기다리지 않고 건너뛴다), 추출기는 추출 대기 행만, embed는 임베딩 열만 쓴다.
+50 17 * * * python -m jobs.run retention
+
 # --- 아직 켜지 않음 ---
 # generate는 LLM 평가 프로토콜·사실성 게이트가 결정된 뒤에 켠다.
 # 켤 때는 docker/crontab을 고치고 scheduler 이미지를 다시 빌드한다(docs/runbook.md).

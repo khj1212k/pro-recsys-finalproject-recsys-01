@@ -1,7 +1,7 @@
 # ADR 0023: 수집 출처와 라이선스, 저장·노출·공개 범위, 본문 보존 기한
 
 ## 상태
-채택됨 (2026-09-26). 출처 표·정책브리핑 수집기·노출 규칙은 이 ADR과 함께 들어갔다. 30일 본문 보존 잡은 설계만 확정했고 구현은 아직이다. 선행 조건이던 수집 스키마(본문 추출 상태·본문 해시 컬럼, ADR 0006)는 2026-09-26 `main`에 병합됐다(PR #8). 설계와 남은 일은 "결과와 한계"의 TODO 절에 있다.
+채택됨 (2026-09-26). 출처 표·정책브리핑 수집기·노출 규칙은 이 ADR과 함께 들어갔다. 30일 본문 보존 잡(`python -m jobs.run retention`)은 2026-10-17에 구현했다 - 맨 아래 "개정 (2026-10-17)". Tier 0 VM에는 아직 배포하지 않았다(병합 뒤 별도 단계, 첫 만료는 2026-10-26 02:36 UTC). 처음의 설계는 "결과와 한계"의 "본문 보존 잡 설계" 절에 그대로 둔다.
 
 추천 평가·요청 시점 추천·시뮬레이터 브랜치 위에 다시 쌓으면서(2026-10-06) 결정은 바꾸지 않았다. 그때 달라진 Alembic head, 옮기지 않은 커밋, 테스트 수는 맨 아래 "통합 기록"에 있다.
 
@@ -138,7 +138,7 @@
   - 두 곳 모두 이 출처가 실패해도 RSS 결과는 버리지 않는다. 에러는 stats(`policy_briefing`)에 남기고, ingest 잡은 경고를 하나 남긴다.
 
 ### 30일 본문 보존
-상업 언론사 본문은 `raw_news_crawled_at` 기준 30일이 지나면 비운다. 정책브리핑(재배포 가능 출처)은 대상이 아니다. 구현은 아래 TODO 설계대로 한다.
+상업 언론사 본문은 `raw_news_crawled_at` 기준 30일이 지나면 비운다. 정책브리핑(재배포 가능 출처)은 대상이 아니다. 구현은 아래 설계를 따르고, 설계와 달라진 점은 "개정 (2026-10-17)"에 있다.
 
 ## 증거
 - 공식 페이지 확인(모두 접근일 2026-09-26): 위 컨텍스트의 korea.kr 공지·저작권정책, data.go.kr 데이터셋 페이지(swagger 명세 포함), 공공누리 제1유형 안내.
@@ -180,7 +180,7 @@
   - 백업을 만들면 백업도 30일 보존을 따라야 한다. 지금은 DB 백업 절차가 없다.
   - 외부 LLM 프로바이더가 입력을 어떻게 쓰는지(보관·학습 여부)는 이 ADR에서 확인하지 않았다.
 
-### TODO: 본문 보존 잡 (구현 대기)
+### 본문 보존 잡 설계 (2026-09-26 TODO, 2026-10-17 구현 - "개정 (2026-10-17)")
 **처음 작성할 때 넣지 않은 이유** (2026-09-26, 이 ADR의 기준이 `9aa235e`였을 때)
 - 그때 `main`의 `news_raw`에는 본문 추출 상태·본문 해시 컬럼이 없었다. 두 컬럼은 수집 런타임 PR(#8)의 마이그레이션 `f87f7378672e`, `d48994e9d26e`가 추가한다.
 - 그때 `main`의 본문 추출기는 `raw_news_content IS NULL OR = ''`인 행을 다시 내려받았다. 본문을 비우면 30일 지난 기사를 매번 다시 받는 루프가 생긴다.
@@ -304,3 +304,106 @@
 - `tests/evaluation/test_e0_store.py`: 창 안에 본문이 지워졌거나 소스를 연 뒤 만료된 기사가 있으면 로더가 멈춤, 저장 대역이 메인 체크아웃 `data/experiments/<실험>/<run>` 밖이나 git이 추적할 수 있는 디렉터리를 만들지 않음.
 - `tests/integration/test_frozen_export_db.py`(CI의 PostgreSQL): 반출 요약에 기사 텍스트 없음, 재배포 가능 출처의 만료 면제, 서버 스냅숏 시각 기준으로 이미 만료된 행의 반출 거절.
 - 실제 반출본으로 확인한 것은 없다(반출 전이다).
+
+## 개정 (2026-10-17) — 본문 보존 잡 구현 (결정은 그대로)
+
+**효력.** main에 병합된 때부터다. 30일, 대상(상업 언론사), 면제(재배포 가능 출처), "본문만 비우고 해시·길이·제목·URL·임베딩은 남긴다"는 위 결정 그대로다. 이 개정은 구현과, 처음 설계(위 "본문 보존 잡 설계")에서 달라진 점과 그 이유를 적는다. Tier 0 VM에는 아직 배포하지 않았다 - 배포·확인·되돌리기는 [런북](../runbook-hosting.md) 4.1이다. **VM의 첫 만료는 2026-10-26 02:36 UTC(11:36 KST)다.** 그 전에 배포하지 않으면 VM의 DB가 이 ADR을 어긴다.
+
+### 들어간 것
+| 무엇 | 어디 |
+|---|---|
+| 마이그레이션 `f1db3221e45f`(`down_revision` = `a6f1e83b0d57`, 단일 head): 본문 NULL 허용, `raw_news_content_length`(글자 수), `raw_news_content_purged_at`, `raw_news_kogl_type`(1~4), CHECK `ck_news_raw_purged_body_gone`(비운 행은 본문 NULL·길이 있음)과 `ck_news_raw_kogl_type`, 기존 행 길이 배치 채움 | `backend/alembic/versions/f1db3221e45f_news_raw_body_retention.py`, `backend/app/models/news.py` |
+| 잡 `python -m jobs.run retention [--days N] [--dry-run] [--batch-size N] [--statement-timeout-s N]` | `jobs/tasks/retention.py`, 상수·출처 해석은 `ai_workspace/config/retention.py`(기한 상수 `BODY_RETENTION_DAYS` = 30, 추출기와 함께 쓰는 "추출 대기" 상태). 설정 `Settings.BODY_RETENTION_DAYS`는 30만 받는다(아래 "기한 가드") |
+| 스케줄: 매일 17:50 UTC(02:50 KST) | `docker/crontab.micro`(Tier 0), `docker/crontab`(전체 스택). Tier 0는 `.env`의 `SCHEDULER_JOBS_DISABLED=retention`으로 다시 빌드하지 않고 끌 수 있다(`docker/compose.micro.yaml`) |
+| 본문을 쓰는 곳: 추출기와 정책브리핑 수집기가 본문 길이를(정책브리핑은 공공누리 유형도) 함께 쓴다. 추출기는 비운 행과 보존 기한이 지난 행을 대상으로 고르지 않는다 | `crawler/content_extractor/extractor.py`, `crawler/policy_briefing.py` |
+| 본문을 읽는 곳 | 아래 "하류" 표 |
+| 일일 리포트: 기한 지난 본문 수, 26시간 넘게 밀린 본문 수(0이 아니면 경고·알림), 비운 수, 가장 오래된 본문 | `jobs/tasks/daily_report.py` |
+
+### 잡이 하는 일
+1. 실행을 시작할 때 DB에서 기준 시각을 한 번 만든다: `cutoff = (now() AT TIME ZONE 'UTC') - days`. 그 실행 동안 고정한다.
+2. **만료**: `raw_news_crawled_at <= cutoff`, 곧 `crawled_at + days <= 지금`. LLM 실험의 동결 반출 도구(ADR 0036, 브랜치 `feat/llm-v2-experiment-data-path` - 아직 main에 없다)와 같은 정의다(만료 시각과 같은 순간부터 만료, 행마다 수집 시각 + 30일).
+3. **대상**: 만료됐고 본문 칸이 NULL이 아니며, 면제가 아니고, "본문이 있거나 추출이 끝난" 행. 면제 = 언론사가 `config/sources.py`에서 재배포 가능(지금은 정책브리핑)이고 `raw_news_kogl_type`이 1이거나 NULL. 표에 없는 언론사는 대상이다(fail closed).
+4. 대상 행을 id 순서로 `--batch-size`(기본 1,000, 최대 5,000)개씩 `FOR UPDATE SKIP LOCKED`로 골라 한 문장으로 바꾸고 배치마다 커밋한다: 본문 NULL, 길이 = `char_length`(바꾸기 직전 본문), 비운 시각 = `now()`, 해시가 없으면 같은 식(`encode(sha256(convert_to(본문,'UTF8')),'hex')`)으로 채운다. 트랜잭션마다 `statement_timeout`(기본 60초)과 `lock_timeout` 5초.
+5. 끝난 뒤 "면제가 아닌 행 중 기한이 지났는데 본문이 남은 행"을 다시 센다. 0이 아니면(다른 트랜잭션이 잡고 있던 행 등) 경고를 남기고(알림), 다음 실행이 비운다.
+6. `job_runs.stats`: `scanned`(기한 지났고 본문 칸이 비지 않은 행), `purgeable`·`purgeable_bodies`·`purgeable_bytes`, `purged`·`purged_bodies`·`purged_chars`·`purged_bytes`, `hash_filled`, `skipped_exempt`, `skipped_awaiting_extraction`, `batches`, `remaining_expired_bodies`, `oldest_remaining_body_crawled_at`·`_age_days`, `cutoff_utc`. `--dry-run`은 1·2·3·5만 하고 쓰지 않는다.
+   - `skipped_awaiting_extraction`은 기한이 지난 빈 행 가운데 추출 상태로는 아직 대기인 행이다. 추출기는 기한이 지난 행을 고르지 않으므로 이 행들은 끝내 추출되지 않고, 이 수는 줄지 않고 쌓일 수 있다. 본문이 ''라 비울 것이 없다(위험 없음).
+7. **기한 가드.** 실제로 비우는 실행은 30일만 쓴다(2026-10-17 리뷰 반영).
+   - `--days`가 없는 스케줄 실행: `Settings.BODY_RETENTION_DAYS`(환경변수)가 30이 아니면 연결을 열기 전에 실패한다(알림). 잘못된 `.env` 값 하나로 매일 더 짧은 기한으로 비우지 않게 한다.
+   - `--days` 7~29는 `--dry-run`과 함께일 때만 받는다(배포 때 실제 규모의 조회 시간을 재는 용도). `--dry-run` 없이 주면 `jobs.run`의 인자 조합 검사(`check_args`)가 실행 기록 없이 종료 코드 2로 끝낸다. `run()`과 `purge_expired_bodies()`도 같은 규칙을 다시 확인한다.
+   - 이유: 30일은 평가셋 추출·라벨링·재생성 한 사이클이고, 더 짧게 비우면 진행 중인 사이클의 본문이 되돌릴 수 없게 사라진다(덤프에서 되살리지 않는다). 런북 4.1 6단계의 `--dry-run --days 7`에서 `--dry-run` 하나만 빠져도 23일치가 사라질 수 있었다.
+   - 본문 추출기와 일일 리포트는 설정이 아니라 ADR 상수(30)를 쓴다. 설정이 틀려도 기한이 지난 본문을 내려받지 않고 수집을 멈추지도 않는다.
+
+### 처음 설계와 달라진 점
+| 처음 설계 | 구현 | 이유 |
+|---|---|---|
+| `down_revision` = `8b7f830013b7` | `a6f1e83b0d57` | 그 사이 `c4d2a91e7f30`·`a6f1e83b0d57`가 main에 들어왔다. head는 하나다 |
+| `crawled_at < now() - make_interval(...)` | `crawled_at <= (now() AT TIME ZONE 'UTC') - make_interval(...)` | 시간대 없는 열을 `timestamptz`와 비교하면 세션 TimeZone으로 바뀐다(KST 세션이면 9시간 어긋남). 경계는 반출 도구와 같게 `<=` |
+| 본문 칸이 NULL이 아닌 모든 행 | 본문 추출기가 아직 고를 수 있는 빈 행(상태 NULL, 또는 시도가 `MAX_EXTRACT_ATTEMPTS` 미만인 `fetch_failed`/`error`이고 본문 '')은 건너뛴다 | 두 잡이 서로 다른 행만 쓴다 - 추출기는 그 행들만, 보존 잡은 나머지만. 그래서 서로를 기다리지 않는다. 그 행에 나중에 본문이 들어오면 다음 실행이 비운다 |
+| 면제 = 재배포 가능 언론사 | + 공공누리 유형이 1 또는 NULL | 유형을 행마다 남기기 시작했으므로(아래) 1이 아니라고 적힌 행은 면제하지 않는다. NULL은 유형을 저장하기 전의 정책브리핑 행이고, 수집기는 처음부터 1만 저장했다 |
+| 길이는 비울 때만 쓴다 | 본문을 쓸 때(추출기·정책브리핑) 쓰고, 기존 행은 마이그레이션이 채우고, 비울 때 다시 쓴다 | 해시와 같은 수명이 된다 - 어떤 행이든 본문 길이를 본문 없이 읽을 수 있다 |
+| 해시 `COALESCE(기존, 계산)` | 같다. 다만 'ok' 행이고 같은 해시의 다른 'ok' 행이 있으면 비워 둔다(`hash_left_null`, 경고) | 부분 unique 인덱스 위반으로 배치 전체가 실패하면 본문을 못 비운다. 그런 행은 `d48994e9d26e` 이후 생기지 않는다(VM 실측: 해시 없는 'ok' 행 0) |
+| 배치 5,000 | 기본 1,000, 최대 5,000, SKIP LOCKED | 1 GB VM에서 한 트랜잭션의 WAL과 잡히는 행 락을 줄인다. 하루치는 약 1,300행이라 2배치다 |
+| CHECK 없음 | `ck_news_raw_purged_body_gone` | 어떤 코드도 비운 행에 본문을 다시 쓸 수 없다(DB가 막는다) |
+| `--days 30` | 실제 실행은 30만. 7~29는 `--dry-run`과 함께일 때만(측정용). `Settings.BODY_RETENTION_DAYS`는 30만 받는다 | 30보다 늘리는 예외는 없다(위 결정). 30보다 짧게 비우면 진행 중인 라벨링 사이클의 본문이 사라지므로 ADR을 먼저 고친다(위 "기한 가드"). 어기면 인자 오류(종료 코드 2) 또는 실패·알림(설정값) |
+| 추출기는 상태로만 대상을 고른다 | + 비운 행 제외, + 수집 후 30일(ADR 상수)이 지난 행 제외. 재시도 상태 목록은 보존 잡과 같은 상수(`RETRYABLE_EXTRACT_STATUSES`) | 기한이 지난 기사의 본문을 새로 내려받아 저장하지 않는다. 재시도 상한을 올려도 비운 행은 다시 받지 않는다 |
+
+### 시간대 (KST와 UTC)
+- `raw_news_crawled_at`은 `timestamp without time zone`이고 값은 UTC다: 수집기가 `datetime.now()`로 쓰고 컨테이너의 TZ가 UTC다(VM 실측 `TimeZone = Etc/UTC`). 기준 시각도 `now() AT TIME ZONE 'UTC'`로 만들어 세션 TimeZone과 무관하다.
+- 예: 2026-09-26 02:36 UTC(11:36 KST) 수집 → 2026-10-26 02:36 UTC(11:36 KST) 만료.
+- 스케줄은 하루 한 번(17:50 UTC = 02:50 KST)이다. 그래서 DB에 본문이 남는 최대 기간은 **30일 + 다음 실행까지(최대 24시간) + 실행 시간**이다. VM의 첫 만료분(09-26 02:36 UTC 수집)은 10-26 17:50 UTC 실행에서 비워진다(30일 15시간). 30일 + 1시간이 필요해지면 crontab 줄을 매시로 바꾼다 - 할 일 없는 실행의 비용은 아래 측정에 있다.
+- 세션 TimeZone이 KST인 연결(`PGTZ=Asia/Seoul`)로 잡을 돌려도 경계와 일일 리포트의 수가 같은지 통합 테스트(`test_boundary_is_the_same_when_the_session_time_zone_is_kst`)가 확인한다.
+- KST로 시각을 쓰는 프로세스(예: Mac 호스트에서 `main.py`를 직접 돌린 경우)가 넣은 행은 수집 시각이 9시간 늦게 적혀 9시간 늦게 비워진다. 운영 수집기(컨테이너)는 그런 행을 만들지 않는다.
+
+### 하류 - 본문을 읽는 곳
+| 어디 | 비운 행(본문 NULL)을 어떻게 다루나 | 테스트 |
+|---|---|---|
+| 본문 추출기 대상 조회 | 고르지 않는다(비운 행, 기한 지난 행). 다시 내려받지 않는다 | `test_retention_job_db.py::test_extractor_never_selects_purged_or_expired_rows`, `test_content_extractor_wiring.py` |
+| 임베딩(`embed`, ingest의 embed 단계) | 대상이 아니다(`본문 IS NOT NULL AND <> ''`). 임베딩되기 전에 비워진 'ok' 행은 `body_purged`로 센다. 비우기 전에 만든 임베딩은 남는다 | `test_embedding_and_clustering_skip_purged_rows`, `test_stage3_embedding_resilience.py` |
+| 클러스터링 = 생성 입력(`HDBSCANClusterer._load_data_from_db` → `workflow/nodes.py`) | 읽지 않는다. 생성은 이 데이터만 받는다 | 위 테스트(`data["contents"]`에 빈 본문 없음) |
+| 평가셋 추출기(`evaluation/llm/evalset.py`) | 본문 없는 기사(NULL·'')가 든 클러스터를 후보에서 빼고 수를 매니페스트 `meta.excluded_without_body`와 출력에 남긴다(예전에는 NULL을 ''로 바꿔 그대로 썼다) | `tests/evaluation/test_evalset.py`, `test_evalset_db.py` |
+| Tier 0 → A1 병합 SQL(런북 6.4) | CSV에 길이·비운 시각·공공누리 유형 열을 더했다. 비운 행은 비운 채 들어가고 본문이 되살아나지 않는다 | `test_merge_tier0_news_raw_sql.py::test_merge_keeps_purged_rows_purged` |
+| 일일 리포트 | 보존 상태 한 줄, 26시간 넘게 밀리면 경고 | `test_daily_report_retention_status_counts_expired_and_purged_bodies`, `test_retention_job.py` |
+| 요청 시점 추천·시뮬레이터·API | 본문을 읽지 않는다(2026-10-06 확인 그대로, 이번에 `git grep raw_news_content`로 다시 확인) | - |
+| 동결 반출(별도 브랜치) | 행 조건이 `본문 IS NOT NULL AND <> ''`라 비운 행은 반출되지 않는다 | 그 브랜치의 테스트 |
+
+### 마이그레이션의 락과 I/O
+- DDL은 카탈로그만 바꾼다(NOT NULL 해제, 기본값 없는 열 추가, `NOT VALID` CHECK). ACCESS EXCLUSIVE는 이 리비전까지의 트랜잭션이 커밋될 때까지만 잡히고, `lock_timeout` 10초를 넘기면 기다리지 않고 실패한다(재실행 안전: `IF NOT EXISTS`, 길이 채우기는 비어 있는 행만).
+- 커밋 뒤 autocommit 블록에서 CHECK를 `VALIDATE`(SHARE UPDATE EXCLUSIVE - 읽기·쓰기를 막지 않음)하고, 길이를 2,000행씩 배치마다 커밋하며 채운다. 행 락은 배치 동안만이다.
+- I/O: 정수 열 하나를 쓰지만 행 전체의 새 버전이 생긴다. 힙에 인라인으로 든 압축 본문은 새 버전으로 복사되고 TOAST로 나간 본문은 포인터만 복사된다. `char_length`가 본문을 한 번씩 푼다. VM(2026-10-16 실측: 30,712행, 힙 28 MB, TOAST 49 MB, 원문 114 MB / 저장 64.5 MB)에서는 "힙 한 벌 다시 쓰기 + 본문 한 번 읽기"다. 죽은 행 버전은 autovacuum이 회수해 다시 쓴다(OS에 돌려주지는 않는다).
+- downgrade: 비운 행을 ''로 두고(본문은 되살아나지 않는다) NOT NULL을 되돌리며 길이·비운 시각·유형 열을 지운다. SET NOT NULL은 ACCESS EXCLUSIVE 아래에서 힙을 한 번 읽는다. 다시 올리면 비운 표시와 유형이 비어 있다 - ''가 된 행은 다음 실행이 다시 비우고(본문은 이미 없다), 유형이 1이 아니던 정책브리핑 행은 "유형 미기록 = 면제"로 보인다(통합 테스트가 이 동작을 확인한다).
+
+### 측정 (CI의 PostgreSQL, 합성 30,000행)
+CI 실행 [38934969437](https://github.com/khj1212k/pro-recsys-finalproject-recsys-01/actions/runs/38934969437)(커밋 `93c8f32`)의 `retention-measurement` 아티팩트(`tests/integration/test_retention_volume.py`). PostgreSQL 16.15, `shared_buffers` 128 MB, 러너 4 vCPU. **러너는 Tier 0(1/8 OCPU, 1 GB)가 아니다** - 옮겨지는 값은 행 수·WAL·크기·락 동작이고, 시간은 VM에서 이보다 몇 배에서 수십 배 길 수 있다(VM에서는 배포 6단계의 `--dry-run --days 7`로 처음 잰다).
+
+- 데이터: 30,000행(본문 26,453개, 원문 114.9 MB, 저장 61.5 MB, 평균 1,789자), 수집 시각을 40일에 고르게 폈다. 합성 본문의 어휘 크기는 그 DB의 pglz로 표본을 재어 Tier 0의 저장/원문 비(0.565)에 가장 가까운 것(0.535)을 골랐다 - 첫 측정의 무작위 어휘(압축 안 됨, 비 1.0)는 모든 본문을 TOAST로 보내 길이 채우기의 힙 I/O를 실제보다 작게 보였다. 크기: 힙 14.7 MB, TOAST 61.2 MB(VM 실측 힙 28 MB, TOAST 49 MB).
+- 동시 쓰기: 측정하는 동안 다른 연결이 10 ms마다 새 행 INSERT(수집기 역할)와 추출 대기 행 UPDATE(추출기 역할)를 번갈아 했다.
+
+| 단계 | 걸린 시간 | WAL | 결과 | 동시 쓰기 지연 (p50 / p95 / 최대) |
+|---|---|---|---|---|
+| 마이그레이션 upgrade(길이 채우기 포함) | 1.19초 | 24.6 MB | 30,053행 채움(2,000행 배치). 힙 14.7 → 24.6 MB(VACUUM 뒤에도 같음 - 안에서 다시 쓰인다), TOAST 그대로 | INSERT 0.67 / 0.85 / 108 ms, UPDATE 0.52 / 0.83 / 60 ms (최대값은 DDL 커밋까지의 ACCESS EXCLUSIVE) |
+| 첫 실행(10일치 7,500행이 한꺼번에 만료) | 0.47초(비우기 0.27초) | 5.0 MB | 7,490행 비움(본문 6,630개, 28.8 MB), 8배치, 추출 대기 10행 건너뜀, 남은 만료 본문 0 | INSERT 0.64 / 0.98 / 1.5 ms, UPDATE 0.50 / 0.79 / 3.4 ms |
+| 매일(하루치 650행) | 0.083초 | 0.49 MB | 650행, 1배치 | 최대 1.4 ms |
+| 할 일 없는 실행 | 0.034초 | 13.5 KB | 0행 | 최대 1.3 ms |
+
+- 길이 채우기 동안 예전 코드처럼 길이 없이 들어온 동시 행 9개는 길이가 비어 있다(채우기가 이미 지나간 id). 새 코드는 쓸 때 길이를 쓰고, 그런 행도 비울 때 길이가 쓰인다.
+- downgrade(비운 행 없음)는 0.12초였다.
+- 비운 뒤 VACUUM을 해도 테이블 파일 크기는 줄지 않는다(TOAST 61.2 MB 그대로). 빈 자리는 뒤에 들어오는 본문이 쓴다.
+- VM으로 옮기면: 마이그레이션은 힙 한 벌(VM 28 MB)을 다시 쓰고 WAL 수십 MB를 만든다. 디스크(41 GB 여유)와 메모리(`shared_buffers` 64 MB를 지나가며 읽는다)에 부담이 없다. 매일 실행은 하루치 약 1,300개 본문으로 위 "매일"의 두 배 규모다.
+
+### 결과와 한계
+- **Tier 0의 기사는 임베딩 없이 본문이 비워진다.** VM은 임베딩을 하지 않는다(2026-10-16 실측 임베딩 0개). 비운 뒤에는 그 기사를 임베딩할 수 없으므로, 수집 후 30일 안에 다른 곳(Mac MPS, A1, 반출 + 원격 임베딩)에서 임베딩하지 않은 기사는 클러스터링·추천 후보에 영영 들어가지 못한다. 첫 손실은 2026-10-26 17:50 UTC 실행에서 생긴다. 해시·제목·URL은 남는다.
+- 하루 한 번이라 최대 보존은 30일 + 24시간 남짓이다(위 시간대 절).
+- 비운 공간은 테이블 안에서 다시 쓰이고 OS에 돌아가지 않는다. 하루 유입(약 1,300개 본문)과 하루 비움이 비슷해지면 테이블 크기가 멈춘다.
+- WAL·스냅숏에 남은 옛 본문: 비운 직후의 WAL 파일과 볼륨 스냅숏에는 옛 행 버전이 남을 수 있다. Postgres의 WAL은 체크포인트 뒤 재사용·삭제된다. 볼륨 백업은 하지 않는다.
+- `FOR UPDATE SKIP LOCKED`로 건너뛴 행은 다음 날까지 남는다(경고가 남는다).
+- 동결 반출(ADR 0036 브랜치)은 면제를 언론사로만 판정한다. 이 잡은 같은 언론사라도 공공누리 유형이 1이 아니라고 적힌 행은 비운다 - 이 잡이 더 엄격하다. 그 브랜치를 병합할 때 반출의 면제에도 `raw_news_kogl_type`을 반영해 두 정의를 맞춘다.
+- 메모리: 보존 잡은 추출기를 임포트하지 않는다(trafilatura·lxml·tqdm 없음). 로컬에서 `jobs.run` 파서를 만들고 `run()`을 연결 직전까지 돌린 프로세스의 최대 RSS는 29.1 MiB였다(추출기를 임포트하던 때 리뷰 측정 46.2 MiB). VM에서는 17:05 ingest가 17:50을 넘기는 일이 잦아 scheduler cgroup(512 MiB) 안에서 둘이 겹칠 수 있다 - 정확성 문제는 없다(서로 다른 행만 쓴다).
+
+### Mac 쪽 덤프
+덤프(`data/backups/*.dump`, 런북 6.5)는 DB 전체의 본문을 담고 행 단위로 지울 수 없다. 규칙: 덤프 안에서 가장 오래된 상업 언론사 본문의 수집 시각 + 30일에 파일을 지운다. 보존 잡이 날마다 돌기 시작하면 DB의 가장 오래된 본문은 늘 29~31일 차라 **전체 덤프는 뜬 지 하루 안팎에 만료된다.** Mac에는 상주 작업을 두지 않기로 했으므로(데몬 없음) 만료일을 파일 이름에 적고 사람이 지운다 - 절차는 [런북](../runbook.md) 8절과 [호스팅 런북](../runbook-hosting.md) 6.5. 지금 있는 두 덤프의 만료일: `mac-compose-2026-09-26.dump` 2026-10-25, `tier0-micro-2026-09-26T2218.dump` 2026-10-26. 지우는 것은 사용자가 한다.
+
+### 증거
+- 단위 테스트(DB 없음): `tests/test_retention_job.py` 56건(파라미터 포함) - dry run은 쓰지 않음, 배치·커밋·시간 제한, 기준 시각을 DB에서 한 번, 루프 상한, 기한 가드(설정값 30만 - 7·29·31·45·문자열이면 연결 전에 실패하고 jobs.run을 거치면 failed·알림 1회, `--days` 7~29는 `--dry-run` 없이 종료 코드 2·실행 기록 연결 없음, `run()`·`purge_expired_bodies()`를 직접 불러도 거부), 인자 범위(배치 1~5,000), 런북·crontab의 짧은 `--days`가 늘 `--dry-run`과 함께인지, 보존 잡 프로세스가 trafilatura·lxml·tqdm을 올리지 않는지(새 프로세스), 면제 출처 = 재배포 가능 출처뿐, SQL이 쓰는 열은 본문·길이·비운 시각·해시뿐, 추출기 선택 조건과 같은 "추출 대기" 조건, 두 crontab의 줄, 일일 리포트 문구와 경고. 바뀐 기존 테스트: 추출기(길이 인자, 대상 조건), 정책브리핑(스키마별 열 2건 추가), 임베딩 통계, 평가셋 1건 추가.
+- 통합 테스트(CI의 PostgreSQL): `tests/integration/test_retention_job_db.py` 12건 - 29일 23시간/30일 1시간 경계(세션 TimeZone이 KST여도 같음), 면제(유형 1·미기록)와 대상(유형 2), 추출 대기 행, dry run → 실제 → 재실행 0행, 비운 행에 본문을 쓰면 CHECK 위반, advisory lock이면 skipped, 잡힌 행은 기다리지 않고 건너뜀(5초 미만)·경고·다음 실행이 비움, 열린 배치가 수집 INSERT·추출 UPDATE·읽기를 막지 않음(1초 lock_timeout, 배치의 락 모드는 RowExclusiveLock까지), 추출기·임베딩·클러스터링·일일 리포트·ingest 현황(본문 있는 'ok'와 비운 행을 따로 셈), downgrade가 본문을 되살리지 않고 upgrade가 길이를 채움, 모델-스키마 일치. 그 밖에 `test_merge_tier0_news_raw_sql.py`·`test_evalset_db.py`·`test_policy_briefing_insert.py`에 비운 행·길이·유형 확인을 더했다.
+- 로컬(macOS, Python 3.11, CI 설치 목록, `nice -n 19`)에서는 단위 테스트만 돌렸다(`1855 passed, 30 skipped`, 5분 34초). DB를 띄우지 않았다 - 통합 테스트와 측정은 CI의 결과다(CI 실행 38934969437: 단위 `1827 passed, 58 skipped`, 통합 `96 passed, 2 skipped` + 측정 1건).
+- 리뷰 반영(기한 가드·가벼운 상수 모듈·ingest 현황·런북) 뒤 로컬 전체 단위 테스트: `1883 passed, 30 skipped`(2분 53초, 같은 조건). 새 통합 테스트 2건(KST 세션 경계, ingest 현황)은 CI에서 돈다.

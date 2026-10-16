@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Tier 0(OCI Always Free E2.1.Micro, 1 GB) 수집 전용 이미지. docker/worker.Dockerfile에서 torch·BGE-M3·
 # hdbscan·lightgbm·LLM SDK를 뺀 것으로, 레이아웃(/app, PYTHONPATH, app 사용자, supercronic)은 같다.
-# 돌 수 있는 잡: jobs.migrate, ingest --stages rss,extract, popularity, daily_report (ADR 0026).
+# 돌 수 있는 잡: jobs.migrate, ingest --stages rss,extract, popularity, daily_report, retention (ADR 0026, 0023).
 # embed/cluster/generate/train은 이 이미지에서 실행하면 ImportError가 난다 - docker/compose.micro.yaml이
 # 스케줄러 crontab을 docker/crontab.micro로 바꿔 이 잡들을 스케줄에서 뺀다.
 #

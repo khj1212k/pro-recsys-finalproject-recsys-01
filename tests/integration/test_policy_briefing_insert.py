@@ -115,13 +115,17 @@ def test_collect_stores_rows_as_extracted_and_skips_same_body(database_url, pg_c
             cur.execute(
                 """SELECT raw_news_url, raw_news_extract_status, raw_news_extracted_at IS NOT NULL,
                           raw_news_extract_attempts,
-                          raw_news_content_sha256 = encode(sha256(convert_to(raw_news_content, 'UTF8')), 'hex')
+                          raw_news_content_sha256 = encode(sha256(convert_to(raw_news_content, 'UTF8')), 'hex'),
+                          raw_news_content_length = char_length(raw_news_content), raw_news_kogl_type,
+                          raw_news_content_purged_at
                    FROM news_raw WHERE raw_news_url = ANY(%s) ORDER BY raw_news_url""",
                 (urls,),
             )
             rows = cur.fetchall()
         assert [r[0] for r in rows] == sorted([urls[0], urls[2]])
-        for _url, status, has_extracted_at, attempts, hash_matches_sql in rows:
+        for _url, status, has_extracted_at, attempts, hash_matches_sql, length_matches_sql, kogl, purged_at in rows:
+            # 본문 보존(f1db3221e45f): 파이썬 len과 SQL char_length가 같은 글자 수, 기사별 공공누리 유형 1, 비운 적 없음
+            assert length_matches_sql is True and kogl == 1 and purged_at is None
             # 추출기(WHERE raw_news_extract_status IS NULL ...)가 다시 내려받지 않는 상태
             assert status == "ok"
             assert has_extracted_at
