@@ -251,8 +251,11 @@ def copy_statements(window: Window) -> List[str]:
         "'extract_status', n.raw_news_extract_status, "
         f"'content_sha256', n.raw_news_content_sha256)::text {source}) TO STDOUT"
     )
+    # linked_rows: 창 안에서 이미 뉴스레터에 연결된 행. 운영 로더(exclude_clustered)는 이 행을 빼는데 반출 행에는
+    # news_letter_id가 없으므로, 같은 스냅숏에서 세어 0인지 확인한다(build_export).
     trailer = (
         "COPY (SELECT json_build_object('kind', 'trailer', 'rows', count(*), "
+        "'linked_rows', count(*) FILTER (WHERE n.news_letter_id IS NOT NULL), "
         f"'min_id', min(n.raw_news_id), 'max_id', max(n.raw_news_id))::text {source}) TO STDOUT"
     )
     return [header, rows, trailer]
@@ -441,6 +444,14 @@ def build_export(raw: RawExport, window: Window, *, code: Dict[str, Any],
         raise ExportError("머리말에 서버 스냅숏 시각이 없다") from None
     if plan is not None:
         _plan_check(plan, window, snapshot)
+    linked = raw.trailer.get("linked_rows")
+    if not isinstance(linked, int) or isinstance(linked, bool):
+        raise ExportError("꼬리말에 linked_rows(뉴스레터에 연결된 행 수)가 없다 - 이 도구의 쿼리로 만든 출력이 아니다")
+    if linked:
+        raise ExportError(
+            f"창 안에 이미 뉴스레터에 연결된 행(news_letter_id가 있는 행)이 {linked}건이다 - 운영 로더(exclude_clustered)는 "
+            "이 행을 빼지만 파일 대역은 뺄 수 없어 결과가 달라진다. 반출하지 않는다(아무것도 쓰지 않았다)"
+        )
     is_redistributable = is_redistributable or _license_lookup()
     rows: List[Dict[str, Any]] = []
     seen = set()
@@ -509,6 +520,7 @@ def build_export(raw: RawExport, window: Window, *, code: Dict[str, Any],
                        "bound": "start <= raw_news_crawled_at < end"},
         "plan": dict(plan) if plan is not None else None,
         "rows": len(rows),
+        "linked_rows": linked,
         "rows_sha256": rows_sha256(rows),
         "id_range": [rows[0]["id"], rows[-1]["id"]] if rows else None,
         "crawled_at_range_utc": [crawled_at[0], crawled_at[-1]] if rows else None,

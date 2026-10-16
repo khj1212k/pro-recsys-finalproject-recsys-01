@@ -244,6 +244,19 @@ def test_export_of_a_window_whose_bodies_have_expired_is_refused_before_touching
     assert "보존 기한" in capsys.readouterr().err and not (tmp_path / "received.sql").exists()
 
 
+def test_build_export_refuses_a_window_with_rows_already_linked_to_a_newsletter():
+    """운영 로더는 news_letter_id가 있는 행을 빼고(exclude_clustered) 파일 대역은 뺄 수 없다 - 같은 결과가 아니다."""
+    rows = [_server_row(1), _server_row(2)]
+    linked = {"kind": "trailer", "rows": 2, "linked_rows": 1, "min_id": 1001, "max_id": 1002}
+    with pytest.raises(fx.ExportError, match="news_letter_id.*1건"):
+        fx.build_export(fx.parse_copy_stream(_stream(rows, trailer=linked)), WINDOW, code=CODE)
+    with pytest.raises(fx.ExportError, match="linked_rows"):  # 셀 수 없는 출력도 받지 않는다
+        fx.build_export(fx.parse_copy_stream(_stream(rows, trailer={k: v for k, v in linked.items()
+                                                                   if k != "linked_rows"})), WINDOW, code=CODE)
+    assert _bundle().manifest["identity"]["linked_rows"] == 0
+    assert "count(*) FILTER (WHERE n.news_letter_id IS NOT NULL)" in fx.build_psql_script(WINDOW)
+
+
 def test_redistributable_sources_are_exempt_from_expiry_and_unknown_sources_are_not():
     rows = [_server_row(1, press="정책브리핑"), _server_row(2, press="처음 보는 출처")]
     bundle = _bundle(rows)

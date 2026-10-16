@@ -73,7 +73,7 @@ def stream(rows: Sequence[Dict], *, head: Optional[Dict] = None, trailer="auto")
     lines += [copy_line(r) for r in rows]
     if trailer == "auto":
         ids = [r["id"] for r in rows]
-        trailer = {"kind": "trailer", "rows": len(rows), "min_id": min(ids) if ids else None,
+        trailer = {"kind": "trailer", "rows": len(rows), "linked_rows": 0, "min_id": min(ids) if ids else None,
                    "max_id": max(ids) if ids else None}
     if trailer is not None:
         lines.append(copy_line(trailer))

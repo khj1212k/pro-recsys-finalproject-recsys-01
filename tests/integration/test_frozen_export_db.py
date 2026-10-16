@@ -209,6 +209,22 @@ def test_export_reports_rows_whose_stored_hash_does_not_match_the_body(pg_conn, 
     assert summary["db_hash_check"] == {"mismatch": 1, "missing": 1}
 
 
+def test_a_window_with_a_row_already_linked_to_a_newsletter_is_not_exported(pg_conn, conn, schema, seeded, tmp_path):
+    """운영 로더(exclude_clustered)가 빼는 행이 창 안에 있으면 파일 대역이 같은 결과를 낼 수 없다."""
+    with pg_conn.cursor() as cur:  # 복제한 스키마에는 외래 키가 없어 news_letter 행 없이 연결을 흉내 낼 수 있다
+        cur.execute(f'UPDATE "{schema}".news_raw SET news_letter_id = %s WHERE raw_news_id = %s',
+                    (987654, seeded["tricky"]))
+        cur.execute(f'UPDATE "{schema}".news_raw SET news_letter_id = %s WHERE raw_news_id = %s',
+                    (987654, seeded["at_end"]))  # 창 밖의 연결은 세지 않는다
+    before = _table_fingerprint(pg_conn, schema)
+    raw = fx.fetch_with_connection(conn, WINDOW)
+    assert raw.trailer["linked_rows"] == 1 and raw.trailer["rows"] == 5
+    with pytest.raises(fx.ExportError, match="news_letter_id"):
+        fx.export_news_raw(WINDOW, conn=conn, code=CODE)
+    assert _table_fingerprint(pg_conn, schema) == before
+    assert not (tmp_path / "data" / "exports").exists() or not any((tmp_path / "data" / "exports").iterdir())
+
+
 def test_bodies_already_past_thirty_days_at_the_server_snapshot_are_not_exported(pg_conn, conn, schema):
     press_id = _press(pg_conn, schema, "가람일보")
     now = _utc_naive_now()
@@ -255,7 +271,7 @@ def test_rows_committed_by_another_session_during_the_export_are_not_mixed_in(pg
         cur.copy_expert(rows_sql, buffer)
         cur.copy_expert(trailer_sql, buffer)
     raw = fx.parse_copy_stream(buffer.getvalue().split(b"\n"))
-    assert len(raw.rows) == raw.trailer["rows"] == 5
+    assert len(raw.rows) == raw.trailer["rows"] == 5 and raw.trailer["linked_rows"] == 0
     assert late not in {r["id"] for r in raw.rows}
 
 

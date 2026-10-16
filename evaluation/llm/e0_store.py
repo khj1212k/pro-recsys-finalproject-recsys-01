@@ -12,8 +12,8 @@
 | `db.batch_manager.create_new_batch` / `update_cluster_log` (Stage5를 통째로 돌릴 때만) | `FileGenerationStore` | `cluster_history.jsonl` |
 
 운영과 달라지는 것(선언된 이탈): `news_raw.news_letter_id`는 갱신되지 않고 요청된 id 목록만 기록된다, 카테고리
-매핑은 저장되지 않는다, 창의 상한(의사 시각)을 로더가 건다, `exclude_clustered`는 적용되지 않는다(파일에는
-뉴스레터가 없다), 뉴스레터 임베딩은 계산하지 않는다.
+매핑은 저장되지 않는다, 창의 상한(의사 시각)을 로더가 건다, `exclude_clustered`는 적용되지 않는다(반출이 창 안에
+뉴스레터에 연결된 행이 없음을 확인하므로 결과는 같다), 뉴스레터 임베딩은 계산하지 않는다.
 
 **조용히 빗나가지 않게 하는 장치.** 이름이나 인자가 바뀐 운영 함수에 대역을 끼우면 틀린 것이 조용히 돈다.
 그래서 `installed()`와 `FileArticleSource.patched_loader()`는 끼우기 전에 `check_production_contract()`를
@@ -236,7 +236,8 @@ class FileArticleSource:
 
         운영 쿼리의 조건을 그대로 따른다: 임베딩 있음(팩 검증이 보장), 본문 있음, 수집 시각 하한, id 순서.
         다른 점은 둘이다. 상한을 건다(운영에서는 NOW()가 자연 상한이다). `exclude_clustered`는 받아서 기록만
-        한다(파일에는 뉴스레터가 없다).
+        한다 - 반출이 같은 스냅숏에서 창 안에 뉴스레터에 연결된 행이 0건임을 확인했으므로(매니페스트의
+        `linked_rows`) 적용해도 결과가 같다.
 
         창이 반출본의 창 밖으로 나가면 멈춘다(fail closed) - 파일에 없는 시간의 기사를 빈 결과로 돌려주면
         입력이 소리 없이 줄어든다. 창 안에 본문이 지워졌거나 지금 만료된 기사가 있으면 기본으로 멈춘다 - 그 창의
