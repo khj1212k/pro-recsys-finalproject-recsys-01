@@ -1,0 +1,286 @@
+{
+ "what": "EB-NeRD v1.2 콜드 regime 판정용 실행(M4)의 실행 기록. ADR 0013 'A2 사전 등록'(ebnerd-cold-v1.2)을 등록한 명령 그대로 Colab CPU 런타임에서 돌렸다. 수치와 판정의 원본은 ebnerd_v1_2_cold.json이고, 이 파일은 그 실행이 어떻게 돌았는지(코드, 시도, 세션 유실과 재개, 시간, CU, 정리)만 담는다.",
+ "label": "[EB-NeRD]",
+ "written": "2026-10-17",
+ "preregistration": {
+  "id": "ebnerd-cold-v1.2",
+  "adr": "docs/adr/0013-ranker-v2-design.md (A2 사전 등록, A2.0–A2.9)",
+  "yaml": "evaluation/recsys/ebnerd/preregistration/cold-v1.2.yaml",
+  "yaml_sha256": "c17399c089584556d01b1017e10c932ceb1b10d6663c36b7d1932290913e01b9",
+  "commit": "c9d186151ad4f936a234754c31336ec8e6d8aeb5",
+  "yaml_changed_since_registration": false
+ },
+ "evidence_grade": {
+  "grade": "preregistered-run",
+  "reasons": [],
+  "source": "ebnerd_v1_2_cold.json meta.evidence (코드가 계산)"
+ },
+ "code": {
+  "commit": "7d7c9f3b2863bfe0e31780e4970aa4b185678dd0",
+  "commit_note": "main의 Merge #18. 사전 등록 커밋 c9d1861의 후손이다. 판정용 실행의 모든 시도가 이 커밋의 tarball 하나를 썼다.",
+  "tarball_sha256": "0ce89e67628a90ddbe0782b919e2a1ec00ca61b827af718046fc267ddf8cd69d",
+  "tarball_command": "git archive --format=tar.gz -o m4_code.tar.gz 7d7c9f3b2863bfe0e31780e4970aa4b185678dd0 recsys_core evaluation/__init__.py evaluation/recsys scripts/m4_colab_driver.py requirements-colab.txt",
+  "tarball_rebuild_check": {
+   "date": "2026-10-17",
+   "git_version": "2.44.0",
+   "sha256_equal": true
+  },
+  "not_in_run": "드라이버의 줄 단위 flush 수정(브랜치 ops/m4-run, 지금 SHA 5388b0e — 실행 당시 기록의 83ada2a)은 이 실행에 들어 있지 않다."
+ },
+ "report_files": {
+  "reports/recsys/ebnerd_v1_2_cold.json": {
+   "sha256": "9a0b9c76bd5036f088a2b9b4b624804b2b8cb4f7dd6d0f3908878fcd5f168792",
+   "bytes": 1004385
+  },
+  "reports/recsys/ebnerd_v1_2_cold.md": {
+   "sha256": "2d0dff21ea9182bdea1ea262376d1429fe416de63472d63c8596708559001180",
+   "bytes": 22764
+  },
+  "provenance": "VM의 /content/m4/out에서 assemble 단계가 쓴 두 파일을 2026-10-06 18:53 KST에 내려받은 그대로 복사했다(바이트 동일, 손으로 고친 곳 없음).",
+  "checks_2026_10_17": {
+   "md_rerender": "python -m evaluation.recsys.ebnerd.make_cold_report reports/recsys/ebnerd_v1_2_cold.json 의 출력이 위 md와 바이트로 같다(make_cold_report.py는 실행 코드 7d7c9f3과 같은 파일이다 — 이 브랜치와 main은 그 파일을 바꾸지 않았다. Python 3.11.14, 2026-10-17).",
+   "verdicts_recompute": "cold_verdicts.cold_verdicts(JSON, cold-v1.2.yaml)의 결과가 JSON의 verdicts와 같다(cold_verdicts.py와 cold-v1.2.yaml은 실행 코드 7d7c9f3과 같은 파일이다).",
+   "content_scan": "JSON의 문자열 값 122종은 지표·arm·피처·조건 이름, sha256, 커밋, 버전, 판정 문구, 임베딩 입력 템플릿 이름뿐이다. 10만 이상의 정수는 149개다. 그중 145개는 행·노출·이벤트 수와 split_seed이고, 4개는 meta.data의 train·validation time_min/time_max(유닉스 시각)다. EB-NeRD 기사 id 범위(9,000,000~9,999,999)의 정수는 0개다. 기사 id·제목·본문은 없다. md도 같다."
+  }
+ },
+ "runtime": {
+  "where": "Google Colab CPU 런타임, 표준 shape(--high-mem 없음), 개인 계정",
+  "host": {
+   "python": "3.13.16",
+   "machine": "x86_64",
+   "system": "Linux",
+   "cpu_count": 2,
+   "ram_gb": 12.7
+  },
+  "libraries": {
+   "numpy": "2.4.6",
+   "pandas": "3.0.6",
+   "pyarrow": "25.0.1",
+   "lightgbm": "4.7.0"
+  },
+  "threads": 2,
+  "cu_rate_per_hour": 0.08,
+  "cu_rate_source": "드라이 런 때 colab usage의 Usage rate와 잔액 차이로 잰 값(A2.10 2026-10-06 기록 1번)"
+ },
+ "inputs": {
+  "manifest_sha256": "03a4922fe393f8c11c5a0d352740226dc2777a5662dfeb443e9fd4db7c2f8099",
+  "files_sha256": {
+   "ebnerd_small/train/behaviors.parquet": "eeedd1b5cb42e952b7688f3199c5eb97da5596e6245a52714083eea3cb8e3736",
+   "ebnerd_small/train/history.parquet": "3f5ac2216f5807677c6225909cef80f1a84d08126c21e3cfeedacb54e3dd323c",
+   "ebnerd_small/validation/behaviors.parquet": "7a212113f427d218f3f36b3f52de876fb2868844e9657474b4be07872674c61d",
+   "ebnerd_small/validation/history.parquet": "4471f22424011192c892fecf3bb4fa3dcf769ebefd8e9fff05b625c3518ac861",
+   "ebnerd_small/articles.parquet": "e3b33c8d0f31167736ef759c5d396411a11cec9bc90466b56fef18f13b341803",
+   "derived/ebnerd_small/article_ids.npy": "0265f06f5689adf9a31331f7cc564d0fa06f0221b10b4812d4a56d8b8126c415",
+   "derived/ebnerd_small/bge_m3_tsb512.f16.npy": "2f096ef8963ba332c72b1e89e3f0a8f29f48789d4367a5493e76d754d9b2ebeb",
+   "derived/ebnerd_small/bge_m3_tsb512.meta.json": "f231ac660398e4e2c753df843abbf407c2f459fd261966ec86409a3d19ff6145"
+  },
+  "articles": {
+   "columns": [
+    "article_id",
+    "published_time",
+    "category",
+    "article_type",
+    "premium"
+   ],
+   "derived_sha256": "e3b33c8d0f31167736ef759c5d396411a11cec9bc90466b56fef18f13b341803",
+   "original_sha256": "b1cea52ee4c152086ff6b70962fe543a43de50c684c1ec0735a4f061bded43d2",
+   "note": "본문·제목 열을 뺀 메타 5개 열 파생 파일만 런타임에 올렸다."
+  },
+  "sha256_verified_each_launch": true,
+  "transfer": "비공개 GCS 버킷 객체의 12시간 서명 URL. URL은 임시 파일로 올려 런타임에서 읽자마자 지웠고 로그·기록·커밋 어디에도 없다."
+ },
+ "registered_command": {
+  "driver": "python m4_colab_driver.py run --workdir /content/m4 --code-tarball /content/m4_code.tar.gz --code-sha256 0ce89e67628a90ddbe0782b919e2a1ec00ca61b827af718046fc267ddf8cd69d --manifest /content/m4_manifest.json --url <키>=<서명 URL> (8개) --cu-rate 0.08 --cu-cap 6 --threads 2 --cu-before <잔액> --detach",
+  "stage": "python -m evaluation.recsys.ebnerd.run_cold --dataset ebnerd_small --root /content/m4/data --out-dir /content/m4/out --seeds 0 1 2 --n-boot 1000 --p2-sample 20000 --sub-cap 20000 --threads 2 --resume --stage <fit|e1|e2p2|e8|e4|e2p1|assemble>",
+  "cu_before_by_launch": {
+   "attempts_1_2": null,
+   "attempt_3": 199.56,
+   "relaunch_1": 199.29,
+   "note": "1·2차에 넘긴 --cu-before 값은 기록이 없다. 3차의 값은 그날 운영 메모, 재개의 값은 지킴이의 실행 설정에 남아 있다. 1차가 시작된 08:10에는 드라이 런 세션이 아직 돌고 있었으므로(08:27:58 정지 뒤 잔액 199.57) 그때의 잔액은 199.56보다 컸다."
+  },
+  "config_hash": "e82782577143644d1b6c12ccec65a012c58fe9575bba7c1c7c18df73ce861249",
+  "driver_config_digest": "7d96f3fe737820dad92d1bf5bafd051771ee67acd22064616a70af07f54057c1"
+ },
+ "attempts": [
+  {
+   "id": "dry_run",
+   "session": "m4-dry",
+   "kst": "2026-10-06 약 07:35–08:27:58 (세션 53분)",
+   "data": "합성(--synthetic), EB-NeRD 없음",
+   "grade": "demo, not evidence",
+   "outcome": "사슬 끝까지 감, stop 후 재개 확인",
+   "cu": "약 0.07"
+  },
+  {
+   "id": "attempt_1",
+   "session": "m4-run",
+   "session_created_kst": "2026-10-06 08:10:26",
+   "driver_started_kst": "2026-10-06 08:10:53",
+   "client_attached": false,
+   "ended": "08:20:31~08:24:22 사이에 세션이 서버에서 사라짐",
+   "units_done": [
+    "model:poolneg:s0"
+   ],
+   "failed_marker": false,
+   "checkpoints_kept": false,
+   "results_viewed": "없음(단위 소요 시간·환경 기록·드라이버 로그만)",
+   "cu": "약 0.02"
+  },
+  {
+   "id": "attempt_2",
+   "session": "m4-run",
+   "session_created_kst": "2026-10-06 08:28:20",
+   "driver_started_kst": "2026-10-06 08:28:36",
+   "client_attached": false,
+   "ended": "08:39:40~08:42:20 사이에 세션이 서버에서 사라짐",
+   "units_done": [
+    "model:poolneg:s0"
+   ],
+   "failed_marker": false,
+   "checkpoints_kept": false,
+   "results_viewed": "없음",
+   "cu": "약 0.02"
+  },
+  {
+   "id": "attempt_3",
+   "session": "m4-run",
+   "session_created_kst": "2026-10-06 08:47:11",
+   "driver_started_kst": "2026-10-06 08:47:29",
+   "client_attached": true,
+   "progress": "fit 단계 08:48:00–11:28:38(드라이버 9,638.0초, 단위 33개: 모델 9 arm x 3 seed + 휴리스틱 적합 2세트 x 3 seed) → e1 11:28:38 시작",
+   "last_seen_alive_kst": "2026-10-06 12:04 (상태 확인으로 VM의 진행 파일을 읽을 수 있었다: 33/52 단위)",
+   "lost_kst": "2026-10-06 12:08경 (당일 운영 메모. 잔액 199.56 → 199.29 = 0.27 CU가 0.08 CU/h로 08:47부터 약 3.4시간과 맞는다)",
+   "detected_kst": "2026-10-06 12:57:22",
+   "detection_note": "로컬 keeper 클라이언트의 출력은 11:14:22에 멈췄지만 프로세스는 끊김을 알리지 않아 지킴이가 유실을 보지 못했다. 12:57:06에 클라이언트를 손으로 끝내자(rc=143, 13,937초 붙어 있었음) 지킴이가 세션 없음을 확인했다. 이후 5분마다 세션 목록을 보는 감시 루프를 더했다.",
+   "units_kept": 33,
+   "e1_partial_lost": "e1의 첫 단위(e1_base)가 끝나기 전에 사라져 e1의 산출물은 하나도 남지 않았다. 재현 게이트는 이 시도에서 계산되지 않았다.",
+   "failed_marker": false,
+   "cu": 0.27,
+   "cu_source": "잔액 차이 199.56 → 199.29(이 구간에 다른 Colab 세션 없음 — E15 첫 세션은 13:20)"
+  },
+  {
+   "id": "relaunch_1",
+   "session": "m4-run (새 VM)",
+   "session_created_kst": "2026-10-06 12:57:22 이후",
+   "restored": "로컬 미러의 체크포인트 62개(모델 54, 휴리스틱 6, progress.json, run.log)를 새 VM에 되돌림. driver_state.json은 되돌리지 않음(설계대로 — 핀 설치를 다시 하게)",
+   "driver_started_kst": "2026-10-06 12:59:38",
+   "driver_finished_kst": "2026-10-06 18:51:56",
+   "wall_seconds": 21137.3,
+   "skipped_units": 33,
+   "computed_units": 19,
+   "reproduction_gate_computed_kst": "2026-10-06 14:21:47",
+   "session_stopped_kst": "2026-10-06 18:53:50~18:55:05 사이(지킴이가 산출물을 세 번 받아 확인한 뒤 정리)",
+   "failed_marker": false,
+   "cu_driver_estimate": 0.47,
+   "cu_session_estimate": "약 0.48 (세션 수명 약 5.95시간 x 0.08)",
+   "cu_note": "잔액 차이로는 따로 잴 수 없다 — 13:20부터 E15 세션(e15-s0, e15-s0g, e15-reh, e15-s1, e15-s2)이 같은 계정에서 함께 돌았다."
+  }
+ ],
+ "relaunch_rule": "A2.9: 세션이 끊기면 같은 명령으로 다시 시작한다. 끝난 단위는 설정 해시가 같을 때만 건너뛴다. 1·2·3차와 재개 1회 모두 같은 tarball·manifest·인자·설정 해시였고, 어느 단계도 0이 아닌 코드로 끝나지 않았다(FAILED 마커 없음). 폐기한 실행은 없다.",
+ "stages_wall_seconds": {
+  "fit": {
+   "driver": 9638.0,
+   "stage_process": 9620,
+   "units_sum": 8128.3,
+   "attempt": "attempt_3"
+  },
+  "e1": {
+   "driver": 9199.8,
+   "stage_process": 9183,
+   "units_sum": 9171.0,
+   "attempt": "relaunch_1"
+  },
+  "e2p2": {
+   "driver": 6949.9,
+   "stage_process": 6929,
+   "units_sum": 6925.8,
+   "attempt": "relaunch_1"
+  },
+  "e8": {
+   "driver": 1354.5,
+   "stage_process": 1333,
+   "units_sum": 1333.1,
+   "attempt": "relaunch_1"
+  },
+  "e4": {
+   "driver": 435.5,
+   "stage_process": 416,
+   "units_sum": 416.3,
+   "attempt": "relaunch_1"
+  },
+  "e2p1": {
+   "driver": 1930.6,
+   "stage_process": 1913,
+   "units_sum": 1899.7,
+   "attempt": "relaunch_1"
+  },
+  "assemble": {
+   "driver": 1216.7,
+   "attempt": "relaunch_1"
+  },
+  "sources": "driver = run.log의 '단계 완료' 줄과 compute.json, stage_process = 단계 프로세스의 'stage … finished', units_sum = progress.json 단위 시간의 합(리포트 7절 표)",
+  "fit_note": "relaunch_1의 compute.json에는 fit이 21.1초로 적혀 있다 — 33개 단위를 모두 건너뛴 시간이다. fit의 실제 계산 시간은 attempt_3의 값이다.",
+  "units_total": 52
+ },
+ "compute_units": {
+  "cap": 6.0,
+  "warn": 5.0,
+  "ops_estimate_during_attempt_3": {
+   "cu": "약 0.65 (범위 0.55~0.9)",
+   "stage_wall_hours": "약 8 (범위 7~10)",
+   "registered": false,
+   "source": "비공개 운영 메모(저장소 밖)에 2026-10-06 09:16 KST경 이후, 즉 3차 시도의 fit 단계가 시작된 지 28분이 지난 뒤에 적은 추정이다. 그 28분 동안 끝난 fit 단위 5개의 시간과 합성 데이터 리허설의 단계 시간으로 환산했다. 실행 전 추정이 아니다. A2.9가 등록한 것은 상한 6 CU와 경고선 5 CU뿐이고, 시간·CU 추정은 등록하지 않았다."
+  },
+  "spent": {
+   "dry_run_and_attempts_1_2": {
+    "cu": 0.1,
+    "source": "잔액 199.66 → 199.56"
+   },
+   "attempt_3": {
+    "cu": 0.27,
+    "source": "잔액 199.56 → 199.29"
+   },
+   "relaunch_1": {
+    "cu": 0.48,
+    "source": "세션 수명 x 0.08 CU/h (드라이버 추정 0.47). 잔액으로는 분리 불가"
+   }
+  },
+  "total_m4": 0.85,
+  "total_evidence_run_attempts": 0.78,
+  "report_meta_compute": "리포트 JSON의 meta.compute(cu_estimated 0.443, wall 19,920.7초)는 assemble 직전까지의 재개 1회분만이다. assemble을 더한 compute.json의 값은 0.47(21,137.3초).",
+  "budget_rule_note": "드라이버의 누적 추정은 VM마다 새로 시작했다(driver_state.json을 되돌리지 않음). 재개 1회의 추정에는 3차 시도의 2.69시간(0.21 CU)이 빠졌다. 실제 누적이 경고선 5 CU에 크게 못 미쳐 건너뛴 단계는 없다(skipped_for_budget = [])."
+ },
+ "cleanup": {
+  "vm": "2026-10-06 18:54경 드라이버 cleanup 뒤 세션 정지. 2026-10-17 `colab sessions`에 M4 세션(m4-dry, m4-run)은 없다. 계정 전체가 비어 있다는 뜻은 아니다 — 같은 날 다른 실험(E15)의 세션은 있었다.",
+  "bucket_meta_articles_object": {
+   "object": "ebnerd/ebnerd_small/articles.meta5cols.parquet",
+   "deleted": true,
+   "deleted_kst": "2026-10-06 18:55경 (m4_finish.sh)",
+   "verified": "2026-10-17 gcloud storage ls(읽기 전용)로 없음을 확인"
+  },
+  "bucket_other_objects": "같은 버킷의 ebnerd/ 아래에 SHA256SUMS, derived/, ebnerd_small/train/, ebnerd_small/validation/, ebnerd_small/articles.meta5cols.e15.parquet이 남아 있다(2026-10-17). E15(ADR 0013 A3, S3·S4 보류 중)의 입력이고 M4의 정리 대상이 아니다.",
+  "local_mac": "체크포인트(models/, units/의 요청별 지표 배열, heuristic/)와 로그는 gitignore된 data/benchmarks/ebnerd/derived/m4_ckpt/out에만 있다. 커밋하지 않는다."
+ },
+ "local_files_sha256": {
+  "compute.json": "5ac04183dd857530d6975c25cad0a77212d36057038b3f3902b9884ca20fdfe4",
+  "reproduction_gate.json": "54d8bec9d2a9e9960942a209763ecedc2ca9b1f4a91793ff741a962e0c96c154",
+  "progress.json": "367d65c3714a0a650d92abb7b2fcd0b937d5a9f74c7724d34c0a5d8b4278644f",
+  "driver_state.json": "9667ea95d34eefcef0c235bde4c805b1f3836aa790274d4e8728837889154187",
+  "run.log": "3ff8c74a9ec1f07e7eb9593e5dd3054e70bd9d54259bbfdfa31a2d7b5132d719",
+  "driver_stdout.log": "640582a98e2508bd7f0b065f3214bf271cf8b7095cbb323d0f7c364be1de063b"
+ },
+ "reproduction_gate": {
+  "arm": "poolneg",
+  "cell": "orig|full",
+  "within": [
+   0.264,
+   0.2728
+  ],
+  "mean": 0.26823928017392756,
+  "status": "pass",
+  "enforced": true,
+  "checked_after": "e1_base",
+  "evidence_grade": "preregistered-run"
+ },
+ "results_viewing": "실행 중의 운영 기록(.ops/m4_run.json, 당일 운영 메모)에 남은 열람은 단위 소요 시간, 환경 기록, 드라이버 로그, 진행 단위 수뿐이다. 재현 게이트는 사람이 아니라 드라이버가 판정했다. 모든 시도가 같은 tarball·manifest·인자·설정 해시로 돌았으므로 실행 도중에 판정과 관계된 조정은 없었다. 결과를 본 뒤 등록 문장(A2.0–A2.9)·yaml·실행 코드는 바꾸지 않았다."
+}

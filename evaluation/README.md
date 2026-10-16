@@ -136,9 +136,11 @@ python -m evaluation.llm.gate_probe --newsletters 'data/team_archive/newsletters
   `recsys_core`는 저장소 루트에서 `python -m evaluation.recsys.ebnerd.run_ebnerd ...`로 실행하면 import된다.
 - demo 데이터 기반 테스트(로더·과제 구성·전 구간 스모크)는 데이터가 있어야 돈다. git worktree에서는
   `EBNERD_ROOT=<메인 체크아웃>/data/benchmarks/ebnerd`를 지정해 실행한다(없으면 skip).
-- **콜드 regime 사슬(v1.2, 결과 대기)**: 인기도 0·저트래픽·작은 풀·짧은 히스토리에서 랭커가 얼마나 버티는지 재는
+- **콜드 regime 사슬(v1.2)**: 인기도 0·저트래픽·작은 풀·짧은 히스토리에서 랭커가 얼마나 버티는지 재는
   실험 묶음이다. 규칙은 [ADR 0013 "A2 사전 등록"](../docs/adr/0013-ranker-v2-design.md)과
-  `ebnerd/preregistration/cold-v1.2.yaml`에 결과 전에 고정했다.
+  `ebnerd/preregistration/cold-v1.2.yaml`에 결과 전에 고정했다. 판정용 실행은 2026-10-06에 끝났고, 결과는
+  [`reports/recsys/ebnerd_v1_2_cold`](../reports/recsys/ebnerd_v1_2_cold.md)(실행 기록 `ebnerd_v1_2_cold_run.json`), 판정과 해석은
+  ADR 0013 "A2 결과"에 있다.
   - `ebnerd/neural/cold.py`(히스토리 절단·인기도 0 강제 — 이후 신경망 비교와 공유), `cold_transforms.py`(학습 마스킹,
     유저 서브샘플, 풀 축소, 요청 내 랭크, 축소 CTR, 릴리스 양자화), `candidate_config.py`(서빙 5출처 라운드로빈·cap),
     `heuristic_fit.py`(4항 가중치 적합), `cold_verdicts.py`(기계 판정), `run_cold.py`(단계별 체크포인트 실행기),
