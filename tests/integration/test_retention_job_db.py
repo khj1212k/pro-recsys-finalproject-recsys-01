@@ -322,7 +322,7 @@ def test_embedding_and_clustering_skip_purged_rows(pg_conn, world, monkeypatch):
     import types
 
     from config.settings import Settings
-    from core.clustering.hdbscan_clusterer import HDBSCANClusterer
+    from core.clustering.hdbscan_clusterer import NewsClusterer
     from jobs.run import main
     import pipeline.stages as stages
 
@@ -361,7 +361,7 @@ def test_embedding_and_clustering_skip_purged_rows(pg_conn, world, monkeypatch):
     assert ids["legacy_no_hash"] not in embedded and ids["policy_type2"] not in embedded
     assert ids["expired_ok"] in embedded  # 비우기 전에 있던 임베딩은 남는다
 
-    data = HDBSCANClusterer()._load_data_from_db(exclude_clustered=False, lookback_hours=24 * 40)
+    data = NewsClusterer()._load_data_from_db(exclude_clustered=False, lookback_hours=24 * 40)
     loaded = set(int(i) for i in data["ids"])
     assert ids["expired_ok"] not in loaded  # 임베딩은 있지만 본문을 비운 행
     assert ids["fresh_ok"] in loaded
@@ -430,10 +430,13 @@ def test_downgrade_does_not_resurrect_bodies_and_upgrade_backfills_lengths(datab
     state = _state(pg_conn, ids)
     assert all(state[k]["content"] == "" and state[k]["purged_at"] is None for k in PURGED_BY_RUN)
 
-    # 비운 표시는 사라졌지만 본문도 없다. 다시 돌리면 같은 행이 다시 비워진다(NULL).
+    # 비운 표시는 사라졌지만 본문도 없다. 다시 돌리면 같은 행이 다시 비워진다(NULL). 공공누리 유형 열도 내렸다
+    # 올리며 비었으므로, 유형 2였던 정책 출처 행은 이제 "유형 미기록 = 면제"로 보여 ''로 남는다 - 본문은 여전히 없다.
     assert main(["retention"]) == 0
     state = _state(pg_conn, ids)
-    assert all(state[k]["content"] is None and state[k]["purged_at"] is not None for k in PURGED_BY_RUN)
+    for key in PURGED_BY_RUN - {"policy_type2"}:
+        assert state[key]["content"] is None and state[key]["purged_at"] is not None, key
+    assert (state["policy_type2"]["content"], state["policy_type2"]["purged_at"]) == ("", None)
 
 
 def test_news_raw_model_matches_the_retention_migration(database_url):
