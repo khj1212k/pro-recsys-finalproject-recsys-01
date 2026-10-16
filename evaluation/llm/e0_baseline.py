@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from evaluation.llm import e0_registered as reg
-from evaluation.llm import e0_sample, e0_store, embedding_pack, frozen_export
+from evaluation.llm import e0_sample, e0_store, frozen_export
 
 KST = timezone(timedelta(hours=9))
 RUN_STATE = "run_state.json"

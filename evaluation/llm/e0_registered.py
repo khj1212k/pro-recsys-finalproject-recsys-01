@@ -15,7 +15,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional
 
 import yaml
 
