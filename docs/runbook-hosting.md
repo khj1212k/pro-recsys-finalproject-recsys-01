@@ -876,8 +876,9 @@ nice -n 19 env OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 PYTHON
 (yaml·매니페스트·ADR만)로 main에 넣는다. 그 PR이 병합되기 전에는 생성 호출을 하지 않는다.
 
 ### 10.4 실행 (pre-flight → warmup 2 → eval 15, 상한 $1.00, 누적 $1.50, 벽시계 2시간)
-1. 실행 직전에 선불 잔액(AI Studio 결제 화면, ₩)과 읽은 시각을 적는다. `PYTHONPATH=ai_workspace python -m core.llm.spend_cli summary`로 원장이
-   멀쩡한지 본다(러너가 다시 확인한다 - 전체 상한 여유가 $2.00 미만이면 시작하지 않는다).
+1. 실행 직전에 선불 잔액(AI Studio 결제 화면, ₩)과 읽은 시각을 적는다. `PYTHONPATH=ai_workspace python -m core.llm.spend_cli summary`로 지출
+   원장(ADR 0035)이 멀쩡한지 본다. 2026-10-17 현재 메인 체크아웃에는 원장이 없다 - 첫 유료 실행 전에 사람이 `spend_cli init`으로 만든다(가드는
+   원장을 만들지 않는다). 러너가 다시 확인한다 - 원장이 없거나 전체 상한 여유가 $2.00 미만이면 시작하지 않는다.
 2. 메인 체크아웃을 실행 전 기록 PR이 병합된 main으로 맞춘다(`git checkout --detach origin/main`, 깨끗한 트리). `GEMINI_API_KEY`가 환경에 있다.
 3. ```bash
    caffeinate -i nice -n 19 env OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 PYTHONPATH=ai_workspace \
