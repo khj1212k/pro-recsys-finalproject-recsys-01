@@ -257,9 +257,10 @@ docker compose exec -T db pg_dump -U newsletter -d newsletter -Fc > backup_$(dat
 만료된다. Mac에는 상주 작업을 두지 않으므로(지우는 데몬도 없다) 덤프를 다룰 때마다 사람이 확인한다:
 
 ```bash
-# 만료일(UTC 날짜)이 오늘이거나 지난 덤프를 보여 준다 - 보이면 지운다(사본이 있는 곳도 같은 날)
-for f in data/backups/*.expires-*.dump; do d=${f##*.expires-}; d=${d%.dump}; \
-  [[ ! "$d" > "$(date -u +%F)" ]] && echo "만료: $f ($d)"; done
+# 만료일(UTC 날짜)이 오늘이거나 지난 덤프를 보여 준다 - 보이면 지운다(사본이 있는 곳도 같은 날).
+# 셸 glob 대신 find를 쓴다: zsh는 맞는 파일이 없으면 glob에서 "no matches found"로 멈춘다(bash·zsh에서 확인).
+find data/backups -name '*.expires-*.dump' 2>/dev/null | sort | while read -r f; do d=${f##*.expires-}; d=${d%.dump}; \
+  [[ "$d" > "$(date -u +%F)" ]] || echo "만료: $f ($d)"; done
 # 만료일이 이름에 없는 예전 덤프: mac-compose-2026-09-26.dump 2026-10-25, tier0-micro-2026-09-26T2218.dump 2026-10-26
 ```
 

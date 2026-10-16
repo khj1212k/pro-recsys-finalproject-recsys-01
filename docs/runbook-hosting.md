@@ -159,6 +159,8 @@ ssh -F .ops/micro/ssh_config micro 'free -m; sudo docker stats --no-stream'
 
 `python -m jobs.run retention`이 매일 17:50 UTC(02:50 KST)에 수집 후 30일이 지난 상업 언론사 본문을 비운다(본문만 NULL,
 해시·길이·제목·URL·임베딩은 남김, 정책브리핑 면제). 만료는 `raw_news_crawled_at + 30일 <= 지금(UTC)`이다.
+실제로 비우는 실행은 30일만 쓴다: `.env`의 `BODY_RETENTION_DAYS`가 30이 아니면 잡이 아무것도 하지 않고 실패(알림)하고,
+30일보다 짧은 `--days`는 `--dry-run`과 함께일 때만 받는다(없으면 종료 코드 2로 아무것도 하지 않는다).
 **VM의 첫 만료는 2026-10-26 02:36 UTC(11:36 KST)** - 그 전에 아래 배포를 끝낸다. 첫 만료분이 실제로 비워지는 것은
 10-26 17:50 UTC 실행이다(하루 한 번이라 최대 보존은 30일 + 24시간 남짓, ADR 0023 개정 2026-10-17).
 
@@ -178,11 +180,20 @@ VMPSQL="cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -U news
 
 0. 하기 전에 - 하나라도 아니면 하지 않는다.
 
+   - **Tier 0 기사의 임베딩을 사용자가 정했는가.** VM은 임베딩을 하지 않는다(2026-10-16 실측 임베딩 0개). 이 배포
+     뒤 첫 실행(2026-10-26 17:50 UTC)부터 VM 기사는 임베딩 없이 본문이 비워지고, 그 뒤로는 영영 임베딩할 수 없다
+     (클러스터링·추천 후보에 들어가지 못한다, ADR 0023 개정의 "결과와 한계"). 그 전에 둘 중 하나를 사용자가 고른다:
+     (a) 만료 전에 Tier 0 행을 다른 곳에서 임베딩한다 - 반출 + 원격 임베딩, 또는 Mac MPS(Mac에서 무거운 연산을
+     돌리지 않는 방침과 함께 정한다), (b) 손실을 받아들인다. 고르지 않았으면 배포하지 않고 사용자에게 묻는다 - 배포하지 않으면 VM의 DB가 ADR 0023을 어기게 되므로
+     10-26 02:36 UTC 전에 답을 받는다.
+   - 아래 명령의 결과가 기대와 같다.
+
    ```bash
    git fetch origin && MERGE=$(git rev-parse origin/main) && git log -1 --oneline $MERGE   # 보존 잡 PR의 병합 커밋
    gh run list --repo khj1212k/pro-recsys-finalproject-recsys-01 --branch main --limit 1   # 그 커밋의 CI가 success
    $MICRO "$VMPSQL -At -c \"SELECT job, started_at FROM job_runs WHERE status = 'running'\""   # 비어 있어야 한다(6.6)
    $MICRO 'free -m; df -h / | tail -1'   # MemAvailable ≥ 300 MiB, 디스크 여유 ≥ 2 GB
+   $MICRO "grep '^BODY_RETENTION_DAYS=' ~/newsletter-recsys/.env || echo 없음"   # 없음 또는 =30 (다르면 잡이 실패한다)
    ```
 
 1. 스케줄러를 멈춘다(마이그레이션 동안 잡이 쓰지 않게). ingest가 돌고 있으면 끝날 때까지 기다린 뒤에 한다.
@@ -228,6 +239,9 @@ VMPSQL="cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -U news
    $MICRO 'cd ~/newsletter-recsys && time sudo docker compose run --rm migrate'
    # 기대: "Running upgrade ... -> f1db3221e45f", "[migrate] f1db3221e45f: 본문 길이 N행 채움 (...배치...)", "[migrate] 완료"
    $MICRO "$VMPSQL -At -c 'SELECT version_num FROM alembic_version'"   # f1db3221e45f
+   # 길이 채움: 본문이 있는데 길이가 없는 행 0. 스케줄러가 멈춰 있는 지금 본다 - 켜진 뒤에는 RSS 수집기가 넣는
+   # 추출 전 행(본문 '', 길이 없음)이 생기므로 조건을 본문 <> ''로 둔다.
+   $MICRO "$VMPSQL -At -c \"SELECT count(*) FROM news_raw WHERE raw_news_content <> '' AND raw_news_content_length IS NULL\""   # 0
    ```
 
 6. 잡을 손으로 먼저 돌린다 - dry run 두 번(세기만), 그다음 실제 실행. 마지막 줄의 JSON이 `job_runs.stats`와 같다.
@@ -236,7 +250,9 @@ VMPSQL="cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -U news
    $MICRO 'cd ~/newsletter-recsys && sudo docker compose run --rm worker retention --dry-run'
    # 10-26 02:36 UTC 전이면 scanned 0, purgeable 0, oldest_remaining_body_crawled_at 2026-09-26T02:36:41...
    $MICRO 'cd ~/newsletter-recsys && sudo docker compose run --rm worker retention --dry-run --days 7'
-   # 읽기만 한다: 실제 규모에서 세는 쿼리가 얼마나 걸리는지(duration_s)와 7일 기준 대상 수(purgeable)를 본다
+   # 읽기만 한다: 실제 규모에서 세는 쿼리가 얼마나 걸리는지(duration_s)와 7일 기준 대상 수(purgeable)를 본다.
+   # 반드시 --dry-run과 함께 쓴다. 코드도 강제한다: 30일보다 짧은 --days에 --dry-run이 없으면 종료 코드 2로
+   # 아무것도 하지 않는다(그대로 비우면 23일치 본문이 되돌릴 수 없게 사라진다).
    $MICRO 'cd ~/newsletter-recsys && sudo docker compose run --rm worker retention'
    # 만료 전이면 purged 0. 만료 뒤에 배포했다면 여기서 첫 비움이 일어난다(remaining_expired_bodies 0이어야 한다)
    ```
@@ -251,8 +267,8 @@ VMPSQL="cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -U news
 **확인**
 
 ```bash
-# 배포 직후: 리비전, 길이 채움, 손으로 돌린 실행
-$MICRO "$VMPSQL -c \"SELECT count(*) FILTER (WHERE raw_news_content IS NOT NULL AND raw_news_content_length IS NULL) AS no_length, \
+# 배포 직후: 길이 채움(본문이 있는데 길이가 없는 행 - 수집기가 넣는 추출 전 빈 행은 세지 않는다), 손으로 돌린 실행
+$MICRO "$VMPSQL -c \"SELECT count(*) FILTER (WHERE raw_news_content <> '' AND raw_news_content_length IS NULL) AS no_length, \
   count(*) FILTER (WHERE raw_news_content_purged_at IS NOT NULL) AS purged FROM news_raw\""          # no_length 0
 $MICRO "$VMPSQL -c \"SELECT id, status, started_at, stats->>'purged' AS purged, stats->>'remaining_expired_bodies' AS remaining, \
   stats->>'oldest_remaining_body_crawled_at' AS oldest, stats->>'duration_s' AS s FROM job_runs WHERE job = 'retention' \
@@ -276,7 +292,8 @@ $MICRO "$VMPSQL -c \"SELECT status, stats->>'purged' AS purged, stats->>'purged_
 - R1 잡만 끈다(코드·스키마 유지). 끈 동안 만료된 본문은 남으므로 ADR 0023을 어긴다 - 고친 뒤 바로 다시 켠다.
 
   ```bash
-  $MICRO "cd ~/newsletter-recsys && echo 'SCHEDULER_JOBS_DISABLED=retention' >> .env && sudo docker compose up -d scheduler"
+  $MICRO "cd ~/newsletter-recsys && printf '\nSCHEDULER_JOBS_DISABLED=retention\n' >> .env && sudo docker compose up -d scheduler"
+  # printf는 앞에 줄바꿈을 넣는다 - .env 끝에 줄바꿈이 없어도 마지막 변수 줄에 이어 붙지 않는다
   # 다시 켜기: .env에서 그 줄을 지우고 같은 up -d scheduler
   ```
 
@@ -299,8 +316,22 @@ $MICRO "$VMPSQL -c \"SELECT status, stats->>'purged' AS purged, stats->>'purged_
     cd newsletter-recsys && sudo docker compose up -d --build'
   ```
 
-- R4 DB가 망가졌다 - 2단계 덤프를 6.2의 명령으로 복원한 뒤 `up -d`(migrate가 head로 올린다). 복원한 DB에는 덤프 시점의
-  본문이 다시 들어 있으므로, 만료 뒤라면 스케줄러를 켜기 전에 `sudo docker compose run --rm worker retention`부터 돌린다.
+- R4 DB가 망가졌다 - 2단계 덤프를 복원한다. 덤프는 `d48994e9d26e`이고 덤프 시점의 본문이 다시 들어 있으므로, 스케줄러를
+  켜지 않은 채 복원 → `migrate`(head로) → `retention`(만료분을 비움) → `up -d` 순서로 한다. 6.2의 복원 명령은 빈 DB에
+  `--clean`으로 덮어쓰고 끝에 `up -d`가 붙어 스케줄러까지 켜므로 여기서는 쓰지 않는다 - 덤프보다 새 리비전의 테이블이
+  남은 DB에 덮어쓰면 `migrate`가 "already exists"로 멈춘다. 그래서 DB를 지우고 빈 DB에 복원한다.
+
+  ```bash
+  $MICRO 'cd ~/newsletter-recsys && sudo docker compose stop scheduler && sudo docker compose up -d db'
+  scp -F .ops/micro/ssh_config $DUMP micro:tier0.dump
+  $MICRO 'cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -U newsletter -d postgres \
+      -c "DROP DATABASE newsletter WITH (FORCE)" -c "CREATE DATABASE newsletter" \
+    && sudo docker compose cp ~/tier0.dump db:/tmp/tier0.dump \
+    && sudo docker compose exec -T db pg_restore -U newsletter -d newsletter --no-owner --exit-on-error /tmp/tier0.dump \
+    && sudo docker compose exec -T db rm /tmp/tier0.dump && rm ~/tier0.dump'
+  $MICRO 'cd ~/newsletter-recsys && sudo docker compose run --rm migrate \
+    && sudo docker compose run --rm worker retention && sudo docker compose up -d'
+  ```
 
 배포를 마치면 2단계 덤프는 이름의 만료일에 지운다(6.5). `~/newsletter-recsys.prev`는 다음 배포 때 지워진다.
 
