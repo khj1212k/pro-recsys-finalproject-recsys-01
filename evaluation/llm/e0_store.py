@@ -79,7 +79,8 @@ PATCH_TARGETS: Dict[Tuple[str, str], Tuple[_Param, ...]] = {
     ("db.connection", "_build_db_config"): (),
 }
 
-# 대역이 흉내 내거나, 대역을 부르는 운영 함수의 본문 sha256(main 1a42b46 = 실행 계획의 기준 b64da14와 같은 내용).
+# 대역이 흉내 내거나, 대역을 부르는 운영 함수의 본문 sha256. 실행 계획의 기준 b64da14와 같은 값이고, PR #25(지출 상한)가
+# 병합된 main a990108에서도 같다(PR #25는 core/llm·settings·Stage5 등을 바꿨지만 이 함수들은 건드리지 않았다).
 # 값이 달라지면: 운영 함수가 무엇을 하도록 바뀌었는지 읽고, 대역이 여전히 같은 일을 하는지
 # tests/evaluation/test_e0_store.py로 확인한 뒤 갱신한다.
 SOURCE_PINS: Dict[Tuple[str, str], str] = {
