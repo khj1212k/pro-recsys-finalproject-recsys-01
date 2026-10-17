@@ -644,7 +644,7 @@ VM에는 읽기 전용으로만 접근했다: `job_runs`·`news_raw` 집계(세�
 |---|---|
 | OCI CLI | 3.94.0(Mac과 같은 판), `/opt/oci-cli` 가상환경(`python3.12-venv` 설치), 디스크 772 MB. 인스턴스 주체로 목록 1회 2.4초, 최대 RSS 75 MB |
 | 최소 권한 확인 | VM 자격으로 내려받기·지우기·덮어쓰기를 시도하면 셋 다 `BucketNotFound`(권한 없는 요청에 대한 OCI의 응답)로 거절. 목록·새 객체 올리기만 된다 |
-| 스크립트 | `/opt/newsletter-backup/tier0_backup.py`·`idle_check.py`(브랜치 `ops/collector-backups-and-reporting`의 `a327d7b`, sha256은 저장소 파일과 같음) |
+| 스크립트 | `/opt/newsletter-backup/tier0_backup.py`·`idle_check.py` — 브랜치 `ops/collector-backups-and-reporting`의 `a327d7b`로 설치해 아래를 돌렸고, 빈 DB 복원(`restore`)의 기록 순서만 고친 `0efc2f5`로 다시 깔았다(`daily` 경로는 같다). sha256은 저장소 파일과 같다 |
 | cron | `/etc/cron.d/newsletter-tier0-backup` — `10 18 * * * root nice -n 10 … daily`, 로그 `/var/log/newsletter-backup.log` |
 
 **실행 (모두 2026-10-17 UTC)**
