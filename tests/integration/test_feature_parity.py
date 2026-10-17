@@ -119,10 +119,14 @@ def test_serving_features_scores_and_lists_match_the_offline_harness_over_200_re
         assert backfill["rebuilt"] == N_REQUEST_USERS // 2
 
         # --- 모델 등록(스크립트의 함수로): 22열, 스키마 지문 포함, shadow
+        # 기본은 무작위 데이터로 만든 22열 모델이다. RECSYS_PARITY_MODEL_FILE에 LightGBM text 모델 파일을 주면 그 모델로
+        # 같은 게이트를 돈다(ADR 0037: EB-NeRD M4 모델은 저장소·CI에 없어 배포하는 쪽이 파일을 넘겨야 한다).
+        model_file = os.environ.get("RECSYS_PARITY_MODEL_FILE")
+        gate_model_text = Path(model_file).read_text(encoding="utf-8") if model_file else train_model_text()
         register_model = _load_register_script()
         tx = psycopg2.connect(database_url)
         try:
-            register_model.register(tx, register_model.build_row(train_model_text(), "gate", name=model_name))
+            register_model.register(tx, register_model.build_row(gate_model_text, "gate", name=model_name))
         finally:
             tx.close()
 
@@ -171,6 +175,8 @@ def test_serving_features_scores_and_lists_match_the_offline_harness_over_200_re
                 "clicks_through_api": n_clicks,
                 "response_sources": sources,
                 "model_version": version,
+                "model_source": (f"file {Path(model_file).name} (RECSYS_PARITY_MODEL_FILE)" if model_file
+                                 else "synthetic 22-column model (tests/recsys/parity_sim.train_model_text)"),
                 "service_counters": {k: v for k, v in sorted(counters.items())
                                      if k.split(".")[0] in ("features", "shadow", "fallback", "cache", "scorer")},
             },
