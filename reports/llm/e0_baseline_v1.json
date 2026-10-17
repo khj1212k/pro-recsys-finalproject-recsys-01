@@ -1,0 +1,3453 @@
+{
+ "balance_reconciliation": {
+  "ledger_sum_usd": 0.155614,
+  "note": "실행 전·마지막 호출 24시간 뒤의 잔액을 읽어 다시 만든다",
+  "rule": "차이가 max($0.10, 원장 합의 15%)를 넘으면 '원장 불일치'(비용 수치 신뢰 불가, void 아님)",
+  "status": "미기록",
+  "unknowns": [
+   "잔액 표시 단위",
+   "반영 지연",
+   "VAT 포함 여부"
+  ]
+ },
+ "clusters": [
+  {
+   "article_body_sha256": [
+    "d183d0bf367060b4cccc63341f961f888bec8af72e2e829f99a78c646185f5dd",
+    "a375466ce9481863c53a7cf7b184b52ab5681b25f916e2963a5efbb7630e7c8d",
+    "99082d06257175ec4084632e0d66d65fe9377ed28baaaf841cdf0f81b631b204",
+    "d25a90a86cb42df27594db176ec979280e1d4e9ddaa8598758adfabbc84c54ab",
+    "e28cff797e8ac4387f4713d62bef8e83b257335822095d4b3caca5daefbba3be"
+   ],
+   "article_ids": [
+    142059,
+    142308,
+    142872,
+    143166,
+    143454
+   ],
+   "calls": 5,
+   "cluster_id": 51,
+   "cost_usd": 0.006908,
+   "first_draft_sha256": "930b4ee0a34eb020a34e91d81fdf8e72cdf63e14f843f505eb43472e4f339124",
+   "gen_attempts": 1,
+   "http_attempts": 5,
+   "item_id": "r1-c51",
+   "newsletter_id": 3,
+   "order": 2,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 1,
+   "saved_formal_sha256": "930b4ee0a34eb020a34e91d81fdf8e72cdf63e14f843f505eb43472e4f339124",
+   "size": 5,
+   "size_bucket": "5-9",
+   "split": "eval",
+   "split_v2": "no",
+   "wall_s": 8.647
+  },
+  {
+   "article_body_sha256": [
+    "785c1047136f63034fad3da3d710da5603eee5733d336a64604b4777bed012c0",
+    "7785e5f34b71316b92f7701e155169edc946a27bbf30925d782dba16b845ab2f",
+    "763400fec0ac3efe20aec0d142d6f0daab50e19d61a62dfcb11cc285d41ff062",
+    "fd86a68f814c079b8c56c683b7a0f1f5a711fd68ed26ef64959667ed6e1f679e"
+   ],
+   "article_ids": [
+    152996,
+    153045,
+    153299,
+    153476
+   ],
+   "calls": 5,
+   "cluster_id": 11,
+   "cost_usd": 0.006369,
+   "first_draft_sha256": "e57fb5d457957539d2e42a0ae8d17ddfec3d0a4977285c298ade0e7ee4cf7cc2",
+   "gen_attempts": 1,
+   "http_attempts": 5,
+   "item_id": "r3-c11",
+   "newsletter_id": 4,
+   "order": 3,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 3,
+   "saved_formal_sha256": "e57fb5d457957539d2e42a0ae8d17ddfec3d0a4977285c298ade0e7ee4cf7cc2",
+   "size": 4,
+   "size_bucket": "3-4",
+   "split": "eval",
+   "split_v2": "no",
+   "wall_s": 9.707
+  },
+  {
+   "article_body_sha256": [
+    "8fd778338135b76cdf9e7a713f7eec968eb004ecd422784dc3fa0f4018c427fd",
+    "b1af53d3badbbc75e21418ceb8cf687c4cb405ff0dbe103b3542564fdb6e63f6",
+    "9d0ab765265946f94743d3246b9f0c2df2c31a48d90e71d946de184f2d0e0857"
+   ],
+   "article_ids": [
+    156314,
+    156593,
+    158202
+   ],
+   "calls": 5,
+   "cluster_id": 149,
+   "cost_usd": 0.006779,
+   "first_draft_sha256": "a3a4d70834e80f24ef1bf0bc7456fc894a5945ea0905bfcf1ade75e91cc6ab10",
+   "gen_attempts": 1,
+   "http_attempts": 5,
+   "item_id": "r3-c149",
+   "newsletter_id": 5,
+   "order": 4,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 3,
+   "saved_formal_sha256": "a3a4d70834e80f24ef1bf0bc7456fc894a5945ea0905bfcf1ade75e91cc6ab10",
+   "size": 3,
+   "size_bucket": "3-4",
+   "split": "eval",
+   "split_v2": "no",
+   "wall_s": 9.728
+  },
+  {
+   "article_body_sha256": [
+    "5521294d2a3c5d48a291f746e0a4077714a50677568d42c2ef0678ceafc41b4d",
+    "9a9860db6728131a3a540ca4ba6f09e4f54e9613145b07eb05304b9198165e51",
+    "6f83e24629e8fcb67c25b91eda918aefeb49ba09bd7d9f41130590ad218d0016",
+    "2faa6228ea3060d960d6647b1469db637183d62a3d7fa357a96851a4da11a2ba",
+    "a7c09c1a5499c246bb4b07d124f8ec3479c9626b055095afc9d597710670419f",
+    "779334e678bec0f184b27215de6e7c1abb3904f58d874b61c32dc2e9f3141a94",
+    "db9b2d4e90aab32b217769397c8719fe59a18cd26ae70f8d07e0362ffa1b2bb6",
+    "c20c5c66a5d72ea22a5b29414f3bf3bac2d5191d9d8c93ed174cfd3112fe2891",
+    "55625fd4434ad2e1dac5446f8fd34bab13035c4c5f04842043ae63ad0211dda1",
+    "6bd60a1bed4ab59f6d1cde650eb593a41cf7993ebb2bf20a9cc5568330553fd4",
+    "42629d85e38db4fc53beeac2c4478dcd93896e758cf57e83f3559fba173c6191",
+    "a451eb2d4d764275ef18ba5d6291a3036eb64b4ec74f7ce45d99798ebcf2a8c0",
+    "0bb37581843557ec548ddfc98e66cd995f8e8530e51a69336d065450d3c87514",
+    "ba789903707786c8520a83c82116b67d9ab25d58f59ebd8d8f653fcd853a5332",
+    "c19a06faa7ee7edaa5c8daecd103967b567350ac658e61fc6c265009c7e1952d",
+    "92214480e90e4d4529b87cbafebf1d34ac7748e43c8bbc6d8ea66cd5e4e0a0e1",
+    "64b2aaead13c53d317eec05b75819fb784ad57bb7a21be058e6b6d27a2aea612",
+    "0046fc3a81bfd0f0cf5abde328ce1dcefbc389c47934ca803aa9b911e9cd3be7",
+    "4db5f440a37bf59193508fb0e3461ee57f012bd5e2218491c37b1f70fe3dfdfb"
+   ],
+   "article_ids": [
+    141476,
+    142346,
+    142680,
+    142735,
+    142737,
+    143174,
+    143176,
+    143178,
+    143278,
+    143305,
+    143516,
+    143559,
+    143590,
+    143642,
+    144068,
+    144124,
+    144146,
+    144410,
+    145418
+   ],
+   "calls": 5,
+   "cluster_id": 22,
+   "cost_usd": 0.012456,
+   "first_draft_sha256": "93a14ff67bc4237b762324b083540b72101ba2196b92fb782f579c07946898ee",
+   "gen_attempts": 1,
+   "http_attempts": 5,
+   "item_id": "r1-c22",
+   "newsletter_id": 7,
+   "order": 5,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 1,
+   "saved_formal_sha256": "93a14ff67bc4237b762324b083540b72101ba2196b92fb782f579c07946898ee",
+   "size": 19,
+   "size_bucket": "10+",
+   "split": "eval",
+   "split_v2": "no",
+   "wall_s": 10.474
+  },
+  {
+   "article_body_sha256": [
+    "7a6eaa4061fc96026c90bb244305da19d1120a5691a04967ca331793a516cd7a",
+    "3e6baddabc7443bea81f7d45b2a3de0efbcf9a32b99197b310e2580ba42dabb4",
+    "36b99315a1a9a24546c845f91ffc6aa3b108b27327dd42281658649219cd6b2b",
+    "67df1f4ecf4f80961b3aea43177d22830f13acbe063898f768e7ae06cd6b8d6f",
+    "2dfc214af3f6aa57f513e2ca3e201e291fb3552eadae6fd1061685d6e34981a6",
+    "ea0d0627c57ca68c284d40a084978179f0d2601442716e7a53b39eaa9d715143",
+    "8324f7a3d8ef6f12d560dd1eb36166a9d6ba5d43ac5d393060ca5eccb9a62534"
+   ],
+   "article_ids": [
+    146197,
+    146550,
+    146851,
+    146898,
+    147342,
+    148157,
+    148252
+   ],
+   "calls": 5,
+   "cluster_id": 14,
+   "cost_usd": 0.008491,
+   "first_draft_sha256": "ed18f004024d84734b9a0a755ef9392a2c3424e65c6e7c401be849d6008835a2",
+   "gen_attempts": 1,
+   "http_attempts": 5,
+   "item_id": "r2-c14",
+   "newsletter_id": 6,
+   "order": 6,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 2,
+   "saved_formal_sha256": "ed18f004024d84734b9a0a755ef9392a2c3424e65c6e7c401be849d6008835a2",
+   "size": 7,
+   "size_bucket": "5-9",
+   "split": "eval",
+   "split_v2": "no",
+   "wall_s": 8.893
+  },
+  {
+   "article_body_sha256": [
+    "f06b3997fac6f925f8e4ce316167f00dc93745134ab6b1d670e21b6a4c7b9e49",
+    "900fcf7065886a840e5f3cde3beb6475e71eb53f26b64e3a2a71edc3ee7233f6",
+    "2b748a42b298efa1f66a1de1dfc7f597cc5269841408a0c46da73aa4dd4da9a1",
+    "9663e4721b52a6451282a947338d2cbfce911847d72877b0008d5e19ac970b7c",
+    "9f5474ab575fcb188a48d8a7ead66add555e137aa9c7c21005f9e3d94777464c",
+    "710e7cdb74dd6f8020c4e389e6ebc3dcfccc16a072c5b60527159d830c567656",
+    "614b60b19094019e77a0fd514f459afa167d5cc0894529a9c817c65642be46ea",
+    "327822fb4dd3f60d34993ebecfa9bc11f25122a06a4c4dad062818fcfac855d5",
+    "38ca9188fa1fbdacb74e5a6022a27e6e50571e3a5d0425d50909cc44e1f26dcc",
+    "bc230b154be411d4eff97cc8a872a09514c66d5956d8e3ea0fb87494ab4f4a65",
+    "cab56530c9a23b0b3f818bc1f095f81926a2eb3d097d55964fb5211a4ff7065e",
+    "90ff9d76b984c3f27d59d8217cb99273b76d042f86186a81dce80d1eef8093cd",
+    "88d7dfbf845c6a70474631190f7c9ee0290cdbe7d6ef6e1edc831c1bce052e88",
+    "19e0a6345a3886c9500feeb131d529552c7ffa02970726e14fd52aec2fa226f7",
+    "b80ef48e8780ea4d7c23e7ebf944e37d40f17dfe831edf1d4d6cf9bf0c177155",
+    "5a5d1017d9885854982dfb74d3e6939d3383f17e6d424a936475b0f5fe456996",
+    "d55ef35972cf3002e83f29b392588e25a617ee938ac7b1a707dcb2cbef858467",
+    "7ca139615907b828624f1642df7b765eb8e15371220184a9d29315e49857a613",
+    "a8b7d718c6a4b4fc0b2664b5dd5ff6bf2a4add851a8dbac8fec7571e5f1ede77",
+    "3f449e033b126ab2a93d534f5dfea7cb0a87712ea963129aecbf49672a477bc6",
+    "9e093e5ff60346972e95d8aa7ecc1929581178f53f9a66fe9160da950d05edc9",
+    "6db1aebdf33fdca091870986a23d70e02851006c03ed52fb6fb1e9d3c397d962",
+    "91c2a660509df3bda68c10fd57c3ba4d43dff646e5af90bd460e16c1e380eb42",
+    "594bf2c4a2f447f7dbd21a19c99a50c48a5e4b77da4b29c1ba54d52bb2447dc5",
+    "0bbaa4ee2e650d8ba0040cbd7d85a3cb836b6a269190d24a2e6a34f1353acfd1",
+    "df169c6fc1c1ee0618a56b1cc10d980d6da7d3720b219038dcc40211e5693c13",
+    "0115aec8cf684f3e2bf5509abb6d1a935705cd3538bdae80511da622a4663912",
+    "8eb1efe2f75e9a5ee4fa6c618efecf563073e64c000bc7cdf9f0488fe53b4f3a",
+    "214cab0f41bd59d3f57df473eab62ea129de866af8eb3853cb6b747f887d6af3",
+    "e3d173193cd5b90d22213e6e12c9b09303be37b28352ca9f8fbb0d7314c98d5a"
+   ],
+   "article_ids": [
+    146449,
+    146625,
+    146903,
+    147883,
+    148155,
+    148243,
+    148324,
+    148325,
+    148334,
+    148622,
+    148667,
+    148682,
+    148712,
+    148730,
+    149124,
+    149135,
+    149139,
+    149354,
+    149358,
+    149792,
+    149924,
+    149960,
+    149980,
+    150299,
+    150699,
+    150709,
+    151259,
+    151326,
+    152451,
+    152461
+   ],
+   "calls": 5,
+   "cluster_id": 19,
+   "cost_usd": 0.013635,
+   "first_draft_sha256": "0a6bf6897d838f4c71cf03394f20d25beaf3a464dc396658a4cd33f5148079fb",
+   "gen_attempts": 1,
+   "http_attempts": 5,
+   "item_id": "r2-c19",
+   "newsletter_id": 8,
+   "order": 7,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 2,
+   "saved_formal_sha256": "0a6bf6897d838f4c71cf03394f20d25beaf3a464dc396658a4cd33f5148079fb",
+   "size": 30,
+   "size_bucket": "10+",
+   "split": "eval",
+   "split_v2": "no",
+   "wall_s": 10.718
+  },
+  {
+   "article_body_sha256": [
+    "28f572e6e764ef7eae8745a4f5fbfde5db3f73392c32ed97c29e6a09fd227a54",
+    "0c868912c696f8aa14d5b5124ebbbf7a40ed0449d689c21a403b4fc58f0ee222",
+    "c61a4e210aa4bd3aba8c7783d973136bd647154d5852374f203ec5bf473ca80f",
+    "44ce7560f8991441cf23948e85e9f133bbb79ffbc581a53867e7c50e285aa8f4",
+    "ef23232127128be5197c5f7b1d964114784d8044314743b4763bbaf20ee77659",
+    "4ea4c99f1ddd43e990854ec298e89170a2925df97870e27f20dc84801d2914d0",
+    "8609733c79cf4c66b29ec752494c1992076d10de633940e326869a3a32d9d067",
+    "70d2933ee6c79b3852764efc7a2806b905affcf691114c81dcae21713cc13f57",
+    "b49f05a5939929147edbda3afc45872c6b8eac9d3d2adff507c6a544d6935938",
+    "257cb58eeddcf6791bb761650760e044c83c6cd29794efdf7d76800dfc97dd2f",
+    "cb8b33037a987b8fd9753a80e91034bbd3e01804dd1244f4f77aaef06af4dfee",
+    "5b5f4f0cdd619fb20be7d22a45a71ae377cd04b115491643fc3c91a3b0ed9fb7",
+    "7031963f2928dde17ca904ae621bc1e1da10918ddd5b215f56392fbbe13a77b5",
+    "5060166e76132819e292e3cba102a72d12f6c71f5238e7bf97aceb3f7d87b6ca",
+    "cfb38792b2e2b6e820c6c8c22cacfa29550d051306ace87adf6a1eb4eaf0488f",
+    "14ad3811d77d1b2548423861acd655913a1a01cd9f4d7064689689190ffc7083",
+    "21a270a8e6a264dccceb69cb386d9401c90b6b1aea3b1b2215169f5708b65256",
+    "f405f2ce8aa2c9ef908632a07ca11a4251b8f532c7f997b0d72f16de646a3a76",
+    "64bfc5c44fd143b55d6e2d226025295beb89cfd0f81c4020db4235703688d36e",
+    "1f491792986b2e940ef6bbec0fae34683bcf155e45ebda785c47b398f4093ab0",
+    "286a35d09476859ea702ee5b7fe071b3269dfa4f6f7feb9afad65940032230f2",
+    "49110ea8b4f8ff2a73db7528d0ecea3b38a67aecb2eac11855d53afe4d7b1344",
+    "aa8de48fa230736adfaa8d4ad6915f5c7135ca947425133a1970e10b749c07bf",
+    "08fbff20b8382f3928382547b20c0251027f5c8ae1eac5aa1c69364ed6b81016",
+    "81f1ef0f55bba9fd35a5ac6af3b625f22b13cee7810ae32256497c32b40e63fd",
+    "0e195d4a0012cdc412d4631f32ff8a573b1ca84f0ef285bff22bac6fe4e7ec9e",
+    "a7048bce582a1d29d6406057defa224491217baf027f90796a501ede80cc6c57",
+    "a3ea6eb514088be6c313665f92ac21e7715bc78231dd05d9469b345e5cc0ab9f",
+    "b77eb190756b51226653f4979fa26ba91c763f6dc342ff52c8b4dc313ad58c87",
+    "ce688f8c1d0cccca7b510f45a853d8616960b4b7432aff0efc9490d46361c1b1",
+    "5df30883125d0284dc51029fbf69dc27ea5674f7a053973322d92e3644c304f1",
+    "f768e6dfa6c7552393e4dd89b4972ba9f016ffd90af4cc2fab8278e415ceea83",
+    "514a0a4568283fd1d0421e6d41f2efafce7314049bb5cfdaf4925504a584af05",
+    "cbf006e37c32ff53a064dd6e9761ca3ae4408800f4b1a6e724eac1282bafbb00",
+    "3a1eeb6f474613145751a9824edc8746b5f34b9c2bdb42f62554c25d338b8fa0",
+    "55d549394e47d68c6ee32d5d25a0cdd79f4ff07ad2ee176bf1b93cd0cfe37419",
+    "dd5777bb6bf779c5f30b3ee008948a53a9db3e8ab9f90aaa4988381a0781603e",
+    "ca6acdf00dee816f4d297064536cdf545341c9d57aff19d4272c2d4c241e2a36",
+    "f2bba5d9abb39f9ab43c8f0c392be0e78bd69076880bf63350ab0e319a5c019f",
+    "8cf47e318377180203b2d811f9add965dbc4f46b1e5b7f66e558584ccc121353",
+    "0dfbe2b2c814b89e92d0738d4a73c18ecbe16e34de1026afb3e93f3fe2dc772f"
+   ],
+   "article_ids": [
+    146102,
+    147033,
+    147355,
+    147654,
+    147876,
+    148094,
+    148226,
+    148249,
+    148339,
+    148549,
+    148557,
+    148593,
+    148594,
+    148607,
+    148638,
+    148701,
+    148740,
+    148951,
+    148954,
+    148967,
+    149044,
+    149072,
+    149118,
+    149346,
+    149420,
+    149845,
+    149849,
+    149964,
+    149991,
+    150653,
+    150698,
+    150704,
+    150705,
+    150706,
+    150886,
+    151257,
+    151327,
+    151745,
+    151756,
+    152478,
+    152480
+   ],
+   "calls": 6,
+   "cluster_id": 8,
+   "cost_usd": 0.018156,
+   "first_draft_sha256": "ee89cf4ab3ebe5de0a18c90d0ef768f4f93babaedf28adbcb956e26733c2e0a8",
+   "gen_attempts": 1,
+   "http_attempts": 6,
+   "item_id": "r2-c8",
+   "newsletter_id": 11,
+   "order": 8,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 2,
+   "saved_formal_sha256": "ee89cf4ab3ebe5de0a18c90d0ef768f4f93babaedf28adbcb956e26733c2e0a8",
+   "size": 41,
+   "size_bucket": "10+",
+   "split": "eval",
+   "split_v2": "no",
+   "wall_s": 11.582
+  },
+  {
+   "article_body_sha256": [
+    "41361174fc827fc763a29e2af8527d8e1836c0ad885fa2fd1dc8ebbe355fbef9",
+    "10ad2daba144813e0124fcee2b2e396ae2a6efc349bd2d0ef5a0ad6ceed8d58b",
+    "6521eeca6d14f7a6c0bda7d7db3fd60dc32d82975da0ef4b7423bbeae472c43a",
+    "42062585b08d2e5d13a125331b1a5ef5aca4e3a47a36022ac4d7b711cf902692"
+   ],
+   "article_ids": [
+    147393,
+    147806,
+    148218,
+    148556
+   ],
+   "calls": 5,
+   "cluster_id": 70,
+   "cost_usd": 0.007019,
+   "first_draft_sha256": "32f7ae51bee4e7a3da9b809ce214f30fa3a12b9cddbe48353631c785156336ba",
+   "gen_attempts": 1,
+   "http_attempts": 5,
+   "item_id": "r2-c70",
+   "newsletter_id": 9,
+   "order": 9,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 2,
+   "saved_formal_sha256": "32f7ae51bee4e7a3da9b809ce214f30fa3a12b9cddbe48353631c785156336ba",
+   "size": 4,
+   "size_bucket": "3-4",
+   "split": "eval",
+   "split_v2": "no",
+   "wall_s": 8.038
+  },
+  {
+   "article_body_sha256": [
+    "9b4f817b1a5955adb30871e3835096ab70ed39783d113ffe51cdf71ba778402c",
+    "c3b3f30d22963b4fd679218d876586508f61359de3456f2d2633b44f566dc26b",
+    "1bcfd15128652a3cec0eda76566224c6da32743ba79094f0a65a2e6ffae973c6",
+    "0fb30254dddc398cf5b5559f8e454b306d92b442365be9f876743f7eef3b4502",
+    "0fa048698d27043159dabfa0378cbb437b312c24b2393b6c3a7cb28212d3e97e"
+   ],
+   "article_ids": [
+    152894,
+    153049,
+    156996,
+    158198,
+    158389
+   ],
+   "calls": 5,
+   "cluster_id": 2,
+   "cost_usd": 0.007088,
+   "first_draft_sha256": "6df4ceae506d813f595571eecdf192b9c0eee343dd33f30e5ee22ac4e8b9d9fd",
+   "gen_attempts": 1,
+   "http_attempts": 5,
+   "item_id": "r3-c2",
+   "newsletter_id": 10,
+   "order": 10,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 3,
+   "saved_formal_sha256": "6df4ceae506d813f595571eecdf192b9c0eee343dd33f30e5ee22ac4e8b9d9fd",
+   "size": 5,
+   "size_bucket": "5-9",
+   "split": "eval",
+   "split_v2": "yes",
+   "wall_s": 8.732
+  },
+  {
+   "article_body_sha256": [
+    "55ba30623cf6d7a54699c66566d5a4d9de78bf12d02becf6e9ddb1f6206595be",
+    "ef5895bf4f24ff6b1b941207c7447d21e54688d00989b5f46c861759bdfdc69c",
+    "e60563a5dfc6f3182a7391c28714f2f79a956430dd8ed0fa8fe724c35731a9c9",
+    "aea3e13ed8439f60eda317686c14f98511082ad36efb8584a1d493707e330c85",
+    "c82a6239f7c5e4c6d1027def4c9a319f0cef80892e0af01be6a0deaec97b3490",
+    "03948a60d5856318dcb9a6092eb3d6f6b989a33b35e369a15c5d78f88d549a80",
+    "316912d98029021a52af9503c95a01d274c1cba96064491b9e4ac19f28df82c2",
+    "3c3fc69b41a7e02833a612dadd4ade553958712fa1477468091d60aa619f4804",
+    "42209b4486c9eb2dd9459e09cc7ef3b5a6d61a53c50a4e791807bddff5d0f068",
+    "a09ff77c86315d9353034ba223c4d29d2bd7923013e0c19a999c90cd6860287d"
+   ],
+   "article_ids": [
+    147332,
+    147333,
+    147334,
+    147335,
+    147336,
+    147337,
+    147338,
+    147339,
+    147340,
+    147341
+   ],
+   "calls": 5,
+   "cluster_id": 60,
+   "cost_usd": 0.010078,
+   "first_draft_sha256": "12c4dc3a006d95671129c8548dce6d3ee79e38a5a06e6c333bc723d615901a53",
+   "gen_attempts": 1,
+   "http_attempts": 5,
+   "item_id": "r2-c60",
+   "newsletter_id": 12,
+   "order": 11,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 2,
+   "saved_formal_sha256": "12c4dc3a006d95671129c8548dce6d3ee79e38a5a06e6c333bc723d615901a53",
+   "size": 10,
+   "size_bucket": "10+",
+   "split": "eval",
+   "split_v2": "no",
+   "wall_s": 9.284
+  },
+  {
+   "article_body_sha256": [
+    "4aa496ed37f77c3ae97444324be6de195e879a185b40c26bd3381f2799c78cf0",
+    "81cf2a658d1076f56e604b276995a198d2e5993de19418a2ff1c26911f27527f",
+    "a80348f9b7d703459e5b4a00769882a7d394abdd3b02bb7a25dbbd30368274ea"
+   ],
+   "article_ids": [
+    142380,
+    143531,
+    143657
+   ],
+   "calls": 5,
+   "cluster_id": 70,
+   "cost_usd": 0.00688,
+   "first_draft_sha256": "87625dce7cac88e90797cf38aad29cfbbda23d160fe5349b58cc19f47ef5aa37",
+   "gen_attempts": 1,
+   "http_attempts": 5,
+   "item_id": "r1-c70",
+   "newsletter_id": 13,
+   "order": 12,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 1,
+   "saved_formal_sha256": "87625dce7cac88e90797cf38aad29cfbbda23d160fe5349b58cc19f47ef5aa37",
+   "size": 3,
+   "size_bucket": "3-4",
+   "split": "eval",
+   "split_v2": "yes",
+   "wall_s": 7.959
+  },
+  {
+   "article_body_sha256": [
+    "e02dbdeff8980a6c53e518f4389ef2649245bf917aa0c3e40221f135b419319c",
+    "d74dbe9a26701e3a8139876f95a688ea7026f1a119eebd65659926def4b5ed23",
+    "541d8123ab6f98e964550238bbeac883caade3120ffd0adbc3f480bac6ce2116",
+    "d383c712855479286070bc85a198c06540e4a131360541c3d2d70e77d45cd48c",
+    "99abea3c63dffdae9a4a2dc87a4a4d235b6fd99e98d18ffb953c3b57a7f6e638",
+    "0fb6e4fc31906281ea041598c610f3702dec6e8563b8d8dc9a0bb05667e61209",
+    "5ab489baa493b50ccca7d265e9146a49441fb1ea63ff40df5b7c8d19d670690a",
+    "04b16898df4e80e2e0d6552390603a8569ab7697d5ce8a4f84e52ce4edfdc7a4",
+    "00720b787257b9674c1986fbd6e92899b789130c1a508e08bb65b0c5587a1d44"
+   ],
+   "article_ids": [
+    141858,
+    141911,
+    142369,
+    142733,
+    142862,
+    143180,
+    143603,
+    144004,
+    144088
+   ],
+   "calls": 5,
+   "cluster_id": 29,
+   "cost_usd": 0.01005,
+   "first_draft_sha256": "3e1058c101244b20db026b46ceeed1bff9167844728e6be63a85127ab6b2a41e",
+   "gen_attempts": 1,
+   "http_attempts": 5,
+   "item_id": "r1-c29",
+   "newsletter_id": 14,
+   "order": 13,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 1,
+   "saved_formal_sha256": "3e1058c101244b20db026b46ceeed1bff9167844728e6be63a85127ab6b2a41e",
+   "size": 9,
+   "size_bucket": "5-9",
+   "split": "eval",
+   "split_v2": "no",
+   "wall_s": 9.608
+  },
+  {
+   "article_body_sha256": [
+    "91bc5b2af36a970918710bffbe456f120099f955dc5a1849bd7a00c70d9387d5",
+    "572253ad55408a82cce2d059a93c20b5cca7f08f7c29bf2bd64994580a6eba88",
+    "732b8242492b300cde33c8706066aaf6af9d06dc645039d3093a8432cbc1faed",
+    "511183de8fab9100d59f97187afadbcc433d49be8ee627a5de4da0ad200f0b32",
+    "cd810fa20708c35191f65183356d59972d3789fbadd835b24b2edfb81aaba55d",
+    "589848b7d6b74f7802745e35db25bb5b978b19c12e1b257bde1d6ced279dad98"
+   ],
+   "article_ids": [
+    144423,
+    144501,
+    144550,
+    144916,
+    144956,
+    144993
+   ],
+   "calls": 5,
+   "cluster_id": 111,
+   "cost_usd": 0.00771,
+   "first_draft_sha256": "ccbd6a8ce5901936f3b91d8c26050799b4dbb9f3174a03db1b8734e4a098eea1",
+   "gen_attempts": 1,
+   "http_attempts": 5,
+   "item_id": "r1-c111",
+   "newsletter_id": 15,
+   "order": 14,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 1,
+   "saved_formal_sha256": "ccbd6a8ce5901936f3b91d8c26050799b4dbb9f3174a03db1b8734e4a098eea1",
+   "size": 6,
+   "size_bucket": "5-9",
+   "split": "eval",
+   "split_v2": "no",
+   "wall_s": 9.027
+  },
+  {
+   "article_body_sha256": [
+    "eb044a7ff8c44c0a85af8042232a23ed2fed590f436f82d6091d63352e6ef7e9",
+    "14f49b578e641215f2348505d4a9df140471a97883fd9a828ca3bfec8d59a3cf",
+    "54953147cef40c25b6cd30145addca3eb30aaec0c4bbfdbc17120b96762239ed",
+    "f501b4c6822d5dcea78aa810491d60e4f4794c7af4b5f944740313cb70d892f3",
+    "76d764d0a54a253bc1e46bd053494e851e035b47af85c173401999d8f06c863f",
+    "bb20bfb00d933318f914a2ac502110cda12ec1733a5e62582e288cc31561a75c",
+    "e0de1b72d4dce8bf7706a32f7c17143f49d0049bb7e7cdf4f2b3439ffdb8757c",
+    "c1de36fc0202acef1279cdee19882537f44174643f6b9f0807a7c44ca1c0b22f",
+    "0622d77492a22db2903b64e40305af6cb6ebf54d072616ee7921e258aefa8a88",
+    "0b82480820e548f56cbed52ee72f36560a3a9e0ae2d4fa7fe6963c6bd06dd233",
+    "e211d8b398c2d005998f10661148ab196d2419be2fe677ca7af545dbd407c017",
+    "8cac17dbb3764f03e34a09b0fac104f7aca680bf19f877c6ccf7fec7d8ede443",
+    "125d7e1841efa9f984d9b9c00fdb030f815807eaa49dc6639a078781c0fab544",
+    "a1980e23610f6aae5ccb19ea869c27d03d922b456042210489a94bcb0e7c55f0"
+   ],
+   "article_ids": [
+    153775,
+    154199,
+    154286,
+    154997,
+    155094,
+    155850,
+    156196,
+    156373,
+    156603,
+    156710,
+    157045,
+    157581,
+    158207,
+    158697
+   ],
+   "calls": 5,
+   "cluster_id": 52,
+   "cost_usd": 0.011265,
+   "first_draft_sha256": "979136931f7a1cb77392a96336c02e760c52405bdbd1b2f4baf75326473c9bff",
+   "gen_attempts": 1,
+   "http_attempts": 5,
+   "item_id": "r3-c52",
+   "newsletter_id": 16,
+   "order": 15,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 3,
+   "saved_formal_sha256": "979136931f7a1cb77392a96336c02e760c52405bdbd1b2f4baf75326473c9bff",
+   "size": 14,
+   "size_bucket": "10+",
+   "split": "eval",
+   "split_v2": "no",
+   "wall_s": 9.271
+  },
+  {
+   "article_body_sha256": [
+    "92baef7aedbfddda4d07ee6b1ec7b21d7375f9f51d7a2d7d21da1e8c5d47f73d",
+    "06eeb8ae806536513df57f18e2c0ae47ec9505a0a0b8ff642a39c072f214a534",
+    "69d840ffc0c009a5f8157981d5404ffe475428e0ef857d39edfcd0dee78c598a"
+   ],
+   "article_ids": [
+    142094,
+    143688,
+    145415
+   ],
+   "calls": 1,
+   "cluster_id": 52,
+   "cost_usd": 0.000508,
+   "first_draft_sha256": null,
+   "gen_attempts": 0,
+   "http_attempts": 1,
+   "item_id": "r1-c52",
+   "newsletter_id": null,
+   "order": 16,
+   "outcome": "skipped",
+   "root_cause": "cluster_eval_fail",
+   "run_k": 1,
+   "saved_formal_sha256": null,
+   "size": 3,
+   "size_bucket": "3-4",
+   "split": "eval",
+   "split_v2": "no",
+   "wall_s": 1.136
+  },
+  {
+   "article_body_sha256": [
+    "b3134a2ab6712177dbb3f4d7668633baac72719427de834bd8dc2513e8c0fae3",
+    "54255a66ea357d63782b9daa677b64ac6b4ac6fb3d466ad8699fdee22e562ec2",
+    "7b5b37511f3acd6e13a16d4ada6f1ce5aef4c6bc0d969ee9aaf942376ffff7a9",
+    "489a6b5ab37361f45504cd80a11c4487312c9c2266503d8ed72d6ab4a5175b7f",
+    "d2cd1f65a279d26496168e920652060ff204ce5641f000f149d27b2081a9b274",
+    "d8abb27a72beac3388e8171e1dd0f59974d708f9867cad0ad71c793b2359ed12",
+    "8df16572f93912dd41e9e6324417193c881a081fe361c3fd916c0e80ad2b2bc2",
+    "af06fad0fd779ebcb6e72b5dc1d5cb7c6bedf2d1fa9c82aed89e58869d847d69",
+    "a0d6e63ddf47e654b0b796560cfbb8d17323b8ef7dfe3fd5ee626b5b02ae4249",
+    "a3936754710c92faaddf34e0f7f062d4bd0852fc26f76e2996c0aaf280cdbd29",
+    "8321498b41dcb5f6f4986b6c1ad6f3d729d729b770cc3106a8a980beeef78179",
+    "4eb940436a64ecea2f76489021d18cbac928cf762d0bfaacb466744f83394754"
+   ],
+   "article_ids": [
+    143584,
+    143952,
+    143955,
+    143963,
+    144054,
+    144078,
+    144108,
+    144114,
+    144382,
+    144417,
+    144802,
+    144849
+   ],
+   "calls": 5,
+   "cluster_id": 96,
+   "cost_usd": 0.010831,
+   "first_draft_sha256": "9dbb4d3c838e34f95e7c675f1d6f9c649c08da6c6c616c7d7a07230ce6d0b44e",
+   "gen_attempts": 1,
+   "http_attempts": 5,
+   "item_id": "r1-c96",
+   "newsletter_id": 2,
+   "order": 0,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 1,
+   "saved_formal_sha256": "9dbb4d3c838e34f95e7c675f1d6f9c649c08da6c6c616c7d7a07230ce6d0b44e",
+   "size": 12,
+   "size_bucket": "10+",
+   "split": "warmup",
+   "split_v2": "no",
+   "wall_s": 10.234
+  },
+  {
+   "article_body_sha256": [
+    "c3ca6918ec714a6424d970159a2f54c7c607446b6a0cfdb146cf0dace95d021c",
+    "8fa592722c2cad9fce521fefbd459efc878c496c933b952a093b7334899c83ad",
+    "fac0ff67533219349e3cf4dcab78697adca69e93b51d6e5ee560a1e840a8cdd0"
+   ],
+   "article_ids": [
+    153085,
+    154167,
+    157544
+   ],
+   "calls": 5,
+   "cluster_id": 17,
+   "cost_usd": 0.006603,
+   "first_draft_sha256": "fb40b317079fd9beeefc47379c42bb01b46ac577f24363fb1eca5c561c358384",
+   "gen_attempts": 1,
+   "http_attempts": 5,
+   "item_id": "r3-c17",
+   "newsletter_id": 1,
+   "order": 1,
+   "outcome": "completed",
+   "root_cause": "none",
+   "run_k": 3,
+   "saved_formal_sha256": "fb40b317079fd9beeefc47379c42bb01b46ac577f24363fb1eca5c561c358384",
+   "size": 3,
+   "size_bucket": "3-4",
+   "split": "warmup",
+   "split_v2": "no",
+   "wall_s": 9.984
+  }
+ ],
+ "denominator": {
+  "definition": "처리 완료 eval 클러스터(completed/skipped/failed/error)",
+  "n_p": 15
+ },
+ "format": "e0-report/1",
+ "generated_at": "2026-10-17T05:43:57Z",
+ "guard": {
+  "caps_usd": {
+   "e0_cumulative": 1.5,
+   "valid_run": 1.0
+  },
+  "ledger": {
+   "open_ids": null,
+   "open_worst_usd": 0.0,
+   "settled": 87,
+   "settled_usd": 0.155614
+  },
+  "refusals": 0
+ },
+ "header": {
+  "billing_fx": 1400.0,
+  "bucket_allocation": {
+   "10+": 5,
+   "3-4": 5,
+   "5-9": 5
+  },
+  "code_sha": "35d0a1df97a38dad089f0daea676650072f592d6",
+  "colab_cu": 0.43,
+  "command": "python -m evaluation.llm.e0_baseline run --export-dir data/exports/20261017T024007Z --pack-dir data/exports/20261017T024007Z/embeddings",
+  "cost_krw": 217.9,
+  "cost_usd": 0.155614,
+  "day_windows": [
+   [
+    "2026-10-12T21:00:00",
+    "2026-10-13T21:00:00"
+   ],
+   [
+    "2026-10-13T21:00:00",
+    "2026-10-14T21:00:00"
+   ],
+   [
+    "2026-10-14T21:00:00",
+    "2026-10-15T21:00:00"
+   ]
+  ],
+  "declared_deviations": [
+   {
+    "id": 1,
+    "patched": [
+     "NewsClusterer._load_data_from_db",
+     "workflow.nodes.get_connection",
+     "workflow.nodes.release_connection",
+     "workflow.nodes.save_news_letter"
+    ],
+    "production_code_changed": false,
+    "store": "harness_file_stand_ins"
+   },
+   {
+    "cluster_selection": "stratified_sample_in_registered_order",
+    "id": 2
+   },
+   {
+    "bypass": "Stage5.execute",
+    "id": 3
+   },
+   {
+    "graph_run": "app.stream",
+    "id": 4
+   },
+   {
+    "article_embedding": "colab_t4_fp16",
+    "id": 5
+   },
+   {
+    "id": 6,
+    "newsletter_embedder": "record_only"
+   },
+   {
+    "id": 7,
+    "window": [
+     "upper_bound_by_runner",
+     "extracted_after_t_k_rows_reported",
+     "no_cross_run_newsletter_exclusion"
+    ]
+   },
+   {
+    "id": 8,
+    "instrumentation": [
+     "complete_wrapper",
+     "httpx_request_response_hooks",
+     "tone_local_fallback_flag"
+    ],
+    "unchanged": [
+     "prompts",
+     "temperature",
+     "max_tokens",
+     "retry_logic",
+     "timeouts"
+    ]
+   }
+  ],
+  "dry_run": false,
+  "embeddings_sha256": "7bb202ed6ce1aaef2a4e7dc5dedd35cefcef390a785a0db2c4b051ff551fb1b2",
+  "export_manifest_sha256": "0c4d9f89d5580aa291f016c2096b23c4a40403baec07a01768baae839a9444e7",
+  "export_t0": "2026-10-17T11:40:07.286148+09:00",
+  "forbid_database": false,
+  "head_sha": "8d4cd8df44b0d3bcef9cf2b760fdf0586aaeddba",
+  "in_client_cap": {
+   "LLM_BUDGET_DAY_USD": "2.00",
+   "LLM_BUDGET_RUN_USD": "2.00",
+   "LLM_BUDGET_TOTAL_USD": "unchanged",
+   "LLM_RUN_ID": "e0-baseline-v1:run-20261017T054231Z"
+  },
+  "label_hours_actual": null,
+  "n_aborted_or_not_started": 0,
+  "n_eval": 15,
+  "n_processed": 15,
+  "n_warmup": 2,
+  "partial_run": false,
+  "processing_order": [
+   "r1-c96",
+   "r3-c17",
+   "r1-c51",
+   "r3-c11",
+   "r3-c149",
+   "r1-c22",
+   "r2-c14",
+   "r2-c19",
+   "r2-c8",
+   "r2-c70",
+   "r3-c2",
+   "r2-c60",
+   "r1-c70",
+   "r1-c29",
+   "r1-c111",
+   "r3-c52",
+   "r1-c52"
+  ],
+  "results_viewed": "등록 시점(A8): 미열람. 이 리포트를 커밋하는 것이 첫 열람이다",
+  "resume_count": 0,
+  "resumes": [],
+  "run": "run-20261017T054231Z",
+  "run_at": "2026-10-17T05:42:31Z",
+  "run_environment": {
+   "packages": {
+    "hdbscan": "0.8.44",
+    "httpx": "0.28.1",
+    "httpx2": "2.13.1",
+    "kiwipiepy": "0.23.2",
+    "langgraph": "1.2.12",
+    "openai": "3.19.2",
+    "pydantic": "2.13.5",
+    "rapidfuzz": "3.14.6"
+   },
+   "pip_freeze_sha256": "078abf171b5d9cb632db77aeedb95ec70ba7b8c41fba562aadb6ac6840cd3e6d",
+   "python_version": "3.11.14"
+  },
+  "sample_manifest_sha256": "ca5f0c4a49d13a2070059e6d98e23eb9c58f09b9706859ed2da1980b008187c2",
+  "seed": {
+   "order": 20261007,
+   "sample": 20261006
+  },
+  "stop": null,
+  "user_decisions": {
+   "label_subset": "full",
+   "newsletter_embedder": "record_only_mac"
+  },
+  "void": null,
+  "wall_clock_reached": null
+ },
+ "human_labels": {
+  "status": "pending"
+ },
+ "kind": "descriptive_baseline",
+ "metrics": {
+  "10_link_integrity": {
+   "excluded_but_linked_per_saved": {
+    "max": 5.0,
+    "median": 0.0,
+    "n": 14,
+    "sum": 5.0,
+    "values": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     5.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "excluded_but_linked_total": 5,
+   "saved_with_gap": {
+    "k": 1,
+    "n": 14,
+    "rate": 0.0714,
+    "wilson95": [
+     0.0127,
+     0.3147
+    ]
+   }
+  },
+  "11_style_rules_shadow": {
+   "first_draft": {
+    "current_prompt_rules": {
+     "banned_ge_1": {
+      "k": 2,
+      "n": 14,
+      "rate": 0.1429,
+      "wilson95": [
+       0.0401,
+       0.3994
+      ]
+     },
+     "content_chars_out": {
+      "k": 11,
+      "n": 14,
+      "rate": 0.7857,
+      "wilson95": [
+       0.5241,
+       0.9243
+      ]
+     },
+     "invalid_category_ge_1": {
+      "k": 0,
+      "n": 14,
+      "rate": 0.0,
+      "wilson95": [
+       0.0,
+       0.2153
+      ]
+     },
+     "keywords_lt_5": {
+      "k": 0,
+      "n": 14,
+      "rate": 0.0,
+      "wilson95": [
+       0.0,
+       0.2153
+      ]
+     },
+     "paragraphs_lt_4": {
+      "k": 9,
+      "n": 14,
+      "rate": 0.6429,
+      "wilson95": [
+       0.3876,
+       0.8366
+      ]
+     },
+     "title_gt_15": {
+      "k": 3,
+      "n": 14,
+      "rate": 0.2143,
+      "wilson95": [
+       0.0757,
+       0.4759
+      ]
+     }
+    },
+    "n": 14,
+    "raw": {
+     "banned_count": {
+      "max": 1.0,
+      "median": 0.0,
+      "n": 14,
+      "sum": 2.0,
+      "values": [
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       1.0,
+       1.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "content_chars": {
+      "max": 1176.0,
+      "median": 949.0,
+      "n": 14,
+      "sum": 13189.0,
+      "values": [
+       967.0,
+       777.0,
+       827.0,
+       953.0,
+       937.0,
+       957.0,
+       955.0,
+       831.0,
+       868.0,
+       1104.0,
+       945.0,
+       887.0,
+       1176.0,
+       1005.0
+      ]
+     },
+     "emoji_count": {
+      "max": 0.0,
+      "median": 0.0,
+      "n": 14,
+      "sum": 0.0,
+      "values": [
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "emotive_count": {
+      "max": 1.0,
+      "median": 0.0,
+      "n": 14,
+      "sum": 2.0,
+      "values": [
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       1.0,
+       1.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "paragraph_count": {
+      "max": 4.0,
+      "median": 1.0,
+      "n": 14,
+      "sum": 29.0,
+      "values": [
+       1.0,
+       1.0,
+       1.0,
+       1.0,
+       1.0,
+       1.0,
+       4.0,
+       4.0,
+       4.0,
+       1.0,
+       1.0,
+       1.0,
+       4.0,
+       4.0
+      ]
+     },
+     "parsed_invalid_category_count": {
+      "max": 0.0,
+      "median": 0.0,
+      "n": 14,
+      "sum": 0.0,
+      "values": [
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "parsed_keyword_count": {
+      "max": 5.0,
+      "median": 5.0,
+      "n": 14,
+      "sum": 70.0,
+      "values": [
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0
+      ]
+     },
+     "sentence_chars": {
+      "max": 43.0,
+      "median": 36.0,
+      "n": 14,
+      "sum": 478.0,
+      "values": [
+       35.0,
+       32.0,
+       23.0,
+       38.0,
+       37.0,
+       37.0,
+       37.0,
+       43.0,
+       41.0,
+       26.0,
+       24.0,
+       35.0,
+       31.0,
+       39.0
+      ]
+     },
+     "title_chars": {
+      "max": 18.0,
+      "median": 12.0,
+      "n": 14,
+      "sum": 189.0,
+      "values": [
+       18.0,
+       12.0,
+       11.0,
+       15.0,
+       12.0,
+       12.0,
+       16.0,
+       18.0,
+       11.0,
+       14.0,
+       12.0,
+       15.0,
+       12.0,
+       11.0
+      ]
+     }
+    },
+    "v2_rules_reference": {
+     "banned_first_word": {
+      "k": 0,
+      "n": 14,
+      "rate": 0.0,
+      "wilson95": [
+       0.0,
+       0.2153
+      ]
+     },
+     "content_chars_out": {
+      "k": 9,
+      "n": 14,
+      "rate": 0.6429,
+      "wilson95": [
+       0.3876,
+       0.8366
+      ]
+     },
+     "emoji_gt_3": {
+      "k": 0,
+      "n": 14,
+      "rate": 0.0,
+      "wilson95": [
+       0.0,
+       0.2153
+      ]
+     },
+     "emotive_ge_1": {
+      "k": 2,
+      "n": 14,
+      "rate": 0.1429,
+      "wilson95": [
+       0.0401,
+       0.3994
+      ]
+     },
+     "paragraphs_ne_3": {
+      "k": 14,
+      "n": 14,
+      "rate": 1.0,
+      "wilson95": [
+       0.7847,
+       1.0
+      ]
+     },
+     "sentence_chars_out": {
+      "k": 3,
+      "n": 14,
+      "rate": 0.2143,
+      "wilson95": [
+       0.0757,
+       0.4759
+      ]
+     },
+     "title_gt_20": {
+      "k": 0,
+      "n": 14,
+      "rate": 0.0,
+      "wilson95": [
+       0.0,
+       0.2153
+      ]
+     }
+    }
+   },
+   "note": "현행 프롬프트 규칙이 주 지표, v2 규칙은 참고. '뉴스' 필러는 폴백 메타 전용이라 세지 않는다.",
+   "saved_formal_draft": {
+    "current_prompt_rules": {
+     "banned_ge_1": {
+      "k": 2,
+      "n": 14,
+      "rate": 0.1429,
+      "wilson95": [
+       0.0401,
+       0.3994
+      ]
+     },
+     "content_chars_out": {
+      "k": 11,
+      "n": 14,
+      "rate": 0.7857,
+      "wilson95": [
+       0.5241,
+       0.9243
+      ]
+     },
+     "invalid_category_ge_1": {
+      "k": 0,
+      "n": 14,
+      "rate": 0.0,
+      "wilson95": [
+       0.0,
+       0.2153
+      ]
+     },
+     "keywords_lt_5": {
+      "k": 0,
+      "n": 14,
+      "rate": 0.0,
+      "wilson95": [
+       0.0,
+       0.2153
+      ]
+     },
+     "paragraphs_lt_4": {
+      "k": 9,
+      "n": 14,
+      "rate": 0.6429,
+      "wilson95": [
+       0.3876,
+       0.8366
+      ]
+     },
+     "title_gt_15": {
+      "k": 3,
+      "n": 14,
+      "rate": 0.2143,
+      "wilson95": [
+       0.0757,
+       0.4759
+      ]
+     }
+    },
+    "n": 14,
+    "raw": {
+     "banned_count": {
+      "max": 1.0,
+      "median": 0.0,
+      "n": 14,
+      "sum": 2.0,
+      "values": [
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       1.0,
+       1.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "content_chars": {
+      "max": 1176.0,
+      "median": 949.0,
+      "n": 14,
+      "sum": 13189.0,
+      "values": [
+       967.0,
+       777.0,
+       827.0,
+       953.0,
+       937.0,
+       957.0,
+       955.0,
+       831.0,
+       868.0,
+       1104.0,
+       945.0,
+       887.0,
+       1176.0,
+       1005.0
+      ]
+     },
+     "emoji_count": {
+      "max": 0.0,
+      "median": 0.0,
+      "n": 14,
+      "sum": 0.0,
+      "values": [
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "emotive_count": {
+      "max": 1.0,
+      "median": 0.0,
+      "n": 14,
+      "sum": 2.0,
+      "values": [
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       1.0,
+       1.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "paragraph_count": {
+      "max": 4.0,
+      "median": 1.0,
+      "n": 14,
+      "sum": 29.0,
+      "values": [
+       1.0,
+       1.0,
+       1.0,
+       1.0,
+       1.0,
+       1.0,
+       4.0,
+       4.0,
+       4.0,
+       1.0,
+       1.0,
+       1.0,
+       4.0,
+       4.0
+      ]
+     },
+     "parsed_invalid_category_count": {
+      "max": 0.0,
+      "median": 0.0,
+      "n": 14,
+      "sum": 0.0,
+      "values": [
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0,
+       0.0
+      ]
+     },
+     "parsed_keyword_count": {
+      "max": 5.0,
+      "median": 5.0,
+      "n": 14,
+      "sum": 70.0,
+      "values": [
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0,
+       5.0
+      ]
+     },
+     "sentence_chars": {
+      "max": 43.0,
+      "median": 36.0,
+      "n": 14,
+      "sum": 478.0,
+      "values": [
+       35.0,
+       32.0,
+       23.0,
+       38.0,
+       37.0,
+       37.0,
+       37.0,
+       43.0,
+       41.0,
+       26.0,
+       24.0,
+       35.0,
+       31.0,
+       39.0
+      ]
+     },
+     "title_chars": {
+      "max": 18.0,
+      "median": 12.0,
+      "n": 14,
+      "sum": 189.0,
+      "values": [
+       18.0,
+       12.0,
+       11.0,
+       15.0,
+       12.0,
+       12.0,
+       16.0,
+       18.0,
+       11.0,
+       14.0,
+       12.0,
+       15.0,
+       12.0,
+       11.0
+      ]
+     }
+    },
+    "v2_rules_reference": {
+     "banned_first_word": {
+      "k": 0,
+      "n": 14,
+      "rate": 0.0,
+      "wilson95": [
+       0.0,
+       0.2153
+      ]
+     },
+     "content_chars_out": {
+      "k": 9,
+      "n": 14,
+      "rate": 0.6429,
+      "wilson95": [
+       0.3876,
+       0.8366
+      ]
+     },
+     "emoji_gt_3": {
+      "k": 0,
+      "n": 14,
+      "rate": 0.0,
+      "wilson95": [
+       0.0,
+       0.2153
+      ]
+     },
+     "emotive_ge_1": {
+      "k": 2,
+      "n": 14,
+      "rate": 0.1429,
+      "wilson95": [
+       0.0401,
+       0.3994
+      ]
+     },
+     "paragraphs_ne_3": {
+      "k": 14,
+      "n": 14,
+      "rate": 1.0,
+      "wilson95": [
+       0.7847,
+       1.0
+      ]
+     },
+     "sentence_chars_out": {
+      "k": 3,
+      "n": 14,
+      "rate": 0.2143,
+      "wilson95": [
+       0.0757,
+       0.4759
+      ]
+     },
+     "title_gt_20": {
+      "k": 0,
+      "n": 14,
+      "rate": 0.0,
+      "wilson95": [
+       0.0,
+       0.2153
+      ]
+     }
+    }
+   }
+  },
+  "12_input_stats": {
+   "articles_per_cluster": {
+    "max": 41.0,
+    "median": 6.0,
+    "n": 15,
+    "sum": 163.0,
+    "values": [
+     5.0,
+     4.0,
+     3.0,
+     19.0,
+     7.0,
+     30.0,
+     41.0,
+     4.0,
+     5.0,
+     10.0,
+     3.0,
+     9.0,
+     6.0,
+     14.0,
+     3.0
+    ]
+   },
+   "body_chars": {
+    "max": 10122.0,
+    "median": 1192.0,
+    "n": 163,
+    "sum": 330470.0,
+    "values": [
+     1554.0,
+     906.0,
+     644.0,
+     10122.0,
+     913.0,
+     759.0,
+     411.0,
+     863.0,
+     461.0,
+     1276.0,
+     1852.0,
+     1746.0,
+     923.0,
+     6705.0,
+     1155.0,
+     4590.0,
+     3866.0,
+     8853.0,
+     7781.0,
+     8941.0,
+     1446.0,
+     914.0,
+     1688.0,
+     1861.0,
+     1616.0,
+     8240.0,
+     1783.0,
+     1385.0,
+     2074.0,
+     1784.0,
+     1110.0,
+     838.0,
+     926.0,
+     821.0,
+     946.0,
+     1237.0,
+     990.0,
+     1004.0,
+     634.0,
+     641.0,
+     1503.0,
+     1109.0,
+     870.0,
+     993.0,
+     1463.0,
+     1334.0,
+     708.0,
+     4312.0,
+     1648.0,
+     683.0,
+     2004.0,
+     2093.0,
+     1645.0,
+     790.0,
+     1072.0,
+     1623.0,
+     1423.0,
+     758.0,
+     1350.0,
+     1678.0,
+     1734.0,
+     4315.0,
+     1721.0,
+     1250.0,
+     1976.0,
+     910.0,
+     762.0,
+     1988.0,
+     4775.0,
+     923.0,
+     1243.0,
+     1463.0,
+     915.0,
+     854.0,
+     4607.0,
+     1108.0,
+     1178.0,
+     1541.0,
+     537.0,
+     5123.0,
+     4431.0,
+     7931.0,
+     7597.0,
+     554.0,
+     1307.0,
+     1772.0,
+     1044.0,
+     1380.0,
+     1105.0,
+     691.0,
+     1158.0,
+     1773.0,
+     991.0,
+     5451.0,
+     4201.0,
+     1054.0,
+     1862.0,
+     783.0,
+     619.0,
+     1674.0,
+     1464.0,
+     1239.0,
+     3013.0,
+     773.0,
+     1221.0,
+     1446.0,
+     1322.0,
+     2035.0,
+     1307.0,
+     740.0,
+     592.0,
+     4009.0,
+     1024.0,
+     436.0,
+     673.0,
+     522.0,
+     1134.0,
+     905.0,
+     515.0,
+     928.0,
+     914.0,
+     510.0,
+     883.0,
+     930.0,
+     840.0,
+     849.0,
+     420.0,
+     995.0,
+     8300.0,
+     1912.0,
+     1192.0,
+     932.0,
+     1427.0,
+     9075.0,
+     9057.0,
+     1474.0,
+     8808.0,
+     4449.0,
+     8846.0,
+     1314.0,
+     1048.0,
+     484.0,
+     891.0,
+     934.0,
+     901.0,
+     589.0,
+     1190.0,
+     1073.0,
+     579.0,
+     5603.0,
+     1360.0,
+     4484.0,
+     1494.0,
+     1598.0,
+     1099.0,
+     720.0,
+     703.0,
+     719.0,
+     1369.0,
+     823.0,
+     963.0,
+     1072.0,
+     730.0
+    ]
+   },
+   "presses_per_cluster": {
+    "max": 6.0,
+    "median": 4.0,
+    "n": 15,
+    "sum": 60.0,
+    "values": [
+     5.0,
+     4.0,
+     2.0,
+     6.0,
+     4.0,
+     6.0,
+     6.0,
+     4.0,
+     3.0,
+     1.0,
+     3.0,
+     4.0,
+     4.0,
+     5.0,
+     3.0
+    ]
+   },
+   "same_press_title_near_dup_pairs": {
+    "max": 0.0,
+    "median": 0.0,
+    "n": 15,
+    "sum": 0.0,
+    "values": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "truncated_over_1500": {
+    "k": 56,
+    "n": 163,
+    "rate": 0.3436,
+    "wilson95": [
+     0.275,
+     0.4193
+    ]
+   }
+  },
+  "13_failure_taxonomy": {
+   "clusters": [
+    {
+     "events": {},
+     "item_id": "r1-c51",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "eval"
+    },
+    {
+     "events": {},
+     "item_id": "r3-c11",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "eval"
+    },
+    {
+     "events": {},
+     "item_id": "r3-c149",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "eval"
+    },
+    {
+     "events": {},
+     "item_id": "r1-c22",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "eval"
+    },
+    {
+     "events": {},
+     "item_id": "r2-c14",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "eval"
+    },
+    {
+     "events": {},
+     "item_id": "r2-c19",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "eval"
+    },
+    {
+     "events": {},
+     "item_id": "r2-c8",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "eval"
+    },
+    {
+     "events": {},
+     "item_id": "r2-c70",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "eval"
+    },
+    {
+     "events": {},
+     "item_id": "r3-c2",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "eval"
+    },
+    {
+     "events": {},
+     "item_id": "r2-c60",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "eval"
+    },
+    {
+     "events": {},
+     "item_id": "r1-c70",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "eval"
+    },
+    {
+     "events": {},
+     "item_id": "r1-c29",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "eval"
+    },
+    {
+     "events": {},
+     "item_id": "r1-c111",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "eval"
+    },
+    {
+     "events": {},
+     "item_id": "r3-c52",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "eval"
+    },
+    {
+     "events": {},
+     "item_id": "r1-c52",
+     "outcome": "skipped",
+     "root_cause": "cluster_eval_fail",
+     "split": "eval"
+    },
+    {
+     "events": {},
+     "item_id": "r1-c96",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "warmup"
+    },
+    {
+     "events": {},
+     "item_id": "r3-c17",
+     "outcome": "completed",
+     "root_cause": "none",
+     "split": "warmup"
+    }
+   ],
+   "root_cause_counts_processed_eval": {
+    "cluster_eval_fail": 1,
+    "none": 14
+   }
+  },
+  "1_completion": {
+   "completion_rate": {
+    "k": 14,
+    "n": 15,
+    "rate": 0.9333,
+    "wilson95": [
+     0.7018,
+     0.9881
+    ]
+   },
+   "excluded_from_denominator": {
+    "aborted_budget": {
+     "cost_usd": 0,
+     "count": 0
+    },
+    "aborted_infra": {
+     "cost_usd": 0,
+     "count": 0
+    },
+    "interrupted": {
+     "cost_usd": 0,
+     "count": 0
+    },
+    "not_started": {
+     "cost_usd": 0,
+     "count": 0
+    }
+   },
+   "length_bias_caution": false,
+   "outcomes_eval": {
+    "completed": 14,
+    "skipped": 1
+   }
+  },
+  "2_first_try_schema_pass": {
+   "by_purpose": {
+    "cluster_eval": {
+     "k": 16,
+     "n": 16,
+     "rate": 1.0,
+     "wilson95": [
+      0.8064,
+      1.0
+     ]
+    },
+    "newsletter_content_gen": {
+     "k": 14,
+     "n": 14,
+     "rate": 1.0,
+     "wilson95": [
+      0.7847,
+      1.0
+     ]
+    },
+    "newsletter_eval": {
+     "k": 14,
+     "n": 14,
+     "rate": 1.0,
+     "wilson95": [
+      0.7847,
+      1.0
+     ]
+    },
+    "newsletter_meta_gen": {
+     "k": 14,
+     "n": 14,
+     "rate": 1.0,
+     "wilson95": [
+      0.7847,
+      1.0
+     ]
+    },
+    "tone_convert": {
+     "k": 14,
+     "n": 14,
+     "rate": 1.0,
+     "wilson95": [
+      0.7847,
+      1.0
+     ]
+    }
+   },
+   "overall": {
+    "k": 72,
+    "n": 72,
+    "rate": 1.0,
+    "wilson95": [
+     0.9493,
+     1.0
+    ]
+   }
+  },
+  "3_retries": {
+   "attempts_per_call": {
+    "max": 1.0,
+    "median": 1.0,
+    "n": 72,
+    "sum": 72.0,
+    "values": [
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "deadline_reached_calls": 0,
+   "denominators": {
+    "http_status_counts": "처리 완료 eval 클러스터(n_p)의 HTTP 시도",
+    "http_status_counts_all_sent": "이 run에서 보낸 HTTP 시도 전체(pre-flight·warmup·중단·미완 클러스터 포함)",
+    "rate_429": "처리 완료 eval 클러스터(n_p)의 HTTP 시도",
+    "rate_429_all_sent": "이 run에서 보낸 HTTP 시도 전체(pre-flight·warmup·중단·미완 클러스터 포함, A8.3 #3)"
+   },
+   "graph": {
+    "cluster_eval_retries_per_cluster": {
+     "max": 1.0,
+     "median": 0.0,
+     "n": 15,
+     "sum": 1.0,
+     "values": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      1.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "generation_attempts_per_cluster": {
+     "max": 1.0,
+     "median": 1.0,
+     "n": 15,
+     "sum": 14.0,
+     "values": [
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      1.0,
+      0.0
+     ]
+    },
+    "tone_redo_for_drift_per_cluster": {
+     "max": 0.0,
+     "median": 0.0,
+     "n": 14,
+     "sum": 0.0,
+     "values": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ]
+    },
+    "tone_validation_retries_per_cluster": {
+     "max": 0.0,
+     "median": 0.0,
+     "n": 14,
+     "sum": 0.0,
+     "values": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+     ]
+    }
+   },
+   "http_attempts_per_call": {
+    "max": 1.0,
+    "median": 1.0,
+    "n": 72,
+    "sum": 72.0,
+    "values": [
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "http_status_counts": {
+    "200": 72
+   },
+   "http_status_counts_all_sent": {
+    "200": 87
+   },
+   "rate_429": {
+    "k": 0,
+    "n": 72,
+    "rate": 0.0,
+    "wilson95": [
+     0.0,
+     0.0507
+    ]
+   },
+   "rate_429_all_sent": {
+    "k": 0,
+    "n": 87,
+    "rate": 0.0,
+    "wilson95": [
+     0.0,
+     0.0423
+    ]
+   },
+   "schema_failures_sum": 0,
+   "transport_failures": {
+    "5xx": 0,
+    "connection": 0,
+    "other": 0,
+    "timeout": 0
+   }
+  },
+  "4_latency": {
+   "call_latency_s_by_purpose": {
+    "cluster_eval": {
+     "max": 1.668,
+     "median": 1.4145,
+     "n": 16,
+     "sum": 21.65,
+     "values": [
+      1.433,
+      1.469,
+      1.52,
+      1.018,
+      1.266,
+      1.513,
+      1.609,
+      1.105,
+      1.273,
+      1.668,
+      1.396,
+      1.189,
+      1.56,
+      1.065,
+      1.437,
+      1.129
+     ]
+    },
+    "newsletter_content_gen": {
+     "max": 3.148,
+     "median": 2.691,
+     "n": 14,
+     "sum": 37.669,
+     "values": [
+      2.224,
+      2.458,
+      2.695,
+      2.943,
+      2.687,
+      2.614,
+      2.172,
+      2.455,
+      3.109,
+      3.148,
+      2.488,
+      2.759,
+      2.857,
+      3.06
+     ]
+    },
+    "newsletter_eval": {
+     "max": 2.442,
+     "median": 1.5505,
+     "n": 14,
+     "sum": 22.519,
+     "values": [
+      1.453,
+      1.628,
+      2.442,
+      1.882,
+      1.52,
+      1.998,
+      1.662,
+      1.549,
+      1.515,
+      1.182,
+      1.148,
+      1.552,
+      1.673,
+      1.315
+     ]
+    },
+    "newsletter_meta_gen": {
+     "max": 1.45,
+     "median": 1.0475,
+     "n": 14,
+     "sum": 16.155,
+     "values": [
+      1.038,
+      1.384,
+      1.341,
+      1.412,
+      1.039,
+      1.45,
+      0.942,
+      1.203,
+      1.056,
+      0.991,
+      1.008,
+      1.005,
+      1.269,
+      1.017
+     ]
+    },
+    "tone_convert": {
+     "max": 2.896,
+     "median": 2.0995,
+     "n": 14,
+     "sum": 31.207,
+     "values": [
+      2.061,
+      2.093,
+      2.407,
+      2.08,
+      2.605,
+      2.896,
+      2.029,
+      2.158,
+      2.102,
+      2.394,
+      1.946,
+      2.306,
+      2.033,
+      2.097
+     ]
+    }
+   },
+   "cluster_wall_s": {
+    "max": 11.582,
+    "median": 9.271,
+    "n": 15,
+    "sum": 132.804,
+    "values": [
+     8.647,
+     9.707,
+     9.728,
+     10.474,
+     8.893,
+     10.718,
+     11.582,
+     8.038,
+     8.732,
+     9.284,
+     7.959,
+     9.608,
+     9.027,
+     9.271,
+     1.136
+    ]
+   },
+   "note": "n이 작아 p95는 적지 않는다(사실상 최댓값). 뉴스레터 임베딩 시간은 빠져 있다(이탈 6).",
+   "saved_cluster_wall_s": {
+    "max": 11.582,
+    "median": 9.2775,
+    "n": 14,
+    "sum": 131.668,
+    "values": [
+     8.647,
+     9.707,
+     9.728,
+     10.474,
+     8.893,
+     10.718,
+     11.582,
+     8.038,
+     8.732,
+     9.284,
+     7.959,
+     9.608,
+     9.027,
+     9.271
+    ]
+   },
+   "single_pass_latency_sum_s": {
+    "max": 10.297,
+    "median": 9.0185,
+    "n": 14,
+    "sum": 126.462,
+    "values": [
+     8.443,
+     9.612,
+     9.591,
+     9.86,
+     8.766,
+     10.297,
+     9.45,
+     7.91,
+     8.638,
+     9.111,
+     7.779,
+     9.182,
+     8.897,
+     8.926
+    ]
+   }
+  },
+  "5_tokens_cost": {
+   "cost_kind_counts": {
+    "observed": 87
+   },
+   "cost_per_call_usd": {
+    "max": 0.0046,
+    "median": 0.0016,
+    "n": 72,
+    "sum": 0.133391,
+    "values": [
+     0.0007,
+     0.0006,
+     0.0006,
+     0.0019,
+     0.0026,
+     0.0023,
+     0.0007,
+     0.0007,
+     0.0007,
+     0.0014,
+     0.0013,
+     0.0016,
+     0.0016,
+     0.0019,
+     0.0016,
+     0.0019,
+     0.0029,
+     0.001,
+     0.0046,
+     0.0046,
+     0.003,
+     0.0007,
+     0.0007,
+     0.0007,
+     0.0031,
+     0.0017,
+     0.0031,
+     0.0021,
+     0.0021,
+     0.0042,
+     0.0007,
+     0.0023,
+     0.0007,
+     0.0037,
+     0.0024,
+     0.0007,
+     0.0024,
+     0.0045,
+     0.0013,
+     0.0007,
+     0.0007,
+     0.0013,
+     0.002,
+     0.003,
+     0.0013,
+     0.002,
+     0.0021,
+     0.0005,
+     0.0038,
+     0.0012,
+     0.0007,
+     0.0025,
+     0.0006,
+     0.0019,
+     0.0041,
+     0.0012,
+     0.0006,
+     0.0023,
+     0.002,
+     0.0026,
+     0.0008,
+     0.0015,
+     0.0016,
+     0.0029,
+     0.0005,
+     0.0007,
+     0.0043,
+     0.0007,
+     0.0016,
+     0.0025,
+     0.0017,
+     0.0022
+    ]
+   },
+   "cost_per_cluster_usd": {
+    "max": 0.0182,
+    "median": 0.0077,
+    "n": 15,
+    "sum": 0.133391,
+    "values": [
+     0.0069,
+     0.0064,
+     0.0068,
+     0.0125,
+     0.0085,
+     0.0136,
+     0.0182,
+     0.007,
+     0.0071,
+     0.0101,
+     0.0069,
+     0.0101,
+     0.0077,
+     0.0113,
+     0.0005
+    ]
+   },
+   "cost_per_saved_usd": {
+    "max": 0.0182,
+    "median": 0.0081,
+    "n": 14,
+    "sum": 0.132884,
+    "values": [
+     0.0069,
+     0.0064,
+     0.0068,
+     0.0125,
+     0.0085,
+     0.0136,
+     0.0182,
+     0.007,
+     0.0071,
+     0.0101,
+     0.0069,
+     0.0101,
+     0.0077,
+     0.0113
+    ]
+   },
+   "cost_usd": {
+    "all_phases_run": 0.155614,
+    "e0_cumulative": 0.155614,
+    "preflight": 0.004789,
+    "processed_eval": 0.133391,
+    "warmup": 0.017434
+   },
+   "formula": "cost = prompt × 입력 단가 + (completion + hidden) × 출력 단가, hidden = max(0, total − prompt − completion)",
+   "in_client_spend_snapshot": {
+    "caps_usd": {
+     "day": 2.0,
+     "run": 2.0,
+     "total": 3.0
+    },
+    "corrupt_ledger_lines": 0,
+    "day": "2026-10-17",
+    "day_usd": 0.155614,
+    "ledger": "/Users/brownee/Projects/newsletter-recsys/.ops/llm_spend_ledger.jsonl",
+    "open_reservations": 0,
+    "run_id": "e0-baseline-v1:run-20261017T054231Z",
+    "run_usd": 0.155614,
+    "total_usd": 0.155614
+   },
+   "models_responded": [
+    "gemini-3.1-flash-lite",
+    "gemini-3.5-flash-lite"
+   ],
+   "prompt_chars_per_token_first_attempt": {
+    "cluster_eval": {
+     "max": 2.3998,
+     "median": 1.9599,
+     "n": 16,
+     "sum": 31.505001,
+     "values": [
+      2.2505,
+      2.1021,
+      2.1465,
+      1.7923,
+      1.7522,
+      1.905,
+      1.7193,
+      2.043,
+      2.0149,
+      1.7255,
+      1.706,
+      2.2666,
+      1.8227,
+      2.0484,
+      1.8101,
+      2.3998
+     ]
+    },
+    "newsletter_content_gen": {
+     "max": 1.8313,
+     "median": 1.671,
+     "n": 14,
+     "sum": 23.382856,
+     "values": [
+      1.682,
+      1.8313,
+      1.6433,
+      1.6913,
+      1.671,
+      1.6349,
+      1.6544,
+      1.6481,
+      1.677,
+      1.5587,
+      1.6933,
+      1.6291,
+      1.6974,
+      1.671
+     ]
+    },
+    "newsletter_eval": {
+     "max": 1.8207,
+     "median": 1.6571,
+     "n": 14,
+     "sum": 23.144008,
+     "values": [
+      1.8207,
+      1.6261,
+      1.6565,
+      1.6796,
+      1.6204,
+      1.6594,
+      1.6236,
+      1.6161,
+      1.6715,
+      1.5361,
+      1.6665,
+      1.6232,
+      1.6867,
+      1.6577
+     ]
+    },
+    "newsletter_meta_gen": {
+     "max": 1.8885,
+     "median": 1.8324,
+     "n": 14,
+     "sum": 25.68207,
+     "values": [
+      1.8885,
+      1.8651,
+      1.8594,
+      1.8138,
+      1.8353,
+      1.8141,
+      1.8238,
+      1.8153,
+      1.8657,
+      1.7491,
+      1.8295,
+      1.8585,
+      1.8579,
+      1.8062
+     ]
+    },
+    "tone_convert": {
+     "max": 1.7416,
+     "median": 1.67,
+     "n": 14,
+     "sum": 23.386084,
+     "values": [
+      1.7416,
+      1.6745,
+      1.6878,
+      1.6802,
+      1.6477,
+      1.641,
+      1.646,
+      1.6407,
+      1.7015,
+      1.6007,
+      1.6656,
+      1.7054,
+      1.7118,
+      1.6418
+     ]
+    }
+   },
+   "tokens_all_phases": {
+    "completion_tokens": 28743,
+    "hidden_tokens": 0,
+    "prompt_tokens": 333823,
+    "reasoning_tokens_reported": 0,
+    "total_tokens": 362566
+   },
+   "tokens_processed_eval": {
+    "completion_tokens": 24137,
+    "hidden_tokens": 0,
+    "prompt_tokens": 290881,
+    "reasoning_tokens_reported": 0,
+    "total_tokens": 315018
+   }
+  },
+  "6_faithfulness_checker": {
+   "by_field": {
+    "advisory.entities.content": 2,
+    "advisory.entities.sentence": 1
+   },
+   "final_draft": {
+    "advisory_entities_ge_1": {
+     "k": 3,
+     "n": 14,
+     "rate": 0.2143,
+     "wilson95": [
+      0.0757,
+      0.4759
+     ]
+    },
+    "unsupported_numbers_ge_1": {
+     "k": 0,
+     "n": 14,
+     "rate": 0.0,
+     "wilson95": [
+      0.0,
+      0.2153
+     ]
+    },
+    "unsupported_quotes_ge_1": {
+     "k": 0,
+     "n": 14,
+     "rate": 0.0,
+     "wilson95": [
+      0.0,
+      0.2153
+     ]
+    }
+   },
+   "first_draft": {
+    "advisory_entities_ge_1": {
+     "k": 3,
+     "n": 14,
+     "rate": 0.2143,
+     "wilson95": [
+      0.0757,
+      0.4759
+     ]
+    },
+    "unsupported_numbers_ge_1": {
+     "k": 0,
+     "n": 14,
+     "rate": 0.0,
+     "wilson95": [
+      0.0,
+      0.2153
+     ]
+    },
+    "unsupported_quotes_ge_1": {
+     "k": 0,
+     "n": 14,
+     "rate": 0.0,
+     "wilson95": [
+      0.0,
+      0.2153
+     ]
+    }
+   },
+   "generator_fallback_drafts": 0,
+   "per_attempt": [
+    {
+     "advisory": {
+      "entities": 0
+     },
+     "attempt": 1,
+     "blocking": {
+      "numbers": 0,
+      "quotes": 0
+     },
+     "gate_passed": true,
+     "item_id": "r1-c51",
+     "number_total": 1
+    },
+    {
+     "advisory": {
+      "entities": 1
+     },
+     "attempt": 1,
+     "blocking": {
+      "numbers": 0,
+      "quotes": 0
+     },
+     "gate_passed": true,
+     "item_id": "r3-c11",
+     "number_total": 0
+    },
+    {
+     "advisory": {
+      "entities": 0
+     },
+     "attempt": 1,
+     "blocking": {
+      "numbers": 0,
+      "quotes": 0
+     },
+     "gate_passed": true,
+     "item_id": "r3-c149",
+     "number_total": 0
+    },
+    {
+     "advisory": {
+      "entities": 0
+     },
+     "attempt": 1,
+     "blocking": {
+      "numbers": 0,
+      "quotes": 0
+     },
+     "gate_passed": true,
+     "item_id": "r1-c22",
+     "number_total": 2
+    },
+    {
+     "advisory": {
+      "entities": 1
+     },
+     "attempt": 1,
+     "blocking": {
+      "numbers": 0,
+      "quotes": 0
+     },
+     "gate_passed": true,
+     "item_id": "r2-c14",
+     "number_total": 1
+    },
+    {
+     "advisory": {
+      "entities": 0
+     },
+     "attempt": 1,
+     "blocking": {
+      "numbers": 0,
+      "quotes": 0
+     },
+     "gate_passed": true,
+     "item_id": "r2-c19",
+     "number_total": 0
+    },
+    {
+     "advisory": {
+      "entities": 0
+     },
+     "attempt": 1,
+     "blocking": {
+      "numbers": 0,
+      "quotes": 0
+     },
+     "gate_passed": true,
+     "item_id": "r2-c70",
+     "number_total": 3
+    },
+    {
+     "advisory": {
+      "entities": 0
+     },
+     "attempt": 1,
+     "blocking": {
+      "numbers": 0,
+      "quotes": 0
+     },
+     "gate_passed": true,
+     "item_id": "r3-c2",
+     "number_total": 0
+    },
+    {
+     "advisory": {
+      "entities": 0
+     },
+     "attempt": 1,
+     "blocking": {
+      "numbers": 0,
+      "quotes": 0
+     },
+     "gate_passed": true,
+     "item_id": "r2-c8",
+     "number_total": 2
+    },
+    {
+     "advisory": {
+      "entities": 0
+     },
+     "attempt": 1,
+     "blocking": {
+      "numbers": 0,
+      "quotes": 0
+     },
+     "gate_passed": true,
+     "item_id": "r2-c60",
+     "number_total": 13
+    },
+    {
+     "advisory": {
+      "entities": 0
+     },
+     "attempt": 1,
+     "blocking": {
+      "numbers": 0,
+      "quotes": 0
+     },
+     "gate_passed": true,
+     "item_id": "r1-c70",
+     "number_total": 0
+    },
+    {
+     "advisory": {
+      "entities": 0
+     },
+     "attempt": 1,
+     "blocking": {
+      "numbers": 0,
+      "quotes": 0
+     },
+     "gate_passed": true,
+     "item_id": "r1-c29",
+     "number_total": 2
+    },
+    {
+     "advisory": {
+      "entities": 1
+     },
+     "attempt": 1,
+     "blocking": {
+      "numbers": 0,
+      "quotes": 0
+     },
+     "gate_passed": true,
+     "item_id": "r1-c111",
+     "number_total": 2
+    },
+    {
+     "advisory": {
+      "entities": 0
+     },
+     "attempt": 1,
+     "blocking": {
+      "numbers": 0,
+      "quotes": 0
+     },
+     "gate_passed": true,
+     "item_id": "r3-c52",
+     "number_total": 0
+    }
+   ],
+   "regenerations_due_to_block": 0
+  },
+  "7_tone_drift": {
+   "blocking_by_type": {
+    "dates": {
+     "k": 0,
+     "n": 14,
+     "rate": 0.0,
+     "wilson95": [
+      0.0,
+      0.2153
+     ]
+    },
+    "entities_added": {
+     "k": 0,
+     "n": 14,
+     "rate": 0.0,
+     "wilson95": [
+      0.0,
+      0.2153
+     ]
+    },
+    "numbers": {
+     "k": 0,
+     "n": 14,
+     "rate": 0.0,
+     "wilson95": [
+      0.0,
+      0.2153
+     ]
+    }
+   },
+   "formal_fallback_saved": {
+    "k": 0,
+    "n": 14,
+    "rate": 0.0,
+    "wilson95": [
+     0.0,
+     0.2153
+    ]
+   },
+   "local_fallback_rounds": {
+    "k": 0,
+    "n": 14,
+    "rate": 0.0,
+    "wilson95": [
+     0.0,
+     0.2153
+    ]
+   },
+   "offline_saved_sentence_drift": {
+    "k": 0,
+    "n": 14,
+    "rate": 0.0,
+    "wilson95": [
+     0.0,
+     0.2153
+    ]
+   }
+  },
+  "8_judge_shadow": {
+   "claim_location_success": {
+    "k": 12,
+    "n": 14,
+    "rate": 0.8571,
+    "wilson95": [
+     0.6006,
+     0.9599
+    ]
+   },
+   "criteria_score_counts": {
+    "coherence": {
+     "5": 14
+    },
+    "coverage": {
+     "5": 14
+    },
+    "faithfulness": {
+     "4": 10,
+     "5": 4
+    },
+    "style": {
+     "3": 1,
+     "4": 2,
+     "5": 11
+    }
+   },
+   "judge_unavailable": 0,
+   "note": "shadow judge는 generator와 같은 계열(Gemini)이다.",
+   "pass_rate_default_thresholds": {
+    "k": 4,
+    "n": 14,
+    "rate": 0.2857,
+    "wilson95": [
+     0.1172,
+     0.5465
+    ]
+   },
+   "unsupported_claims": {
+    "max": 4.0,
+    "median": 1.0,
+    "n": 14,
+    "sum": 14.0,
+    "values": [
+     1.0,
+     1.0,
+     4.0,
+     1.0,
+     1.0,
+     1.0,
+     2.0,
+     1.0,
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0
+    ]
+   }
+  },
+  "9_cluster_evaluator": {
+   "confidence_parsed": {
+    "max": 1.0,
+    "median": 1.0,
+    "n": 16,
+    "sum": 15.75,
+    "values": [
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     0.95,
+     1.0,
+     1.0,
+     0.95,
+     1.0,
+     1.0,
+     0.95,
+     1.0,
+     1.0,
+     0.9
+    ]
+   },
+   "decisions_not_parsed": {},
+   "decisions_parsed": {
+    "FAIL": 2,
+    "PASS": 14
+   },
+   "outliers": {
+    "max": 5.0,
+    "median": 0.0,
+    "n": 16,
+    "sum": 5.0,
+    "values": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     5.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "retries": {
+    "max": 1.0,
+    "median": 0.0,
+    "n": 15,
+    "sum": 1.0,
+    "values": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     1.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ]
+   },
+   "second_subgroup_ge3_dropped_C15": 1,
+   "sub_group_sizes": [
+    1,
+    2,
+    2,
+    3,
+    3,
+    3,
+    3,
+    3,
+    4,
+    4,
+    4,
+    5,
+    5,
+    6,
+    6,
+    9,
+    10,
+    27,
+    36
+   ],
+   "sub_groups": {
+    "max": 2.0,
+    "median": 1.0,
+    "n": 16,
+    "sum": 19.0,
+    "values": [
+     1.0,
+     1.0,
+     1.0,
+     0.0,
+     0.0,
+     2.0,
+     2.0,
+     1.0,
+     2.0,
+     2.0,
+     1.0,
+     1.0,
+     2.0,
+     1.0,
+     0.0,
+     2.0
+    ]
+   }
+  }
+ },
+ "preflight": {
+  "call_params_mismatch": [],
+  "calls": [
+   {
+    "completion_tokens": 131,
+    "cost_usd": 0.0003475,
+    "error": null,
+    "hidden_tokens": 0,
+    "http_attempts": 1,
+    "latency_s": 2.224,
+    "max_tokens": 2048,
+    "parsed": true,
+    "prompt_tokens": 604,
+    "purpose": "cluster_eval",
+    "schema_failures": 0,
+    "temperature": 0.1
+   },
+   {
+    "completion_tokens": 365,
+    "cost_usd": 0.0012752,
+    "error": null,
+    "hidden_tokens": 0,
+    "http_attempts": 1,
+    "latency_s": 2.449,
+    "max_tokens": 8192,
+    "parsed": true,
+    "prompt_tokens": 1209,
+    "purpose": "newsletter_content_gen",
+    "schema_failures": 0,
+    "temperature": 0.2
+   },
+   {
+    "completion_tokens": 117,
+    "cost_usd": 0.0006708,
+    "error": null,
+    "hidden_tokens": 0,
+    "http_attempts": 1,
+    "latency_s": 1.0,
+    "max_tokens": 1024,
+    "parsed": true,
+    "prompt_tokens": 1261,
+    "purpose": "newsletter_meta_gen",
+    "schema_failures": 0,
+    "temperature": 0.2
+   },
+   {
+    "completion_tokens": 411,
+    "cost_usd": 0.0009275,
+    "error": null,
+    "hidden_tokens": 0,
+    "http_attempts": 1,
+    "latency_s": 2.479,
+    "max_tokens": 2048,
+    "parsed": true,
+    "prompt_tokens": 1244,
+    "purpose": "newsletter_eval",
+    "schema_failures": 0,
+    "temperature": 0.1
+   },
+   {
+    "completion_tokens": 500,
+    "cost_usd": 0.0015677,
+    "error": null,
+    "hidden_tokens": 0,
+    "http_attempts": 1,
+    "latency_s": 2.088,
+    "max_tokens": 4096,
+    "parsed": true,
+    "prompt_tokens": 1059,
+    "purpose": "tone_convert",
+    "schema_failures": 0,
+    "temperature": 0.4
+   }
+  ],
+  "infra_failure": false,
+  "stop": null
+ },
+ "prereg": "e0-baseline-v1",
+ "warmup": {
+  "audit": [],
+  "items": [
+   "r1-c96",
+   "r3-c17"
+  ],
+  "outcomes": {
+   "r1-c96": "completed",
+   "r3-c17": "completed"
+  }
+ }
+}

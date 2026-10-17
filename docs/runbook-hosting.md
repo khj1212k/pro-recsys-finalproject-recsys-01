@@ -847,7 +847,7 @@ python scripts/import_embeddings.py --export-dir data/exports/<T0> --pack-dir da
 
 **2026-10-17 현재 E0은 돌리지 않았다.** 도구는 합성 입력과 페이크 LLM 전송 계층으로만 확인했다
 (`python -m evaluation.llm.e0_baseline --dry-run`, 실제 기사·실제 호출 없음). 순서는 A8.0 그대로이고, 한 단계라도 건너뛰면 러너가 시작하지 않는다.
-명령은 전부 **메인 체크아웃**에서 `PYTHONPATH=ai_workspace`로 돌린다(워크트리의 편집 설치가 섞이지 않게). Mac 규칙대로 계산이 있는 명령에는
+명령은 전부 **메인 체크아웃**에서 `PYTHONPATH=ai_workspace`로 돌린다(워크트리의 편집 설치가 섞이지 않게). `prepare`·`run`(재개 포함)·`e0_report`·`e0_labels`에는 **`PYTHONHASHSEED=0`**도 붙인다 - 운영 `split_v2`의 동점 순서가 해시 시드를 따라 표본을 다시 계산하지 못하면 러너가 시작하지 않는다(ADR 0009 A8.11). Mac 규칙대로 계산이 있는 명령에는
 `nice -n 19 env OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2`를 붙인다.
 
 ### 10.1 code_sha와 반출
