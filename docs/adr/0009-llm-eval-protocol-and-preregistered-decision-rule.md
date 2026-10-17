@@ -583,3 +583,51 @@ A8이 등록된 뒤(`b64da14`) main에 들어온 코드와의 관계다. 구현�
   합성 텍스트라 실제 기사의 처리량은 본 실행에서 잰다.
 - **러너가 감지하지 못하는 void 사유.** A8.6 (e) "러너가 아닌 수단으로 호출을 섞음"은 러너가 볼 수 없다 - 잔액 대조의 "같은 기간 다른 Gemini
   호출" 칸과 클라이언트 안 원장 요약(run 요약의 `in_client_spend`)으로 사람이 확인한다.
+
+**A8.10 실행 전 기록 (2026-10-17, A8.0 4단계 — 실행 전 기록 PR) — 실행 전이고 결과는 없다(결과 열람: 해당 없음 — 생성 호출 0건, 지출 원장 기록 0건, `reports/llm/` 없음).**
+위 A8.0~A8.9의 문안과 yaml의 규칙 키는 고치지 않았다(`amendments`는 그대로 1건). 아래 값은 yaml `pre_run_record`와 같고, 표본 매니페스트
+`evaluation/llm/evalsets/e0-baseline-v1.jsonl`(id·URL·언론사·해시·길이·`order`만)이 함께 들어간다. 반출·임베딩·표본은 A8.0 3단계 순서대로
+`code_sha`의 깨끗한 메인 체크아웃(detached)에서 했고, 그 사이 LLM 호출은 없었다.
+- **`code_sha`** = `35d0a1df97a38dad089f0daea676650072f592d6`(PR #30 병합). `git diff --stat b64da14 35d0a1d -- ai_workspace`: 17개 파일, +2,832/−42.
+  그래프(`ai_workspace/workflow/`)와 프롬프트는 바뀌지 않았다. 생성 경로에서 바뀐 것은 LLM 클라이언트 층(`core/llm/adapters.py`·`client.py`·`budget.py`·
+  `spend_ledger.py`·`spend_cli.py`·`kill_switch.py`·`pricing.py`, `core/llm_client.py`, `core/llm_metrics.py` - ADR 0035 지출 상한, `amendments[0]`이
+  등록한 경로)과 `pipeline/stages.py`의 `run_clusters_bounded`(같은 ADR의 런 중단 시 미시작 처리)다. `config/settings.py`는 ADR 0035·0023 설정을
+  더했고 A8.2의 설정 키 기본값은 그대로다(러너의 설정 비교 통과). 나머지(`config/retention.py`, `crawler/*`, Stage3 보존 집계, `main.py`,
+  `.env.example`)는 수집·보존 경로다.
+- **`adr_0023_amendment_commit`** = `7cb6861039cc436db9fb994db9ad5e84e8280152`(PR #28 병합, ADR 0023 "개정 (2026-10-06)").
+- **반출**(런북 9·10.1, `export --days 5`): T0 = 2026-10-17 11:40:07.286 KST(서버 스냅숏 02:40:07Z), 창 2026-10-10 21:00 ~ 10-15 21:00 UTC(날짜 창 5개),
+  **6,874행**(9.2의 직전 건수와 같다), 8개 언론사, `export_manifest_sha256`(= `identity_sha256`) `0c4d9f89…a9444e7`, 본문 파일 sha256 `e9938692…ec39c5`
+  (33,985,107바이트), DB 해시 대조 불일치 0·누락 0, Alembic `f1db3221e45f`(10-17 VM 재배포 뒤), `code_dirty=false`. 본문 만료: 첫 **2026-11-09
+  21:05:07Z**(`export_body_expires_at`), 마지막 2026-11-14 19:05:23Z. 반출기는 열 이름을 적은 SELECT라 새 열(`raw_news_content_length`·
+  `raw_news_content_purged_at`·`raw_news_kogl_type`)을 읽지 않고, 본문이 NULL인(비운) 행은 행 조건이 뺀다 - 코드 변경 없이 돌았다.
+- **임베딩**(런북 10.2, Colab T4 세션 `e0-embed` 하나, 11:40:57~12:04:56 KST): 코드 tarball(`code_sha`에서 런북의 파일 목록 그대로 `git archive`)
+  sha256 `15206a36…21d104a`. A8.0 3단계의 순서대로 같은 세션에서 먼저 **S0**(합성 300건, 따로 둔 작업 디렉터리, `--cu-cap 0.3`): 11.7건/s, 첫 정렬 창
+  64행 비트 단위 결정론, fp16/fp32 코사인 p10 0.9999906·최솟값 0.9999284(앞 S0와 같은 값), 핀 9개 일치, 드라이버 추정 0.039 CU. 그다음 **본 실행**:
+  6,874행 7파트, 인코딩 1,048초(6.56건/s, 6,423토큰/s, 673만 토큰, 절단 0), GPU 피크 3.14 GB, 결정론 64행 비트 단위 같음, 모델 리비전
+  `5617a9f…` = 고정값. `embeddings_fp16_vs_fp32_cos`(저장 f16 대 fp32, 100건) p10 **0.99999219**, 최솟값 **0.99990849**. 잡이 끝나며 입력 파일
+  2개를 지웠다(`cleanup: done`, 입력 디렉터리 남음 False). `import_embeddings.py` 대조 통과: 6,874 × 1,024 float16, `embeddings_sha256`
+  `7bb202ed…51fb1b2`, 노름 최대 편차 2.4e-4.
+  **`colab_cu_used` = 0.43**: 세션 수명 23분 59초 × 1.07 CU/h = 0.428. 계정 잔액은 193.48 → 193.05(같은 계정의 다른 실험 세션 `e15-s2b`, CPU 0.08/h의
+  몫이 섞여 있다), 드라이버 추정은 본 실행 0.339 + S0 0.039. 세션은 붙은 `colab exec` 클라이언트와 Mac의 감시 루프(60초마다 서버 세션 목록,
+  2회 연속 없으면 클라이언트를 끊고 알림)로 지켰고 유실은 없었다.
+- **표본**(`prepare`, Mac 31초): 마지막 3개 창으로 다 뽑혀 연장 없음(`frame=full`). `day_windows_utc` = 10-12 21:00 / 10-13 21:00 / 10-14 21:00 /
+  10-15 21:00 UTC 경계의 24시간 창 3개(의사 시각 10-14·15·16 06:00 KST). 후보(기사 ≥ 3) 버킷별 238 / 103 / 27, **배분 5·5·5**, eval 15 + warmup 2.
+  `snapshot_sha256` run1 `cdfbd7ad…`, run2 `97bfa041…`, run3 `d54369b5…`. `sample_manifest_sha256` `5b458cc9…ec509a8b`. 처리 순서(warmup 둘이 먼저):
+  `r1-c9, r1-c10 | r1-c49, r3-c11, r3-c149, r1-c22, r2-c51, r2-c57, r2-c19, r2-c70, r2-c76, r2-c60, r1-c67, r1-c29, r2-c8, r3-c52, r1-c52`.
+  이탈 7의 보고: 의사 시각 뒤에 본문 추출이 끝난 행이 창 안에 run1 24 / run2 20 / run3 18행. 라벨 마감(표본 중 가장 오래된 기사의 수집 + 30일)
+  **2026-11-11 22:05:07Z**.
+- **사용자 결정**: `newsletter_embedder = record_only_mac`(A8.2 이탈 6 그대로), `label_subset = full`(A8.8의 기본, 축소안 아님). 사용자가 E0 진행을 맡겼고
+  (2026-10-17) 두 칸에 따로 지시하지 않아 등록된 기본값을 적었다.
+- **실행할 커밋(운영 메모, 규칙 변경 아님).** E0은 이 기록을 담은 커밋 - 이 PR의 **첫 커밋**(`docs/`·이 yaml의 `pre_run_record`·표본 매니페스트만
+  바꾼다, A8.0 4단계) - 에서 돈다. 런북 10.4 2의 `git checkout --detach origin/main`을 쓰지 않는 이유는 둘이다. (1) 이 PR의 브랜치는 `fa4c6da`
+  (PR #31 병합) 위에 있고, 그 뒤 main에 PR #32(E15, `evaluation/recsys/**`)가 2026-10-17 11:36 KST에 병합돼 origin/main의 끝은 A8.2 (c)가 보는
+  코드 경로(`evaluation`)에서 `code_sha`와 다르다. (2) `code_sha`의 단위 테스트 하나(`test_the_committed_record_is_empty_and_refused_field_by_field`)가
+  커밋된 기록이 비어 있다고 가정해 이 기록 커밋에서 깨진다. 그 테스트를 "비어 있거나 전부 채워져 형식 검사를 통과한다"로 고친 것은 이 PR의
+  **둘째 커밋**이고(`tests/`는 A8.2 (c)의 코드 경로 밖이며 러너 코드는 바뀌지 않는다), E0을 돌리는 커밋에는 들어가지 않는다. 첫 커밋은 병합 커밋으로
+  main에 들어가므로 (a)를 만족하고, `code_sha`와의 차이가 위 세 가지뿐이라 (c)와 "달라도 되는 것" 목록을 그대로 만족한다. 그래서 이 PR은
+  스쿼시·리베이스 없이 병합 커밋으로 넣는다.
+- **잔액 대조의 실행 전 값**: 선불 잔액 ₩8,000(AI Studio 결제 화면 "크레딧 잔액", 2026-10-17 11:47 KST). 실행 직전에 다시 읽고 리포트에 적는다.
+  지출 원장(ADR 0035)은 2026-10-17 11:35 KST에 `spend_cli init`으로 만들었다(기록 0건).
+- **런북과 다르게 한 운영 세부.** 코드 tarball을 `/tmp` 대신 세션 작업 디렉터리에 만들었다. 원격 디렉터리가 없을 때 업로드가 500으로 실패해
+  (`/content/e0emb/input`, S0용 디렉터리) 업로드 전에 `colab exec`로 디렉터리만 만들었다. S0는 런북 10.2에 없지만 A8.0 3단계가 반출 뒤
+  `code_sha` 코드의 S0를 요구해 같은 세션에서 먼저 돌렸다(합성 텍스트, 기사 본문 없음).
