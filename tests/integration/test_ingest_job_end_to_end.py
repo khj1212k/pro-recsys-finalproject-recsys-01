@@ -128,6 +128,8 @@ def test_ingest_job_collects_extracts_embeds_and_is_idempotent(database_url, pg_
         assert stats["embed"]["embedded"] == 1
         # 실패 원인은 언론사별 개수로만 남는다(URL·본문 없음)
         assert extract["fetch_fail_causes"] == {fake_world["press_name"]: {"disconnect": 1}}
+        # 다운로드에 성공한 요청(ok·duplicate·dropped - 파서 예외는 빼고)의 시간 구간 개수
+        assert extract["fetch_ok_latency"] == {fake_world["press_name"]: {"<5s": 3}}
         assert extract["deferred"] == 0
 
         urls = fake_world["urls"]

@@ -44,6 +44,20 @@ class FetchOutcome(NamedTuple):
     html: Optional[str]
     cause: str = ""  # 성공이면 "" - 실패 원인 분류는 classify_error와 fetch_page_once 참고
     attempts: int = 1
+    request_s: float = 0.0  # 성공한 요청(마지막 시도) 1번에 걸린 시간(초). 실패면 0
+
+
+# 성공한 요청의 시간 구간(job_runs.stats의 extract.fetch_ok_latency, 언론사별 개수만). 읽기 상한(15초)·요청 상한(30초)이
+# 느리지만 결국 성공하던 페이지를 끊는지 배포 뒤에 가르려고 남긴다 - 15초 이상 구간이 늘면 상한에 가까운 성공이 많은 것이다.
+_LATENCY_BUCKETS = ((5.0, "<5s"), (15.0, "5-15s"))
+LATENCY_OVER = ">=15s"
+
+
+def latency_bucket(seconds: float) -> str:
+    for upper, label in _LATENCY_BUCKETS:
+        if seconds < upper:
+            return label
+    return LATENCY_OVER
 
 
 def _request_headers() -> Dict[str, str]:
@@ -240,22 +254,24 @@ def fetch_page(
     backoff_s: Optional[float] = None,
     fetch_once: Optional[Callable[[str], Tuple[Optional[str], str]]] = None,
     sleep_fn: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> FetchOutcome:
     """fetch_page_once를 attempts번까지(기본 Settings.EXTRACT_FETCH_ATTEMPTS) 짧은 대기로 다시 시도한다.
 
-    fetch_once/sleep_fn은 테스트에서 네트워크와 대기 없이 검증하려고 주입할 수 있게 둔다.
+    fetch_once/sleep_fn/clock은 테스트에서 네트워크와 대기 없이 검증하려고 주입할 수 있게 둔다.
     """
     attempts = max(1, Settings.EXTRACT_FETCH_ATTEMPTS if attempts is None else attempts)
     backoff_s = Settings.EXTRACT_RETRY_BACKOFF_S if backoff_s is None else backoff_s
     fetch_once = fetch_once or fetch_page_once
     cause = "other"
     for attempt in range(1, attempts + 1):
+        started = clock()
         try:
             html, cause = fetch_once(url)
         except Exception as err:  # noqa: BLE001 - 주입한 함수나 디코딩의 예외도 원인으로 센다
             html, cause = None, classify_error(err)
         if html:
-            return FetchOutcome(html, "", attempt)
+            return FetchOutcome(html, "", attempt, round(clock() - started, 3))
         cause = cause or "empty_body"
         if attempt == attempts or not is_retryable(cause):
             return FetchOutcome(None, cause, attempt)

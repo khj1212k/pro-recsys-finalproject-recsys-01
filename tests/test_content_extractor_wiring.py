@@ -95,6 +95,21 @@ def test_process_single_article_marks_duplicate_when_same_body_already_saved():
     conn.commit.assert_called_once()
 
 
+def test_process_single_article_reports_how_long_the_successful_request_took():
+    """성공한 요청의 시간은 결과로만 돌려준다(stats에 구간별 개수로 남는다) - 읽기 15초 상한이 느린 성공을 끊는지 보려고."""
+    conn = MagicMock()
+    conn.cursor.return_value = MagicMock()
+    with patch("crawler.content_extractor.extractor.get_connection", return_value=conn), \
+         patch("crawler.content_extractor.extractor.release_connection"), \
+         patch("crawler.content_extractor.extractor.fetch_page", return_value=FetchOutcome("<html/>", "", 1, 12.5)), \
+         patch("crawler.content_extractor.extractor.trafilatura.extract", return_value="너무 짧은 본문"):
+        dropped = ContentExtractor.process_single_article((1, "http://example.com", "동아일보", "제목"))
+    assert (dropped.status, dropped.fetch_s) == ("dropped", 12.5)
+
+    result, _, _ = _run_single(fetch_return=None)
+    assert result.status == "fetch_failed" and result.fetch_s is None
+
+
 def test_process_single_article_marks_fetch_failure_for_bounded_retry():
     result, conn, cur = _run_single(fetch_return=None, fetch_cause="read_timeout")
 
@@ -370,6 +385,23 @@ def test_time_budget_stops_dispatching_and_defers_the_rest(workers):
     assert stats["per_press"]["세계일보"] == {"ok": 3, "deferred": 4}
     assert stats["deferred_reasons"] == {"time_budget": 4}
     assert stats["time_budget_exhausted"] is True and stats["time_budget_s"] == 25
+
+
+def test_successful_request_times_are_counted_per_press_in_buckets():
+    articles = [(i, f"u{i}", "동아일보" if i <= 4 else "경향신문", "t") for i in range(1, 7)]
+    results = {
+        1: ExtractionResult(1, "동아일보", "ok", fetch_s=0.3),
+        2: ExtractionResult(2, "동아일보", "dropped", fetch_s=7.0),
+        3: ExtractionResult(3, "동아일보", "duplicate", fetch_s=21.0),
+        4: ExtractionResult(4, "동아일보", "fetch_failed", fetch_cause="read_timeout"),
+        5: ExtractionResult(5, "경향신문", "empty", fetch_s=1.2),
+        6: ExtractionResult(6, "경향신문", "error", detail="parser"),
+    }
+
+    stats, _, _ = _extract(articles, results, num_workers=1)
+
+    # URL 없이 언론사별 구간 개수만. 실패한 요청은 fetch_fail_causes로 따로 센다
+    assert stats["fetch_ok_latency"] == {"동아일보": {"<5s": 1, "5-15s": 1, ">=15s": 1}, "경향신문": {"<5s": 1}}
 
 
 def test_without_time_budget_everything_is_dispatched():

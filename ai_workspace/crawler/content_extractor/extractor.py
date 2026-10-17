@@ -18,7 +18,7 @@ from db.connection import get_connection, release_connection
 from config.retention import BODY_RETENTION_DAYS, RETRYABLE_EXTRACT_STATUSES
 from config.settings import Settings
 from .cleaners import clean_text_lite, is_drop_article
-from .fetch import fetch_page, is_site_failure
+from .fetch import fetch_page, is_site_failure, latency_bucket
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,7 @@ class ExtractionResult(NamedTuple):
     reasons: Tuple[str, ...] = ()
     detail: str = ""
     fetch_cause: str = ""  # fetch_failed일 때 마지막 요청의 실패 원인(fetch.py) - 개수만 stats에 남긴다
+    fetch_s: Optional[float] = None  # 다운로드에 성공했을 때 그 요청 1번에 걸린 시간 - 구간별 개수만 stats에 남긴다
 
 
 # raw_news_extract_status 값(d48994e9d26e의 CHECK 제약과 동일).
@@ -183,17 +184,19 @@ class ContentExtractor:
                 if should_drop:
                     _record_extraction(cur, raw_news_id, '', 'dropped')
                     conn.commit()
-                    return ExtractionResult(raw_news_id, press_name, "dropped", tuple(drop_reasons))
+                    return ExtractionResult(raw_news_id, press_name, "dropped", tuple(drop_reasons),
+                                            fetch_s=fetched.request_s)
 
                 status = _record_ok_or_duplicate(conn, cur, raw_news_id, cleaned)
                 return ExtractionResult(
-                    raw_news_id, press_name, status, detail=f"raw={len(text)} clean={len(cleaned)}"
+                    raw_news_id, press_name, status, detail=f"raw={len(text)} clean={len(cleaned)}",
+                    fetch_s=fetched.request_s,
                 )
 
             # 페이지는 받았지만 본문을 뽑지 못함(목록/영상 페이지 등) - 재시도해도 같으므로 확정
             _record_extraction(cur, raw_news_id, '', 'empty')
             conn.commit()
-            return ExtractionResult(raw_news_id, press_name, "empty")
+            return ExtractionResult(raw_news_id, press_name, "empty", fetch_s=fetched.request_s)
 
         except Exception as e:
             conn.rollback()
@@ -256,6 +259,8 @@ class ContentExtractor:
             "drop_reasons": {}, "per_press": {}, "error_samples": [],
             # 실패 원인(fetch.py 분류)별 개수 - 언론사별. URL·본문은 남기지 않는다.
             "fetch_fail_causes": {},
+            # 다운로드에 성공한 요청의 시간 구간(<5s·5-15s·>=15s)별 개수 - 언론사별(fetch.latency_bucket)
+            "fetch_ok_latency": {},
             "deferred_reasons": {}, "press_breaker": {},
             "time_budget_s": time_budget_s, "time_budget_exhausted": False,
         }
@@ -286,6 +291,10 @@ class ContentExtractor:
                 causes = stats["fetch_fail_causes"].setdefault(result.press_name, {})
                 cause = result.fetch_cause or "unknown"
                 causes[cause] = causes.get(cause, 0) + 1
+            elif result.fetch_s is not None:
+                buckets = stats["fetch_ok_latency"].setdefault(result.press_name, {})
+                bucket = latency_bucket(result.fetch_s)
+                buckets[bucket] = buckets.get(bucket, 0) + 1
             if result.status == "error" and len(stats["error_samples"]) < 5:
                 stats["error_samples"].append(result.detail)
                 logger.error(f"   [Error] {result.press_name}: {result.detail}")

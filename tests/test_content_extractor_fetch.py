@@ -26,6 +26,7 @@ from crawler.content_extractor.fetch import (  # noqa: E402
     fetch_page_once,
     is_retryable,
     is_site_failure,
+    latency_bucket,
 )
 
 SYNTHETIC_HTML = (
@@ -274,14 +275,23 @@ def test_is_site_failure(cause, expected):
 
 def test_fetch_page_retries_transient_failures_with_short_backoff():
     calls, sleeps = [], []
+    now = [0.0]
 
     def flaky(url):
         calls.append(url)
+        now[0] += 7.5 if len(calls) == 2 else 30.0  # 첫 시도 30초 실패, 둘째 7.5초 성공
         return (None, "disconnect") if len(calls) < 2 else ("<html>ok</html>", "")
 
-    assert fetch_page("u", attempts=2, backoff_s=2, fetch_once=flaky, sleep_fn=sleeps.append) \
-        == FetchOutcome("<html>ok</html>", "", 2)
+    assert fetch_page("u", attempts=2, backoff_s=2, fetch_once=flaky, sleep_fn=sleeps.append, clock=lambda: now[0]) \
+        == FetchOutcome("<html>ok</html>", "", 2, 7.5)  # 걸린 시간은 성공한 요청 1번만 잰다
     assert sleeps == [2]
+
+
+@pytest.mark.parametrize("seconds, bucket", [
+    (0.0, "<5s"), (4.999, "<5s"), (5.0, "5-15s"), (14.9, "5-15s"), (15.0, ">=15s"), (31.0, ">=15s"),
+])
+def test_latency_bucket(seconds, bucket):
+    assert latency_bucket(seconds) == bucket
 
 
 def test_fetch_page_gives_up_after_attempts_and_reports_last_cause():
