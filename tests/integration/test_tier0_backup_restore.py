@@ -4,6 +4,7 @@ VM에서는 DB 도구를 `docker compose exec -T db`로 부르지만 여기서�
 (Db.exec_prefix = [], 접속은 PG* 환경변수). 원본은 이 테스트가 만드는 DB 하나다 - 테스트 DB의 스키마(Alembic head)를
 `pg_dump --schema-only`로 복제하고 합성 행만 넣는다(기사 문장은 지어낸 표식). 끝나면 만든 DB를 모두 지운다.
 """
+import argparse
 import gzip
 import importlib.util
 import os
@@ -251,3 +252,41 @@ def test_job_recorder_writes_a_row_daily_report_can_read(source):
         assert cur.fetchone() == ("succeeded", True, "5", "it's quoted", None)
     assert tb.last_success(db, tb.HOST_BACKUP_JOB) is not None
     assert tb.last_success(db, tb.RESTORE_CHECK_JOB) is None
+
+
+def test_without_full_only_the_body_free_archive_is_built_and_no_body_reaches_the_work_dir(source, tmp_path):
+    db, src, conn, _, url = source
+    work = tmp_path / "work"
+    result = tb.build_archives(db, str(work), full=False)
+    assert sorted(result.archives) == ["nobody"] and "full" not in result.stats["names"]
+    assert result.stats["full"] == {"disabled": True}
+    assert sorted(os.listdir(work)) == [os.path.basename(result.archives["nobody"])]
+    files = _members(result.archives["nobody"], tmp_path / "nobody")
+    assert sorted(files) == sorted(tb.ARCHIVE_MEMBERS["nobody"])
+    copy = gzip.open(files["news_raw.nobody.copy.gz"]).read().decode()
+    assert len(copy.splitlines()) == 6
+    for sentinel in (RECENT, OLD, PUBLIC):
+        assert sentinel not in copy
+
+
+def test_a_real_copy_failure_keeps_row_content_out_of_job_runs_error_and_the_log(source, tmp_path, capsys):
+    """psql의 COPY 오류는 CONTEXT 줄에 문제 행을 싣는다. 실패 기록(job_runs.error)과 cron 로그(표준출력)에는 오류 종류만 남는다."""
+    db, src, conn, _, url = source
+    bad = tmp_path / "bodies.copy.gz"
+    with gzip.open(bad, "wb") as f:
+        f.write(f"1\t{RECENT} 합성 문장\textra-column\n".encode())  # 열이 하나 많다 -> extra data after last expected column
+    args = argparse.Namespace(no_record=False, git_sha=None)
+
+    def restore_bodies():
+        tb.copy_in_gzip(db, db.cmd("psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"), str(bad),
+                        prefix=tb.RESTORE_BODIES_PREFIX, suffix=tb.RESTORE_BODIES_SUFFIX)
+        return {}
+
+    assert tb.recorded(db, tb.RESTORE_CHECK_JOB, args, restore_bodies) == tb.EXIT_FAILED
+    with conn.cursor() as cur:
+        cur.execute("SELECT status, error FROM job_runs WHERE job = %s ORDER BY id DESC LIMIT 1", (tb.RESTORE_CHECK_JOB,))
+        status, error = cur.fetchone()
+    assert status == "failed" and "COPY FROM 실패" in error and "ERROR:" in error
+    assert RECENT not in error and "합성" not in error
+    out = capsys.readouterr()
+    assert RECENT not in out.out and RECENT not in out.err
