@@ -364,7 +364,7 @@ def _measure(args, rng, now, url) -> dict:
 
     from app.database import register_pgvector_on_connect
     from app.recsys.config import RecsysConfig
-    from app.recsys.pipeline import load_popularity, popular_ids
+    from app.recsys.pipeline import ClickCounts, legacy_popular_ids, load_popularity, popular_ids
     from app.recsys.service import build_service
     from app.recsys.sql_repository import SqlRecsysRepository, sql_repo_scope, vector_from_send
 
@@ -401,8 +401,15 @@ def _measure(args, rng, now, url) -> dict:
         q["recent_clicks_20_heavy"] = stats(timed(lambda u: repo.recent_clicks(u, since24, now, 20), pick(heavy)))
         q["knn_100_in_window"] = stats(timed(lambda _: repo.knn_ids(profile, since72, 100), range(R)))
         q["recent_100"] = stats(timed(lambda _: repo.recent_ids(100), range(R)))
-        q["popular_100(window_meta+compute_scores)"] = stats(
+        # 후보 출처 popular(ADR 0014 사전 등록 4): 창 안 뉴스레터를 읽고 6시간 클릭 수를 한 번 세어 정렬한다.
+        q["popular_100(window_meta+clicks_6h)"] = stats(
             timed(lambda _: popular_ids(repo, since72, now, 100), range(R))
+        )
+        # 새 조회만: 신선도 창 안 뉴스레터 전부의 6시간 클릭 수(노출 창을 비운 item_window_counts 한 번).
+        q["clicks_6h_window"] = stats(timed(lambda _: ClickCounts(repo, now).get(window), range(R)))
+        # ADR 0014 전의 popular 출처와 같은 계산(지금은 폴백 체인의 popular 단계만 쓴다). 예전 결과 파일과 같은 이름이다.
+        q["popular_100(window_meta+compute_scores)"] = stats(
+            timed(lambda _: legacy_popular_ids(repo, since72, now, 100), range(R))
         )
         q["category_recent_50"] = stats(timed(lambda _: repo.category_recent_ids([1, 2], since72, 50), range(R)))
         q["clicked_among_300"] = stats(timed(lambda u: repo.clicked_among(u, cands), pick(heavy)))
