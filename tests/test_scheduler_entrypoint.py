@@ -76,3 +76,21 @@ def test_sigterm_reaches_job_process_group_and_scheduler_exits_cleanly(tmp_path)
     finally:
         if proc.poll() is None:
             proc.kill()
+
+
+def test_jobs_see_which_crontab_the_scheduler_was_started_with(tmp_path):
+    """daily_report가 정시 회차를 세려고 읽는 SCHEDULER_CRONTAB = supercronic의 마지막 인자(crontab 경로)."""
+    seen = tmp_path / "seen"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_executable(bin_dir / "supercronic", f"""
+        import os
+        open({str(seen)!r}, "w").write(os.environ.get("SCHEDULER_CRONTAB", "<unset>"))
+    """)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+    env.pop("SCHEDULER_CRONTAB", None)
+    crontab = tmp_path / "crontab.micro"
+    crontab.write_text("")
+    proc = subprocess.run(["sh", ENTRYPOINT, "-quiet", str(crontab)], env=env, timeout=10)
+    assert proc.returncode == 0
+    assert seen.read_text() == str(crontab)

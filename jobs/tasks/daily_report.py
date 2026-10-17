@@ -1,9 +1,30 @@
-"""daily_report: 최근 24시간 잡 실행/수집/추천 응답 현황 요약을 로그(+Slack 웹훅)로 남긴다(읽기 전용)."""
-from typing import Any, Dict, List, Optional
+"""daily_report: 최근 24시간 잡 실행/수집/추천 응답 현황 요약을 로그(+Slack 웹훅)로 남긴다(읽기 전용).
+
+운영 줄 세 개(ADR 0026 결정 6): 정시 회차(예정 vs 시작 - 건너뛴 회차는 job_runs에 행이 없다), 호스트 밖 백업의
+경과 시간, 유휴 회수 위험. 뒤의 둘은 VM 호스트의 cron이 돌리는 scripts/oci/tier0_backup.py가 job_runs에 남긴
+'backup'·'idle_check'·'restore_check' 행을 읽는다(그 잡들은 jobs.run이 아니다).
+"""
+import os
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from jobs.schedule import SLOT_MATCH_TOLERANCE, expected_slots, match_slots, parse_crontab
 
 WINDOW_HOURS = 24
 # 본문 보존 잡(retention)은 하루 한 번 돈다. 만료된 지 이보다 오래된 본문이 남아 있으면 잡이 돌지 않은 것이다.
 RETENTION_OVERDUE_HOURS = 26
+# 호스트 밖 백업은 매일 18:10 UTC(scripts/oci/tier0-backup.cron). 하루를 거르면 경고한다.
+BACKUP_OVERDUE_HOURS = 30
+# 복원 검증은 28일마다(tier0_backup.py daily). 한 번 거르면 경고한다.
+RESTORE_CHECK_OVERDUE_DAYS = 35
+# 유휴 지표는 백업과 같은 cron에서 매일 잰다. 이보다 오래된 측정은 "모름"으로 본다.
+IDLE_CHECK_STALE_HOURS = 48
+# scripts/oci/tier0_backup.py가 job_runs에 쓰는 잡 이름(테스트가 대조한다).
+HOST_BACKUP_JOB = "backup"
+IDLE_CHECK_JOB = "idle_check"
+RESTORE_CHECK_JOB = "restore_check"
+# 정시 회차 줄에 적는 건너뛴 회차 시각의 최대 개수
+MISSED_SLOTS_SHOWN = 6
 
 
 def format_report(report: Dict[str, Any]) -> str:
@@ -35,6 +56,15 @@ def format_report(report: Dict[str, Any]) -> str:
             f"{retention['purged_24h']}건 / 누적 {retention['purged_total']}건, 가장 오래된 본문 수집 "
             f"{oldest + ' UTC' if oldest else '없음'}"
         )
+    schedule = report.get("schedule")
+    if schedule is not None:
+        lines.append(format_schedule(schedule))
+    backup = report.get("backup")
+    if backup is not None:
+        lines.append(format_backup(backup))
+    idle = report.get("idle")
+    if idle is not None:
+        lines.append(format_idle(idle, backup))
     recsys = report.get("recsys_24h")
     if recsys is not None:
         by_source = sorted(recsys["by_source"].items(), key=lambda kv: (-kv[1]["responses"], kv[0]))
@@ -106,6 +136,201 @@ def impression_sources(cur, window: str) -> Dict[str, Dict[str, int]]:
     )
     return {source: {"responses": responses, "items": items} for source, responses, items in cur.fetchall()}
 
+def _mb(n: Optional[int]) -> str:
+    return "?" if n is None else f"{n / 1_000_000:.1f} MB"
+
+
+def _utc_short(iso: Optional[str]) -> str:
+    if not iso:
+        return "?"
+    return datetime.fromisoformat(iso).astimezone(timezone.utc).strftime("%m-%d %H:%M UTC")
+
+
+def format_schedule(schedule: Dict[str, Any]) -> str:
+    if schedule.get("crontab") is None:
+        return "- 정시 회차: 세지 않음(SCHEDULER_CRONTAB 없음 - 스케줄러 밖에서 돌린 리포트)"
+    parts = []
+    for job, s in sorted(schedule["jobs"].items(), key=lambda kv: (-len(kv[1]["missed"]), kv[0])):
+        text = f"{job} {s['started']}/{s['scheduled']}"
+        missed = s["missed"]
+        if missed:
+            shown = "·".join(datetime.fromisoformat(t).astimezone(timezone.utc).strftime("%H:%M")
+                             for t in missed[:MISSED_SLOTS_SHOWN])
+            more = f" 외 {len(missed) - MISSED_SLOTS_SHOWN}" if len(missed) > MISSED_SLOTS_SHOWN else ""
+            text += f"(건너뜀 {len(missed)}: {shown}{more} UTC, 성공 {s['succeeded']})"
+        parts.append(text)
+    line = (f"- 정시 회차(최근 {WINDOW_HOURS}시간, {schedule['crontab']} 기준 시작/예정): "
+            + (", ".join(parts) if parts else "jobs.run 줄 없음"))
+    if schedule.get("disabled"):
+        line += f" / 꺼 둔 잡: {', '.join(schedule['disabled'])}"
+    if schedule.get("unsupported"):
+        line += f" / 세지 못한 줄 {len(schedule['unsupported'])}개"
+    return line
+
+
+def format_backup(backup: Dict[str, Any]) -> str:
+    if not backup.get("last_success_at"):
+        tail = f", 최근 {WINDOW_HOURS}시간 실패 {backup.get('failed_24h', 0)}" if backup.get("failed_24h") else ""
+        return f"- 호스트 밖 백업: 기록 없음(job_runs에 '{HOST_BACKUP_JOB}' 성공이 없다 - 런북 6.5){tail}"
+    line = (
+        f"- 호스트 밖 백업(OCI Object Storage, 런북 6.5): 마지막 성공 {backup['hours_since']:.1f}시간 전"
+        f"({_utc_short(backup['last_success_at'])}, 본문 없는 사본 {_mb(backup.get('nobody_bytes'))} · "
+        f"최근 본문 사본 {_mb(backup.get('full_bytes'))}/{backup.get('full_body_rows', '?')}건), "
+        f"그 뒤 수집 {backup['rows_since']}건, 최근 {WINDOW_HOURS}시간 실패 {backup['failed_24h']}"
+    )
+    if backup.get("restore_check_at"):
+        line += f" / 복원 검증 마지막 {_utc_short(backup['restore_check_at'])}({backup['restore_check_days']:.0f}일 전)"
+    else:
+        line += " / 복원 검증 기록 없음"
+    for w in backup.get("warnings") or []:
+        line += f" / {w}"
+    return line
+
+
+def reclaim_risk(idle: Optional[Dict[str, Any]], backup: Optional[Dict[str, Any]]) -> Tuple[str, str]:
+    """(수준, 이유). 공식 유휴 기준(ADR 0026 결정 6)에 걸리는지와, 회수되면 무엇을 잃는지(백업 경과)를 합친다."""
+    if not idle or not idle.get("measured_at") or idle["hours_since"] > IDLE_CHECK_STALE_HOURS:
+        return "모름", f"{IDLE_CHECK_STALE_HOURS}시간 안의 유휴 지표 측정이 없다"
+    verdict = idle.get("verdict")
+    backup_ok = bool(backup and backup.get("last_success_at") and backup["hours_since"] <= BACKUP_OVERDUE_HOURS)
+    if verdict == "safe":
+        return "낮음", "공식 유휴 기준 밖"
+    criterion = "기준상 유휴" if verdict == "idle" else "기준+5%p 안쪽"
+    if not backup_ok:
+        return "높음", f"{criterion}이고 {BACKUP_OVERDUE_HOURS}시간 안의 호스트 밖 백업이 없다"
+    return "주의", f"{criterion} - 손실은 마지막 백업 뒤 수집분으로 묶여 있다"
+
+
+def format_idle(idle: Optional[Dict[str, Any]], backup: Optional[Dict[str, Any]]) -> str:
+    level, reason = reclaim_risk(idle, backup)
+    line = f"- 유휴 회수 위험(ADR 0026 결정 6): {level} - {reason}"
+    if idle and idle.get("measured_at"):
+        line += (f" (측정 {_utc_short(idle['measured_at'])}, {idle.get('window_days', '?')}일 창 CPU p95 "
+                 f"{idle.get('cpu_p95')}% · 네트워크 p95 {idle.get('net_p95')}%, 기준 20%)")
+    if backup and backup.get("last_success_at") and level in ("주의", "높음"):
+        line += f". 지금 회수되면 마지막 백업 뒤 수집 {backup['rows_since']}건을 잃는다"
+    return line
+
+
+def ops_warnings(backup: Optional[Dict[str, Any]]) -> List[str]:
+    """사람이 볼 경고(알림). 백업이 한 번도 없었던 호스트(개발 Mac)에서는 경고하지 않는다 - 줄에만 '기록 없음'."""
+    if not backup or not backup.get("last_success_at"):
+        return []
+    out = []
+    if backup["hours_since"] > BACKUP_OVERDUE_HOURS:
+        out.append(f"호스트 밖 백업이 {backup['hours_since']:.0f}시간째 없다(기준 {BACKUP_OVERDUE_HOURS}시간) - "
+                   "VM의 /var/log/newsletter-backup.log와 job_runs의 'backup' 행을 본다(런북 6.5)")
+    if backup.get("failed_24h"):
+        out.append(f"최근 {WINDOW_HOURS}시간 호스트 밖 백업 실패 {backup['failed_24h']}회(job_runs의 'backup' 행의 error)")
+    days = backup.get("restore_check_days")
+    if days is None or days > RESTORE_CHECK_OVERDUE_DAYS:
+        out.append(f"복원 검증이 {'한 번도 없다' if days is None else f'{days:.0f}일째 없다'}"
+                   f"(기준 {RESTORE_CHECK_OVERDUE_DAYS}일) - 런북 6.5의 복원 검증")
+    out.extend(backup.get("warnings") or [])
+    return out
+
+
+def read_crontab() -> Optional[Tuple[str, str]]:
+    """스케줄러가 쓰는 crontab(docker/scheduler-entrypoint.sh가 SCHEDULER_CRONTAB으로 넘긴다)의 (이름, 내용)."""
+    path = os.getenv("SCHEDULER_CRONTAB")
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            return os.path.basename(path), f.read()
+    except OSError:
+        return None
+
+
+def disabled_jobs() -> List[str]:
+    return sorted({name.strip() for name in os.getenv("JOBS_DISABLED", "").split(",") if name.strip()})
+
+
+def schedule_status(cur, now: datetime, crontab: Optional[Tuple[str, str]],
+                    disabled: Sequence[str] = ()) -> Dict[str, Any]:
+    """정시 회차(예정 vs 시작). now는 DB의 now()."""
+    if crontab is None:
+        return {"crontab": None}
+    name, text = crontab
+    entries, unsupported = parse_crontab(text)
+    start = now - timedelta(hours=WINDOW_HOURS)
+    slots = expected_slots(entries, start, now, disabled)
+    runs: Dict[str, List[Tuple[datetime, str]]] = {job: [] for job in slots}
+    if slots:
+        cur.execute(
+            "SELECT job, started_at, status FROM job_runs WHERE job = ANY(%s) AND started_at > %s AND started_at <= %s",
+            (sorted(slots), start, now + SLOT_MATCH_TOLERANCE),
+        )
+        for job, started_at, status in cur.fetchall():
+            runs[job].append((started_at, status))
+    jobs = {}
+    for job, job_slots in slots.items():
+        m = match_slots(job_slots, runs[job])
+        m["missed"] = [t.isoformat() for t in m["missed"]]
+        jobs[job] = m
+    return {"crontab": name, "jobs": jobs, "unsupported": unsupported,
+            "disabled": sorted(set(disabled) & {e.job for e in entries})}
+
+
+def _latest_success(cur, job: str) -> Tuple[Optional[datetime], Dict[str, Any]]:
+    cur.execute(
+        "SELECT finished_at, stats FROM job_runs WHERE job = %s AND status = 'succeeded' "
+        "ORDER BY finished_at DESC NULLS LAST LIMIT 1",
+        (job,),
+    )
+    row = cur.fetchone()
+    return (row[0], row[1] or {}) if row else (None, {})
+
+
+def backup_status(cur, now: datetime, window: str) -> Dict[str, Any]:
+    """tier0_backup.py가 남긴 'backup'·'restore_check' 행에서 마지막 성공, 실패 수, 그 뒤 수집량."""
+    finished, stats = _latest_success(cur, HOST_BACKUP_JOB)
+    cur.execute(
+        "SELECT count(*) FROM job_runs WHERE job = %s AND status IN ('failed', 'abandoned') "
+        "AND started_at >= now() - %s::interval",
+        (HOST_BACKUP_JOB, window),
+    )
+    (failed,) = cur.fetchone()
+    out: Dict[str, Any] = {"last_success_at": None, "failed_24h": failed}
+    if finished is None:
+        return out
+    snapshot = stats.get("snapshot_at_utc")
+    snapshot_at = datetime.fromisoformat(snapshot) if snapshot else finished
+    # raw_news_crawled_at은 시간대 없는 UTC 값이다
+    cur.execute("SELECT count(*) FROM news_raw WHERE raw_news_crawled_at > %s",
+                (snapshot_at.astimezone(timezone.utc).replace(tzinfo=None),))
+    (rows_since,) = cur.fetchone()
+    restore_at, _ = _latest_success(cur, RESTORE_CHECK_JOB)
+    out.update({
+        "last_success_at": finished.isoformat(),
+        "hours_since": (now - finished).total_seconds() / 3600,
+        "snapshot_at_utc": snapshot_at.isoformat(),
+        "rows_since": rows_since,
+        "nobody_bytes": (stats.get("nobody") or {}).get("bytes"),
+        "full_bytes": (stats.get("full") or {}).get("bytes"),
+        "full_body_rows": (stats.get("full") or {}).get("body_rows"),
+        "warnings": list(stats.get("warnings") or []),
+        "restore_check_at": restore_at.isoformat() if restore_at else None,
+        "restore_check_days": (now - restore_at).total_seconds() / 86400 if restore_at else None,
+    })
+    return out
+
+
+def idle_status(cur, now: datetime) -> Dict[str, Any]:
+    """tier0_backup.py idle-check가 남긴 마지막 측정(scripts/oci/idle_check.py와 같은 계산)."""
+    finished, stats = _latest_success(cur, IDLE_CHECK_JOB)
+    if finished is None:
+        return {"measured_at": None}
+    verdict = stats.get("verdict") or {}
+    return {
+        "measured_at": finished.isoformat(),
+        "hours_since": (now - finished).total_seconds() / 3600,
+        "verdict": "idle" if verdict.get("idle") else ("at_risk" if verdict.get("at_risk") else "safe"),
+        "cpu_p95": stats.get("cpu_p95"),
+        "net_p95": stats.get("net_p95"),
+        "window_days": stats.get("requested_days"),
+    }
+
 
 def run(ctx) -> Dict[str, Any]:
     from db.connection import get_db_connection
@@ -158,6 +383,11 @@ def run(ctx) -> Dict[str, Any]:
         total, embedded, newsletters = cur.fetchone()
         retention = retention_status(cur, window)
         recsys_by_source = impression_sources(cur, window)
+        cur.execute("SELECT now()")
+        (now,) = cur.fetchone()
+        schedule = schedule_status(cur, now, read_crontab(), disabled_jobs())
+        backup = backup_status(cur, now, window)
+        idle = idle_status(cur, now)
 
     report = {
         "job_runs": job_runs,
@@ -165,9 +395,14 @@ def run(ctx) -> Dict[str, Any]:
         "totals": {"news_raw": total, "embedded": embedded, "newsletters_24h": newsletters},
         "retention": retention,
         "recsys_24h": {"by_source": recsys_by_source},
+        "schedule": schedule,
+        "backup": backup,
+        "idle": idle,
     }
     warning = retention_warning(retention)
     if warning:
+        ctx.warn(warning)
+    for warning in ops_warnings(backup):
         ctx.warn(warning)
     text = format_report(report)
     print(text)
