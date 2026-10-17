@@ -1,0 +1,77 @@
+{
+  "cluster": {
+    "type": "object",
+    "properties": {
+      "analysis": {"type": "string", "description": "판단 근거, 세 문장 이내. 기사 문장을 옮기지 않고 기사 id로 가리킨다"},
+      "single_event": {"type": "boolean"},
+      "outlier_ids": {"type": "array", "items": {"type": "integer"}},
+      "key_facts": {
+        "type": "array",
+        "maxItems": 6,
+        "items": {
+          "type": "object",
+          "properties": {
+            "text": {"type": "string", "description": "자기 말로 쓴 사실 한 문장, 80자 이내"},
+            "source_ids": {"type": "array", "minItems": 1, "items": {"type": "integer"}}
+          },
+          "required": ["text", "source_ids"],
+          "propertyOrdering": ["text", "source_ids"]
+        }
+      }
+    },
+    "required": ["analysis", "single_event", "outlier_ids", "key_facts"],
+    "propertyOrdering": ["analysis", "single_event", "outlier_ids", "key_facts"]
+  },
+  "output": {
+    "type": "object",
+    "properties": {
+      "analysis": {"type": "string", "description": "판단 근거, 다섯 문장 이내. 기사 문장을 옮기지 않고 기사 id로 가리킨다"},
+      "fact_errors": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "field": {"type": "string", "enum": ["title", "sentence", "content"]},
+            "text": {"type": "string", "description": "그 칸의 글자를 그대로 옮긴 부분 문자열"},
+            "type": {"type": "string", "enum": ["number", "date", "entity", "quote", "other"]},
+            "reason": {"type": "string", "description": "어느 기사 id와 어떻게 다른지 한 문장"}
+          },
+          "required": ["field", "text", "type", "reason"],
+          "propertyOrdering": ["field", "text", "type", "reason"]
+        }
+      },
+      "style": {"type": "integer", "minimum": 1, "maximum": 5},
+      "headline_mismatch": {"type": "boolean"},
+      "publishable": {"type": "boolean"}
+    },
+    "required": ["analysis", "fact_errors", "style", "headline_mismatch", "publishable"],
+    "propertyOrdering": ["analysis", "fact_errors", "style", "headline_mismatch", "publishable"]
+  },
+  "coverage": {
+    "type": "object",
+    "properties": {
+      "facts": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "index": {"type": "integer", "minimum": 0},
+            "covered": {"type": "boolean"}
+          },
+          "required": ["index", "covered"],
+          "propertyOrdering": ["index", "covered"]
+        }
+      }
+    },
+    "required": ["facts"]
+  },
+  "tone": {
+    "type": "object",
+    "properties": {
+      "analysis": {"type": "string", "description": "판단 근거, 세 문장 이내"},
+      "tone_drift": {"type": "boolean"}
+    },
+    "required": ["analysis", "tone_drift"],
+    "propertyOrdering": ["analysis", "tone_drift"]
+  }
+}
