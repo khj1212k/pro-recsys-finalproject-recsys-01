@@ -19,7 +19,7 @@ from app.recsys.deadline import BudgetExceeded, Deadline  # noqa: F401 (기존 �
 from app.recsys.exploration import plan_slate
 from app.recsys.metrics import RecsysCounters
 from app.recsys.repository import RecsysRepository
-from app.recsys.scoring import Scorer, ScorerStack, heuristic_of, make_heuristic, popularity_order
+from app.recsys.scoring import PRIOR_SET, Scorer, ScorerStack, heuristic_of, make_heuristic, popularity_order
 from app.recsys.throttle import ThrottledExceptionLog
 from recsys_core import round_robin_union
 from recsys_core import serving as core_serving
@@ -198,18 +198,27 @@ def generate_candidates(
     cfg: RecsysConfig,
     now: datetime,
     clicks: Optional[ClickCounts] = None,
+    popular_by_clicks: Optional[bool] = None,
 ) -> CandidateSet:
     """출처·순서·k·창·상한은 전부 cfg.candidate_spec()에서 온다(recsys_core.SERVING_CANDIDATE_SPEC, ADR 0033).
     신호가 없는 출처(프로필 없음, 최근 클릭 없음, 선호 카테고리 없음)는 목록 자체를 내지 않는다.
-    clicks는 그 요청의 6시간 클릭 수 조회(popular 출처와 휴리스틱이 같이 쓴다). 없으면 여기서 만든다."""
+    clicks는 그 요청의 6시간 클릭 수 조회(popular 출처와 휴리스틱이 같이 쓴다). 없으면 여기서 만든다.
+
+    popular_by_clicks는 출처 popular의 순서다. 참이면 6시간 클릭 수(ADR 0014 사전 등록 4), 거짓이면 M5 전의
+    compute_scores 순서(되돌리기 세트 prior - 요청 경로에 클릭 수 조회가 남지 않는다, ADR 0014 사전 등록 이후 변경 기록 1).
+    None이면 cfg.heuristic_set을 따른다. 출처의 이름·k·창·상한은 어느 쪽이든 같다."""
     spec = cfg.candidate_spec()
+    if popular_by_clicks is None:
+        popular_by_clicks = cfg.heuristic_set != PRIOR_SET
     clicks = clicks or ClickCounts(repo, now)
     since = now - timedelta(hours=spec.window_h)
     producers = {
         "knn_profile": lambda k: None if state.profile is None else repo.knn_ids(state.profile, since, k),
         "knn_short": lambda k: None if state.short_term is None else repo.knn_ids(state.short_term, since, k),
         "recent": lambda k: repo.recent_ids(k),
-        "popular": lambda k: popular_ids(repo, since, now, k, clicks),
+        "popular": lambda k: (
+            popular_ids(repo, since, now, k, clicks) if popular_by_clicks else legacy_popular_ids(repo, since, now, k)
+        ),
         "category": lambda k: (
             repo.category_recent_ids(state.category_ids, since, k) if state.category_ids else None
         ),
@@ -307,6 +316,10 @@ class RealtimeRecommender:
         # 개인 신호가 없는 사용자의 순서를 내는 휴리스틱(ADR 0014 사전 등록 3). 활성 스코어러(또는 그 폴백)가 휴리스틱이면
         # 그것과 같은 것을 쓴다 - 콜드 경로와 개인화 경로의 활성 식이 갈리지 않게.
         self.heuristic = heuristic or heuristic_of(self.stack.active) or make_heuristic(cfg.heuristic_set)
+        # 그 휴리스틱이 6시간 클릭 수를 쓰는가. 쓰지 않으면(되돌리기 세트 prior) 요청 경로가 그 조회를 하지 않는다 -
+        # 콜드 경로, 후보 출처 popular(M5 전의 compute_scores 순서), 스코어링의 인기 항 모두(ADR 0014 사전 등록 이후
+        # 변경 기록 1). 지연 때문에 되돌릴 때 새 조회가 남지 않게 하려는 것이다.
+        self.uses_clicks = bool(getattr(self.heuristic, "uses_clicks", True))
         self.reranker = reranker or CategoryBasedMMRReranker()
         self.item_cache = item_cache or TTLCache(cfg.item_cache_ttl_s, cfg.item_cache_max_entries)
         self._errors = ThrottledExceptionLog(logger=logger)
@@ -365,8 +378,7 @@ class RealtimeRecommender:
         metas = repo.window_meta(since)
         # 활성 휴리스틱의 비개인 항으로 정렬한다(ADR 0014 사전 등록 3). 되돌리기 세트(prior)는 compute_scores 순서이고
         # 클릭 수를 읽지 않는다.
-        wants_clicks = bool(getattr(self.heuristic, "uses_clicks", True))
-        counts = clicks.get([m.news_letter_id for m in metas]) if wants_clicks and metas else None
+        counts = clicks.get([m.news_letter_id for m in metas]) if self.uses_clicks and metas else None
         ranked = self.heuristic.cold_order(metas, counts, now)
         if not ranked:
             raise EmptyRecommendation("no newsletters in the freshness window")
@@ -404,7 +416,7 @@ class RealtimeRecommender:
         if not state.has_personal_signal:
             return self._cold_popular(repo, user_id, now, clicks)
 
-        cands = generate_candidates(repo, state, self.cfg, now, clicks)
+        cands = generate_candidates(repo, state, self.cfg, now, clicks, popular_by_clicks=self.uses_clicks)
         deadline.check("exclusion")
         clicked = repo.clicked_among(user_id, cands.ids)
         state.clicked_ids = clicked
@@ -418,7 +430,8 @@ class RealtimeRecommender:
 
         item_ids = [int(it.news_letter_id) for it in items]
         # 활성 휴리스틱(또는 활성 모델의 폴백)의 인기 항. popular 출처가 창 안의 수를 이미 읽었다(ADR 0014).
-        state.clicks_6h = clicks.get(item_ids)
+        # 되돌리기 세트(prior)의 heuristic-v1은 이 값을 쓰지 않으므로 읽지 않는다.
+        state.clicks_6h = clicks.get(item_ids) if self.uses_clicks else None
         if self.stack.active_needs_features():
             # 활성 모델이 어댑터 피처로 점수를 낸다: 인기도 입력을 요청 경로에서 읽어야 한다.
             state.popularity = self._popularity_in_path(repo, item_ids, now)

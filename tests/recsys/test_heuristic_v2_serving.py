@@ -14,7 +14,14 @@ import pytest
 
 from app.recsys.config import RecsysConfig
 from app.recsys.deadline import Deadline
-from app.recsys.pipeline import ClickCounts, build_user_state, load_popularity, popular_ids
+from app.recsys.pipeline import (
+    ClickCounts,
+    build_user_state,
+    generate_candidates,
+    legacy_popular_ids,
+    load_popularity,
+    popular_ids,
+)
 from app.recsys.scoring import (
     HEURISTIC_FEATURE_SCHEMA,
     PRIOR_HEURISTIC_FEATURE_SCHEMA,
@@ -203,22 +210,43 @@ def test_users_without_any_signal_get_the_non_personal_terms_of_the_active_heuri
     assert (rec.source, rec.model_version, rec.profile_source) == (SOURCE_COLD_POPULAR, "heuristic-v2-b", "none")
 
 
-def test_the_prior_set_rolls_back_to_heuristic_v1_and_popularity_v1():
+def test_the_prior_set_rolls_back_the_request_path_and_reads_no_click_counts():
+    """되돌리기 세트는 스코어러(heuristic-v1)·콜드 경로(popularity-v1)·후보 출처 popular(compute_scores 순서)를 다 되돌려
+    요청 경로에 6시간 클릭 수 조회가 남지 않는다(사전 등록 5, 사전 등록 이후 변경 기록 1). 기본 세트는 읽는다."""
     cfg = RecsysConfig(heuristic_set="prior", feature_fn=None)
     warm_repo, _ = _world()
     cold_repo, _ = _world()
+    default_repo, _ = _world()
     service = _service(warm_repo, cfg)
+    default = _service(default_repo, RecsysConfig(feature_fn=None))
     try:
         warm = service.recommender.rank(warm_repo, LIGHT, REQ, Deadline(10.0))
         cold = service.recommender.rank(cold_repo, NOBODY, REQ, Deadline(10.0))
+        default.recommender.rank(default_repo, LIGHT, REQ, Deadline(10.0))
     finally:
         service.shutdown()
+        default.shutdown()
 
     assert (warm.model_version, cold.model_version) == ("heuristic-v1", "popularity-v1")
     assert warm.feature_schema_version == PRIOR_HEURISTIC_FEATURE_SCHEMA
-    # 후보 출처 popular는 세트와 무관하게 6시간 클릭 순서라 개인화 경로는 클릭 수를 읽는다(사전 등록 4).
-    # 되돌리기 세트의 콜드 경로(compute_scores)는 읽지 않는다.
-    assert "item_click_counts" in warm_repo.calls and "item_click_counts" not in cold_repo.calls
+    assert service.recommender.uses_clicks is False and default.recommender.uses_clicks is True
+    assert "item_click_counts" not in warm_repo.calls and "item_click_counts" not in cold_repo.calls
+    assert "item_click_counts" in default_repo.calls
+
+
+@pytest.mark.parametrize("heuristic_set, by_clicks", [("b", True), ("a", True), ("prior", False)])
+def test_the_popular_candidate_source_follows_the_heuristic_set(heuristic_set, by_clicks):
+    repo, t = _small_repo()
+    cfg = RecsysConfig(heuristic_set=heuristic_set)
+    since = t - timedelta(hours=cfg.candidate_spec().window_h)
+    clicks_order, legacy_order = popular_ids(repo, since, t, 100), legacy_popular_ids(repo, since, t, 100)
+    assert clicks_order != legacy_order  # 두 순서가 갈리는 세계라야 이 테스트가 무엇을 본다
+    repo.calls.clear()
+
+    cands = generate_candidates(repo, build_user_state(repo, 9, t, cfg), cfg, t)
+
+    assert cands.by_source["popular"] == (clicks_order if by_clicks else legacy_order)
+    assert ("item_click_counts" in repo.calls) is by_clicks
 
 
 @pytest.mark.parametrize("threshold, profile_source", [(0, "long_term"), (3, "long_term"), (4, "onboarding")])
