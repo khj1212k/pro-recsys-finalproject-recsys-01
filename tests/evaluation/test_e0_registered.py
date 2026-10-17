@@ -157,12 +157,31 @@ def _filled_record():
     }
 
 
-def test_the_committed_record_is_empty_and_refused_field_by_field():
-    problems = reg.check_pre_run_record(PREREG["pre_run_record"])
+def _committed_record_at(rev: str):
+    shown = subprocess.run(["git", "show", f"{rev}:{reg.PREREG_REL}"], cwd=REPO_ROOT, capture_output=True, text=True)
+    return yaml.safe_load(shown.stdout)["pre_run_record"] if shown.returncode == 0 else None
+
+
+def test_an_empty_record_is_refused_field_by_field():
+    # code_sha(러너 PR 병합)에 커밋된 빈 기록 - 저장소 기록을 읽을 수 없으면(얕은 체크아웃) 같은 모양을 만들어 쓴다
+    empty = _committed_record_at("35d0a1df97a38dad089f0daea676650072f592d6") or {
+        **{f: None for f in reg.PRE_RUN_FIELDS}, "embeddings_fp16_vs_fp32_cos": {"p10": None, "min": None, "n": 100},
+        "user_decisions": {"newsletter_embedder": None, "label_subset": None}, "void_runs": []}
+    problems = reg.check_pre_run_record(empty)
     for field in reg.PRE_RUN_FIELDS:
         if field in ("embeddings_fp16_vs_fp32_cos", "user_decisions"):
             continue  # 칸 안의 값이 비어 있다(아래 형식 검사가 막는다)
         assert any(p.startswith(field) for p in problems), field
+
+
+def test_the_committed_record_is_empty_or_complete():
+    """A8.0 4단계 전에는 비어 있고, 실행 전 기록 커밋 뒤에는 전부 채워져 형식 검사를 통과한다 - 반쯤 채운 기록은 없다."""
+    record = PREREG["pre_run_record"]
+    if record.get("code_sha") is None:
+        assert all(record.get(f) in (None, "", [], {}) for f in reg.PRE_RUN_FIELDS
+                   if f not in ("embeddings_fp16_vs_fp32_cos", "user_decisions"))
+    else:
+        assert reg.check_pre_run_record(record) == []
 
 
 def test_a_filled_record_passes_and_each_malformed_value_is_named():
