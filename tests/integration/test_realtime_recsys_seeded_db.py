@@ -238,8 +238,19 @@ def api_client(engine, database_url):
 
 
 def test_a_click_moves_the_next_response_toward_the_clicked_topic(engine, seeded):
-    long_term = seeded.vec_of[seeded.by_topic[0][0]] + 0.6 * seeded.vec_of[seeded.by_topic[2][0]]
-    uid = seeded.add_user(long_term=long_term / np.linalg.norm(long_term))
+    """장기 프로필은 서빙처럼 클릭 이력의 증분 상태이고(ADR 0033), 새 클릭은 클릭 API와 같은 함수
+    (profile_store.apply_click)로 그 상태를 갱신한다. 활성 휴리스틱 heuristic-v2-b(ADR 0014)는 단기 항의 가중치가
+    장기 항보다 훨씬 작아(0.86 대 7.68) 장기 벡터를 고정해 두면 클릭 한 번이 상위 10개를 바꾸지 못한다 - 클릭의
+    반응은 장기 상태를 거쳐 온다(evaluation/serving/click_shift_sensitivity.py 표 2, 단위 테스트
+    test_clicks_on_another_topic_pull_it_into_the_top10_as_evidence_accumulates와 같은 이력)."""
+    from app.recsys import profile_store
+    from jobs.tasks.rebuild_user_state import rebuild_all
+
+    uid = seeded.add_user()
+    now = datetime.now(timezone.utc)
+    for topic, j, days in [(0, 1, 1), (0, 2, 2), (0, 3, 3), (0, 4, 5), (0, 5, 8), (2, 1, 2), (2, 2, 4), (2, 3, 6)]:
+        seeded.click(uid, seeded.by_topic[topic][j], at=now - timedelta(days=days))
+    assert rebuild_all(engine, user_ids=[uid])["rebuilt"] == 1  # 이력을 장기 상태로(시드·이관의 경로)
     service = _service(engine)
 
     def topic1_share(rec):
@@ -248,7 +259,10 @@ def test_a_click_moves_the_next_response_toward_the_clicked_topic(engine, seeded
 
     before = _recommend(service, engine, uid)
     clicked = seeded.by_topic[1][0]
-    seeded.click(uid, clicked)
+    clicked_at = datetime.now(timezone.utc)
+    seeded.click(uid, clicked, at=clicked_at)
+    with engine.begin() as conn:
+        assert profile_store.apply_click(conn, uid, clicked, clicked_at)
     after = _recommend(service, engine, uid)
 
     print(f"\n[recsys click-shift] topic1 share@10 before={topic1_share(before):.2f} after={topic1_share(after):.2f}")
@@ -270,6 +284,52 @@ def test_a_click_older_than_24h_does_not_count_as_short_term(engine, seeded):
     with Session(engine) as s:
         recent = SqlRecsysRepository(s).recent_clicks(uid, now - timedelta(hours=24), now, 20)
     assert recent == []
+
+
+def test_the_heuristic_six_hour_click_count_equals_the_adapter_pop_clicks_6h_in_sql(engine, seeded, pg_conn):
+    """ADR 0014 사전 등록 2: 활성 휴리스틱의 c6(ClickCounts - item_window_counts를 창 하나·빈 노출 창으로 부른다)이 어댑터의
+    pop_clicks_6h(같은 함수를 세 창 + 노출 창으로 부른 결과의 첫 열)와 같다. 빈 노출 창이면 SQL이 노출 조회를 보내지 않고
+    FILTER가 하나뿐인 분기를 탄다 - 그 분기의 결과를 PostgreSQL에서 본다. 창 경계는 load_popularity의 통합 테스트와 같다."""
+    from sqlalchemy.orm import Session
+
+    from app.recsys.pipeline import ClickCounts, load_popularity
+    from app.recsys.sql_repository import SqlRecsysRepository
+    from app.recsys.types import WindowCounts
+    from recsys_core import serving as core_serving
+
+    a, b = seeded.add_user(), seeded.add_user()
+    x, y, z, untouched = seeded.by_topic[3][:4]
+    now = datetime.now(timezone.utc).replace(microsecond=300_000)
+    end = now.replace(microsecond=0) - timedelta(seconds=1)  # 요청 초(올림) - 2초
+    assert core_serving.item_window_end(now) == end
+    seeded.click(a, x, at=end - timedelta(microseconds=1))   # 6h 창 안(끝 직전)
+    seeded.click(b, x, at=end)                               # 끝은 제외
+    seeded.click(b, x, at=end - timedelta(hours=6))          # 6h 창의 시작은 포함
+    seeded.click(a, x, at=end - timedelta(hours=6, microseconds=1))  # 24h 창에만
+    seeded.click(a, y, at=end - timedelta(hours=20))         # 24h 창에만
+    with pg_conn.cursor() as cur:
+        cur.execute(  # 클릭이 아닌 이벤트는 세지 않는다
+            "INSERT INTO user_newsletter_ctr_log (user_id, news_letter_id, created_at, event) VALUES (%s, %s, %s, 'detail_view')",
+            (a, z, end - timedelta(hours=1)),
+        )
+        cur.execute(  # 노출만 있는 뉴스레터: 클릭 수는 0이다
+            "INSERT INTO recommendation_impression_log "
+            "(request_id, user_id, news_letter_id, position, source, model_version, created_at) "
+            "VALUES (%s, %s, %s, 0, 'realtime', 'heuristic-v2-b', %s)",
+            (str(uuid.uuid4()), b, z, end - timedelta(seconds=5)),
+        )
+    ids = [x, y, z, untouched]
+
+    with Session(engine) as s:
+        repo = SqlRecsysRepository(s)
+        c6 = ClickCounts(repo, now).get(ids)
+        adapter = load_popularity(repo, ids, now)
+        start6 = core_serving.item_window_starts(now)[0]
+        clicks_only = repo.item_window_counts(ids, (start6,), end, end)
+
+    assert c6 == {i: (adapter[i].clicks[0] if i in adapter else 0) for i in ids} == {x: 2, y: 0, z: 0, untouched: 0}
+    assert adapter[y].clicks[:2] == (0, 1) and adapter[z].inviews == 1  # 다른 창·노출은 어댑터 쪽에만 있다
+    assert clicks_only == {x: WindowCounts((2,), 0)}  # 빈 노출 창: 노출만 있는 z는 결과에 없다
 
 
 def test_brand_new_users_never_get_an_empty_list(engine, seeded):
@@ -389,7 +449,7 @@ def test_impressions_are_written_to_the_log_table(engine, seeded, pg_conn):
     assert [r[1] for r in rows] == rec.news_letter_ids[:3]
     assert [r[2] for r in rows] == [0, 1, 2]
     assert {r[0] for r in rows} == {rec.request_id}
-    assert {(r[3], r[4]) for r in rows} == {("realtime", "heuristic-v1")}
+    assert {(r[3], r[4]) for r in rows} == {("realtime", "heuristic-v2-b")}
     service.shutdown()
 
 

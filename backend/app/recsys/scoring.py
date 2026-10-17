@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import Callable, Dict, Optional, Protocol, Sequence, Tuple
+from typing import Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
 
@@ -9,23 +9,29 @@ from recsys_core import serving as core_serving
 
 from app.recsys.deadline import Deadline
 from app.recsys.metrics import RecsysCounters
+from app.recsys.popularity import compute_scores
 from app.recsys.shadow import DeferredResult, ShadowRunner
 from app.recsys.throttle import ThrottledExceptionLog
-from app.recsys.types import Item, ScoreResult, UserState, WindowCounts
+from app.recsys.types import Item, NewsletterMeta, ScoreResult, UserState, WindowCounts
 
 logger = logging.getLogger(__name__)
 
 # 칸 로그의 features(float32 바이트)를 푸는 방법. 요청 로그의 feature_schema_version이 가리킨다.
 # 버전을 바꾸지 않고 순서나 뜻을 바꾸면 예전 로그를 잘못 읽게 되므로, 바뀌면 새 번호를 더한다.
-HEURISTIC_FEATURE_SCHEMA = 1
+# 1 = heuristic-v1(사전값)의 4항. 2026-10-17 전의 로그와 되돌리기 세트(RECSYS_HEURISTIC_SET=prior)가 쓴다.
+PRIOR_HEURISTIC_FEATURE_SCHEMA = 1
 # recsys_core 서빙 어댑터의 22열(ADR 0033). 값의 정의는 recsys_core.serving의 시각 규칙과 SCHEMA_DEFINITION이다.
 ADAPTER_FEATURE_SCHEMA = core_serving.FEATURE_SCHEMA_VERSION
+# 3 = heuristic-v2의 4항(ADR 0014 사전 등록 2). 활성 휴리스틱의 기본 스키마다.
+HEURISTIC_FEATURE_SCHEMA = 3
 FEATURE_SCHEMAS: Dict[int, Tuple[str, ...]] = {
-    # 휴리스틱 4항의 가중치를 곱하기 전 값. 신호가 없는 항(장기·단기 벡터 없음)은 NaN이다.
-    HEURISTIC_FEATURE_SCHEMA: ("cos_long", "cos_short", "recency", "popularity"),
+    # 가중치를 곱하기 전 값. 신호가 없는 항(장기·단기 벡터 없음)은 NaN이다.
+    PRIOR_HEURISTIC_FEATURE_SCHEMA: ("cos_long", "cos_short", "recency", "popularity"),
     ADAPTER_FEATURE_SCHEMA: tuple(core_serving.FEATURE_NAMES),
+    # 가중치를 곱하기 전 값. 개인 신호가 없는 항과 읽지 못한 클릭 항은 NaN이다(점수에서는 0).
+    HEURISTIC_FEATURE_SCHEMA: ("cos_long", "cos_short", "recency", "log1p_clicks_6h"),
 }
-assert len(FEATURE_SCHEMAS) == 2, "피처 스키마 버전 번호가 겹칩니다"
+assert len(FEATURE_SCHEMAS) == 3, "피처 스키마 버전 번호가 겹칩니다"
 
 FeatureFn = Callable[[UserState, Sequence[Item], datetime], np.ndarray]
 PopularityLoader = Callable[[], Dict[int, WindowCounts]]
@@ -61,30 +67,177 @@ def _cosine(matrix_normed: np.ndarray, v: Optional[np.ndarray]) -> Optional[np.n
     return matrix_normed @ (np.asarray(v, dtype=np.float32) / n)
 
 
+def _aware(at: datetime) -> datetime:
+    return at if at.tzinfo is not None else at.replace(tzinfo=timezone.utc)
+
+
 def item_ages_hours(items: Sequence[Item], now: datetime) -> np.ndarray:
+    """heuristic-v1의 경과 시간: now - created_at(초 미만 포함)."""
     ages = []
     for it in items:
-        created = it.created_at
-        if created.tzinfo is None:
-            created = created.replace(tzinfo=timezone.utc)
-        ages.append(max(0.0, (now - created).total_seconds() / 3600.0))
+        ages.append(max(0.0, (now - _aware(it.created_at)).total_seconds() / 3600.0))
     return np.asarray(ages, dtype=np.float32)
+
+
+def hours_since_pub(created_at: Sequence[datetime], now: datetime) -> np.ndarray:
+    """서빙 어댑터의 hours_since_pub과 같은 값(ADR 0014 사전 등록 2): (T - floor(생성 시각)) / 3600, T = floor(now) + 1.
+    하네스·어댑터와 같은 정수 초 규칙이라 같은 요청의 값이 1e-6 안에서 같다."""
+    t_req = core_serving.request_second(now)
+    seconds = np.asarray([t_req - core_serving.epoch_seconds(_aware(c)) for c in created_at], dtype=np.float64)
+    return (np.maximum(0.0, seconds) / 3600.0).astype(np.float32)
 
 
 @dataclass(frozen=True)
 class HeuristicWeights:
-    """실사용 데이터로 튜닝한 값이 아니라 사전(prior) 가중치다 (ADR 0015).
+    """heuristic-v2의 4항 가중치(ADR 0014). 기본값은 서빙 기본 세트 (b)다.
 
-    장기:단기 = 0.45:0.35는 합성 점검(evaluation/serving/click_shift_sensitivity.py)에서
-    고른 값이다. MMR이 후보 풀 안에서 점수를 min-max 정규화하기 때문에 반응이 계단형이라,
-    0.5:0.3은 다른 주제를 3번 클릭해도 상위 10개에 그 주제가 10%만 들어오고 0.4:0.4
-    이상은 클릭 한 번에 80~90%로 뒤집혔다. 0.45:0.35는 클릭 1/2/3회에 평균 15/29/39%로
-    근거가 쌓일수록 늘어난다 - 실수 클릭 한 번에 피드가 장악되지 않으면서 반응은 한다.
-    다만 이 값은 절벽 위에 있다: 0.05만 옮겨도 "반응 없음"과 "피드 장악" 사이를 넘어가고, 시드별
-    범위도 넓다(클릭 3회 후 20~60%). 주제 4개가 거의 직교하는 합성 코퍼스에서 결과를 보고 고른
-    값이므로 실제 임베딩·실제 클릭에서 다시 정해야 한다(ADR 0015 증거 4).
-    신선도/인기는 코사인이 비슷할 때의 동점 깨기 역할이라 작게 두고, 식은 배치 인기 랭킹
-    (app/recsys/popularity.compute_scores)과 같은 척도를 쓴다.
+    값은 ADR 0013 A2 E7이 EB-NeRD에서 seed 0·1·2마다 적합한 원값의 원소별 산술 평균이다
+    (reports/recsys/ebnerd_v1_2_cold.json e7.weights, ADR 0014 사전 등록 1). 점수는 가중치에 선형이라 이 점수는 세
+    seed 점수의 평균과 같다. 평균 가중치의 점수기 자체는 E7에서 평가하지 않았다(미측정).
+    - long_term: cos(사용자 프로필, 후보)        - 하네스 hist_cos
+    - short_term: cos(최근 클릭 단위 벡터 합, 후보) - 하네스 short_cos
+    - recency: exp(-hours_since_pub / recency_tau_hours)
+    - popularity: log1p(최근 6시간 클릭 수)       - 하네스 pop_clicks_6h
+    """
+
+    long_term: float = 7.676315219348940
+    short_term: float = 0.861686427004918
+    recency: float = 4.508614262759206
+    popularity: float = 1.066841429686268
+    recency_tau_hours: float = 48.0
+
+
+# 서빙 세트(ADR 0014 사전 등록 1·5). (b) = sub1(유저 1%) 적합, 서빙 기본값. (a) = 전체 트래픽 적합 - 전환 규칙(사전 등록 6)을
+# 만족할 때만 쓴다.
+WEIGHTS_B = HeuristicWeights()
+WEIGHTS_A = HeuristicWeights(
+    long_term=5.041179796065179,
+    short_term=2.772215179557055,
+    recency=1.846242902324785,
+    popularity=0.705847576322416,
+)
+HEURISTIC_SETS: Dict[str, HeuristicWeights] = {"b": WEIGHTS_B, "a": WEIGHTS_A}
+PRIOR_SET = "prior"
+
+
+def _set_name(weights: HeuristicWeights) -> str:
+    for name, w in HEURISTIC_SETS.items():
+        if w == weights:
+            return name
+    return "custom"
+
+
+def _counts_vector(ids: Sequence[int], clicks_6h: Optional[Mapping[int, int]]) -> Optional[np.ndarray]:
+    if clicks_6h is None:
+        return None
+    return np.asarray([int(clicks_6h.get(int(i), 0)) for i in ids], dtype=np.float64)
+
+
+def _ordered(ids: Sequence[int], created_at: Sequence[datetime], scores: np.ndarray) -> List[Tuple[int, float]]:
+    """점수 내림차순, 동점은 생성 시각 내림차순 -> 뉴스레터 ID 내림차순(ADR 0014 사전 등록 3·4)."""
+    keys = sorted(
+        range(len(ids)),
+        key=lambda j: (-float(scores[j]), -_aware(created_at[j]).timestamp(), -int(ids[j])),
+    )
+    return [(int(ids[j]), float(scores[j])) for j in keys]
+
+
+def popularity_order(metas: Sequence[NewsletterMeta], clicks_6h: Optional[Mapping[int, int]]) -> List[int]:
+    """후보 출처 popular의 순서(ADR 0014 사전 등록 4): 6시간 클릭 수 내림차순 -> 생성 시각 내림차순 -> ID 내림차순.
+    클릭 수를 읽지 못했으면(None) 전부 0으로 본다(생성 시각 순서가 된다)."""
+    ids = [int(m.news_letter_id) for m in metas]
+    counts = _counts_vector(ids, clicks_6h)
+    scores = np.zeros(len(ids)) if counts is None else counts
+    return [nid for nid, _ in _ordered(ids, [m.news_letter_created_at for m in metas], scores)]
+
+
+class HeuristicScorer:
+    """활성 휴리스틱 스코어러 heuristic-v2 (ADR 0014 사전 등록 2).
+
+        s = w_long·cos_long + w_short·cos_short + w_recency·exp(-h/48) + w_pop·log1p(c6h)
+
+    - cos_long: state.profile(장기 벡터 = 증분 상태의 방향, 없으면 콜드 체인의 온보딩·카테고리 중심 벡터)과의 코사인.
+    - cos_short: state.short_term(서빙 어댑터와 같은 최근 클릭의 단위 벡터 합)과의 코사인.
+    - h: 서빙 어댑터의 hours_since_pub(hours_since_pub 함수).
+    - c6h: state.clicks_6h - 어댑터의 pop_clicks_6h와 같은 창의 클릭 수. None이면 읽지 못한 것이고 그 항은 모든 후보에서
+      0이다(순위에 영향이 없다).
+    신호가 없는 항은 0이고 다른 항으로 가중치를 넘기지 않는다 - 하네스의 피처 값(히스토리가 없으면 hist_cos = 0)과 E7이
+    적합한 식 그대로다. 칸 로그의 피처(스키마 3)에는 신호가 없는 항과 읽지 못한 클릭 항을 NaN으로 남긴다.
+    """
+
+    def __init__(self, weights: Optional[HeuristicWeights] = None, set_name: Optional[str] = None):
+        if weights is None:
+            set_name = set_name or "b"
+            if set_name not in HEURISTIC_SETS:
+                raise ValueError(f"unknown heuristic weight set {set_name!r}; expected one of {sorted(HEURISTIC_SETS)}")
+            weights = HEURISTIC_SETS[set_name]
+        self.w = weights
+        self.set_name = set_name or _set_name(weights)
+        self.version = f"heuristic-v2-{self.set_name}"
+
+    # 인기 항이 6시간 클릭 수를 읽는다(state.clicks_6h). 콜드 경로가 이 값을 보고 클릭 수를 읽을지 정한다.
+    uses_clicks = True
+
+    @property
+    def cold_model_version(self) -> str:
+        return self.version
+
+    def _non_personal(self, created_at: Sequence[datetime], counts: Optional[np.ndarray], now: datetime):
+        recency = np.exp(-hours_since_pub(created_at, now).astype(np.float64) / self.w.recency_tau_hours)
+        log_clicks = None if counts is None else np.log1p(counts)
+        scores = self.w.recency * recency
+        if log_clicks is not None:
+            scores = scores + self.w.popularity * log_clicks
+        return scores, recency, log_clicks
+
+    def score(self, state: UserState, items: Sequence[Item], now: datetime) -> ScoreResult:
+        n = len(items)
+        ids = [int(it.news_letter_id) for it in items]
+        scores, recency, log_clicks = self._non_personal(
+            [it.created_at for it in items], _counts_vector(ids, getattr(state, "clicks_6h", None)), now
+        )
+        missing = np.full(n, np.nan, dtype=np.float64)
+        cos_long = cos_short = None
+        if n and (state.profile is not None or state.short_term is not None):
+            emb = _normalize_rows(np.stack([it.embedding for it in items]).astype(np.float32))
+            cos_long = _cosine(emb, state.profile)
+            cos_short = _cosine(emb, state.short_term)
+        if cos_long is not None:
+            scores = scores + self.w.long_term * cos_long.astype(np.float64)
+        if cos_short is not None:
+            scores = scores + self.w.short_term * cos_short.astype(np.float64)
+        features = np.column_stack(
+            [
+                missing if cos_long is None else cos_long,
+                missing if cos_short is None else cos_short,
+                recency,
+                missing if log_clicks is None else log_clicks,
+            ]
+        ).astype(np.float32)
+        return ScoreResult(
+            scores=np.asarray(scores, dtype=np.float64),
+            model_version=self.version,
+            features=features.reshape(n, 4),
+            feature_schema_version=HEURISTIC_FEATURE_SCHEMA,
+        )
+
+    def cold_order(
+        self, metas: Sequence[NewsletterMeta], clicks_6h: Optional[Mapping[int, int]], now: datetime
+    ) -> List[Tuple[int, float]]:
+        """개인 신호가 전혀 없는 사용자의 순서(ADR 0014 사전 등록 3): 같은 식의 비개인 두 항.
+        반환: (뉴스레터 ID, 점수) 점수 내림차순, 동점은 생성 시각 내림차순 -> ID 내림차순."""
+        ids = [int(m.news_letter_id) for m in metas]
+        created = [m.news_letter_created_at for m in metas]
+        scores, _, _ = self._non_personal(created, _counts_vector(ids, clicks_6h), now)
+        return _ordered(ids, created, np.asarray(scores, dtype=np.float64))
+
+
+@dataclass(frozen=True)
+class PriorHeuristicWeights:
+    """heuristic-v1의 사전(prior) 가중치 (ADR 0015 증거 4). 되돌리기 세트(RECSYS_HEURISTIC_SET=prior)로만 남는다.
+
+    장기:단기 = 0.45:0.35는 합성 점검(evaluation/serving/click_shift_sensitivity.py)에서 고른 값이고 절벽 위에 있다.
+    E7(ADR 0013 A2)에서 EB-NeRD sub1 칸의 (b) 적합 세트가 이 사전값보다 나았다(+0.0208 [+0.0080, +0.0339]).
     """
 
     long_term: float = 0.45
@@ -94,11 +247,20 @@ class HeuristicWeights:
     recency_tau_hours: float = 48.0
 
 
-class HeuristicScorer:
-    version = "heuristic-v1"
+class PriorHeuristicScorer:
+    """heuristic-v1: 2026-10-17까지의 활성 스코어러를 바꾸지 않고 둔 것(되돌리기용, ADR 0014 사전 등록 5).
 
-    def __init__(self, weights: HeuristicWeights = HeuristicWeights()):
+    인기 항은 클릭이 아니라 뉴스레터에 묶인 기사 수(raw_news_count)의 min(1, log1p(x)/5)이고, 한쪽 벡터가 없으면 그
+    가중치를 다른 쪽으로 넘겨 개인화 비중을 유지한다. 콜드 경로는 compute_scores(popularity-v1) 순서다.
+    """
+
+    version = "heuristic-v1"
+    cold_model_version = "popularity-v1"
+    uses_clicks = False
+
+    def __init__(self, weights: PriorHeuristicWeights = PriorHeuristicWeights()):
         self.w = weights
+        self.set_name = PRIOR_SET
 
     def score(self, state: UserState, items: Sequence[Item], now: datetime) -> ScoreResult:
         emb = _normalize_rows(np.stack([it.embedding for it in items]).astype(np.float32))
@@ -135,8 +297,29 @@ class HeuristicScorer:
             scores=scores.astype(np.float64),
             model_version=self.version,
             features=features,
-            feature_schema_version=HEURISTIC_FEATURE_SCHEMA,
+            feature_schema_version=PRIOR_HEURISTIC_FEATURE_SCHEMA,
         )
+
+    def cold_order(
+        self, metas: Sequence[NewsletterMeta], clicks_6h: Optional[Mapping[int, int]], now: datetime
+    ) -> List[Tuple[int, float]]:
+        """popularity-v1: compute_scores(최신성 + 묶인 기사 수) 순서. 클릭 수는 읽지 않는다."""
+        return [(int(s["id"]), float(s["score"])) for s in compute_scores(metas, now)]
+
+
+def make_heuristic(set_name: str):
+    """설정(RECSYS_HEURISTIC_SET)의 활성 휴리스틱. prior는 heuristic-v1이다."""
+    if set_name == PRIOR_SET:
+        return PriorHeuristicScorer()
+    return HeuristicScorer(set_name=set_name)
+
+
+def heuristic_of(scorer) -> Optional[object]:
+    """스코어러(또는 그 폴백)가 휴리스틱이면 그것. 콜드 경로가 같은 휴리스틱의 순서를 쓰려고 찾는다."""
+    for candidate in (scorer, getattr(scorer, "fallback", None)):
+        if candidate is not None and callable(getattr(candidate, "cold_order", None)):
+            return candidate
+    return None
 
 
 class ScorerStack:

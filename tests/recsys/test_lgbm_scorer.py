@@ -89,7 +89,7 @@ def _scorer(source, feature_fn=feature0_is_axis0_cosine, clock=None, counters=No
 
 def test_without_an_active_model_the_heuristic_is_used():
     result = _scorer(FakeSource()).score(_state(), _items(), NOW)
-    assert result.model_version == "heuristic-v1"
+    assert result.model_version == "heuristic-v2-b"
 
 
 def test_active_model_scores_with_the_injected_feature_function():
@@ -172,7 +172,7 @@ def test_background_reload_never_makes_a_request_wait_for_the_registry():
 
     try:
         assert source.entered.wait(2)
-        assert while_blocked.model_version == "heuristic-v1"
+        assert while_blocked.model_version == "heuristic-v2-b"
         assert elapsed < 0.5
     finally:
         source.release.set()
@@ -194,7 +194,7 @@ def test_deactivating_the_model_returns_to_the_heuristic_after_reload():
     source.active = None
     t[0] = 61.0
 
-    assert scorer.score(_state(), _items(), NOW).model_version == "heuristic-v1"
+    assert scorer.score(_state(), _items(), NOW).model_version == "heuristic-v2-b"
 
 
 def test_registry_failure_keeps_serving_the_current_model():
@@ -227,7 +227,7 @@ def test_feature_errors_fall_back_to_the_heuristic_and_are_counted(bad_fn):
 
     result = _scorer(source, feature_fn=bad_fn, counters=counters).score(_state(), _items(), NOW)
 
-    assert result.model_version == "heuristic-v1"
+    assert result.model_version == "heuristic-v2-b"
     assert counters.get("scorer.lgbm_error") == 1
 
 
@@ -238,7 +238,7 @@ def test_feature_name_mismatch_with_registry_disables_the_model():
 
     result = _scorer(source, counters=counters).score(_state(), _items(), NOW)
 
-    assert result.model_version == "heuristic-v1"
+    assert result.model_version == "heuristic-v2-b"
     assert counters.get("scorer.feature_mismatch") == 1
 
 
@@ -246,7 +246,7 @@ def test_without_a_feature_function_the_heuristic_is_used_even_if_a_model_exists
     source = FakeSource()
     source.publish("v1", _train_text(+1))
 
-    assert _scorer(source, feature_fn=None).score(_state(), _items(), NOW).model_version == "heuristic-v1"
+    assert _scorer(source, feature_fn=None).score(_state(), _items(), NOW).model_version == "heuristic-v2-b"
 
 
 def test_feature_function_is_resolved_from_a_dotted_path():
@@ -383,7 +383,7 @@ def test_the_stack_logs_registered_shadow_models_next_to_the_active_heuristic():
 
     result = stack.score(_state(), _items(), NOW)
 
-    assert result.model_version == "heuristic-v1"
+    assert result.model_version == "heuristic-v2-b"
     assert list(result.extra_scores) == ["lgbm:ranker@s1"]
     # 활성 점수는 프로필(축 1)과 같은 항목 2를, shadow 모델은 축 0인 항목 1을 선호한다
     assert result.scores[1] > result.scores[0]

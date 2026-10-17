@@ -115,7 +115,8 @@ def test_exploration_draws_follow_the_registered_stream_and_differ_between_reque
 def test_shadow_scores_and_heuristic_features_are_logged_for_every_slot(world_a):
     b = world_a.backend
     assert all(req["shadow_versions"] == [SHADOW_VERSION] for req in b.request_rows)
-    assert all(req["model_version"] == "heuristic-v1" and req["feature_schema_version"] == 1 for req in b.request_rows)
+    # 활성 스코어러는 heuristic-v2(ADR 0014, 세트 b), 칸 로그의 피처는 그 4항(스키마 3)이다
+    assert all(req["model_version"] == "heuristic-v2-b" and req["feature_schema_version"] == 3 for req in b.request_rows)
     assert all(score is not None for score in b.slots.shadow_score)  # explored slots included
     assert set(b.slots.n_features) == {4}
     assert b.counters.get("shadow.scored") == b.counters.get("cache.miss") and b.counters.get("shadow.error") == 0

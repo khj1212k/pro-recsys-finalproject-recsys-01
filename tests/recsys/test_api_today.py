@@ -74,7 +74,7 @@ def test_today_keeps_body_contract_and_sets_recsys_headers(wired):
     assert isinstance(body, list) and 0 < len(body) <= 20
     assert set(body[0]) == FRONTEND_TODAY_FIELDS
     assert resp.headers["X-Rec-Source"] == "realtime"
-    assert resp.headers["X-Model-Version"] == "heuristic-v1"
+    assert resp.headers["X-Model-Version"] == "heuristic-v2-b"
     assert resp.headers["X-Request-Id"]
 
 

@@ -35,7 +35,9 @@ class RecsysRepository(Protocol):
         end: datetime,
     ) -> Dict[int, WindowCounts]:
         """아이템별 인기도 창 집계(ADR 0033). 클릭은 창마다 [click_starts[j], end), 노출은 [inview_start, end).
-        모든 사용자의 클릭·노출을 센다. 어느 창에도 행이 없는 아이템은 결과에 없다."""
+        모든 사용자의 클릭·노출을 센다. 어느 창에도 행이 없는 아이템은 결과에 없다.
+        inview_start >= end이면 노출 창이 비어 있다(노출 0건). 클릭 수만 필요한 쪽(ADR 0014의 6시간 클릭 수)이 그렇게
+        부르고, SQL 구현은 그때 노출 조회를 보내지 않는다."""
         ...
 
     def onboarding_vector(self, user_id: int) -> Optional[np.ndarray]: ...

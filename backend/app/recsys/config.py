@@ -7,6 +7,9 @@ from recsys_core import SERVING_CANDIDATE_SPEC, CandidateSpec
 
 MODES = ("realtime", "batch")
 FATIGUE_MODES = ("off", "log", "enforce")
+# 활성 휴리스틱의 가중치 세트(ADR 0014 사전 등록 5). b = 서빙 기본값(E7 sub1 적합), a = 전체 트래픽 적합(전환 규칙을
+# 만족할 때만), prior = heuristic-v1(되돌리기용).
+HEURISTIC_SETS = ("b", "a", "prior")
 
 # 후보 생성기의 출처·순서·기본값은 recsys_core.SERVING_CANDIDATE_SPEC 한곳에 있다(ADR 0033). 아래는 출처마다
 # 그 k를 덮어쓰는 설정 필드다(두 KNN 출처는 RECSYS_KNN_K 하나를 같이 쓴다).
@@ -37,8 +40,16 @@ class RecsysConfig:
     category_n: int = _DEFAULT_K["category"]
     candidate_cap: int = SERVING_CANDIDATE_SPEC.cap
 
-    short_term_hours: int = 24
-    short_term_max_clicks: int = 20
+    # 단기 벡터의 창과 상한은 설정이 아니다: 서빙 피처 어댑터의 정의(recsys_core.serving의 요청 초 기준 24시간·최근 20개)
+    # 하나를 휴리스틱·knn_short 후보·어댑터가 같이 쓴다(ADR 0014 사전 등록 2). 예전의 RECSYS_SHORT_TERM_HOURS·
+    # RECSYS_SHORT_TERM_MAX_CLICKS는 없어졌다.
+
+    # 콜드스타트 임계 k*(ADR 0031 결정 1, ADR 0013 A2 E2의 값 0). 장기 프로필 상태에 반영된 클릭 수가 이보다 적은
+    # 사용자는 클릭 신호(장기·단기 벡터)를 프로필로 쓰지 않고 콜드 체인(온보딩 -> 카테고리 -> 인기)을 탄다. 피처
+    # 어댑터의 입력은 그대로 계산한다. 온보딩 선택은 이벤트로 세지 않는다. 0이면 아무도 거르지 않는다.
+    min_personal_events: int = 0
+    # 활성 휴리스틱의 가중치 세트(HEURISTIC_SETS). 바꾸는 규칙은 ADR 0014 사전 등록 6이다.
+    heuristic_set: str = "b"
 
     batch_max_age_hours: int = 36
 
@@ -97,6 +108,12 @@ class RecsysConfig:
             raise ValueError(
                 f"RECSYS_FATIGUE_MODE must be one of {FATIGUE_MODES}, got {self.fatigue_mode!r}"
             )
+        if self.heuristic_set not in HEURISTIC_SETS:
+            raise ValueError(
+                f"RECSYS_HEURISTIC_SET must be one of {HEURISTIC_SETS}, got {self.heuristic_set!r}"
+            )
+        if self.min_personal_events < 0:
+            raise ValueError("RECSYS_MIN_PERSONAL_EVENTS must not be negative")
         if self.explore_slots < 0 or self.explore_slots_cold < 0:
             raise ValueError("RECSYS_EXPLORE_SLOTS and RECSYS_EXPLORE_SLOTS_COLD must not be negative")
         if self.shadow_max < 0:

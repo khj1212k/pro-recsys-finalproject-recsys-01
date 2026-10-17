@@ -15,7 +15,13 @@ import pytest
 from app.recsys.config import RecsysConfig
 from app.recsys.deadline import Deadline
 from app.recsys.exploration import det_propensity, plan_slate
-from app.recsys.scoring import HeuristicScorer, HeuristicWeights, ScorerStack, decode_features
+from app.recsys.scoring import (
+    HEURISTIC_FEATURE_SCHEMA,
+    HeuristicScorer,
+    HeuristicWeights,
+    ScorerStack,
+    decode_features,
+)
 from app.recsys.service import build_service, rng_for_request
 from app.recsys.types import SOURCE_COLD_POPULAR, SOURCE_POPULAR, SOURCE_REALTIME, ScoreResult
 from tests.recsys.fakes import NOW, FakeRepo, FakeUser, LogRecorder, axis_vec, two_topic_corpus
@@ -203,7 +209,7 @@ def test_request_and_slot_rows_describe_the_slate_that_was_shown():
     slots = log.slots_of(rec.request_id)
     det = _det(service, repo, WARM)
     assert request["request_id"] == rec.request_id and request["user_id"] == WARM
-    assert (request["source"], request["model_version"]) == (SOURCE_REALTIME, "heuristic-v1")
+    assert (request["source"], request["model_version"]) == (SOURCE_REALTIME, "heuristic-v2-b")
     assert (request["policy_version"], request["profile_source"]) == ("eps-uniform-v1", "long_term")
     assert (request["cache_hit"], request["fallback_reason"]) == (False, None)
     assert request["candidate_ids"] == det.eligible_ids.tolist()
@@ -212,7 +218,7 @@ def test_request_and_slot_rows_describe_the_slate_that_was_shown():
     assert request["candidate_count"] == 30
     assert request["explore_pool_size"] == 30 - 18
     assert request["slate_size"] == request["shown_count"] == 20
-    assert request["feature_schema_version"] == 1 and request["shadow_versions"] is None
+    assert request["feature_schema_version"] == HEURISTIC_FEATURE_SCHEMA and request["shadow_versions"] is None
     assert request["latency_ms"] is not None and request["latency_ms"] >= 0
 
     assert [s["position"] for s in slots] == list(range(20))
@@ -231,13 +237,13 @@ def test_request_and_slot_rows_describe_the_slate_that_was_shown():
         total = 12 * (2 / 20) / 12 + sum(det_propensity(r, pos, 20, 2) for r in range(18))
         assert total == pytest.approx(1.0)
 
-    # 탐색으로 들어온 아이템에도 활성 점수와 피처가 남고, 피처로 점수를 다시 계산할 수 있다
+    # 탐색으로 들어온 아이템에도 활성 점수와 피처가 남고, 피처로 점수를 다시 계산할 수 있다(없는 신호는 0, ADR 0014)
     w = HeuristicWeights()
     for s in slots:
-        cos_long, cos_short, recency, popularity = decode_features(s["features"]).astype(float)
+        cos_long, cos_short, recency, log_clicks = decode_features(s["features"]).astype(float)
         assert np.isnan(cos_short)  # 이 사용자는 단기 벡터가 없다
-        rebuilt = (w.long_term + w.short_term) * cos_long + w.recency * recency + w.popularity * popularity
-        assert s["score"] == pytest.approx(rebuilt, abs=1e-6)
+        rebuilt = w.long_term * cos_long + w.recency * recency + w.popularity * log_clicks
+        assert s["score"] == pytest.approx(rebuilt, abs=1e-5)
     assert service.counters.get("requests.logged") == 1
     assert service.counters.get("impressions.logged") == 20
 
@@ -403,7 +409,7 @@ def test_shadow_scores_are_logged_for_every_slot_and_never_change_the_response()
     stacked.log_impressions(WARM, again, again.news_letter_ids)
 
     assert rec.news_letter_ids == expected.news_letter_ids and rec.scores == expected.scores
-    assert rec.model_version == "heuristic-v1"
+    assert rec.model_version == "heuristic-v2-b"
     assert shadow.calls == 1
     first, second = log.requests
     assert first["shadow_versions"] == second["shadow_versions"] == ["shadow-reverse"]

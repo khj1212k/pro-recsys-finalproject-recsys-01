@@ -19,6 +19,9 @@ updated at every click (`profile_state`), the short-term vector is built by the 
 `recent_clicks` (clicks strictly before the request), and `item_window_counts` exists for the
 feature adapter. That is a different world from the one ADR 0025 A1.1 registered, so a run of this
 file does not reproduce those reports and is not a re-run of them (ADR 0025 A1.6, 2026-10-06).
+Since ADR 0014 (2026-10-17) policy A's active scorer is heuristic-v2 (RECSYS_HEURISTIC_SET, default b): its
+popularity term reads the last 6 hours of clicks (`item_window_counts`) and the "popular" candidate source is
+ordered by those clicks. The shadow stand-in keeps the heuristic-v1 terms the registered E9 used.
 Not wired in here: the serving feature adapter (`feature_fn` is off, slot logs keep the heuristic's
 four terms) and the out-of-path shadow thread (the shadow scores in the request path, which keeps a
 run a pure function of its spec).
@@ -50,7 +53,12 @@ if _BACKEND_ROOT not in sys.path:
 from app.recsys.config import RecsysConfig  # noqa: E402
 from app.recsys.metrics import RecsysCounters  # noqa: E402
 from app.recsys.pipeline import RealtimeRecommender  # noqa: E402
-from app.recsys.scoring import HeuristicScorer, HeuristicWeights, ScorerStack  # noqa: E402
+from app.recsys.scoring import (  # noqa: E402
+    PriorHeuristicScorer,
+    PriorHeuristicWeights,
+    ScorerStack,
+    make_heuristic,
+)
 from app.recsys.service import RecommendationService  # noqa: E402
 from app.recsys.types import POLICY_NONE, DeterministicList, NewsletterMeta, ProfileState  # noqa: E402
 from app.recsys.types import Item as RecsysItem  # noqa: E402
@@ -66,18 +74,21 @@ TARGET_POLICIES = ("random", "reactive", "shadow_recency")
 # Names the serving code behind /today in the tables and reports this harness writes. The registered
 # E9/E10 results carry no such key: they were made before ADR 0033 by the harness at commit 0ccd59f
 # (nightly long-term vector). A report that carries this value is not a run of the registered world.
-SERVING_PATH = "adr-0033: incremental long-term profile, clicks strictly before the request, in-path shadow"
+SERVING_PATH = ("adr-0033: incremental long-term profile, clicks strictly before the request, in-path shadow; "
+                "adr-0014: heuristic-v2 active scorer, 6h-click popular source")
 SHADOW_VERSION = "heuristic-recency-sim"
-# ADR 0025 A1.2: the shadow-ranker stand-in. Same four terms as the active heuristic, other weights.
-SHADOW_WEIGHTS = HeuristicWeights(long_term=0.10, short_term=0.10, recency=0.60, popularity=0.20,
-                                  recency_tau_hours=48.0)
+# ADR 0025 A1.2: the shadow-ranker stand-in. The four terms of heuristic-v1 (the active heuristic when E9 was
+# registered), other weights. It stays on the v1 terms after the active heuristic moved to heuristic-v2 (ADR 0014),
+# so the stand-in policy B is the one the registered E9 measured.
+SHADOW_WEIGHTS = PriorHeuristicWeights(long_term=0.10, short_term=0.10, recency=0.60, popularity=0.20,
+                                       recency_tau_hours=48.0)
 EXPLORE_STREAM = 11  # default_rng([seed, 11, request counter]) draws the exploration slots
 RANDOM_POLICY_STREAM = 23  # default_rng([seed, 23, ranking counter]) draws the random policy's slate
 # The wall-clock budget is not under test: generous, so a slow runner cannot turn answers into fallbacks.
 TIME_BUDGET_MS = 600_000
 
 
-class ShadowRecencyScorer(HeuristicScorer):
+class ShadowRecencyScorer(PriorHeuristicScorer):
     version = SHADOW_VERSION
 
     def __init__(self):
@@ -149,7 +160,8 @@ class SimRecsysRepository:
     def item_window_counts(self, news_letter_ids: Sequence[int], click_starts: Sequence[datetime],
                            inview_start: datetime, end: datetime) -> Dict[int, WindowCounts]:
         """Clicks in [click_starts[j], end) and impressions in [inview_start, end), all users. Items without a
-        row in any window are left out. Nothing in this harness reads it (the feature adapter is off)."""
+        row in any window are left out. The active heuristic's 6-hour click counts read it (ADR 0014) with an empty
+        impression window; the feature adapter is off in this harness."""
         out: Dict[int, WindowCounts] = {}
         for nid in news_letter_ids:
             clicked_at = self.w.clicks_by_item.get(int(nid), ())
@@ -412,7 +424,7 @@ class ServingBackend(FakeBackend):
 
         self.repo = SimRecsysRepository(self)
         self.counters = RecsysCounters()
-        stack = ScorerStack(HeuristicScorer(), [ShadowRecencyScorer()],
+        stack = ScorerStack(make_heuristic(self.cfg.heuristic_set), [ShadowRecencyScorer()],
                             deadline_fraction=self.cfg.shadow_deadline_fraction, counters=self.counters)
         self.recommender = PolicyRecommender(self.cfg, stack, self.counters, self, ranking=ranking, targets=targets)
         explore_draws = itertools.count()

@@ -61,7 +61,7 @@ def test_active_scores_are_untouched_and_shadow_scores_are_keyed_by_model_versio
     )
 
     np.testing.assert_array_equal(stacked.scores, alone.scores)
-    assert stacked.model_version == alone.model_version == "heuristic-v1"
+    assert stacked.model_version == alone.model_version == "heuristic-v2-b"
     assert list(stacked.extra_scores) == ["shadow-a", "shadow-b"]
     assert stacked.extra_scores["shadow-b"].tolist() == [5, 4, 3, 2, 1]
 
@@ -140,23 +140,25 @@ def test_a_shadow_that_is_the_same_version_as_the_active_scorer_or_another_shado
 
 
 def test_the_heuristic_reports_the_four_terms_it_scored_with_and_they_reproduce_the_score():
-    """칸 로그의 features는 가중치를 곱하기 전의 4항이다. 로그만으로 점수를 다시 계산할 수 있어야 한다."""
+    """칸 로그의 features는 가중치를 곱하기 전의 4항이다(스키마 3, ADR 0014). 로그만으로 점수를 다시 계산할 수 있어야
+    한다: 없는 신호(NaN)는 점수에서 0이다."""
     w = HeuristicWeights()
     items = _items()
-    long_only = UserState(user_id=1, profile=axis_vec(DIM, 1))
-    both = UserState(user_id=1, profile=axis_vec(DIM, 1), short_term=axis_vec(DIM, 2))
+    clicks = {1: 4, 3: 1}
+    long_only = UserState(user_id=1, profile=axis_vec(DIM, 1), clicks_6h=clicks)
+    both = UserState(user_id=1, profile=axis_vec(DIM, 1), short_term=axis_vec(DIM, 2), clicks_6h=clicks)
 
-    for state, w_long, w_short in ((long_only, w.long_term + w.short_term, 0.0), (both, w.long_term, w.short_term)):
+    for state in (long_only, both):
         result = HeuristicScorer(w).score(state, items, NOW)
         assert result.feature_schema_version == HEURISTIC_FEATURE_SCHEMA
         assert result.features.shape == (len(items), len(FEATURE_SCHEMAS[HEURISTIC_FEATURE_SCHEMA]))
-        cos_long, cos_short, recency, popularity = (result.features[:, j].astype(np.float64) for j in range(4))
-        rebuilt = w_long * cos_long + w.recency * recency + w.popularity * popularity
-        if w_short:
-            rebuilt = rebuilt + w_short * cos_short
-        else:
+        cos_long, cos_short, recency, log_clicks = (result.features[:, j].astype(np.float64) for j in range(4))
+        if state.short_term is None:
             assert np.all(np.isnan(cos_short))  # 없는 신호는 0이 아니라 NaN으로 남는다
-        np.testing.assert_allclose(rebuilt, result.scores, atol=1e-6)
+        rebuilt = (w.long_term * cos_long + w.short_term * np.nan_to_num(cos_short) + w.recency * recency
+                   + w.popularity * log_clicks)
+        np.testing.assert_allclose(rebuilt, result.scores, atol=1e-5)
+        np.testing.assert_allclose(log_clicks, np.log1p([clicks.get(it.news_letter_id, 0) for it in items]), atol=1e-6)
 
 
 def test_feature_payload_round_trips_as_little_endian_float32():

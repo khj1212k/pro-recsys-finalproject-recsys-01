@@ -119,7 +119,7 @@ def test_a_registered_shadow_model_scores_candidates_with_adapter_features_and_b
     (request,) = log.requests
     version = "lgbm:ranker@v1"
     # 목록을 만든 것은 휴리스틱이다. 모델은 점수만 남긴다.
-    assert rec.source == SOURCE_REALTIME and request["model_version"] == "heuristic-v1"
+    assert rec.source == SOURCE_REALTIME and request["model_version"] == "heuristic-v2-b"
     assert request["feature_schema_version"] == ADAPTER_FEATURE_SCHEMA == 2
     assert request["features_as_of"] == NOW
     assert request["shadow_versions"] == [version]
@@ -259,7 +259,7 @@ def test_a_failed_popularity_read_for_the_active_model_scores_that_request_with_
         service.shutdown()
 
     assert rec.source == SOURCE_REALTIME and rec.fallback_reason is None  # 조회 하나가 요청을 폴백으로 보내지 않는다
-    assert rec.model_version == "heuristic-v1"
+    assert rec.model_version == "heuristic-v2-b"
     assert service.counters.get("features.popularity_error") == 1 and service.counters.get("scorer.lgbm_error") == 1
 
 
@@ -282,7 +282,7 @@ def test_a_model_registered_against_a_different_feature_schema_is_not_served(nam
     finally:
         service.shutdown()
 
-    assert rec.model_version == "heuristic-v1"  # 활성 자리는 휴리스틱이 채점한다
+    assert rec.model_version == "heuristic-v2-b"  # 활성 자리는 휴리스틱이 채점한다
     assert log.requests[0]["shadow_versions"] is None  # shadow는 점수를 남기지 않는다
     assert service.counters.get(counter) == 2
     # 어댑터 피처 자체는 남는다(모델과 무관하게 계산된다)

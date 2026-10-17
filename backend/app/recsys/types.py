@@ -57,9 +57,11 @@ class ProfileState:
 @dataclass
 class UserState:
     user_id: int
-    # 장기 벡터 = 증분 상태의 방향(반감기 7일 감쇠 합). 클릭 이력이 없으면 None이다.
+    # 장기 벡터 = 증분 상태의 방향(반감기 7일 감쇠 합). 클릭 이력이 없거나, 반영된 클릭 수가 콜드스타트 임계
+    # (RECSYS_MIN_PERSONAL_EVENTS, ADR 0031)보다 적으면 None이다.
     long_term: Optional[np.ndarray] = None
-    # 단기 벡터 = 최근 24시간·최근 20클릭의 단위 벡터 합(ADR 0017)
+    # 단기 벡터 = recent_clicks(어댑터의 정의: 요청 초 기준 24시간 안의 최근 20클릭)의 단위 벡터 합(ADR 0014, 0017).
+    # 장기 벡터와 같은 임계를 따른다.
     short_term: Optional[np.ndarray] = None
     category_ids: List[int] = field(default_factory=list)
     clicked_ids: Set[int] = field(default_factory=set)
@@ -73,6 +75,11 @@ class UserState:
     recent_clicks: List[ClickEvent] = field(default_factory=list)
     # 후보 아이템의 인기도 창 집계. None은 "아직 읽지 않음"이다(어댑터가 값을 내지 않는다).
     popularity: Optional[Dict[int, WindowCounts]] = None
+    # --- 활성 휴리스틱의 입력(ADR 0014). 후보의 최근 6시간 클릭 수(어댑터의 pop_clicks_6h와 같은 창). 없는 ID는 0건이다.
+    # None은 읽지 않았거나 읽지 못한 것이다: 휴리스틱의 인기 항이 모든 후보에서 0이 된다.
+    clicks_6h: Optional[Dict[int, int]] = None
+    # 클릭 이력이 있지만 콜드스타트 임계(RECSYS_MIN_PERSONAL_EVENTS)보다 적어 클릭 신호를 프로필로 쓰지 않은 사용자.
+    below_min_personal_events: bool = False
 
     @property
     def has_personal_signal(self) -> bool:

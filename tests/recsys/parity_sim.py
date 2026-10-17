@@ -99,7 +99,12 @@ def simulate(n_items: int = 120, n_users: int = 8, n_requests: int = 200, dim: i
     def factory():
         yield repo
 
-    cfg = RecsysConfig(model_reload_s=0.0, shadow_max=1, **cfg_kw)
+    # 시간 한도 셋은 벽시계로 잰다(요청 예산은 time.monotonic, 로그 쓰기의 대기 상한은 실제 대기). 재생은 결정론 시계로
+    # 돌고 그 시계는 요청 안에서 멈춰 있으므로, 기본값(300ms·500ms·100ms)이면 CPU가 붐비는 러너에서 일부 요청이 폴백으로
+    # 가거나 shadow 점수를 잃는다 - 게이트가 보려는 것이 아니다. 통합 게이트(tests/integration/test_feature_parity.py)와
+    # 같이 넉넉히 둔다. 넘긴 cfg_kw가 이긴다.
+    limits = {"time_budget_ms": 60_000, "shadow_budget_ms": 60_000, "shadow_log_wait_ms": 60_000}
+    cfg = RecsysConfig(model_reload_s=0.0, shadow_max=1, **{**limits, **cfg_kw})
     counters = RecsysCounters()
     stack = build_scorer_stack(cfg, source, serving.features, counters)
     for scorer in (stack.active, *stack.shadows):
