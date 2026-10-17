@@ -301,3 +301,32 @@ def test_backup_output_never_contains_body_text(tmp_path, monkeypatch, capsys):
     event = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert event["status"] == "succeeded"
     assert set(event["stats"]) <= {"snapshot_at_utc", "names", "nobody", "full", "monthly", "bucket", "warnings"}
+
+
+def test_restore_into_an_empty_db_records_its_run_only_after_the_schema_exists(tmp_path, monkeypatch):
+    events = []
+
+    class Recorder:
+        def __init__(self, db, job, sha):
+            events.append(("init", db.name, job))
+
+        def start(self):
+            events.append(("start",))
+
+        def record(self, status, stats, error=None):
+            events.append(("record", status))
+
+        def finish(self, *a, **kw):
+            events.append(("finish",))
+
+    def fake_restore(db, archive, work, **kw):
+        events.append(("restore", kw["target_db"], kw["scratch"], kw["with_bodies"]))
+        return {"kind": "full"}
+
+    monkeypatch.setattr(tb, "JobRecorder", Recorder)
+    monkeypatch.setattr(tb, "restore_archive", fake_restore)
+    rc = tb.main(["--work-dir", str(tmp_path), "--db-exec", "", "--db-name", "newsletter", "restore",
+                  "--archive", "x.tar", "--target-db", "newsletter", "--with-bodies"])
+    assert rc == tb.EXIT_OK
+    # 빈 DB에는 job_runs가 없다 - 복원이 끝난 뒤 대상 DB에 한 행으로 남긴다(시작 행을 먼저 쓰지 않는다)
+    assert events == [("init", "newsletter", "restore"), ("restore", "newsletter", False, True), ("record", "succeeded")]

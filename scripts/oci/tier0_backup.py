@@ -474,6 +474,17 @@ class JobRecorder:
             variables={"job": self.job, "sha": self.git_sha or ""}, what="job_runs 기록")
         self.run_id = int(out.splitlines()[-1])
 
+    def record(self, status: str, stats: Dict[str, Any], error: Optional[str] = None) -> None:
+        """끝난 실행을 한 행으로 남긴다 - 실행 전에는 job_runs가 없는 DB(빈 DB에 복원하는 restore)용."""
+        stats = {**stats, "duration_s": round(time.monotonic() - self.started, 1)}
+        self.db.psql_script(
+            "INSERT INTO job_runs (job, status, started_at, finished_at, stats, error, git_sha) VALUES "
+            "(:'job', :'status', now() - make_interval(secs => :'secs'::float8), now(), :'stats'::jsonb, "
+            "NULLIF(:'error', ''), NULLIF(:'sha', ''));",
+            variables={"job": self.job, "status": status, "secs": str(stats["duration_s"]),
+                       "stats": json.dumps(stats, ensure_ascii=False, default=str), "error": (error or "")[:8000],
+                       "sha": self.git_sha or ""}, what="job_runs 기록")
+
     def finish(self, status: str, stats: Dict[str, Any], error: Optional[str] = None) -> None:
         if self.run_id is None:
             return
@@ -885,12 +896,24 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.command == "idle-check":
             os.environ.setdefault("OCI_CLI_AUTH", args.oci_auth)
             return recorded(db, IDLE_CHECK_JOB, args, lambda: run_idle_check(args.days))
-        if args.command in ("restore-check", "restore"):
-            scratch = args.command == "restore-check"
-            job = RESTORE_CHECK_JOB if scratch else "restore"
-            return recorded(db, job, args, lambda: restore_archive(
-                db, args.archive, work, target_db=args.target_db, scratch=scratch, with_bodies=args.with_bodies,
-                keep_target=getattr(args, "keep_target", False)))
+        if args.command == "restore-check":
+            return recorded(db, RESTORE_CHECK_JOB, args, lambda: restore_archive(
+                db, args.archive, work, target_db=args.target_db, scratch=True, with_bodies=args.with_bodies,
+                keep_target=args.keep_target))
+        if args.command == "restore":
+            # 빈 DB에 복원한다 - 복원 전에는 job_runs가 없으므로 끝난 뒤에 대상 DB에 한 행으로 남긴다.
+            restore_db = Db(exec_prefix=db.exec_prefix, user=db.user, name=args.target_db, cwd=db.cwd, env=db.env)
+            recorder = JobRecorder(restore_db, "restore", args.git_sha)
+            try:
+                stats = restore_archive(db, args.archive, work, target_db=args.target_db, scratch=False,
+                                        with_bodies=args.with_bodies)
+            except Exception as exc:
+                log({"job": "restore", "status": "failed", "error": f"{type(exc).__name__}: {exc}"[:2000]})
+                return EXIT_FAILED
+            if not args.no_record:
+                recorder.record("succeeded", stats)
+            log({"job": "restore", "status": "succeeded", "stats": stats})
+            return EXIT_OK
         if args.command == "daily":
             return run_daily(db, args, work)
     except BackupError as exc:
