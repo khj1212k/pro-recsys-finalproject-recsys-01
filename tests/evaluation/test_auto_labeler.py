@@ -491,3 +491,21 @@ def test_label_metrics_reads_auto_label_files(proto, pkg, tmp_path):
     assert m["status"] == "complete" and m["labeled"] == {"outputs": 2, "outputs_total": 2, "clusters": 3, "clusters_total": 3}
     assert m["publishable_primary"]["n"] == 3 and m["outcome_by_single_event"]["skipped"] == {"single_event_Y": 1, "single_event_N": 0}
     assert e0_labels.label_metrics(pkg.labels_dir, pkg.run_dir, items, ends, {})["status"] == "pending"
+
+
+def test_extension_worst_case_is_one_guard_reservation_per_planned_call(proto, pkg):
+    """A8.13 (b)5: 다음 항목 호출들의 최악 예약액 합 - 다시 묻기는 넣지 않는다(A8.14)."""
+    from core.llm import budget
+
+    fake = FakeGemini(proto)
+    lab = make_labeler(proto, pkg, fake)
+    lab._run_group([al.Unit("a", "cluster", "r1-c1")])
+    group = [al.Unit("b", "cluster", "r1-c1")] + [al.Unit("b", k, "o1") for k in ("output", "coverage", "tone")]
+    cfg = budget.BudgetConfig.from_env()
+    want = 0.0
+    for u in group:
+        system, user = lab._messages(u)
+        est = budget.estimate_prompt_tokens([{"role": "system", "content": system}, {"role": "user", "content": user}],
+                                            proto.schemas[u.kind], bytes_per_token=cfg.bytes_per_token)
+        want += (est * 0.50 + proto.max_tokens(u.kind) * 3.00) / 1e6
+    assert lab.worst_case_usd(group) == pytest.approx(want)

@@ -911,7 +911,11 @@ class Labeler:
         return first, rest
 
     def worst_case_usd(self, group: Sequence[Unit]) -> float:
-        """묶음의 호출마다 가드와 같은 식(바이트 기준 입력 + max_tokens)으로 잡은 최악 예약액의 합(다시 묻기 포함)."""
+        """묶음의 호출마다(단위당 한 번) 가드와 같은 식(바이트 기준 입력 + max_tokens)으로 잡은 최악 예약액의 합.
+
+        A8.13 (b)5의 확장 정지 규칙 그대로다. 다시 묻기(규칙 위반 때만 생긴다)는 넣지 않는다 - 처음 구현은 넣어서
+        등록 규칙보다 일찍 멈췄다(A8.14).
+        """
         from core.llm import budget
 
         cfg = budget.BudgetConfig.from_env()
@@ -926,7 +930,7 @@ class Labeler:
                                                 self.proto.schemas[u.kind] if self.transport.schema_mode == "json_schema" else None,
                                                 bytes_per_token=cfg.bytes_per_token)
             one = (est * p_in + self.proto.max_tokens(u.kind) * p_out) / 1e6
-            total += one * (1 + int(self.proto.labeler["rule_repair_attempts"]))
+            total += one
         return total
 
     def _coverage_messages_for_estimate(self, u: Unit) -> Optional[Tuple[str, str]]:
