@@ -20,6 +20,13 @@ amendments:                 # 항목 형식: {date, reason, results_viewed, chan
       않는 그 밖의 4xx와 분류하지 못한 오류.
     results_viewed: "no"           # E0 실행 전, reports/llm/ 없음
     changed_keys: [budget.stop_on_infra, metrics.failure_taxonomy.root_cause_first_match]
+  - date: "2026-10-17"
+    reason: >-
+      A8.11. 운영 클러스터링(split_v2)의 결과가 프로세스의 문자열 해시 시드(PYTHONHASHSEED)에 따라 달라져, 실행 전 기록의
+      표본을 러너가 다시 계산하지 못했다(2026-10-17 14:33 KST 시작 검사 거절, 생성 호출 0건). 규칙 키는 바꾸지 않는다.
+      prepare와 run을 PYTHONHASHSEED=0으로 돌리고(pre_run_record.python_hash_seed), 그 값으로 표본·순서·스냅숏을 다시 기록한다.
+    results_viewed: "no"           # 생성 호출 0건, 지출 원장 기록 0건, reports/llm/ 없음
+    changed_keys: []
 
 # A8.0 순서: 러너 PR 병합(code_sha) -> ADR 0023 개정 확인 -> 반출·임베딩·스냅숏·표본(LLM 호출 없음)
 #            -> 이 블록을 채우는 문서 전용 커밋(A8.10) -> pre-flight -> warmup -> eval -> 리포트 -> 라벨
@@ -36,12 +43,13 @@ pre_run_record:
   embeddings_fp16_vs_fp32_cos: {p10: 0.9999921875446296, min: 0.9999084911537253, n: 100}
   colab_cu_used: 0.43
   day_windows_utc: [["2026-10-12T21:00:00", "2026-10-13T21:00:00"], ["2026-10-13T21:00:00", "2026-10-14T21:00:00"], ["2026-10-14T21:00:00", "2026-10-15T21:00:00"]]          # [[start, end), ...] 실제로 쓴 창(3~5개)
-  snapshot_sha256: {run1: "cdfbd7ad3a6a64770da8a81ebc24404c1037ce24afd0bbd579fec714f2b6f9b8", run2: "97bfa0412d881a91eb43c38f2fb85db59363e6b0013602a7815609b913fcd697", run3: "d54369b52b6fd38ad64be80d8a3f4e9f29537f05aaeab44e99fa89a681092a96"}          # {run1: ..., run2: ..., run3: ...} 날짜 창별 멤버십(ids) 스냅숏
-  sample_manifest_sha256: "5b458cc9246ff69c98c24c1ecdb91a7366e1eae9d70a828d574fd856ec509a8b"   # evaluation/llm/evalsets/e0-baseline-v1.jsonl (order 포함)
+  snapshot_sha256: {run1: "cdfbd7ad3a6a64770da8a81ebc24404c1037ce24afd0bbd579fec714f2b6f9b8", run2: "5cff8ee7ee243eb3bbe33232f08341f120bdd2122fa22fe7f0da204c52d4b5e0", run3: "d54369b52b6fd38ad64be80d8a3f4e9f29537f05aaeab44e99fa89a681092a96"}          # {run1: ..., run2: ..., run3: ...} 날짜 창별 멤버십(ids) 스냅숏
+  sample_manifest_sha256: "ca5f0c4a49d13a2070059e6d98e23eb9c58f09b9706859ed2da1980b008187c2"   # evaluation/llm/evalsets/e0-baseline-v1.jsonl (order 포함)
   bucket_allocation: {"3-4": 5, "5-9": 5, "10+": 5}        # {"3-4": n, "5-9": n, "10+": n} 실제 배분
   user_decisions:
     newsletter_embedder: "record_only_mac"    # "record_only_mac" | "real_colab_cpu"
     label_subset: "full"           # "full" | "reduced_first10"
+  python_hash_seed: 0            # A8.11: prepare·run 프로세스의 PYTHONHASHSEED(운영 split_v2의 동점 순서가 이 값에 달려 있다)
   void_runs: []                  # {date, reason, cost_usd}
 
 code_identity:                   # A8.2. 러너는 전부 참일 때만 시작한다
