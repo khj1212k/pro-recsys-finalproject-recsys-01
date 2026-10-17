@@ -8,6 +8,10 @@ feedparser
 trafilatura
 lxml_html_clean
 requests
+# 기사 요청(crawler/content_extractor/fetch.py)이 직접 쓴다 - urllib3 2.x API(read1, get_redirect_location,
+# Retry(other=...))에 기대므로 메이저 버전을 묶는다. 예전에는 trafilatura를 거친 간접 의존이었다.
+urllib3>=2,<3
+certifi
 python-dateutil
 tqdm>=4.65.0
 
