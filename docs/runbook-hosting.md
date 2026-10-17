@@ -594,6 +594,20 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 지나면 대상에서 빠진다. `budget_hit`이 `true`인 회차가 이어지면 대상이 예산보다 많은 것이다 — 어느 언론사가 시간을 쓰는지
 `causes`의 `read_timeout`·`deadline`(요청마다 15~30초)을 본다.
 
+미시도 잔량(차단기가 미루기만 하고 처리량이 새 기사를 못 따라가면 쌓인다 — ADR 0026 증거 10 (f), 배포 전 동아일보 0건). 미룬
+기사는 최종 `fetch_failed`로 세어지지 않으므로 실패 비율과 따로 본다:
+
+```bash
+ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db \
+  psql -U newsletter -d newsletter -c \"BEGIN READ ONLY; SELECT p.press_name, count(*) AS never_tried, \
+  round(extract(epoch FROM (now() AT TIME ZONE 'UTC') - min(n.raw_news_crawled_at)) / 3600) AS oldest_h \
+  FROM news_raw n JOIN press p USING (press_id) WHERE n.raw_news_extract_status IS NULL \
+  AND n.raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - interval '30 days' GROUP BY 1 ORDER BY 2 DESC; COMMIT;\""
+```
+
+`never_tried`가 하루 넘게 늘거나 `oldest_h`가 몇 시간을 넘으면 동아일보가 처리량에 묶인 것이다 — 차단기 기준(`EXTRACT_PRESS_BREAKER_FAILURES`,
+코드 기본값 3)을 다시 정할지는 그때 수집량(`ok`)과 함께 본다.
+
 원인을 다시 확인할 때(같은 시각 VM과 Mac에서 같은 URL을 받는다. 본문은 저장하지 않고 상태 코드·시간만 본다):
 
 ```bash
