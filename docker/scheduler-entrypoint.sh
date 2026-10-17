@@ -8,6 +8,11 @@
 # 받아 'failed (terminated by SIGTERM)'과 그때까지의 stats를 기록하고 advisory lock을 푼다.
 set -u
 
+# 잡이 자기가 어떤 crontab으로 불렸는지 알 수 있게 한다 - daily_report가 이 파일로 정시 회차(예정 vs 시작)를 센다
+# (jobs/schedule.py). supercronic의 마지막 인자가 crontab 경로다.
+for SCHEDULER_CRONTAB in "$@"; do :; done
+export SCHEDULER_CRONTAB="${SCHEDULER_CRONTAB:-}"
+
 supercronic "$@" &
 SUPERCRONIC_PID=$!
 
