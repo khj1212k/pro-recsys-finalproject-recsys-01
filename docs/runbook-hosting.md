@@ -596,7 +596,7 @@ ssh -F .ops/micro/ssh_config micro 'sudo install -d -m 0700 /var/lib/newsletter-
 **내리기**(ADR 0023 개정 2026-10-17 2가 병합되지 않을 때, 또는 백업을 멈출 때): `sudo rm /etc/cron.d/newsletter-tier0-backup`, Mac에서
 `oci os object bulk-delete -ns $NS -bn newsletter-tier0-backups --prefix full/ --force`(본문 사본부터). 본문 없는 사본과 버킷은 남겨도 된다.
 
-**비용.** 사용량은 사본 하루 약 46 MB, 버킷 전체 약 0.3 GB(2026-10-17 크기 기준), API 요청 하루 약 8건 — Always Free(체험 중 Standard
+**비용.** 사용량은 사본 하루 약 46 MB, 버킷 전체 약 0.3 GB(2026-10-17 크기 기준), API 요청 하루 약 7건 — Always Free(체험 중 Standard
 10 GB, 그 뒤 세 계층 합 20 GB, 월 50,000건) 안이다. 할당량 5 GiB가 넘지 못하게 막는다(넘으면 올리기가 실패하고 daily_report가 경고한다).
 `nobody/monthly/`는 지우지 않으므로 해마다 12개씩 는다 — `news_raw`가 커지는 만큼 함께 커진다(2026-10 3.8 MB). 1 GB에 가까워지면 다시 본다.
 
