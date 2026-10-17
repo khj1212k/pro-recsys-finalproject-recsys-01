@@ -1,0 +1,10 @@
+# /etc/cron.d/newsletter-tier0-backup - Tier 0 호스트 밖 백업(ADR 0026 결정 6, docs/runbook-hosting.md 6.5).
+# 설치는 런북 6.5의 "설치·갱신"을 따른다(스크립트는 /opt/newsletter-backup/에 복사, 기계별 값은 /etc/newsletter-backup.conf).
+# 시각은 호스트 TZ(UTC). 18:10 UTC = 03:10 KST: 본문 보존 잡(17:50 UTC, docker/crontab.micro)이 끝난 뒤이고
+# unattended-upgrades 재부팅 창(18:40 UTC)보다 앞이다. daily 전체 약 2.5분(2026-10-17 측정 2분 34초: backup 62초 · idle_check
+# 71초 · 28일마다 restore_check 17초). daily_report(00:10 UTC)는 그 약 6시간 뒤라 한 번 거른 백업을 다음 리포트가 경고한다.
+# 실행은 root여야 한다 - 인스턴스 메타데이터(169.254.169.254:80)는 OCI 이미지의 iptables가 root에게만 연다.
+SHELL=/bin/sh
+PATH=/opt/oci-cli/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+TIER0_BACKUP_GIT_SHA=__GIT_SHA__
+10 18 * * * root nice -n 10 /usr/bin/python3 /opt/newsletter-backup/tier0_backup.py --config /etc/newsletter-backup.conf daily >> /var/log/newsletter-backup.log 2>&1

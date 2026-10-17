@@ -196,12 +196,17 @@ jobs:
           ../.venv/bin/python -m alembic upgrade head
 
       # tests/integration/test_merge_tier0_news_raw_sql.py는 런북과 같은 경로(psql -1 -f ... < CSV)로
-      # scripts/oci/merge_tier0_news_raw.sql을 돌린다. psql이 없으면 그 테스트는 건너뛰므로, 건너뛴 채
-      # 초록이 되지 않게 여기서 있는지 확인하고 없으면 설치한다.
-      - name: Ensure psql client
+      # scripts/oci/merge_tier0_news_raw.sql을 돌린다. test_tier0_backup_restore.py는 pg_dump·pg_restore로
+      # 호스트 밖 백업을 만들고 복원한다(ADR 0026 결정 6). 도구가 없으면 그 테스트들은 건너뛰므로, 건너뛴 채
+      # 초록이 되지 않게 여기서 있는지 확인하고 없으면 설치한다. pg_dump는 서버(16)보다 낮은 메이저면 덤프를 거절한다.
+      - name: Ensure PostgreSQL client tools
         run: |
-          command -v psql || (sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends postgresql-client)
+          (command -v psql && command -v pg_dump && command -v pg_restore) || \
+            (sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends postgresql-client)
           psql --version
+          pg_dump --version
+          pg_restore --version
+          test "$(pg_dump --version | grep -oE '[0-9]+' | head -1)" -ge 16
 
       - name: Run integration tests
         run: .venv/bin/python -m pytest -q -m integration tests/
