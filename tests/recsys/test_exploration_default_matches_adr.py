@@ -42,6 +42,8 @@ def test_exploration_on_by_default_goes_with_the_adopted_exploration_part_of_adr
     if RecsysConfig().explore_enabled:
         # 켜 둔 기본값의 근거는 탐색 칸을 E13·위치 편향에 쓰는 부분의 채택이다. 오프폴리시 부분은 E9 실패로 제안됨이다.
         assert status.startswith("**부분 채택 ("), status
+        # 상태 줄만 훑는 독자가 "부분 채택"을 E9 통과로 읽지 않게, 같은 줄에 등록한 채택 조건(E9)의 실패를 적는다
+        assert "E9" in status and "실패했다" in status, status
         assert "| 부분 채택 (" in row, row
         head = text[: text.index("## 컨텍스트")]
         assert "E13" in head and "위치 편향" in head and "제안됨 유지(E9 실패)" in head
