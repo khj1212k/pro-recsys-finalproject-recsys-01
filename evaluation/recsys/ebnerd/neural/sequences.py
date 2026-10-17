@@ -196,14 +196,35 @@ class ScalarBlock:
     gender: np.ndarray      # [행] int64 (0 = 결측)
 
 
+# scalar_block이 한 번에 변환하는 행 수. 변환은 행마다 독립이라(원소별 연산) 조각으로 나눠도 결과가 비트 단위로 같고,
+# float64 중간값은 이 행 수만큼만 만든다(P2 test 470만 쌍·콜드 1,410만 쌍에서 한 번에 만들면 수 GB다 — ADR 0013 A3.12 2026-10-17).
+SCALAR_BLOCK_ROWS = 1 << 18
+
+
 def scalar_block(x_raw: np.ndarray, columns: Sequence[str], spec: ScalarSpec, stats: Mapping,
-                 n_categories: int) -> ScalarBlock:
+                 n_categories: int, chunk_rows: Optional[int] = None) -> ScalarBlock:
     """raw 피처 행렬 -> 신경망의 스칼라 입력. 통계는 stats(fit에서 계산)의 것을 그대로 쓴다.
 
     인기도 0 강제 같은 콜드 조건은 raw 행렬에 먼저 적용한 뒤 이 함수를 부른다(표준화된 공간의 0은 다른 조건이다).
+    행을 chunk_rows개씩(기본 SCALAR_BLOCK_ROWS) 변환해 미리 잡은 출력에 채운다.
     """
     if list(stats["columns"]) != list(columns):
         raise ValueError("통계를 계산한 열 순서와 입력 열 순서가 다릅니다")
+    n = len(x_raw)
+    cont = np.empty((n, len(spec.continuous) + len(stats["missing"])), dtype=np.float32)
+    cat = np.empty(n, dtype=np.int64)
+    gender = np.empty(n, dtype=np.int64)
+    step = max(1, int(chunk_rows or SCALAR_BLOCK_ROWS))
+    for a in range(0, n, step):
+        b = min(a + step, n)
+        part = _scalar_rows(x_raw[a:b], columns, spec, stats, n_categories)
+        cont[a:b], cat[a:b], gender[a:b] = part.cont, part.category, part.gender
+    return ScalarBlock(cont=cont, category=cat, gender=gender)
+
+
+def _scalar_rows(x_raw: np.ndarray, columns: Sequence[str], spec: ScalarSpec, stats: Mapping,
+                 n_categories: int) -> ScalarBlock:
+    """scalar_block의 변환 본체(행 조각 하나). 모든 연산이 원소별이다."""
     idx = {c: i for i, c in enumerate(columns)}
     t = (_transformed(x_raw, columns, spec) - np.asarray(stats["mean"])) / np.asarray(stats["std"])
     flags = [np.isnan(x_raw[:, idx[c]]).astype(np.float64) for c in stats["missing"]]

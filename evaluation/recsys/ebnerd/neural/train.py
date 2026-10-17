@@ -30,8 +30,11 @@ import torch  # noqa: E402
 if sys.platform == "darwin":
     torch.set_num_threads(1)
 
+from recsys_core import expand_ranges  # noqa: E402
+
 from .datasets import NeuralInputs, collate, eval_batches, group_batches  # noqa: E402
 from .models import NeuralRanker, NeuralSpec, listwise_loss, next_click_loss  # noqa: E402
+from .sequences import ScalarBlock, Sequences  # noqa: E402
 
 
 def deterministic_setup(seed: int) -> None:
@@ -182,6 +185,51 @@ def predict(trained: TrainedNeural, inp: NeuralInputs, emb: np.ndarray, *, devic
     model = build_model(trained.spec, emb.shape[1], trained.n_cont, trained.n_categories, fixed)
     model.load_state_dict(trained.state)
     return _score(model.to(device), inp, emb_tensor(emb, device), device, max_pairs)
+
+
+def predict_streamed(trained: TrainedNeural, cand_ptr: np.ndarray, cand_item: np.ndarray, labels: np.ndarray,
+                     seq: Sequences, block_rows: Callable[[np.ndarray], ScalarBlock], emb: np.ndarray, *,
+                     device: torch.device, fixed: Mapping, max_pairs: int = 65536, chunk_pairs: int = 1 << 19) -> np.ndarray:
+    """predict와 비트 단위로 같은 점수를, 스칼라 블록을 전체 쌍에 대해 한 번에 만들지 않고 낸다(메모리 상한).
+
+    배치 계획은 전체 입력의 eval_batches 그대로다(같은 그룹이 같은 순서로 같은 배치에 들어가 모델이 받는 텐서가 predict와 같다).
+    연속한 배치를 쌍 chunk_pairs개 안팎으로 묶어, 그 배치들의 요청이 가진 쌍에 대해서만 block_rows(쌍 위치)로 스칼라 블록을
+    만들고 다음 묶음으로 넘어가며 버린다. block_rows는 행마다 독립인 변환(scalar_block)이어야 한다 — 그래야 일부 행으로 만든
+    블록이 전체로 만든 블록의 그 행과 같다.
+    """
+    cand_ptr = np.asarray(cand_ptr, dtype=np.int64)
+    n_cand = np.diff(cand_ptr)
+    model = build_model(trained.spec, emb.shape[1], trained.n_cont, trained.n_categories, fixed)
+    model.load_state_dict(trained.state)
+    model = model.to(device)
+    emb_t = emb_tensor(emb, device)
+    out = np.zeros(len(cand_item), dtype=np.float32)
+    batches = eval_batches(n_cand, max_pairs)
+    model.eval()
+    with torch.no_grad():
+        i = 0
+        while i < len(batches):
+            j, size = i + 1, int(n_cand[batches[i]].sum())
+            while j < len(batches) and size + int(n_cand[batches[j]].sum()) <= chunk_pairs:
+                size += int(n_cand[batches[j]].sum())
+                j += 1
+            reqs = np.sort(np.concatenate(batches[i:j]))
+            lo, hi = cand_ptr[reqs], cand_ptr[reqs + 1]
+            _, pairs = expand_ranges(lo, hi)
+            block = block_rows(pairs)
+            if block.cont.shape[1] != trained.n_cont:
+                raise ValueError("스칼라 블록의 폭이 학습 때와 다릅니다(다른 통계로 만든 입력)")
+            sub = NeuralInputs(cand_ptr=np.concatenate([[0], np.cumsum(hi - lo)]), cand_item=cand_item[pairs],
+                               labels=labels[pairs], cont=block.cont, category=block.category, gender=block.gender,
+                               seq=seq.subset(reqs))
+            for groups in batches[i:j]:
+                batch = collate(sub, np.searchsorted(reqs, groups))
+                scores, _, _ = model(emb_t, _to_torch(batch, device))
+                mask = batch["cand_mask"]
+                out[pairs[batch["pair_index"][mask]]] = scores.cpu().numpy()[mask]
+            del block, sub
+            i = j
+    return out
 
 
 def determinism_gate(spec: NeuralSpec, fit_in: NeuralInputs, es_in: NeuralInputs, emb: np.ndarray, *,

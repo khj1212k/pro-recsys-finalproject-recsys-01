@@ -76,5 +76,6 @@ jobs:
           tests/evaluation/test_ebnerd_neural_verdict.py
           tests/evaluation/test_ebnerd_neural_tune_stack.py
           tests/evaluation/test_ebnerd_neural_models.py
+          tests/evaluation/test_ebnerd_neural_cold_bounded.py
           tests/evaluation/test_ebnerd_run_neural.py
           tests/evaluation/test_e15_colab_driver.py
