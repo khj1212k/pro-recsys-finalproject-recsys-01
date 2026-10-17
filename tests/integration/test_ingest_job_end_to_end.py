@@ -43,6 +43,12 @@ class _FakeEmbedder:
         return vecs, 0.01
 
 
+def _fetched(pages, url):
+    from crawler.content_extractor.fetch import FetchOutcome
+
+    return FetchOutcome(pages[url]) if url in pages else FetchOutcome(None, "disconnect", 2)
+
+
 @pytest.fixture
 def fake_world(pg_conn, isolated_news_raw, monkeypatch):
     from config.settings import Settings
@@ -89,7 +95,7 @@ def fake_world(pg_conn, isolated_news_raw, monkeypatch):
     monkeypatch.setitem(sys.modules, "core.embedder", fake_embedder_module)
 
     with patch("crawler.rss_collector.parse_feed_with_retry", return_value=feed), \
-         patch("crawler.content_extractor.extractor.fetch_url_with_retry", side_effect=lambda u: pages.get(u)), \
+         patch("crawler.content_extractor.extractor.fetch_page", side_effect=lambda u: _fetched(pages, u)), \
          patch("crawler.content_extractor.extractor.trafilatura.extract", side_effect=fake_extract):
         yield {"press_name": press_name, "press_id": press_id, "urls": urls}
 
@@ -120,6 +126,11 @@ def test_ingest_job_collects_extracts_embeds_and_is_idempotent(database_url, pg_
         assert (extract["ok"], extract["duplicate"], extract["dropped"], extract["fetch_failed"], extract["error"]) \
             == (1, 1, 1, 1, 1)
         assert stats["embed"]["embedded"] == 1
+        # 실패 원인은 언론사별 개수로만 남는다(URL·본문 없음)
+        assert extract["fetch_fail_causes"] == {fake_world["press_name"]: {"disconnect": 1}}
+        # 다운로드에 성공한 요청(ok·duplicate·dropped - 파서 예외는 빼고)의 시간 구간 개수
+        assert extract["fetch_ok_latency"] == {fake_world["press_name"]: {"<5s": 3}}
+        assert extract["deferred"] == 0
 
         urls = fake_world["urls"]
         with pg_conn.cursor() as cur:
@@ -208,6 +219,49 @@ def test_scheduler_split_collects_without_embedding_then_embed_job_fills_vectors
         assert stats["embed"]["embedded"] >= 1
         assert stats["embed"]["remaining"] == 0 and stats["embed"]["stopped_by_budget"] is False
         assert _embedding_dims(pg_conn, ok_url) == DIM
+    finally:
+        with pg_conn.cursor() as cur:
+            cur.execute("DELETE FROM job_runs WHERE id = ANY(%s)", (run_ids,))
+
+
+def test_press_breaker_defers_without_spending_extract_attempts(database_url, pg_conn, fake_world, monkeypatch):
+    """언론사 차단기로 미룬 기사는 DB에 아무것도 쓰지 않는다 - 상태·시도 횟수·추출 시각이 그대로라 다음 실행에서
+    시도 상한(MAX_EXTRACT_ATTEMPTS)을 다 쓴 채로 시작하지 않는다(ADR 0026 결정 9). 대상은 raw_news_id 순이므로
+    차단 중에는 가장 오래된 기사만 상한까지 시험 삼아 받고, 나머지는 기다린다."""
+    from config.settings import Settings
+    from crawler.content_extractor.fetch import FetchOutcome
+    from jobs.run import main
+
+    monkeypatch.setattr(Settings, "EXTRACT_PRESS_BREAKER_FAILURES", 2)
+
+    def rows():
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                "SELECT raw_news_id, raw_news_extract_status, raw_news_extract_attempts, raw_news_extracted_at IS NULL "
+                "FROM news_raw WHERE press_id = %s ORDER BY raw_news_id",
+                (fake_world["press_id"],),
+            )
+            return cur.fetchall()
+
+    run_ids = []
+    try:
+        with patch("crawler.content_extractor.extractor.fetch_page",
+                   return_value=FetchOutcome(None, "disconnect", 2)):
+            for expected_attempts in (1, 2):
+                assert main(["ingest", "--stages", "rss,extract", "--workers", "1"]) == 0
+                run_id, status, stats = _latest_run(pg_conn, "ingest")
+                run_ids.append(run_id)
+                assert status == "succeeded"  # 한 언론사만의 실패는 경고로 알린다
+                press = fake_world["press_name"]
+                assert any(w.startswith(f"{press}:") and "다음 실행으로 미룸" in w for w in stats["warnings"])
+                extract = stats["extract"]
+                assert (extract["targets"], extract["fetch_failed"], extract["deferred"]) == (5, 2, 3)
+                assert extract["press_breaker"] == {press: {"failures": 2, "deferred": 3}}
+                assert extract["fetch_fail_causes"] == {press: {"disconnect": 2}}
+
+                current = rows()
+                assert [r[1:] for r in current[:2]] == [("fetch_failed", expected_attempts, False)] * 2
+                assert [r[1:] for r in current[2:]] == [(None, 0, True)] * 3
     finally:
         with pg_conn.cursor() as cur:
             cur.execute("DELETE FROM job_runs WHERE id = ANY(%s)", (run_ids,))

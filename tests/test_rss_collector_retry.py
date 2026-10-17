@@ -77,3 +77,94 @@ def test_unreadable_feed_error_includes_http_status():
         stats = collect_rss()
 
     assert "HTTP 403" in stats["per_feed"]["차단언론"]["error"]
+
+
+def _local_server(handler):
+    """테스트 안에서만 잠깐 뜨는 127.0.0.1 HTTP 소켓 서버(외부 네트워크 없음)."""
+    import socketserver
+    import threading
+
+    class _Handler(socketserver.BaseRequestHandler):
+        def handle(self):
+            self.request.settimeout(5)
+            raw = b""
+            try:
+                while b"\r\n\r\n" not in raw:
+                    chunk = self.request.recv(4096)
+                    if not chunk:
+                        return
+                    raw += chunk
+            except OSError:
+                return
+            handler(self.request, self.server.stop)
+
+    class _Server(socketserver.ThreadingTCPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+
+    srv = _Server(("127.0.0.1", 0), _Handler)
+    srv.stop = threading.Event()
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def _close(srv):
+    srv.stop.set()
+    srv.shutdown()
+    srv.server_close()
+
+
+SYNTHETIC_RSS = (
+    '<?xml version="1.0" encoding="UTF-8"?><rss version="2.0"><channel><title>합성 피드</title>'
+    '<item><title>합성 기사</title><link>http://127.0.0.1/a</link>'
+    '<pubDate>Sat, 17 Oct 2026 09:00:00 +0900</pubDate></item></channel></rss>'
+).encode("utf-8")
+
+
+def test_feed_request_that_holds_the_connection_is_cut_by_the_socket_timeout(monkeypatch):
+    """feedparser는 urllib을 timeout 없이 부른다 - 응답 없이 붙잡는 RSS 서버(Tier 0의 동아일보 RSS는 첫 바이트까지
+    74초가 걸린 적이 있다)에 ingest가 끝없이 멈추지 않게 소켓 대기 1번을 RSS_SOCKET_TIMEOUT_S로 묶는다(ADR 0026 결정 9)."""
+    import socket
+    import time
+
+    import crawler.rss_collector as rss_collector
+
+    srv = _local_server(lambda sock, stop: stop.wait(5))  # 요청을 읽고 아무것도 보내지 않는다
+    monkeypatch.setattr(rss_collector.Settings, "RSS_SOCKET_TIMEOUT_S", 0.5)
+    before = socket.getdefaulttimeout()
+    try:
+        started = time.monotonic()
+        try:
+            outcome = getattr(rss_collector._fetch_feed(f"http://127.0.0.1:{srv.server_address[1]}/rss"),
+                              "bozo_exception", None)
+        except Exception as err:  # noqa: BLE001 - 응답 대기 중 시간 초과는 feedparser가 잡지 않고 올린다
+            outcome = err
+        elapsed = time.monotonic() - started
+    finally:
+        _close(srv)
+
+    assert elapsed < 3
+    assert "timed out" in str(outcome)
+    assert socket.getdefaulttimeout() == before  # 프로세스 기본값은 되돌려 둔다
+
+
+def test_feed_is_still_parsed_with_the_socket_timeout(monkeypatch):
+    import socket
+
+    import crawler.rss_collector as rss_collector
+
+    def serve(sock, stop):
+        sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/rss+xml\r\nContent-Length: "
+                     + str(len(SYNTHETIC_RSS)).encode() + b"\r\nConnection: close\r\n\r\n" + SYNTHETIC_RSS)
+
+    srv = _local_server(serve)
+    monkeypatch.setattr(rss_collector.Settings, "RSS_SOCKET_TIMEOUT_S", 2.0)
+    before = socket.getdefaulttimeout()
+    try:
+        feed = rss_collector._fetch_feed(f"http://127.0.0.1:{srv.server_address[1]}/rss")
+    finally:
+        _close(srv)
+
+    assert not feed.bozo
+    assert [e.title for e in feed.entries] == ["합성 기사"]
+    assert socket.getdefaulttimeout() == before

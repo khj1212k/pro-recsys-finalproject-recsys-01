@@ -47,16 +47,17 @@ def test_ingest_fails_loudly_when_every_rss_feed_failed(monkeypatch):
         ingest.run(ctx)
     # 실패해도 여기까지의 수집 통계는 job_runs에 남도록 ctx.stats에 들어가 있어야 한다
     assert ctx.stats["rss"]["failed_feeds"] == 2
+    assert ctx.warnings == []  # 실패 메시지 하나로 알린다 - 피드마다 경고를 덧붙이지 않는다
 
 
-def _ingest_rss_only(monkeypatch, policy_briefing):
-    """rss 단계만 도는 ingest. RSS는 정상, 정책브리핑 수집은 policy_briefing(함수)로 바꿔 끼운다."""
+def _ingest_rss_only(monkeypatch, policy_briefing, rss=None):
+    """rss 단계만 도는 ingest. RSS는 rss(기본: 정상), 정책브리핑 수집은 policy_briefing(함수)로 바꿔 끼운다."""
     from jobs.tasks import ingest
     import crawler.rss_collector as rss_module
     import crawler.policy_briefing as policy_module
 
-    monkeypatch.setattr(rss_module, "collect_rss", lambda hours: {
-        "inserted": 3, "skipped": 1, "failed_feeds": 0, "per_feed": {"a": {"inserted": 3}}})
+    rss = rss or {"inserted": 3, "skipped": 1, "failed_feeds": 0, "per_feed": {"a": {"inserted": 3}}}
+    monkeypatch.setattr(rss_module, "collect_rss", lambda hours: rss)
     monkeypatch.setattr(policy_module, "collect_policy_briefing", policy_briefing)
     monkeypatch.setattr(ingest, "news_raw_snapshot", lambda: {"total": 0})
     checkpoints = []
@@ -110,40 +111,66 @@ def test_ingest_without_service_key_records_skip_without_warning(monkeypatch):
     assert ctx.warnings == []
 
 
-def _ingest_extract_only(monkeypatch, extract_stats):
+def test_ingest_warns_for_each_failed_rss_feed_but_succeeds(monkeypatch):
+    """2026-10-17 Tier 0 run 946~952의 모양: 동아일보 RSS가 RemoteDisconnected로 실패해 신규 기사 0건이고, 추출 대상에
+    동아일보가 없어 추출 경고도 없이 succeeded로 끝났다 - 수집량이 0인데 알림이 없었다. RSS 단계에서 못 읽은 피드도
+    피드마다 경고한다(ADR 0026 결정 9). 피드 하나의 실패로 실행을 실패시키지는 않는다."""
+    rss = {"inserted": 4, "skipped": 0, "failed_feeds": 2, "per_feed": {
+        "동아일보": {"press": "동아일보", "inserted": 0,
+                    "error": "RemoteDisconnected: Remote end closed connection without response"},
+        "경향신문": {"press": "경향신문", "inserted": 4, "error": None},
+        "한국경제": {"press": "한국경제", "inserted": 0,
+                    "error": "feed unreadable (HTTP 403): <unknown>:1:0: undefined entity"},
+    }}
+    ingest, ctx, _ = _ingest_rss_only(monkeypatch, lambda: {"skipped": "no service key"}, rss=rss)
+
+    ingest.run(ctx)
+
+    assert ctx.warnings == [
+        "동아일보: RSS 수집 실패 (RemoteDisconnected) - 이번 회차 신규 기사 0건",
+        "한국경제: RSS 수집 실패 (feed unreadable (HTTP 403)) - 이번 회차 신규 기사 0건",
+    ]
+
+
+def _ingest_extract_only(monkeypatch, extract_stats, extra_argv=()):
     from jobs.tasks import ingest
     import crawler.content_extractor as extractor_pkg
 
+    calls = []
+
     class FakeExtractor:
-        def extract_parallel_with_stats(self, workers=None):
+        def extract_parallel_with_stats(self, workers=None, time_budget_s=None):
+            calls.append({"workers": workers, "time_budget_s": time_budget_s})
             return dict(extract_stats)
 
     monkeypatch.setattr(extractor_pkg, "ContentExtractor", FakeExtractor)
     monkeypatch.setattr(ingest, "news_raw_snapshot", lambda: {"total": 0})
     checkpoints = []
-    ctx = JobContext(job="ingest", args=build_parser().parse_args(["ingest", "--stages", "extract"]))
+    ctx = JobContext(job="ingest", args=build_parser().parse_args(["ingest", "--stages", "extract", *extra_argv]))
     ctx._checkpoint = lambda: checkpoints.append(dict(ctx.stats))
+    ctx.extract_calls = calls
     return ingest, ctx, checkpoints
 
 
-def _extract_stats(per_press):
-    totals = {k: 0 for k in ("ok", "dropped", "empty", "fetch_failed", "error")}
+def _extract_stats(per_press, **extra):
+    totals = {k: 0 for k in ("ok", "dropped", "empty", "fetch_failed", "error", "deferred")}
     for counts in per_press.values():
         for k, v in counts.items():
             totals[k] += v
-    return {"targets": sum(totals.values()), **totals, "per_press": per_press}
+    return {"targets": sum(totals.values()), **totals, "per_press": per_press, **extra}
 
 
 def test_ingest_fails_when_most_article_fetches_failed(monkeypatch):
     """네트워크가 끊기거나 차단되면 RSS는 되는데 본문은 전부 fetch_failed가 된다 - 그래도
-    succeeded로 끝나면 아무도 모른다."""
+    succeeded로 끝나면 아무도 모른다. 두 언론사 이상이 실패하면 한 사이트 문제로 보지 않는다."""
     stats = _extract_stats({"A": {"ok": 2, "fetch_failed": 5}, "B": {"fetch_failed": 2, "error": 1}})
     ingest, ctx, checkpoints = _ingest_extract_only(monkeypatch, stats)
 
-    with pytest.raises(RuntimeError, match="8건 실패"):
+    with pytest.raises(RuntimeError, match="10건 중 8건 실패.*언론사 2곳"):
         ingest.run(ctx)
     assert ctx.stats["extract"]["fetch_failed"] == 7
     assert checkpoints and checkpoints[-1]["extract"]["targets"] == 10
+    assert [w.split(":")[0] for w in ctx.warnings] == ["A", "B"]  # 실패해도 언론사별 경고는 남긴다
 
 
 def test_ingest_warns_but_succeeds_when_one_press_fetches_all_failed(monkeypatch):
@@ -153,6 +180,139 @@ def test_ingest_warns_but_succeeds_when_one_press_fetches_all_failed(monkeypatch
     ingest.run(ctx)
 
     assert len(ctx.warnings) == 1 and ctx.warnings[0].startswith("A:")
+
+
+def test_one_blocked_press_no_longer_fails_the_whole_run(monkeypatch):
+    """2026-10-16 20:05 UTC Tier 0 회차(run 934)의 모양: 대상 52건 중 34건 실패(65%) - 모두 동아일보.
+    예전 규칙은 실행 전체를 실패시켰다. 이제 경고(원인 포함)로 알리고 실행은 성공한다(ADR 0026 결정 9)."""
+    stats = _extract_stats(
+        {"동아일보": {"ok": 6, "fetch_failed": 34}, "매일경제": {"ok": 5, "dropped": 2},
+         "경향신문": {"ok": 4, "dropped": 1}},
+        fetch_fail_causes={"동아일보": {"disconnect": 26, "read_timeout": 8}},
+    )
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats)
+
+    ingest.run(ctx)
+
+    assert ctx.warnings == ["동아일보: 기사 40건 중 34건 본문 다운로드 실패 (원인: disconnect 26, read_timeout 8)"
+                            " - 차단/사이트 개편 확인"]
+
+
+def test_failures_spread_beyond_the_worst_press_still_fail_the_run(monkeypatch):
+    """가장 많이 실패한 언론사를 빼도 절반 이상 실패면 한 사이트 문제가 아니다(예: VM 네트워크 문제)."""
+    stats = _extract_stats({"A": {"fetch_failed": 10}, "B": {"ok": 2, "fetch_failed": 2},
+                            "C": {"ok": 1, "error": 1}})
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats)
+
+    # B(2/4)는 받은 기사의 절반이 실패라 건강하지 않은 언론사다 - 두 곳이면 그것만으로 실패한다
+    with pytest.raises(RuntimeError, match="언론사 2곳"):
+        ingest.run(ctx)
+
+    stats = _extract_stats({"A": {"fetch_failed": 10}, "B": {"ok": 1, "fetch_failed": 1},
+                            "C": {"ok": 1, "error": 1}, "D": {"fetch_failed": 1, "ok": 1}})
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats)
+    # B·C·D는 각각 2건이라 언론사 경고 기준(3건)에 못 미친다 - A를 빼도 6건 중 3건(50%) 실패
+    with pytest.raises(RuntimeError, match="A를 빼도 6건 중 3건 실패"):
+        ingest.run(ctx)
+
+
+def test_press_breaker_and_deferred_articles_are_reported_but_not_counted_as_failures(monkeypatch):
+    """차단기로 미룬 기사는 받지 않았으므로 실패 분모에 넣지 않고, 경고에 미룬 건수를 적는다."""
+    stats = _extract_stats(
+        {"동아일보": {"fetch_failed": 3, "deferred": 44}, "세계일보": {"ok": 8}},
+        fetch_fail_causes={"동아일보": {"disconnect": 3}},
+        press_breaker={"동아일보": {"failures": 3, "deferred": 44}},
+        deferred_reasons={"press_breaker": 44},
+    )
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats)
+
+    ingest.run(ctx)
+
+    assert ctx.warnings == ["동아일보: 기사 3건 중 3건 본문 다운로드 실패 (원인: disconnect 3), 연속 실패로 남은 44건은 "
+                            "다음 실행으로 미룸 - 차단/사이트 개편 확인"]
+
+
+def test_time_budget_exhaustion_warns(monkeypatch):
+    stats = _extract_stats({"세계일보": {"ok": 30, "deferred": 12}}, time_budget_s=2700.0,
+                           time_budget_exhausted=True, deferred_reasons={"time_budget": 12})
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats, ["--extract-deadline-s", "2700"])
+    monkeypatch.setattr(ingest, "_clock", lambda: 0.0)
+
+    ingest.run(ctx)
+
+    assert ctx.extract_calls == [{"workers": None, "time_budget_s": 2700.0}]
+    assert ctx.stats["extract"]["deadline_s"] == 2700.0
+    assert ctx.warnings == ["본문 추출 시간 예산 2700초(ingest 시작 뒤 2700초 마감)를 다 써서 12건을 다음 실행으로 미룸"]
+
+
+def _ingest_rss_then_extract(monkeypatch, rss_seconds, argv):
+    """RSS 단계가 rss_seconds초 걸린 것처럼 시계를 돌리고, 추출 단계가 받은 시간 예산을 돌려준다."""
+    from jobs.tasks import ingest
+    import crawler.content_extractor as extractor_pkg
+    import crawler.policy_briefing as policy_module
+    import crawler.rss_collector as rss_module
+
+    now = [1000.0]
+
+    def slow_rss(hours):
+        now[0] += rss_seconds
+        return {"inserted": 1, "skipped": 0, "failed_feeds": 0, "per_feed": {"a": {"inserted": 1}}}
+
+    budgets = []
+
+    class FakeExtractor:
+        def extract_parallel_with_stats(self, workers=None, time_budget_s=None):
+            budgets.append(time_budget_s)
+            return _extract_stats({"a": {"ok": 1}}, time_budget_s=time_budget_s)
+
+    monkeypatch.setattr(ingest, "_clock", lambda: now[0])
+    monkeypatch.setattr(rss_module, "collect_rss", slow_rss)
+    monkeypatch.setattr(policy_module, "collect_policy_briefing", lambda: {"skipped": "no service key"})
+    monkeypatch.setattr(extractor_pkg, "ContentExtractor", FakeExtractor)
+    monkeypatch.setattr(ingest, "news_raw_snapshot", lambda: {"total": 0})
+    ctx = JobContext(job="ingest", args=build_parser().parse_args(["ingest", "--stages", "rss,extract", *argv]))
+    ingest.run(ctx)
+    return budgets
+
+
+def test_extract_deadline_is_measured_from_ingest_start_so_a_slow_rss_stage_shortens_extraction(monkeypatch):
+    """다음 정시 회차와 겹치지 않게 하는 것은 잡이 끝나는 시각이다. 추출 예산을 추출 시작부터 재면 RSS 단계가
+    늦을수록(관측 최대 321초, 상한 없음) 잡 끝이 그만큼 밀린다 - 마감은 ingest 시작부터 잰다(ADR 0026 결정 9)."""
+    assert _ingest_rss_then_extract(monkeypatch, 500, ["--extract-deadline-s", "2700"]) == [2200.0]
+    # RSS가 마감을 거의 다 써도 추출은 최소 60초 돈다(앞서 실패한 기사만 계속 미뤄지지 않게)
+    assert _ingest_rss_then_extract(monkeypatch, 2690, ["--extract-deadline-s", "2700"]) == [60.0]
+    # 마감을 주지 않으면(수동 실행) 제한 없음
+    assert _ingest_rss_then_extract(monkeypatch, 500, []) == [None]
+
+
+def test_extract_deadline_flag_must_be_positive():
+    parser = build_parser()
+    assert parser.parse_args(["ingest"]).extract_deadline_s is None
+    with pytest.raises(SystemExit):
+        parser.parse_args(["ingest", "--extract-deadline-s", "0"])
+
+
+def test_scheduled_ingest_lines_bound_extraction_before_the_next_hourly_slot():
+    """매시 :05 ingest가 다음 회차를 건너뛰게 하지 않도록 crontab은 ingest 시작부터 잰 추출 마감을 준다(ADR 0026 결정 9).
+    마감 + 이미 보낸 기사 하나의 요청 상한(2 x 30초 + 2초)이 다음 회차(:05)보다 충분히 앞서야 한다(:55 안).
+    RSS 단계는 마감 안에 들어가므로 따로 더하지 않는다 - 대신 RSS 요청의 소켓 대기 1번에 상한이 있어야 한다."""
+    from pathlib import Path
+
+    from config.settings import Settings
+
+    root = Path(__file__).resolve().parents[1]
+    parser = build_parser()
+    for name in ("crontab", "crontab.micro"):
+        lines = [l for l in (root / "docker" / name).read_text(encoding="utf-8").splitlines()
+                 if l and not l.startswith("#") and " ingest " in l]
+        assert len(lines) == 1, name
+        fields = lines[0].split()
+        assert fields[:5] == ["5", "*", "*", "*", "*"]
+        args = parser.parse_args(fields[8:])
+        assert args.extract_deadline_s is not None, name
+        in_flight = Settings.EXTRACT_FETCH_ATTEMPTS * Settings.EXTRACT_REQUEST_DEADLINE_S + Settings.EXTRACT_RETRY_BACKOFF_S
+        assert args.extract_deadline_s + in_flight <= 50 * 60, name
+    assert 0 < Settings.RSS_SOCKET_TIMEOUT_S <= 120
 
 
 def test_generate_skips_before_clustering_when_kill_switch_file_exists(tmp_path, monkeypatch):

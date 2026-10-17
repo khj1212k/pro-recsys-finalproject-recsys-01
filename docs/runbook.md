@@ -20,7 +20,7 @@ Airflow는 쓰지 않는다. 팀 시절 DAG은 `backend/airflow/dags/`에 보관
 
 | 잡 | 주기 | 비고 |
 |---|---|---|
-| `ingest --stages rss,extract` | 매시 05분 | RSS → 본문 추출. 세계일보 피드는 20건 ≈ 2.7시간 분량이라 매시 돌린다. rss 단계에서 정책브리핑 Open API도 받는다(`.env`에 `DATA_GO_KR_SERVICE_KEY`가 있을 때만, 본문을 API가 줘서 추출 대상이 아님, 실패해도 경고만 - [ADR 0023](adr/0023-data-sources-copyright-retention.md)) |
+| `ingest --stages rss,extract --extract-deadline-s 2700` | 매시 05분 | RSS → 본문 추출. 세계일보 피드는 20건 ≈ 2.7시간 분량이라 매시 돌린다. 본문 추출은 ingest 시작 뒤 45분이 지나면 새 기사를 보내지 않고 남은 기사를 다음 회차로 미룬다([ADR 0026](adr/0026-hosting-tiers-and-contingency.md) 결정 9). rss 단계에서 정책브리핑 Open API도 받는다(`.env`에 `DATA_GO_KR_SERVICE_KEY`가 있을 때만, 본문을 API가 줘서 추출 대상이 아님, 실패해도 경고만 - [ADR 0023](adr/0023-data-sources-copyright-retention.md)) |
 | `embed --time-budget-s 2400` | 매시 20분 | 본문 있고 임베딩 없는 기사를 BGE-M3로. **Mac에서는 컨테이너 줄이 꺼져 있고**(`JOBS_DISABLED=embed`) 호스트 launchd 에이전트가 같은 시각에 MPS로 돈다 |
 | `popularity` | 매시 35분 | 뉴스레터가 아직 없어서 빈 랭킹이 저장되는 게 정상 |
 | `cluster` | 매일 14:50 UTC (23:50 KST) | LLM 호출 없이 클러스터 통계만 `job_runs`에 기록 |
@@ -103,8 +103,16 @@ docker compose exec db psql -U newsletter -d newsletter -c "
   프로세스 그룹에 SIGTERM을 직접 보낸다(유예 60초, `stop_grace_period`). 유예 안에 끝나지 않거나 OOM·SIGKILL로
   죽은 실행은 `running`으로 남았다가 다음 실행이 `abandoned`로 바꾸고 알림을 보낸다.
 - `running` 행의 `stats`는 잡이 도는 동안 갱신된다(ingest는 단계마다, embed는 배치마다) - 강제 종료된 실행도 어디까지 했는지 남는다.
-- `succeeded`여도 `stats->'warnings'`가 있으면 알림이 간다(예: 한 언론사 기사 3건 이상이 전부 다운로드 실패).
-  본문 다운로드 실패(`fetch_failed`+`error`)가 대상의 50% 이상(대상 5건 이상)이면 ingest는 `failed`로 끝난다.
+- `succeeded`여도 `stats->'warnings'`가 있으면 알림이 간다(예: RSS 피드 하나를 읽지 못했다, 한 언론사의 본문
+  다운로드가 연달아 실패해 남은 기사를 다음 실행으로 미뤘다, 추출 시간 예산을 다 썼다). RSS 경고는 피드마다
+  `<피드>: RSS 수집 실패 (<원인 종류>) - 이번 회차 신규 기사 0건`이다 - 그 언론사는 추출 대상이 없을 수 있어 추출
+  경고가 나지 않으므로 이것이 그 회차의 유일한 신호다. 모든 RSS 피드를 읽지 못하면 ingest는 `failed`로 끝난다.
+  피드별 원인 전문은 `stats->'rss'->'per_feed'-><피드>->>'error'`다.
+  ingest가 본문 다운로드 실패로 `failed`가 되는 것은 실패가 한 언론사로 설명되지 않을 때다 - 건강하지 않은 언론사가
+  두 곳 이상이거나, 가장 많이 실패한 언론사를 빼고도 받은 기사 5건 이상 중 절반 이상이 실패했을 때
+  ([ADR 0026](adr/0026-hosting-tiers-and-contingency.md) 결정 9). 이 규칙을 넣기 전 코드(Tier 0 VM의 `13801fc` 포함)는
+  "대상 5건 이상 중 50% 이상 실패면 `failed`"다 - 어느 규칙으로 돈 실행인지는 `job_runs.git_sha`로 가른다.
+  언론사별 실패 원인 개수는 `stats->'extract'->'fetch_fail_causes'`, 미룬 기사는 `stats->'extract'->'deferred'`다.
 - embed 행의 `device`가 `mps`면 호스트 에이전트, `cpu`면 컨테이너 실행이다.
 
 호스트 임베딩 에이전트:
