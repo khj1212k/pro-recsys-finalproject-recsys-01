@@ -110,40 +110,45 @@ def test_ingest_without_service_key_records_skip_without_warning(monkeypatch):
     assert ctx.warnings == []
 
 
-def _ingest_extract_only(monkeypatch, extract_stats):
+def _ingest_extract_only(monkeypatch, extract_stats, extra_argv=()):
     from jobs.tasks import ingest
     import crawler.content_extractor as extractor_pkg
 
+    calls = []
+
     class FakeExtractor:
-        def extract_parallel_with_stats(self, workers=None):
+        def extract_parallel_with_stats(self, workers=None, time_budget_s=None):
+            calls.append({"workers": workers, "time_budget_s": time_budget_s})
             return dict(extract_stats)
 
     monkeypatch.setattr(extractor_pkg, "ContentExtractor", FakeExtractor)
     monkeypatch.setattr(ingest, "news_raw_snapshot", lambda: {"total": 0})
     checkpoints = []
-    ctx = JobContext(job="ingest", args=build_parser().parse_args(["ingest", "--stages", "extract"]))
+    ctx = JobContext(job="ingest", args=build_parser().parse_args(["ingest", "--stages", "extract", *extra_argv]))
     ctx._checkpoint = lambda: checkpoints.append(dict(ctx.stats))
+    ctx.extract_calls = calls
     return ingest, ctx, checkpoints
 
 
-def _extract_stats(per_press):
-    totals = {k: 0 for k in ("ok", "dropped", "empty", "fetch_failed", "error")}
+def _extract_stats(per_press, **extra):
+    totals = {k: 0 for k in ("ok", "dropped", "empty", "fetch_failed", "error", "deferred")}
     for counts in per_press.values():
         for k, v in counts.items():
             totals[k] += v
-    return {"targets": sum(totals.values()), **totals, "per_press": per_press}
+    return {"targets": sum(totals.values()), **totals, "per_press": per_press, **extra}
 
 
 def test_ingest_fails_when_most_article_fetches_failed(monkeypatch):
     """네트워크가 끊기거나 차단되면 RSS는 되는데 본문은 전부 fetch_failed가 된다 - 그래도
-    succeeded로 끝나면 아무도 모른다."""
+    succeeded로 끝나면 아무도 모른다. 두 언론사 이상이 실패하면 한 사이트 문제로 보지 않는다."""
     stats = _extract_stats({"A": {"ok": 2, "fetch_failed": 5}, "B": {"fetch_failed": 2, "error": 1}})
     ingest, ctx, checkpoints = _ingest_extract_only(monkeypatch, stats)
 
-    with pytest.raises(RuntimeError, match="8건 실패"):
+    with pytest.raises(RuntimeError, match="10건 중 8건 실패.*언론사 2곳"):
         ingest.run(ctx)
     assert ctx.stats["extract"]["fetch_failed"] == 7
     assert checkpoints and checkpoints[-1]["extract"]["targets"] == 10
+    assert [w.split(":")[0] for w in ctx.warnings] == ["A", "B"]  # 실패해도 언론사별 경고는 남긴다
 
 
 def test_ingest_warns_but_succeeds_when_one_press_fetches_all_failed(monkeypatch):
@@ -153,6 +158,95 @@ def test_ingest_warns_but_succeeds_when_one_press_fetches_all_failed(monkeypatch
     ingest.run(ctx)
 
     assert len(ctx.warnings) == 1 and ctx.warnings[0].startswith("A:")
+
+
+def test_one_blocked_press_no_longer_fails_the_whole_run(monkeypatch):
+    """2026-10-16 20:05 UTC Tier 0 회차(run 934)의 모양: 대상 52건 중 34건 실패(65%) - 모두 동아일보.
+    예전 규칙은 실행 전체를 실패시켰다. 이제 경고(원인 포함)로 알리고 실행은 성공한다(ADR 0026 결정 9)."""
+    stats = _extract_stats(
+        {"동아일보": {"ok": 6, "fetch_failed": 34}, "매일경제": {"ok": 5, "dropped": 2},
+         "경향신문": {"ok": 4, "dropped": 1}},
+        fetch_fail_causes={"동아일보": {"disconnect": 26, "read_timeout": 8}},
+    )
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats)
+
+    ingest.run(ctx)
+
+    assert ctx.warnings == ["동아일보: 기사 40건 중 34건 본문 다운로드 실패 (원인: disconnect 26, read_timeout 8)"
+                            " - 차단/사이트 개편 확인"]
+
+
+def test_failures_spread_beyond_the_worst_press_still_fail_the_run(monkeypatch):
+    """가장 많이 실패한 언론사를 빼도 절반 이상 실패면 한 사이트 문제가 아니다(예: VM 네트워크 문제)."""
+    stats = _extract_stats({"A": {"fetch_failed": 10}, "B": {"ok": 2, "fetch_failed": 2},
+                            "C": {"ok": 1, "error": 1}})
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats)
+
+    # B(2/4)는 받은 기사의 절반이 실패라 건강하지 않은 언론사다 - 두 곳이면 그것만으로 실패한다
+    with pytest.raises(RuntimeError, match="언론사 2곳"):
+        ingest.run(ctx)
+
+    stats = _extract_stats({"A": {"fetch_failed": 10}, "B": {"ok": 1, "fetch_failed": 1},
+                            "C": {"ok": 1, "error": 1}, "D": {"fetch_failed": 1, "ok": 1}})
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats)
+    # B·C·D는 각각 2건이라 언론사 경고 기준(3건)에 못 미친다 - A를 빼도 6건 중 3건(50%) 실패
+    with pytest.raises(RuntimeError, match="A를 빼도 6건 중 3건 실패"):
+        ingest.run(ctx)
+
+
+def test_press_breaker_and_deferred_articles_are_reported_but_not_counted_as_failures(monkeypatch):
+    """차단기로 미룬 기사는 받지 않았으므로 실패 분모에 넣지 않고, 경고에 미룬 건수를 적는다."""
+    stats = _extract_stats(
+        {"동아일보": {"fetch_failed": 3, "deferred": 44}, "세계일보": {"ok": 8}},
+        fetch_fail_causes={"동아일보": {"disconnect": 3}},
+        press_breaker={"동아일보": {"failures": 3, "deferred": 44}},
+        deferred_reasons={"press_breaker": 44},
+    )
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats)
+
+    ingest.run(ctx)
+
+    assert ctx.warnings == ["동아일보: 기사 3건 중 3건 본문 다운로드 실패 (원인: disconnect 3), 연속 실패로 남은 44건은 "
+                            "다음 실행으로 미룸 - 차단/사이트 개편 확인"]
+
+
+def test_time_budget_exhaustion_warns(monkeypatch):
+    stats = _extract_stats({"세계일보": {"ok": 30, "deferred": 12}}, time_budget_s=2400.0,
+                           time_budget_exhausted=True, deferred_reasons={"time_budget": 12})
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats, ["--extract-time-budget-s", "2400"])
+
+    ingest.run(ctx)
+
+    assert ctx.extract_calls == [{"workers": None, "time_budget_s": 2400.0}]
+    assert ctx.warnings == ["본문 추출 시간 예산 2400.0초를 다 써서 12건을 다음 실행으로 미룸"]
+
+
+def test_extract_time_budget_flag_must_be_positive():
+    parser = build_parser()
+    assert parser.parse_args(["ingest"]).extract_time_budget_s is None
+    with pytest.raises(SystemExit):
+        parser.parse_args(["ingest", "--extract-time-budget-s", "0"])
+
+
+def test_scheduled_ingest_lines_bound_extraction_before_the_next_hourly_slot():
+    """매시 :05 ingest가 다음 회차를 건너뛰게 하지 않도록 crontab은 추출 시간 예산을 준다(ADR 0026 결정 9).
+    예산 + RSS 관측 최대(321초) + 보낸 기사 하나의 요청 상한(2 x 30초 + 2초)이 1시간보다 충분히 작아야 한다."""
+    from pathlib import Path
+
+    from config.settings import Settings
+
+    root = Path(__file__).resolve().parents[1]
+    parser = build_parser()
+    for name in ("crontab", "crontab.micro"):
+        lines = [l for l in (root / "docker" / name).read_text(encoding="utf-8").splitlines()
+                 if l and not l.startswith("#") and " ingest " in l]
+        assert len(lines) == 1, name
+        fields = lines[0].split()
+        assert fields[:5] == ["5", "*", "*", "*", "*"]
+        args = parser.parse_args(fields[8:])
+        assert args.extract_time_budget_s is not None, name
+        in_flight = Settings.EXTRACT_FETCH_ATTEMPTS * Settings.EXTRACT_REQUEST_DEADLINE_S + Settings.EXTRACT_RETRY_BACKOFF_S
+        assert args.extract_time_budget_s + 321 + in_flight <= 50 * 60, name
 
 
 def test_generate_skips_before_clustering_when_kill_switch_file_exists(tmp_path, monkeypatch):

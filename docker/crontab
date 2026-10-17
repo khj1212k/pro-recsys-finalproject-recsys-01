@@ -4,8 +4,9 @@
 
 # 수집: RSS -> 본문 추출, 매시 5분. 임베딩은 따로 돈다(아래) - 몇 시간 걸릴 수 있는 CPU 임베딩이
 # ingest 락을 잡고 있으면 그동안의 수집 실행이 건너뛰어진다. RSS 창이 짧은 피드가 있어(세계일보는
-# 최근 20건이 약 2.7시간 분량, 2026-09-26 첫 수집) 수집은 매시 돌린다.
-5 * * * * python -m jobs.run ingest --stages rss,extract
+# 최근 20건이 약 2.7시간 분량, 2026-09-26 첫 수집) 수집은 매시 돌린다. 추출은 40분 예산 - 남은 기사는
+# 다음 회차가 이어받는다(시도 횟수를 쓰지 않음, ADR 0026 결정 9).
+5 * * * * python -m jobs.run ingest --stages rss,extract --extract-time-budget-s 2400
 
 # 임베딩: 매시 20분, 한 실행은 40분 예산(남은 기사는 다음 실행이 오래된 것부터 이어받음).
 # Mac 개발 환경은 docker/compose.mac.yaml이 JOBS_DISABLED=embed로 이 줄을 끄고, 호스트 MPS
