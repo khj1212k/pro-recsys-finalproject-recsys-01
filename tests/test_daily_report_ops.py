@@ -253,8 +253,95 @@ def test_report_reads_the_job_names_the_host_backup_script_writes():
     assert host.RESTORE_CHECK_EVERY_DAYS < dr.RESTORE_CHECK_OVERDUE_DAYS
 
 
-def test_backup_overdue_threshold_covers_one_daily_cron_interval():
-    cron = (REPO / "scripts" / "oci" / "tier0-backup.cron").read_text(encoding="utf-8")
-    lines = [l for l in cron.splitlines() if l.strip() and not l.startswith("#") and "tier0_backup.py" in l]
-    assert len(lines) == 1 and lines[0].split()[2:5] == ["*", "*", "*"]  # 매일
-    assert 24 < dr.BACKUP_OVERDUE_HOURS < 48
+def _daily_cron_time(path, marker):
+    """(시, 분) - 매일 한 번 도는 줄. 시각은 UTC(호스트·컨테이너 TZ)."""
+    text = (REPO / path).read_text(encoding="utf-8")
+    lines = [l for l in text.splitlines() if l.strip() and not l.lstrip().startswith("#") and marker in l]
+    assert len(lines) == 1, lines
+    minute, hour, *rest = lines[0].split()
+    assert rest[:3] == ["*", "*", "*"] and minute.isdigit() and hour.isdigit()  # 매일 한 번
+    return int(hour), int(minute)
+
+
+@pytest.mark.parametrize("duration", [timedelta(seconds=40), timedelta(minutes=3), timedelta(hours=1)])
+def test_one_skipped_backup_warns_at_the_very_next_daily_report_and_a_normal_one_does_not(duration):
+    """백업(18:10 UTC)과 리포트(00:10 UTC)의 위상을 두 crontab에서 읽는다. 정상이면 리포트 시점의 경과는 약 6시간,
+    한 번 거르면 약 30시간이다 - 기준이 그 사이여야 한 번 거른 것을 바로 다음 리포트가 잡는다(기준 30시간이면 29.97시간이라
+    놓치고 하루 뒤에야 경고했다). duration: 백업 시작에서 job_runs.finished_at까지(실측 약 1분, 넉넉하게 1시간까지)."""
+    bh, bm = _daily_cron_time("scripts/oci/tier0-backup.cron", "tier0_backup.py")
+    rh, rm = _daily_cron_time("docker/crontab.micro", "jobs.run daily_report")
+    report = _t(18, rh, rm)
+    last_start = report.replace(hour=bh, minute=bm)
+    if last_start >= report:
+        last_start -= timedelta(days=1)
+    normal = (report - (last_start + duration)).total_seconds() / 3600
+    skipped_once = normal + 24
+    assert normal <= dr.BACKUP_OVERDUE_HOURS < skipped_once
+
+    def overdue(hours):
+        return [w for w in dr.ops_warnings(_backup(hours_since=hours)) if "호스트 밖 백업이" in w]
+
+    assert overdue(normal) == []
+    assert overdue(skipped_once) and f"{skipped_once:.0f}시간째 없다" in overdue(skipped_once)[0]
+    # 유휴 회수 위험도 같은 기준이다: 한 번 거르면 '높음'
+    idle = {"measured_at": report.isoformat(), "hours_since": 6.0, "verdict": "idle"}
+    assert dr.reclaim_risk(idle, _backup(hours_since=normal))[0] == "주의"
+    assert dr.reclaim_risk(idle, _backup(hours_since=skipped_once))[0] == "높음"
+
+
+def test_runs_left_running_count_as_failures_with_their_own_note():
+    warnings = dr.ops_warnings(_backup(failed_24h=1, stuck_24h=1, restore_failed_24h=2, restore_stuck_24h=2))
+    backup = next(w for w in warnings if "호스트 밖 백업 실패" in w)
+    assert "1회 - 그중 1회는 1시간 넘게 'running'으로 남은 행" in backup
+    restore = next(w for w in warnings if "복원 검증 실패" in w)
+    assert "2회 - 그중 2회는" in restore and "'restore_check'" in restore
+    line = dr.format_backup(_backup(failed_24h=1, stuck_24h=1, restore_failed_24h=1))
+    assert "최근 24시간 실패 1(그중 끝나지 않은 실행 1)" in line
+    assert line.endswith("최근 24시간 복원 검증 실패 1")
+    assert dr.HOST_RUN_STALE_HOURS <= 1  # 정상 실행은 백업 약 1분·복원 검증 약 20초
+
+
+def test_backup_line_says_when_the_body_copy_is_switched_off():
+    line = dr.format_backup(_backup(full_disabled=True, full_bytes=None, full_body_rows=None))
+    assert "본문 없는 사본 3.8 MB · 본문 사본 꺼짐(full_enabled 아님)" in line
+    assert "최근 본문 사본" not in line
+
+
+def test_schedule_status_counts_utc_slots_even_when_the_db_session_is_not_utc():
+    """DB의 now()는 세션 TimeZone의 aware 시각이다. KST로 받아도 하루 한 번 도는 잡의 회차는 crontab 그대로 UTC다."""
+    kst = timezone(timedelta(hours=9))
+    crontab = ("crontab.micro", "10 0 * * * python -m jobs.run daily_report\n50 17 * * * python -m jobs.run retention\n")
+    now = _t(18, 6, 50).astimezone(kst)  # 15:50 KST
+    runs = [("daily_report", _t(18, 0, 10, 2).astimezone(kst), "succeeded"),
+            ("retention", _t(17, 17, 50, 1).astimezone(kst), "succeeded")]
+    status = dr.schedule_status(_Cur(runs), now, crontab)
+    assert status["jobs"]["daily_report"] == {"scheduled": 1, "started": 1, "succeeded": 1, "missed": []}
+    assert status["jobs"]["retention"] == {"scheduled": 1, "started": 1, "succeeded": 1, "missed": []}
+    since = dr.schedule_status(_Cur(runs), now, crontab, since=_t(17, 20, 0).astimezone(kst))
+    assert since["jobs"]["daily_report"]["scheduled"] == 1 and since["jobs"]["retention"]["scheduled"] == 0
+    assert since["counted_since"] == _t(17, 20, 0).isoformat()
+
+
+class _RecordingCur:
+    def __init__(self, row):
+        self.row, self.calls = row, []
+
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+
+    def fetchone(self):
+        return self.row
+
+
+def test_image_first_run_only_looks_at_the_scheduler_jobs_of_the_crontab():
+    """같은 커밋으로 깐 호스트 스크립트('backup')나 일회성 잡이 먼저 돌았어도 스케줄러의 첫 잡을 기준으로 삼는다."""
+    crontab = ("crontab.micro", "5 * * * * python -m jobs.run ingest --stages rss,extract\n"
+                                "35 * * * * python -m jobs.run popularity\n50 17 * * 1 python -m jobs.run retention\n")
+    assert dr.crontab_jobs(crontab) == ["ingest", "popularity", "retention"]
+    assert dr.crontab_jobs(None) == []
+    cur = _RecordingCur((_t(16, 19, 35, 1),))
+    assert dr.image_first_run(cur, "abc1234", dr.crontab_jobs(crontab)) == _t(16, 19, 35, 1)
+    sql, params = cur.calls[0]
+    assert "job = ANY(%s)" in sql and params == ("abc1234", ["ingest", "popularity", "retention"])
+    assert dr.image_first_run(_RecordingCur(None), "abc1234", []) is None  # crontab이 없으면 세지 않는다
+    assert dr.image_first_run(_RecordingCur(None), None, ["ingest"]) is None
