@@ -628,9 +628,9 @@ VM에는 읽기 전용으로만 접근했다: `job_runs`·`news_raw` 집계(세�
 | 그 밖의 무료 한도(같은 문서) | 아웃바운드 전송 월 10 TB, Monitoring 조회 데이터 포인트 10억 |
 | 기존 상태 | 버킷 0개, 동적 그룹 0개, 정책 1개(`Tenant Admin Policy`), 구획은 루트뿐, Object Storage 한도 `storage-bytes` 무제한(체험) |
 | 만든 것 | 버킷 `newsletter-tier0-backups`(Standard, `NoPublicAccess`, 버전 관리·자동 계층화·이벤트·복제 꺼짐), 동적 그룹 `newsletter-micro-backup`(이 VM의 OCID 하나), 정책 `newsletter-tier0-backup`(아래 3문장), 할당량 정책 `newsletter-object-storage-cap`(`set object-storage quota storage-bytes to 5368709120 in tenancy` — 적용 뒤 `available` 5,368,709,120) — 모두 과금 없는 자원이다 |
-| 예상 사용량 | 사본 하루 약 46 MB(본문 없는 3.8 + 본문 42.3). 버킷에 동시에 있는 양은 본문 사본 최대 3개 + 일별 35개 + 월별 → 지금 크기로 약 0.3 GB. API 요청은 하루 약 8건(올리기 3 + 목록 5), 지표 조회는 하루 30,240점(7일 × 1,440분 × 3지표) |
+| 예상 사용량 | 사본 하루 약 46 MB(본문 없는 3.8 + 본문 42.3). 버킷에 동시에 있는 양은 본문 사본 최대 3개 + 일별 35개 + 월별 → 지금 크기로 약 0.3 GB. API 요청은 하루 약 7건(올리기 2, 그달 첫날 3 + 목록 4~5), 지표 조회는 하루 30,240점(7일 × 1,440분 × 3지표) |
 
-정책 문장(이름만 바꿔 런북 6.5에 그대로 있다):
+정책 문장(런북 6.5의 설치 절차가 이 세 문장을 쓴다):
 - 동적 그룹 → `manage objects in tenancy where all {target.bucket.name = 'newsletter-tier0-backups', any {request.permission = 'OBJECT_CREATE', request.permission = 'OBJECT_INSPECT'}}`
 - 동적 그룹 → `read metrics in tenancy where target.metrics.namespace = 'oci_computeagent'`
 - 서비스 `objectstorage-ap-tokyo-1` → 같은 버킷의 `object-family`, 수명 주기 규칙에 필요한 권한만(BUCKET_INSPECT·BUCKET_READ·OBJECT_INSPECT·OBJECT_UPDATE_TIER·OBJECT_DELETE·OBJECT_VERSION_DELETE)
