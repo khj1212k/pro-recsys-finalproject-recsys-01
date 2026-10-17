@@ -320,6 +320,29 @@ API는 60초마다 레지스트리를 확인한다(`RECSYS_MODEL_RELOAD_S`). sha
 `GET /recsys/stats`의 `shadow.scored` / `features.computed`와 칸 로그의 `scores_shadow`로 본다.
 `RECSYS_FEATURE_FN=off`면 어댑터 피처와 shadow가 전부 꺼진다(휴리스틱만).
 
+**EB-NeRD M4 모델을 shadow로 올리기 (ADR 0037).** 모델 파일은 저장소·이미지에 없다. 개발용 Mac의 M4 체크포인트
+(gitignore된 `data/` 아래의 `models/<arm>_s<seed>.txt`와 같은 이름의 `.json`)에서 두 쌍을 서빙 DB에 닿는 곳의 임시 디렉터리로
+옮기고, 검사 → 등록 → 임시 파일 삭제 순서로 한다. 등록 순서가 shadow 칸 순서다(마지막이 첫 칸 = 주모델).
+
+```bash
+# 1) 옮기기(예: scp). 저장소 작업 트리 안이면 gitignore된 자리여야 한다 - 도구가 확인한다.
+scp <체크포인트>/models/poolneg_s0.{txt,json} <체크포인트>/models/poolneg_mask0_s0.{txt,json} <호스트>:/tmp/m4/
+# 2) 검사만(DB 접속 없음): 허용 arm·seed, 판정 리포트와 피처 목록·best_iteration·트리 수, 서빙 어댑터 22열
+python scripts/register_ebnerd_shadow.py --model /tmp/m4/poolneg_s0.txt --model /tmp/m4/poolneg_mask0_s0.txt --dry-run
+# 3) 등록(둘 다 통과해야 하나도 올라간다), 4) 임시 파일 지우기
+DATABASE_URL=postgresql://... python scripts/register_ebnerd_shadow.py --model /tmp/m4/poolneg_s0.txt --model /tmp/m4/poolneg_mask0_s0.txt
+rm -r /tmp/m4
+```
+
+등록한 뒤 ADR 0037의 "결과와 한계"에 날짜·버전·모델 sha256(출력의 `model_sha256`)을 적는다. 내리는 조건(상업적 사용,
+`model_registry`의 공개 반출, 라이선스가 모델 사용을 막음)이 생기면 행을 retired로 바꾸고 지운다. 같은 모델로 parity 게이트를 돌리려면
+테스트 DB에서 `RECSYS_PARITY_MODEL_FILE=/tmp/m4/poolneg_mask0_s0.txt pytest -m integration tests/integration/test_feature_parity.py`.
+
+**활성 휴리스틱과 콜드스타트 임계 (ADR 0014, 0031).** `RECSYS_HEURISTIC_SET`(기본 `b`; `a`는 ADR 0014 사전 등록 6의 전환이 성립했을
+때만, `prior`는 heuristic-v1로 되돌리기), `RECSYS_MIN_PERSONAL_EVENTS`(기본 0). 6시간 클릭 수 조회 실패는
+`GET /recsys/stats`의 `popularity.clicks_error`, 임계에 걸린 사용자는 `profile.below_min_events`로 센다.
+`RECSYS_SHORT_TERM_HOURS`·`RECSYS_SHORT_TERM_MAX_CLICKS`는 없어졌다(남아 있어도 읽지 않는다).
+
 ## 10. 스키마 변경 반영
 
 새 Alembic 리비전을 머지한 뒤: `docker compose build && docker compose up -d` - `migrate`가 먼저

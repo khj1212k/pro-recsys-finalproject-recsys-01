@@ -162,6 +162,7 @@ v(t) = Σ 2^(−(t−t_i)/h)·e_i = 2^(−(t−a)/h)·S(a). 코사인은 양수 
   (`RECSYS_FEATURE_FN`의 기본값, `off`로 끈다). 열 이름·순서는 `recsys_core.schema.RANKER_V2_FEATURES`.
 - **칸 로그의 피처는 어댑터의 22열이다**(`feature_schema_version = 2`, float32 88바이트). 어댑터 피처를 만들지
   못한 요청은 전처럼 활성 휴리스틱의 4항(버전 1)을 남긴다. 요청 로그의 `features_as_of`가 재계산의 기준 시각이다.
+  (2026-10-17: 활성 휴리스틱이 heuristic-v2가 되어 그 4항은 버전 3이다 — ADR 0014. 버전 1은 되돌리기 세트와 예전 로그.)
 - **스키마 지문** `recsys_core.serving.SCHEMA_HASH`: 열 이름·순서와 정의(창, 반감기, 상한, 세션 간격, 시각 규칙,
   결측 표기)의 해시. 모델을 등록할 때 함께 적고(`model_registry.feature_schema_hash`), 서빙은 자기 지문과 다른
   모델로 점수를 내지 않는다(`scorer.schema_mismatch`).
@@ -485,4 +486,4 @@ shadow 점수 순서 뒤집음 → 2 실패, 서빙 후보를 25개로 줄임 �
 | shadow: 남은 예산이 `deadline_fraction` 미만이면 생략 | 요청 경로 밖의 전용 스레드, 자기 예산, 버리기, 차단 | 대안 7 (ADR 0025가 남긴 일) |
 | parity 테스트 `tests/recsys/test_feature_parity.py` + CI | 메모리 저장소판(그 경로)과 PostgreSQL판(`tests/integration/test_feature_parity.py`) | 로컬에서 DB 없이 게이트의 계산을 검증하고, 수치는 CI에서 낸다 |
 | `jobs/tasks/user_embed.py` 삭제, `train` → `JobSkipped` | 그대로 | — |
-| `RECSYS_MIN_PERSONAL_EVENTS`(k\*), 동적 신선도 창, 콜드 경로 통합 | 하지 않음 | k\*는 E2의 결과다. 나머지는 ADR 0025가 미룬 일이고 이 ADR의 범위가 아니다 |
+| `RECSYS_MIN_PERSONAL_EVENTS`(k\*), 동적 신선도 창, 콜드 경로 통합 | 하지 않음 | k\*는 E2의 결과다. 나머지는 ADR 0025가 미룬 일이고 이 ADR의 범위가 아니다 (2026-10-17: k\* = 0을 M5에서 넣었다 — ADR 0014 구현 기록 1, ADR 0031) |
