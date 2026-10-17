@@ -238,8 +238,19 @@ def api_client(engine, database_url):
 
 
 def test_a_click_moves_the_next_response_toward_the_clicked_topic(engine, seeded):
-    long_term = seeded.vec_of[seeded.by_topic[0][0]] + 0.6 * seeded.vec_of[seeded.by_topic[2][0]]
-    uid = seeded.add_user(long_term=long_term / np.linalg.norm(long_term))
+    """장기 프로필은 서빙처럼 클릭 이력의 증분 상태이고(ADR 0033), 새 클릭은 클릭 API와 같은 함수
+    (profile_store.apply_click)로 그 상태를 갱신한다. 활성 휴리스틱 heuristic-v2-b(ADR 0014)는 단기 항의 가중치가
+    장기 항보다 훨씬 작아(0.86 대 7.68) 장기 벡터를 고정해 두면 클릭 한 번이 상위 10개를 바꾸지 못한다 - 클릭의
+    반응은 장기 상태를 거쳐 온다(evaluation/serving/click_shift_sensitivity.py 표 2, 단위 테스트
+    test_clicks_on_another_topic_pull_it_into_the_top10_as_evidence_accumulates와 같은 이력)."""
+    from app.recsys import profile_store
+    from jobs.tasks.rebuild_user_state import rebuild_all
+
+    uid = seeded.add_user()
+    now = datetime.now(timezone.utc)
+    for topic, j, days in [(0, 1, 1), (0, 2, 2), (0, 3, 3), (0, 4, 5), (0, 5, 8), (2, 1, 2), (2, 2, 4), (2, 3, 6)]:
+        seeded.click(uid, seeded.by_topic[topic][j], at=now - timedelta(days=days))
+    assert rebuild_all(engine, user_ids=[uid])["rebuilt"] == 1  # 이력을 장기 상태로(시드·이관의 경로)
     service = _service(engine)
 
     def topic1_share(rec):
@@ -248,7 +259,10 @@ def test_a_click_moves_the_next_response_toward_the_clicked_topic(engine, seeded
 
     before = _recommend(service, engine, uid)
     clicked = seeded.by_topic[1][0]
-    seeded.click(uid, clicked)
+    clicked_at = datetime.now(timezone.utc)
+    seeded.click(uid, clicked, at=clicked_at)
+    with engine.begin() as conn:
+        assert profile_store.apply_click(conn, uid, clicked, clicked_at)
     after = _recommend(service, engine, uid)
 
     print(f"\n[recsys click-shift] topic1 share@10 before={topic1_share(before):.2f} after={topic1_share(after):.2f}")
