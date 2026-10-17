@@ -1,10 +1,10 @@
 {
  "kind": "e0_auto_labels",
  "format": 1,
- "generated_at": "2026-10-17T06:32:50.811453+00:00",
+ "generated_at": "2026-10-17T06:42:52.917256+00:00",
  "header": {
   "command": "python -m evaluation.llm.e0_auto_label_report",
-  "head_sha": "95cd000fc1031860b6ca7c36006592f799026290",
+  "head_sha": "d50bcb60bfe70205a4a31fee892e967ad39ad055",
   "protocol": "e0-auto-labels-v1",
   "protocol_sha256": "b3aa857d6303227f4d4724892eae7b2325552b1fa67dada7421ed6460248a479",
   "adr": "docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md#A8.13",
