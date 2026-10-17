@@ -83,6 +83,9 @@ class _Handler(socketserver.BaseRequestHandler):
                     sock.sendall(body[i:i + 1])
                 except OSError:
                     return
+        elif path == "/hold-body":
+            sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n<html>")
+            stop.wait(3)  # 헤더와 본문 앞부분만 보내고 멈춘다
         elif path.startswith("/redirect/"):
             n = int(path.rsplit("/", 1)[1])
             respond("302 Found", b"", [f"Location: {'/ok' if n == 0 else f'/redirect/{n - 1}'}"])
@@ -162,6 +165,21 @@ def test_slow_drip_body_is_cut_at_the_request_deadline(server):
     started = time.monotonic()
     assert _once(f"{base}/drip", read_timeout_s=1.0, deadline_s=0.3) == (None, "deadline")
     assert time.monotonic() - started < 1.5
+
+
+def test_body_stall_is_cut_at_the_request_deadline_not_after_another_full_read_timeout(server):
+    """본문 도중 멈추면 남은 시간만큼만 기다린다 - 요청 1번이 상한(deadline_s)을 크게 넘기지 않는다."""
+    base, _ = server
+    started = time.monotonic()
+    assert _once(f"{base}/hold-body", read_timeout_s=2.0, deadline_s=0.4) == (None, "deadline")
+    assert time.monotonic() - started < 1.0
+
+
+def test_header_wait_is_also_bounded_by_the_request_deadline(server):
+    base, _ = server
+    started = time.monotonic()
+    assert _once(f"{base}/hold", read_timeout_s=2.0, deadline_s=0.4) == (None, "deadline")
+    assert time.monotonic() - started < 1.0
 
 
 @pytest.mark.parametrize("code", [403, 404, 429, 503])

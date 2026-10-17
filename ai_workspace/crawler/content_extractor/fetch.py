@@ -112,8 +112,8 @@ def fetch_page_once(
     """HTTP GET 한 번. (html, "") 또는 (None, 원인)을 돌려준다.
 
     - 연결은 connect_timeout_s, 소켓 읽기 한 번은 read_timeout_s 안에 끝나야 한다.
-    - 본문을 받는 데까지 합쳐 deadline_s를 넘기면 "deadline"으로 끊는다(조금씩 흘려보내는 서버 대비).
-      본문은 read1로 받아, 데이터가 조금이라도 오면 바로 돌아와 시간을 다시 잰다.
+    - 요청 전체(연결·응답 헤더·본문)가 deadline_s를 넘기면 "deadline"으로 끊는다(조금씩 흘려보내는 서버 대비).
+      본문은 read1로 받아 데이터가 조금이라도 오면 바로 돌아오고, 읽기마다 소켓 시간 제한을 남은 시간으로 줄인다.
     - 인증서 오류면 검증 없이 한 번 더 받는다 - trafilatura가 하던 대로다(공개 기사 페이지만 받는다).
     """
     connect_timeout_s = Settings.EXTRACT_CONNECT_TIMEOUT_S if connect_timeout_s is None else connect_timeout_s
@@ -126,11 +126,11 @@ def fetch_page_once(
             url,
             headers=_request_headers(),
             retries=_RETRY,
-            timeout=urllib3.Timeout(connect=connect_timeout_s, read=read_timeout_s),
+            timeout=urllib3.Timeout(total=deadline_s, connect=connect_timeout_s, read=read_timeout_s),
             preload_content=False,
         )
     except Exception as err:  # noqa: BLE001 - 원인 분류로 돌려준다
-        cause = classify_error(err)
+        cause = _past_deadline(classify_error(err), clock() - started, deadline_s)
         if cause == "ssl" and _verify:
             return fetch_page_once(
                 url, connect_timeout_s=connect_timeout_s, read_timeout_s=read_timeout_s,
@@ -138,30 +138,51 @@ def fetch_page_once(
             )
         return None, cause
 
+    complete = False
     try:
         if response.status != 200:
             return None, f"http_{response.status}"
         data = bytearray()
         reader = getattr(response, "read1", None) or response.read
         while True:
-            if clock() - started > deadline_s:
+            remaining = deadline_s - (clock() - started)
+            if remaining <= 0:
                 return None, "deadline"
+            _limit_socket_wait(response, min(read_timeout_s, remaining))
             chunk = reader(_CHUNK_BYTES)
             if not chunk:
                 break
             data.extend(chunk)
             if len(data) > MAX_PAGE_BYTES:
                 return None, "too_large"
-        if clock() - started > deadline_s:
-            return None, "deadline"
+        complete = True
     except Exception as err:  # noqa: BLE001
-        return None, classify_error(err)
+        return None, _past_deadline(classify_error(err), clock() - started, deadline_s)
     finally:
+        if not complete:
+            response.close()  # 본문을 다 읽지 않은 연결은 풀에 되돌려 재사용하지 않는다
         response.release_conn()
 
     if len(data) < MIN_PAGE_BYTES:
         return None, "too_small"
     return _decode(bytes(data)), ""
+
+
+def _limit_socket_wait(response, seconds: float) -> None:
+    """다음 소켓 읽기가 seconds보다 오래 막히지 않게 한다. 연결 객체를 못 찾으면(라이브러리 내부가 바뀌면) 그대로 둔다 -
+    그때도 읽기 한 번은 read_timeout_s에서 끊기므로 요청 1번의 최악은 deadline_s + read_timeout_s다."""
+    sock = getattr(getattr(response, "connection", None), "sock", None)
+    if sock is None:
+        return
+    try:
+        sock.settimeout(max(0.001, seconds))
+    except OSError:
+        pass
+
+
+def _past_deadline(cause: str, elapsed: float, deadline_s: float) -> str:
+    # 남은 시간으로 줄인 소켓 제한에 걸린 것이면 읽기 시간 초과가 아니라 요청 전체 상한이다.
+    return "deadline" if cause == "read_timeout" and elapsed >= deadline_s * 0.999 else cause
 
 
 def is_retryable(cause: str) -> bool:
