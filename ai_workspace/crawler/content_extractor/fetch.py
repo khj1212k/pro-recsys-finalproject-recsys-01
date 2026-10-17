@@ -12,6 +12,7 @@
 
 import time
 from typing import Callable, Dict, NamedTuple, Optional, Tuple
+from urllib.parse import urljoin
 
 import urllib3
 from urllib3.exceptions import (
@@ -71,9 +72,10 @@ def _pool(verify: bool) -> urllib3.PoolManager:
     return pool
 
 
-# 연결·읽기 오류는 다시 보내지 않고(connect=0, read=0) 그대로 올린다. 리다이렉트만 trafilatura처럼 2번까지 따라간다.
-# total=None이라 상태 코드(429·5xx)로 다시 보내지도 않는다 - Retry-After를 따라 몇 분씩 잠드는 일이 없다.
-_RETRY = urllib3.util.Retry(total=None, connect=0, read=0, redirect=MAX_REDIRECTS, status=0, other=0)
+# 연결·읽기 오류는 다시 보내지 않고(connect=0, read=0) 그대로 올린다. total=None이라 상태 코드(429·5xx)로 다시
+# 보내지도 않는다 - Retry-After를 따라 몇 분씩 잠드는 일이 없다. 리다이렉트는 urllib3에 맡기지 않고(redirect=False)
+# fetch_page_once가 trafilatura처럼 2번까지 따라간다 - urllib3는 홉마다 시간 상한을 새로 시작하기 때문이다.
+_RETRY = urllib3.util.Retry(total=None, connect=0, read=0, redirect=False, status=0, other=0)
 
 
 def classify_error(err: BaseException) -> str:
@@ -112,31 +114,49 @@ def fetch_page_once(
     """HTTP GET 한 번. (html, "") 또는 (None, 원인)을 돌려준다.
 
     - 연결은 connect_timeout_s, 소켓 읽기 한 번은 read_timeout_s 안에 끝나야 한다.
-    - 요청 전체(연결·응답 헤더·본문)가 deadline_s를 넘기면 "deadline"으로 끊는다(조금씩 흘려보내는 서버 대비).
-      본문은 read1로 받아 데이터가 조금이라도 오면 바로 돌아오고, 읽기마다 소켓 시간 제한을 남은 시간으로 줄인다.
+    - 요청 전체(리다이렉트를 따라간 홉까지 포함한 연결·응답 헤더·본문)가 deadline_s를 넘기면 "deadline"으로 끊는다
+      (조금씩 흘려보내는 서버 대비). 홉마다 남은 시간만 준다. 본문은 read1로 받아 데이터가 조금이라도 오면 바로
+      돌아오고, 읽기마다 소켓 시간 제한을 남은 시간으로 줄인다.
     - 인증서 오류면 검증 없이 한 번 더 받는다 - trafilatura가 하던 대로다(공개 기사 페이지만 받는다).
     """
     connect_timeout_s = Settings.EXTRACT_CONNECT_TIMEOUT_S if connect_timeout_s is None else connect_timeout_s
     read_timeout_s = Settings.EXTRACT_READ_TIMEOUT_S if read_timeout_s is None else read_timeout_s
     deadline_s = Settings.EXTRACT_REQUEST_DEADLINE_S if deadline_s is None else deadline_s
     started = clock()
-    try:
-        response = _pool(_verify).request(
-            "GET",
-            url,
-            headers=_request_headers(),
-            retries=_RETRY,
-            timeout=urllib3.Timeout(total=deadline_s, connect=connect_timeout_s, read=read_timeout_s),
-            preload_content=False,
-        )
-    except Exception as err:  # noqa: BLE001 - 원인 분류로 돌려준다
-        cause = _past_deadline(classify_error(err), clock() - started, deadline_s)
-        if cause == "ssl" and _verify:
-            return fetch_page_once(
-                url, connect_timeout_s=connect_timeout_s, read_timeout_s=read_timeout_s,
-                deadline_s=max(0.0, deadline_s - (clock() - started)), clock=clock, _verify=False,
+    current, redirects = url, 0
+    while True:
+        remaining = deadline_s - (clock() - started)
+        if remaining <= 0:
+            return None, "deadline"
+        try:
+            response = _pool(_verify).request(
+                "GET",
+                current,
+                headers=_request_headers(),
+                retries=_RETRY,
+                redirect=False,
+                timeout=urllib3.Timeout(total=remaining, connect=connect_timeout_s, read=read_timeout_s),
+                preload_content=False,
             )
-        return None, cause
+        except Exception as err:  # noqa: BLE001 - 원인 분류로 돌려준다
+            cause = _past_deadline(classify_error(err), clock() - started, deadline_s)
+            if cause == "ssl" and _verify:
+                # trafilatura처럼 처음 주소부터 검증 없이 다시 받는다 - 남은 시간 안에서만
+                return fetch_page_once(
+                    url, connect_timeout_s=connect_timeout_s, read_timeout_s=read_timeout_s,
+                    deadline_s=max(0.0, deadline_s - (clock() - started)), clock=clock, _verify=False,
+                )
+            return None, cause
+        location = response.get_redirect_location()
+        if not location:
+            break
+        # 리다이렉트 응답의 본문은 읽지 않고 연결을 닫는다(urllib3는 다 읽어 비웠다 - 흘려보내는 서버면 상한이 없다)
+        response.close()
+        response.release_conn()
+        if redirects >= MAX_REDIRECTS:
+            return None, "redirects"
+        redirects += 1
+        current = urljoin(current, location)
 
     complete = False
     try:

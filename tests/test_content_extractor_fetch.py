@@ -86,6 +86,9 @@ class _Handler(socketserver.BaseRequestHandler):
         elif path == "/hold-body":
             sock.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n<html>")
             stop.wait(3)  # 헤더와 본문 앞부분만 보내고 멈춘다
+        elif path == "/slow-redirect":
+            stop.wait(0.8)  # 응답 헤더를 늦게 보낸 뒤 붙잡는 페이지로 보낸다
+            respond("302 Found", b"", ["Location: /hold"])
         elif path.startswith("/redirect/"):
             n = int(path.rsplit("/", 1)[1])
             respond("302 Found", b"", [f"Location: {'/ok' if n == 0 else f'/redirect/{n - 1}'}"])
@@ -198,6 +201,17 @@ def test_redirects_are_followed_up_to_two_like_trafilatura(server):
     html, cause = _once(f"{base}/redirect/1")  # /redirect/1 -> /redirect/0 -> /ok: 리다이렉트 2번
     assert cause == "" and "합성 문단" in html
     assert _once(f"{base}/redirect/2") == (None, "redirects")  # 3번
+
+
+def test_redirect_hops_share_one_request_deadline(server):
+    """리다이렉트를 따라간 요청도 처음 요청부터 센 deadline_s 안에서 끊긴다 - urllib3에 맡기면 홉마다 상한이 새로 시작해
+    리다이렉트 2번이면 요청 1번이 최악 3 x deadline_s가 된다(결정 9의 실행 시간 예산 계산이 틀어진다)."""
+    base, srv = server
+    before = len(srv.seen)
+    started = time.monotonic()
+    assert _once(f"{base}/slow-redirect", read_timeout_s=2.0, deadline_s=1.0) == (None, "deadline")
+    assert time.monotonic() - started < 1.4
+    assert [path for path, _ in srv.seen[before:]] == ["/slow-redirect", "/hold"]
 
 
 def test_size_limits(server, monkeypatch):
