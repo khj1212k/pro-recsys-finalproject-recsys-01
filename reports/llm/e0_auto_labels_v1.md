@@ -7,7 +7,7 @@ E0 기준선(ADR 0009 A8)의 사람 라벨 자리를 자동 라벨러가 채운 
 | 항목 | 값 |
 |---|---|
 | command | "python -m evaluation.llm.e0_auto_label_report" |
-| head_sha | "d50bcb60bfe70205a4a31fee892e967ad39ad055" |
+| head_sha | "51d1425229baebeafd5ebe08ed48f443898eeb48" |
 | protocol | "e0-auto-labels-v1" |
 | protocol_sha256 | "b3aa857d6303227f4d4724892eae7b2325552b1fa67dada7421ed6460248a479" |
 | adr | "docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md#A8.13" |
