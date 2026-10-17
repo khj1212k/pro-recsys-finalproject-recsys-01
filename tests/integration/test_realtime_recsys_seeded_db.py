@@ -286,6 +286,52 @@ def test_a_click_older_than_24h_does_not_count_as_short_term(engine, seeded):
     assert recent == []
 
 
+def test_the_heuristic_six_hour_click_count_equals_the_adapter_pop_clicks_6h_in_sql(engine, seeded, pg_conn):
+    """ADR 0014 사전 등록 2: 활성 휴리스틱의 c6(ClickCounts - item_window_counts를 창 하나·빈 노출 창으로 부른다)이 어댑터의
+    pop_clicks_6h(같은 함수를 세 창 + 노출 창으로 부른 결과의 첫 열)와 같다. 빈 노출 창이면 SQL이 노출 조회를 보내지 않고
+    FILTER가 하나뿐인 분기를 탄다 - 그 분기의 결과를 PostgreSQL에서 본다. 창 경계는 load_popularity의 통합 테스트와 같다."""
+    from sqlalchemy.orm import Session
+
+    from app.recsys.pipeline import ClickCounts, load_popularity
+    from app.recsys.sql_repository import SqlRecsysRepository
+    from app.recsys.types import WindowCounts
+    from recsys_core import serving as core_serving
+
+    a, b = seeded.add_user(), seeded.add_user()
+    x, y, z, untouched = seeded.by_topic[3][:4]
+    now = datetime.now(timezone.utc).replace(microsecond=300_000)
+    end = now.replace(microsecond=0) - timedelta(seconds=1)  # 요청 초(올림) - 2초
+    assert core_serving.item_window_end(now) == end
+    seeded.click(a, x, at=end - timedelta(microseconds=1))   # 6h 창 안(끝 직전)
+    seeded.click(b, x, at=end)                               # 끝은 제외
+    seeded.click(b, x, at=end - timedelta(hours=6))          # 6h 창의 시작은 포함
+    seeded.click(a, x, at=end - timedelta(hours=6, microseconds=1))  # 24h 창에만
+    seeded.click(a, y, at=end - timedelta(hours=20))         # 24h 창에만
+    with pg_conn.cursor() as cur:
+        cur.execute(  # 클릭이 아닌 이벤트는 세지 않는다
+            "INSERT INTO user_newsletter_ctr_log (user_id, news_letter_id, created_at, event) VALUES (%s, %s, %s, 'detail_view')",
+            (a, z, end - timedelta(hours=1)),
+        )
+        cur.execute(  # 노출만 있는 뉴스레터: 클릭 수는 0이다
+            "INSERT INTO recommendation_impression_log "
+            "(request_id, user_id, news_letter_id, position, source, model_version, created_at) "
+            "VALUES (%s, %s, %s, 0, 'realtime', 'heuristic-v2-b', %s)",
+            (str(uuid.uuid4()), b, z, end - timedelta(seconds=5)),
+        )
+    ids = [x, y, z, untouched]
+
+    with Session(engine) as s:
+        repo = SqlRecsysRepository(s)
+        c6 = ClickCounts(repo, now).get(ids)
+        adapter = load_popularity(repo, ids, now)
+        start6 = core_serving.item_window_starts(now)[0]
+        clicks_only = repo.item_window_counts(ids, (start6,), end, end)
+
+    assert c6 == {i: (adapter[i].clicks[0] if i in adapter else 0) for i in ids} == {x: 2, y: 0, z: 0, untouched: 0}
+    assert adapter[y].clicks[:2] == (0, 1) and adapter[z].inviews == 1  # 다른 창·노출은 어댑터 쪽에만 있다
+    assert clicks_only == {x: WindowCounts((2,), 0)}  # 빈 노출 창: 노출만 있는 z는 결과에 없다
+
+
 def test_brand_new_users_never_get_an_empty_list(engine, seeded):
     service = _service(engine)
     nobody = seeded.add_user()
