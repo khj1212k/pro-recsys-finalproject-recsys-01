@@ -1458,3 +1458,47 @@ python -m evaluation.recsys.ebnerd.run_neural --stage assemble --out-dir <풀어
       있다. A2 판정 테스트와 m4 드라이버 테스트(main의 flush 변경 포함) 2개 파일 75개 통과. A3 등록 구간(41,823 bytes)의 sha256이
       작업 트리·`82fcd03`·`612b005`에서 같고, `git diff 82fcd03 -- evaluation/recsys/ebnerd/preregistration/neural-e15.yaml`은
       비어 있다. 이 기록과 함께 바꾼 것은 테스트 모듈 docstring 한 단락(9번)뿐이고 A3.11 tarball 경로 밖이다.
+- **2026-10-17 11:42 KST — S4 보류 해제 점검: 메모리 규칙은 통과, 그러나 해제하지 않았다 — 병합 SHA로는 S3 묶음을 이어 돌 수 없다
+  (운영 기록. 판정용 결과 열람: 없음 — 읽은 것은 `e15-reh2`의 단계 피크 RSS·종료 코드와 S2의 P2 단계 피크 RSS, S3 묶음
+  `progress.json`의 설정 해시·코드 SHA뿐이다. 판정 규칙·임계값·표본·시드·arm·탐색 공간·드라이버·실험 코드 변경: 없음. 등록 문장
+  A3.0–A3.11과 yaml은 고치지 않았다)**
+  1. *실행 커밋 확인(바로 위 기록 7번이 띄우기 전에 하라고 한 것).* #32를 병합한 main 커밋은
+     `381f61db90ff50e4cf2eb8a2d60d07f876042adc`다. `git merge-base --is-ancestor`로 `309ac6d`·`b0a393a`·`612b005`·`a8277b5`가 모두
+     그 조상임을 확인했다. `git diff 612b005 381f61d -- <A3.11 경로>`는 `scripts/m4_colab_driver.py`의 `subprocess_runner` 하나뿐이다
+     (`5388b0e`의 flush 두 줄과 docstring — 바로 위 기록 7번이 적은 그 변경). 그 사이 main에 E15 경로를 바꾼 다른 커밋은 없다.
+     `git diff 82fcd03 381f61d -- evaluation/recsys/ebnerd/preregistration/neural-e15.yaml`은 비어 있다. A3.11 1번 명령으로
+     `381f61d`에서 만든 tarball은 sha256 `8b44dbc54f9b0e014823973b27212205f0d442ec45fb72930d63ffd90b06e9d2`, 276,679 bytes이고
+     (두 번 만들어 같은 값), tar에 남은 커밋 id는 `381f61db…`(40자리)다.
+  2. *10-06 15:00 규칙을 `e15-reh2`(수정 코드 `612b005`, P2)에 적용한 계산.* 판정 함수(`e15_rehearsal_judge.judge`)를 그 세션의
+     상태 파일에 다시 적용했고(읽기만, 파일을 쓰지 않음) 아래 손 계산과 같은 값이 나왔다. 바로 위 기록 5번의 값과 같다.
+     - 리허설 값(단계마다 프로세스 트리 피크 RSS와 `ru_maxrss` 중 큰 쪽): `gbdt_tune` 2.58, `gbdt_final` 2.89, `neural_tune` 4.01,
+       `select` 1.29, `neural_final` 4.52, `stack` 4.69, `cold` 3.89 GB. `cold` 종료 코드 0(60,000 요청 × 5조건, 각 14,861,887 쌍).
+     - 실데이터 값(S2, 재확인 단계 제외 — 첫 판정과 같은 값): P2 `gbdt_tune` 3.88, `gbdt_final` 4.44 GB.
+     - gap = max(3.88 − 2.58, 4.44 − 2.89) = max(1.30, 1.55) = **1.55 GB**. ratio = max(3.88 / 2.58, 4.44 / 2.89) =
+       max(1.504, 1.536) = **1.536**.
+     - 단계별 추정 = max(리허설 + 1.55, 리허설 × 1.536): `gbdt_tune` max(4.13, 3.96) = 4.13, `gbdt_final` max(4.44, 4.44) = 4.44,
+       `neural_tune` max(5.56, 6.16) = 6.16, `select` max(2.84, 1.98) = 2.84, `neural_final` max(6.07, 6.94) = 6.94,
+       `stack` max(6.24, 7.21) = **7.21**, `cold` max(5.44, 5.98) = 5.98 GB.
+     - 최댓값 7.21 GB(`stack`) ≤ 8.0 GB이고 `cold` 종료 코드가 0이다 → 규칙의 값은 **통과**.
+     - 수동 해제 기준(운영 계획의 `release_by_hand`, CUDA 몫은 위쪽 끝): 7.21 + 2.5 + 1.0 = **10.71 GB < 12.67 GB**(남는 몫
+       1.96 GB). CUDA 몫 1.5 GB로는 9.71 GB. S4의 첫 단계(P2 재현 게이트 재확인)는 S2의 P2 `gate` 실측 4.69 GB로 4.69 + 3.5 =
+       8.19 GB다.
+  3. *해제하지 않은 이유(위 S3 시작 기록 4번의 제약이 그대로다).* 지킴이는 S2 → S3 → S4를 한 out-dir(`main` 사슬)로 잇고 모든
+     세션에 tarball 하나(`b64da14`, `015bf8e3…f7c6`)를 쓴다. 그 tarball을 `381f61d`의 것으로 바꿔 S3 묶음(`47ed7cc3…c7c7`)에서
+     이어 돌리면: 드라이버가 tarball에 남은 커밋 id를 `E15_CODE_SHA`로 넘기고(`scripts/e15_colab_driver.py`), `run_neural`의 설정
+     해시에 그 값(`config.code_sha`)이 들어가는데, 묶음의 `progress.json`은 `config.code_sha` = `b64da14…`·`config_hash`
+     `bb67ae09…04ff`다. 첫 단계에서 `Store`가 `ConfigMismatch`를 내고 `run_neural`이 종료 코드 3으로 끝나며, 드라이버는 0이 아닌
+     종료 코드를 단계 실패로 보고 FAILED 마커를 남긴다 — 실행 전체가 무효다. tarball을 그대로 둔 채 띄우면 P2 콜드가 수정 전
+     코드로 돌아 첫 리허설처럼 메모리로 죽을 수 있고(합성 11.16 GB) 그것도 무효다. 그래서 메모리 기준은 통과했지만
+     `MEMORY_OK_s4`를 만들지 않았고, 지킴이의 설정과 tarball도 바꾸지 않았다. 1번의 tarball은 git 제외 운영 디렉터리에 따로
+     두었다(지킴이가 읽지 않는 경로). 11:40 KST에 Colab 세션이 하나도 없음을 확인했다 — 지킴이는 S4 앞에서 VM 없이 기다린다
+     (과금 없음).
+  4. *남은 결정(이 절에 먼저 적고 띄운다).* 위 S3 시작 기록 4번의 (가)·(나) 중 하나다. 어느 쪽이든 쓸 코드는 1번의 `381f61d`
+     tarball이다. 기록된 값으로 본 비용:
+     - (가) 병합 SHA로 S2 → S3 → S4를 새 out-dir에서 처음부터. 지난 실측으로 S2 0.943 CU(CPU 11.79시간), S3 3.231 CU(T4
+       3.02시간)에 S4(세션 상한 9 CU)가 더해진다. E15 누적 추정 5.49 CU에서 S4 앞까지 9.66 CU, S4가 상한까지 써도 18.66 CU로
+       경고선 24 CU 아래다(드라이버의 예산 판단에는 앞 세션까지의 누적이 `--cu-spent-before`로 들어간다). 등록 명령·단일 SHA·
+       `assemble` 그대로다. 지금의 S2·S3(`b64da14`) 체크포인트는 기록으로만 남는다.
+     - (나) P1은 지금 체크포인트(`b64da14`)를 쓰고 P2만 병합 SHA로 처음부터. P2의 GBDT 단계는 S2 실측으로 `gate` 2,541초 +
+       `gbdt_tune` 20,287초 + `gbdt_final` 3,845초 = 7.41시간 ≈ 0.59 CU(CPU)이고 신경망 단계는 T4의 S4다. 두 체크포인트를 합치는
+       `assemble` 코드 변경(새 SHA, 결과 동일성 확인)과 리포트 머리말의 SHA 두 개 표기가 먼저 필요하다.
