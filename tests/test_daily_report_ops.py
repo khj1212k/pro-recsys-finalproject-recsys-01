@@ -99,6 +99,41 @@ def test_schedule_line_shows_started_over_scheduled_and_skipped_hours():
             "성공 19), popularity 24/24") in text
 
 
+def test_schedule_line_names_the_deploy_time_when_counting_started_after_it():
+    line = dr.format_schedule({"crontab": "crontab.micro", "unsupported": [], "disabled": [],
+                               "counted_since": _t(16, 19, 35, 1).isoformat(),
+                               "jobs": {"retention": {"scheduled": 0, "started": 0, "succeeded": 0, "missed": []}}})
+    assert line.startswith("- 정시 회차(최근 24시간, 이 코드가 처음 돈 10-16 19:35 UTC부터, crontab.micro 기준")
+    assert "retention" not in line  # 창 안에 예정 회차가 없는 잡은 적지 않는다
+
+
+class _Cur:
+    """schedule_status가 부르는 cursor 흉내: job_runs 조회 결과만 돌려준다."""
+
+    def __init__(self, rows):
+        self.rows = rows
+
+    def execute(self, sql, params=None):
+        self.params = params
+
+    def fetchall(self):
+        return self.rows
+
+
+def test_schedule_status_does_not_count_slots_before_this_image_first_ran():
+    """배포로 생긴 retention 줄(17:50)의 배포 전 회차를 '건너뜀'으로 세지 않는다(2026-10-17 VM에서 본 경우)."""
+    crontab = ("crontab.micro", "50 17 * * * python -m jobs.run retention\n35 * * * * python -m jobs.run popularity\n")
+    now = _t(17, 6, 50)
+    deployed = _t(16, 19, 35, 1)
+    runs = [("popularity", _t(16, h, 35, 1) if h >= 7 else _t(17, h, 35, 1), "succeeded") for h in range(24)]
+    unbounded = dr.schedule_status(_Cur(runs), now, crontab)
+    assert unbounded["jobs"]["retention"]["missed"] and unbounded["counted_since"] is None
+    bounded = dr.schedule_status(_Cur(runs), now, crontab, since=deployed)
+    assert bounded["jobs"]["retention"]["scheduled"] == 0
+    assert bounded["jobs"]["popularity"]["scheduled"] == 12  # 19:35 ~ 06:35
+    assert bounded["counted_since"] == deployed.isoformat()
+
+
 def test_schedule_line_without_crontab_says_it_did_not_count():
     assert "세지 않음(SCHEDULER_CRONTAB 없음" in dr.format_schedule({"crontab": None})
 
