@@ -25,23 +25,23 @@ amendments:                 # 항목 형식: {date, reason, results_viewed, chan
 #            -> 이 블록을 채우는 문서 전용 커밋(A8.10) -> pre-flight -> warmup -> eval -> 리포트 -> 라벨
 # 실행 전에 채운다(결과 열람 전). void_runs 말고 하나라도 비어 있으면 러너는 시작하지 않는다.
 pre_run_record:
-  code_sha: null                 # E0 러너 PR의 main 병합 커밋. 이 블록을 담는 커밋의 해시가 아니다
-  ai_workspace_diff_since_b64da14: null   # git diff --stat b64da14 <code_sha> -- ai_workspace 요약
-  adr_0023_amendment_commit: null         # 실험용 DB 밖 본문 사본 규칙이 main에 들어간 커밋
-  export_t0_kst: null            # Tier 0 VM 읽기 전용 COPY 시각
-  export_rows: null
-  export_manifest_sha256: null
-  export_body_expires_at: null   # 반출 행 중 가장 이른 crawled_at + 30일 (ADR 0023)
-  embeddings_sha256: null        # emb.f16.npy
-  embeddings_fp16_vs_fp32_cos: {p10: null, min: null, n: 100}
-  colab_cu_used: null
-  day_windows_utc: null          # [[start, end), ...] 실제로 쓴 창(3~5개)
-  snapshot_sha256: null          # {run1: ..., run2: ..., run3: ...} 날짜 창별 멤버십(ids) 스냅숏
-  sample_manifest_sha256: null   # evaluation/llm/evalsets/e0-baseline-v1.jsonl (order 포함)
-  bucket_allocation: null        # {"3-4": n, "5-9": n, "10+": n} 실제 배분
+  code_sha: "35d0a1df97a38dad089f0daea676650072f592d6"                 # E0 러너 PR의 main 병합 커밋. 이 블록을 담는 커밋의 해시가 아니다
+  ai_workspace_diff_since_b64da14: " 17 files changed, 2832 insertions(+), 42 deletions(-)"   # git diff --stat b64da14 <code_sha> -- ai_workspace 요약
+  adr_0023_amendment_commit: "7cb6861039cc436db9fb994db9ad5e84e8280152"         # 실험용 DB 밖 본문 사본 규칙이 main에 들어간 커밋
+  export_t0_kst: "2026-10-17T11:40:07.286148+09:00"            # Tier 0 VM 읽기 전용 COPY 시각
+  export_rows: 6874
+  export_manifest_sha256: "0c4d9f89d5580aa291f016c2096b23c4a40403baec07a01768baae839a9444e7"
+  export_body_expires_at: "2026-11-09T21:05:07.903169Z"   # 반출 행 중 가장 이른 crawled_at + 30일 (ADR 0023)
+  embeddings_sha256: "7bb202ed6ce1aaef2a4e7dc5dedd35cefcef390a785a0db2c4b051ff551fb1b2"        # emb.f16.npy
+  embeddings_fp16_vs_fp32_cos: {p10: 0.9999921875446296, min: 0.9999084911537253, n: 100}
+  colab_cu_used: 0.43
+  day_windows_utc: [["2026-10-12T21:00:00", "2026-10-13T21:00:00"], ["2026-10-13T21:00:00", "2026-10-14T21:00:00"], ["2026-10-14T21:00:00", "2026-10-15T21:00:00"]]          # [[start, end), ...] 실제로 쓴 창(3~5개)
+  snapshot_sha256: {run1: "cdfbd7ad3a6a64770da8a81ebc24404c1037ce24afd0bbd579fec714f2b6f9b8", run2: "97bfa0412d881a91eb43c38f2fb85db59363e6b0013602a7815609b913fcd697", run3: "d54369b52b6fd38ad64be80d8a3f4e9f29537f05aaeab44e99fa89a681092a96"}          # {run1: ..., run2: ..., run3: ...} 날짜 창별 멤버십(ids) 스냅숏
+  sample_manifest_sha256: "5b458cc9246ff69c98c24c1ecdb91a7366e1eae9d70a828d574fd856ec509a8b"   # evaluation/llm/evalsets/e0-baseline-v1.jsonl (order 포함)
+  bucket_allocation: {"3-4": 5, "5-9": 5, "10+": 5}        # {"3-4": n, "5-9": n, "10+": n} 실제 배분
   user_decisions:
-    newsletter_embedder: null    # "record_only_mac" | "real_colab_cpu"
-    label_subset: null           # "full" | "reduced_first10"
+    newsletter_embedder: "record_only_mac"    # "record_only_mac" | "real_colab_cpu"
+    label_subset: "full"           # "full" | "reduced_first10"
   void_runs: []                  # {date, reason, cost_usd}
 
 code_identity:                   # A8.2. 러너는 전부 참일 때만 시작한다
