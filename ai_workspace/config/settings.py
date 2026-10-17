@@ -161,8 +161,19 @@ class BaseSettings:
     HTTP_USER_AGENT: str = os.getenv(
         "HTTP_USER_AGENT", "Mozilla/5.0 (compatible; newsletter-recsys/1.0)"
     )
-    MAX_FETCH_RETRIES: int = 3  # RSS/본문 크롤링 네트워크 요청 최대 재시도 횟수
-    # 본문 다운로드가 (위 재시도까지) 실패한 기사를 이후 실행에서 다시 시도하는 총 횟수 상한.
+    MAX_FETCH_RETRIES: int = 3  # RSS 피드·정책브리핑 API 네트워크 요청 최대 재시도 횟수
+    # 기사 본문 요청(crawler/content_extractor/fetch.py, ADR 0026 결정 9). 요청 1번은 연결 10초, 소켓 읽기 1번
+    # 15초, 본문을 다 받을 때까지 30초 안에 끝나야 한다. 같은 실행 안에서는 2번까지(사이 대기 2초) 보낸다.
+    # 예전(trafilatura.fetch_url 3번)에는 응답 없이 끊는 서버에 기사 1건이 HTTP 요청 9번·대기 약 3분이 됐다.
+    EXTRACT_CONNECT_TIMEOUT_S: float = float(os.getenv("EXTRACT_CONNECT_TIMEOUT_S", "10"))
+    EXTRACT_READ_TIMEOUT_S: float = float(os.getenv("EXTRACT_READ_TIMEOUT_S", "15"))
+    EXTRACT_REQUEST_DEADLINE_S: float = float(os.getenv("EXTRACT_REQUEST_DEADLINE_S", "30"))
+    EXTRACT_FETCH_ATTEMPTS: int = int(os.getenv("EXTRACT_FETCH_ATTEMPTS", "2"))
+    EXTRACT_RETRY_BACKOFF_S: float = float(os.getenv("EXTRACT_RETRY_BACKOFF_S", "2"))
+    # 한 실행 안에서 같은 언론사 기사의 다운로드가 연달아 이만큼 실패하면 그 언론사의 남은 기사는 이번 실행에서
+    # 받지 않고 다음 실행으로 미룬다(시도 횟수를 쓰지 않는다). 0이면 끈다.
+    EXTRACT_PRESS_BREAKER_FAILURES: int = int(os.getenv("EXTRACT_PRESS_BREAKER_FAILURES", "3"))
+    # 본문 다운로드가 실패한 기사를 이후 실행에서 다시 시도하는 총 횟수 상한.
     # news_raw.raw_news_extract_attempts로 센다 - 막힌 URL을 2시간마다 영원히 두드리지 않게.
     MAX_EXTRACT_ATTEMPTS: int = int(os.getenv("MAX_EXTRACT_ATTEMPTS", "3"))
     # 상업 언론사 본문 보존 기한(일, 수집 시각 기준 - ADR 0023). `jobs.run retention`의 --days 기본값이다.
