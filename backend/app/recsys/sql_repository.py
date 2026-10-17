@@ -129,16 +129,19 @@ class SqlRecsysRepository:
             **{f"s{j}": start for j, start in enumerate(click_starts)},
         )
         # 노출: 화면에 나간 칸 하나가 한 건. ix_recommendation_impression_log_news_letter_id_created_at.
-        inviews = dict(
-            self._rows(
-                "SELECT news_letter_id, COUNT(*) FROM recommendation_impression_log "
-                "WHERE news_letter_id = ANY(:ids) AND created_at >= :start AND created_at < :end "
-                "GROUP BY news_letter_id",
-                ids=ids,
-                start=inview_start,
-                end=end,
+        # 노출 창이 비어 있으면(시작 >= 끝) 조회하지 않는다 - 클릭 수만 필요한 휴리스틱의 인기 항(ADR 0014)이 그렇게 부른다.
+        inviews = {}
+        if inview_start < end:
+            inviews = dict(
+                self._rows(
+                    "SELECT news_letter_id, COUNT(*) FROM recommendation_impression_log "
+                    "WHERE news_letter_id = ANY(:ids) AND created_at >= :start AND created_at < :end "
+                    "GROUP BY news_letter_id",
+                    ids=ids,
+                    start=inview_start,
+                    end=end,
+                )
             )
-        )
         zero = (0,) * len(click_starts)
         by_id = {r[0]: tuple(int(c) for c in r[1:]) for r in clicks}
         return {

@@ -103,13 +103,15 @@ def test_prior_scores_follow_the_serving_formula_and_weight_transfer():
     assert huge - both == pytest.approx(0.05, rel=1e-6)
 
 
-def test_registered_prior_weights_equal_the_serving_defaults():
+def test_registered_prior_weights_equal_the_serving_prior_set():
+    """사전 등록의 사전값은 등록 당시 서빙 기본값(heuristic-v1)이다. 서빙 기본값이 heuristic-v2 (b) 세트로 바뀐 뒤
+    (ADR 0014)에도 그 사전값은 되돌리기 세트(PriorHeuristicWeights)로 남아 있어야 한다."""
     backend = str(REPO / "backend")
     if backend not in sys.path:
         sys.path.insert(0, backend)
     os.environ.setdefault("DATABASE_URL", "postgresql://test:test@localhost:5432/testdb")
     scoring = pytest.importorskip("app.recsys.scoring")
-    w = scoring.HeuristicWeights()
+    w = scoring.PriorHeuristicWeights()
     assert PRIOR == {"long_term": w.long_term, "short_term": w.short_term, "recency": w.recency,
                      "popularity": w.popularity}
     assert PREREG["heuristics"]["recency_tau_hours"] == w.recency_tau_hours

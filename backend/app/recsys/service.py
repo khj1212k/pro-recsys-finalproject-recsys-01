@@ -26,11 +26,11 @@ from app.recsys.pipeline import (
     EmptyRecommendation,
     RealtimeRecommender,
     build_recommendation,
-    popular_ids,
+    legacy_popular_ids,
     shadow_scores_at,
 )
 from app.recsys.repository import RecsysRepository
-from app.recsys.scoring import HeuristicScorer, Scorer, encode_features
+from app.recsys.scoring import Scorer, encode_features, make_heuristic
 from app.recsys.throttle import ThrottledExceptionLog  # noqa: F401 (기존 임포트 경로 유지)
 from app.recsys.types import (
     SOURCE_BATCH,
@@ -331,8 +331,10 @@ class RecommendationService:
         return ids, "batch"
 
     def _popular(self, repo: RecsysRepository, now: datetime, n: int):
+        # 폴백의 인기 목록은 popularity-v1(compute_scores) 그대로다: 실시간 경로가 실패하거나 예산을 넘긴 뒤의
+        # 최후 경로라 클릭 집계를 더하지 않는다(ADR 0014 대안 8). 후보 출처 popular는 6시간 클릭 순서다.
         since = now - timedelta(hours=self.cfg.freshness_hours)
-        return popular_ids(repo, since, now, n), POPULARITY_MODEL_VERSION
+        return legacy_popular_ids(repo, since, now, n), POPULARITY_MODEL_VERSION
 
 
 def build_service(
@@ -350,7 +352,10 @@ def build_service(
     feature_repo_factory는 요청 경로 밖의 피처 작업이 인기도 창 집계를 읽는 저장소다(pipeline.RealtimeRecommender)."""
     counters = counters or RecsysCounters()
     recommender = RealtimeRecommender(
-        cfg, scorer=scorer or HeuristicScorer(), counters=counters, feature_repo_factory=feature_repo_factory
+        cfg,
+        scorer=scorer or make_heuristic(cfg.heuristic_set),
+        counters=counters,
+        feature_repo_factory=feature_repo_factory,
     )
     return RecommendationService(
         cfg,

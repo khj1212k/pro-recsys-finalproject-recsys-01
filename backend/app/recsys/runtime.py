@@ -5,7 +5,7 @@ from typing import Optional
 
 from app.recsys.config import RecsysConfig
 from app.recsys.metrics import RecsysCounters
-from app.recsys.scoring import HeuristicScorer, ScorerStack
+from app.recsys.scoring import ScorerStack, make_heuristic
 from app.recsys.service import RecommendationService, build_service
 
 _service: Optional[RecommendationService] = None
@@ -72,7 +72,8 @@ def build_scorer_stack(
 ) -> ScorerStack:
     """활성 스코어러 하나 + shadow 스코어러들 (ADR 0025, 0033).
 
-    - 활성: 레지스트리에 role='active' 모델이 있고 피처 함수가 있으면 그 모델, 아니면 4항 휴리스틱.
+    - 활성: 레지스트리에 role='active' 모델이 있고 피처 함수가 있으면 그 모델, 아니면 4항 휴리스틱
+      (RECSYS_HEURISTIC_SET의 세트, ADR 0014).
     - shadow: 레지스트리의 role='shadow' 모델 중 최신 shadow_max개. 같은 후보에 점수만 매겨 칸 로그에
       남긴다. 피처 함수가 없으면 어떤 모델도 점수를 낼 수 없으므로 만들지 않는다.
     - 피처 함수는 묶음에도 준다: 후보의 피처 행렬을 한 번 계산해 칸 로그에 남기고 모델들이 같이 쓴다.
@@ -91,7 +92,7 @@ def build_scorer_stack(
             **kwargs,
         )
 
-    active = model_scorer(fallback=HeuristicScorer())
+    active = model_scorer(fallback=make_heuristic(cfg.heuristic_set))
     shadows = []
     if feature_fn is not None:
         shadows = [model_scorer(fallback=None, role="shadow", slot=i) for i in range(cfg.shadow_max)]

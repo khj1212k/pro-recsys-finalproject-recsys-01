@@ -389,7 +389,7 @@ def test_impressions_are_written_to_the_log_table(engine, seeded, pg_conn):
     assert [r[1] for r in rows] == rec.news_letter_ids[:3]
     assert [r[2] for r in rows] == [0, 1, 2]
     assert {r[0] for r in rows} == {rec.request_id}
-    assert {(r[3], r[4]) for r in rows} == {("realtime", "heuristic-v1")}
+    assert {(r[3], r[4]) for r in rows} == {("realtime", "heuristic-v2-b")}
     service.shutdown()
 
 

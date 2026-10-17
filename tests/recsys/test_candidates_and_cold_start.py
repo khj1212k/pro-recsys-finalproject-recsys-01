@@ -146,9 +146,11 @@ def test_expired_deadline_aborts_before_scoring():
 
 
 def test_clicks_on_another_topic_pull_it_into_the_top10_as_evidence_accumulates():
-    """장기 프로필(주제 0+2)과 다른 주제 1을 클릭할수록 다음 목록 상위 10개의 주제 1 비율이
-    늘어야 한다 - 한 번에 0이면 반응이 없는 것이고, 한 번에 대부분을 차지하면 실수 클릭
-    하나에 피드가 장악된다. 1024차원, 주제 내 코사인 ~0.7인 합성 데이터."""
+    """장기 프로필(주제 0+2의 클릭 이력)과 다른 주제 1을 클릭할수록 다음 목록 상위 10개의 주제 1 비율이
+    늘어야 한다 - 한 번에 0이면 반응이 없는 것이고, 한 번에 대부분을 차지하면 실수 클릭 하나에 피드가 장악된다.
+    1024차원, 주제 내 코사인 ~0.7인 합성 데이터. 장기 벡터는 서빙처럼 클릭마다 갱신되는 증분 상태다(ADR 0033) -
+    방금 한 클릭이 장기 벡터에도 들어간다. 활성 휴리스틱은 heuristic-v2-b(ADR 0014).
+    (같은 설정에서 heuristic-v1은 클릭 한 번에 0.9가 된다: evaluation/serving/click_shift_sensitivity.py 표 2.)"""
     rng = np.random.default_rng(7)
     dim, per_topic = 1024, 12
 
@@ -164,9 +166,9 @@ def test_clicks_on_another_topic_pull_it_into_the_top10_as_evidence_accumulates(
             nid = t * per_topic + j + 1
             corpus.append(FakeNewsletter(nid, noisy(t), NOW - timedelta(hours=1 + j), 1 + j % 3, (t + 1,)))
             topic_of[nid] = t
-    vec = {n.id: n.embedding for n in corpus}
-    long_term = vec[1] + 0.6 * vec[2 * per_topic + 1]
-    repo = FakeRepo(corpus, [FakeUser(1, long_term=long_term / np.linalg.norm(long_term))])
+    repo = FakeRepo(corpus, [FakeUser(1)])
+    for nid, days in [(2, 1), (3, 2), (4, 3), (5, 5), (6, 8), (26, 2), (27, 4), (28, 6)]:  # 주제 0 x5, 주제 2 x3
+        repo.click(1, nid, NOW - timedelta(days=days))
     recommender = _recommender()
 
     def topic1_share():

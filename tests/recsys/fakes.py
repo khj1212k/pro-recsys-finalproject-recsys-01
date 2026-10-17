@@ -136,7 +136,8 @@ class FakeRepo:
         return [ClickEvent(c[3], self.newsletters[c[2]].embedding, c[2]) for c in recent]
 
     def item_window_counts(self, news_letter_ids, click_starts, inview_start, end):
-        self._call("item_window_counts")
+        # 노출 창이 빈 호출(활성 휴리스틱의 6시간 클릭 수, ADR 0014)과 어댑터의 인기도 집계를 따로 센다.
+        self._call("item_click_counts" if inview_start >= end else "item_window_counts")
         out = {}
         for nid in news_letter_ids:
             clicks = tuple(sum(1 for c in self.clicks if c[2] == nid and s <= c[3] < end) for s in click_starts)

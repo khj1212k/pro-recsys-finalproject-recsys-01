@@ -71,19 +71,66 @@ def test_short_term_vector_is_the_unit_sum_of_the_last_20_clicks_strictly_before
     assert np.allclose(state.short_term, unit_rows(np.stack(last20)).sum(axis=0), atol=1e-6)
 
 
-def test_a_narrower_configured_short_window_only_changes_the_heuristic_vector():
+def test_the_heuristic_short_vector_is_the_adapters_recent_clicks_and_has_no_separate_setting():
+    """ADR 0014 사전 등록 2: 휴리스틱·knn_short 후보·어댑터가 같은 최근 클릭(요청 초 기준 24시간의 최근 20개)을 쓴다."""
     corpus = two_topic_corpus(dim=DIM, per_topic=10)
     repo = FakeRepo(corpus, [FakeUser(1)])
-    repo.click(1, 1, NOW - timedelta(hours=10))   # 주제 A
-    repo.click(1, 12, NOW - timedelta(hours=1))   # 주제 B
+    now = NOW.replace(microsecond=500_000)
+    repo.click(1, 1, now - timedelta(hours=10))   # 주제 A
+    repo.click(1, 12, now - timedelta(hours=1))   # 주제 B
+    # 요청 초 T = floor(now) + 1 기준 24시간 창의 시작 바로 앞: 어댑터의 창 밖이다(now - 24h보다는 뒤)
+    repo.click(1, 13, now - timedelta(hours=24) + timedelta(microseconds=200_000))
 
-    wide = build_user_state(repo, 1, NOW, RecsysConfig())
-    narrow = build_user_state(repo, 1, NOW, RecsysConfig(short_term_hours=2, short_term_max_clicks=5))
+    state = build_user_state(repo, 1, now, RecsysConfig())
 
-    assert len(wide.recent_clicks) == len(narrow.recent_clicks) == 2  # 어댑터 입력은 설정과 무관하다(24시간·20건)
-    clicked_b = next(n for n in corpus if n.id == 12).embedding
-    assert _cos(narrow.short_term, clicked_b) == pytest.approx(1.0, abs=1e-6)  # 2시간 창: 주제 B 클릭 하나뿐
-    assert _cos(wide.short_term, clicked_b) < 0.9                              # 24시간 창: 두 클릭의 합
+    assert [c.news_letter_id for c in state.recent_clicks] == [1, 12]
+    assert np.allclose(state.short_term, unit_rows(np.stack([c.embedding for c in state.recent_clicks])).sum(axis=0))
+    assert not hasattr(RecsysConfig(), "short_term_hours") and not hasattr(RecsysConfig(), "short_term_max_clicks")
+
+
+# ------------------------------------------------------------------ 콜드스타트 임계 (ADR 0031 결정 1)
+def test_min_personal_events_zero_lets_every_user_with_clicks_use_them():
+    corpus = two_topic_corpus(dim=DIM, per_topic=5)
+    repo = FakeRepo(corpus, [FakeUser(1)])
+    repo.click(1, 2, NOW - timedelta(hours=2))
+
+    state = build_user_state(repo, 1, NOW, RecsysConfig())
+
+    assert RecsysConfig().min_personal_events == 0
+    assert state.profile_source == "long_term" and state.short_term is not None
+    assert not state.below_min_personal_events
+
+
+def test_below_min_personal_events_the_click_signal_is_not_the_profile_but_adapter_inputs_stay():
+    corpus = two_topic_corpus(dim=DIM, per_topic=5)
+    repo = FakeRepo(corpus, [FakeUser(1, onboarding_ids=[7]), FakeUser(2, category_ids=[1]), FakeUser(3)])
+    for uid in (1, 2, 3):
+        repo.click(uid, 2, NOW - timedelta(hours=2))
+        repo.click(uid, 3, NOW - timedelta(hours=1))
+    cfg = RecsysConfig(min_personal_events=3)
+
+    onboarded, by_category, nobody = (build_user_state(repo, uid, NOW, cfg) for uid in (1, 2, 3))
+
+    for state in (onboarded, by_category, nobody):
+        assert state.long_term is None and state.short_term is None and state.below_min_personal_events
+        assert state.hist.hist_len == 2 and len(state.recent_clicks) == 2  # 어댑터의 입력은 그대로
+    assert (onboarded.profile_source, by_category.profile_source, nobody.profile_source) == (
+        "onboarding", "category", "none")
+    assert not nobody.has_personal_signal
+    # 클릭이 임계에 닿으면 클릭 신호를 쓴다(온보딩 선택은 세지 않는다)
+    repo.click(1, 4, NOW - timedelta(minutes=30))
+    reached = build_user_state(repo, 1, NOW, cfg)
+    assert reached.profile_source == "long_term" and not reached.below_min_personal_events
+
+
+def test_min_personal_events_and_the_heuristic_set_are_validated_and_read_from_the_environment():
+    cfg = RecsysConfig.from_env({"RECSYS_MIN_PERSONAL_EVENTS": "5", "RECSYS_HEURISTIC_SET": "a"})
+    assert (cfg.min_personal_events, cfg.heuristic_set) == (5, "a")
+    assert RecsysConfig().heuristic_set == "b"
+    with pytest.raises(ValueError):
+        RecsysConfig(min_personal_events=-1)
+    with pytest.raises(ValueError):
+        RecsysConfig(heuristic_set="c")
 
 
 def test_popularity_is_read_for_the_adapter_windows_which_end_before_the_request():

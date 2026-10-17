@@ -422,7 +422,7 @@ def test_a_registered_shadow_model_is_scored_and_logged_without_changing_the_res
 
         version = f"lgbm:{model_name}@v1"
         assert rec.news_letter_ids == expected.news_letter_ids  # 같은 시드의 탐색, 같은 활성 점수: 응답이 같다
-        assert rec.model_version == "heuristic-v1" and rec.shadow_versions == [version]
+        assert rec.model_version == "heuristic-v2-b" and rec.shadow_versions == [version]
         with pg_conn.cursor() as cur:
             cur.execute(
                 "SELECT shadow_versions FROM recommendation_request_log WHERE request_id = %s", (rec.request_id,)
