@@ -25,6 +25,7 @@ from crawler.content_extractor.fetch import (  # noqa: E402
     fetch_page,
     fetch_page_once,
     is_retryable,
+    is_site_failure,
 )
 
 SYNTHETIC_HTML = (
@@ -256,6 +257,19 @@ def test_classify_error_maps_urllib3_errors():
 ])
 def test_is_retryable(cause, expected):
     assert is_retryable(cause) is expected
+
+
+@pytest.mark.parametrize("cause, expected", [
+    ("disconnect", True), ("read_timeout", True), ("deadline", True), ("connect_error", True),
+    ("connect_timeout", True), ("ssl", True), ("network_error", True),
+    ("http_500", True), ("http_502", True), ("http_403", True), ("http_429", True), ("http_408", True),
+    ("http_404", False), ("http_410", False), ("http_401", False),
+    ("too_small", False), ("too_large", False), ("redirects", False), ("other", False), ("empty_body", False),
+    ("", False), ("http_", False),
+])
+def test_is_site_failure(cause, expected):
+    """언론사별 차단기가 세는 원인: 그 사이트로 가는 다른 요청도 같은 꼴이 될 만한 실패만."""
+    assert is_site_failure(cause) is expected
 
 
 def test_fetch_page_retries_transient_failures_with_short_backoff():

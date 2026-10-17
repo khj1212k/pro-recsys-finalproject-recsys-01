@@ -282,17 +282,61 @@ def test_press_breaker_defers_the_rest_of_a_blocked_press_without_fetching(worke
     assert stats["deferred_reasons"] == {"press_breaker": 8 - fetched}
 
 
+def _result(press, status, cause=""):
+    return ExtractionResult(0, press, status, fetch_cause=cause or ("disconnect" if status == "fetch_failed" else ""))
+
+
 def test_press_breaker_counts_consecutive_failures_only(monkeypatch):
     """성공이 끼면 0부터 다시 센다. 'error'(파서·DB 예외)는 네트워크 문제가 아니라 세지도 되돌리지도 않는다."""
     plan = DispatchPlan([], breaker_failures=3)
     for status in ("fetch_failed", "fetch_failed", "ok", "fetch_failed", "fetch_failed", "dropped"):
-        plan.record(ExtractionResult(0, "A", status))
+        plan.record(_result("A", status))
     assert plan.tripped == {}
     for status in ("fetch_failed", "error", "fetch_failed", "error", "fetch_failed"):
-        plan.record(ExtractionResult(0, "A", status))
+        plan.record(_result("A", status))
     assert plan.tripped == {"A": 3}
-    plan.record(ExtractionResult(0, "B", "fetch_failed"))
+    plan.record(_result("B", "fetch_failed"))
     assert "B" not in plan.tripped  # 언론사마다 따로 센다
+
+
+@pytest.mark.parametrize("cause", ["connect_error", "connect_timeout", "disconnect", "read_timeout", "deadline",
+                                   "ssl", "network_error", "http_500", "http_503", "http_403", "http_429"])
+def test_press_breaker_counts_site_level_causes(cause):
+    plan = DispatchPlan([], breaker_failures=3)
+    for _ in range(3):
+        plan.record(_result("A", "fetch_failed", cause))
+    assert plan.tripped == {"A": 3}
+
+
+@pytest.mark.parametrize("cause", ["http_404", "http_410", "http_400", "too_small", "too_large", "redirects", "other"])
+def test_press_breaker_ignores_article_level_causes(cause):
+    """없는 기사(404·410)·크기·리다이렉트 상한은 그 기사만의 문제다 - 세지도 0으로 되돌리지도 않는다."""
+    plan = DispatchPlan([], breaker_failures=3)
+    for _ in range(5):
+        plan.record(_result("A", "fetch_failed", cause))
+    assert plan.tripped == {}
+    # 사이트 단위 실패 사이에 끼어도 연속을 끊지 않는다
+    for c in ("disconnect", cause, "read_timeout", cause, "disconnect"):
+        plan.record(_result("A", "fetch_failed", c))
+    assert plan.tripped == {"A": 3}
+
+
+def test_dead_urls_retried_first_do_not_defer_a_healthy_press(monkeypatch):
+    """대상은 raw_news_id 순이라 앞서 실패한 재시도 기사가 언론사마다 맨 앞에 온다. 건강한 언론사에 죽은 URL(404)이
+    3건 쌓여 있어도 그 회차의 새 기사를 미루지 않는다(예전에는 차단기가 열려 새 기사가 시도 상한을 다 쓸 때까지 밀렸다)."""
+    from config.settings import Settings
+
+    monkeypatch.setattr(Settings, "EXTRACT_PRESS_BREAKER_FAILURES", 3)
+    articles = [(i, f"u{i}", "경향신문", "t") for i in range(1, 8)]
+    results = {**_press_block("경향신문", 1, 3, cause="http_404"),
+               **{i: ExtractionResult(i, "경향신문", "ok") for i in range(4, 8)}}
+
+    stats, processed, _ = _extract(articles, results, num_workers=1)
+
+    assert processed == list(range(1, 8))
+    assert stats["deferred"] == 0 and stats["press_breaker"] == {}
+    assert stats["per_press"]["경향신문"] == {"fetch_failed": 3, "ok": 4}
+    assert stats["fetch_fail_causes"] == {"경향신문": {"http_404": 3}}
 
 
 def test_press_breaker_can_be_disabled(monkeypatch):
@@ -339,6 +383,6 @@ def test_deferred_articles_are_not_written_to_the_db():
     process_single_article(유일하게 DB에 쓰는 곳)을 부르지 않는 것으로 확인한다 - 실제 행은 integration 테스트."""
     plan = DispatchPlan([(1, "u", "A", "t"), (2, "u", "A", "t")], breaker_failures=1)
     first = plan.next_article()
-    plan.record(ExtractionResult(first[0], "A", "fetch_failed"))
+    plan.record(ExtractionResult(first[0], "A", "fetch_failed", fetch_cause="disconnect"))
     assert plan.next_article() is None
     assert plan.deferred == [((2, "u", "A", "t"), "press_breaker")]

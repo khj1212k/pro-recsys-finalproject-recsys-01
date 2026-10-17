@@ -215,6 +215,24 @@ def is_retryable(cause: str) -> bool:
     return True
 
 
+# 사이트 단위 실패 - 그 언론사로 가는 다른 기사 요청도 같은 꼴이 될 만한 원인이다. 언론사별 차단기(extractor.py)는 이것만
+# 센다. 없는 기사(404·410 같은 4xx), 크기·리다이렉트 상한, 분류 밖의 예외(other)는 그 기사만의 문제라 세지 않는다.
+_SITE_CAUSES = frozenset({
+    "connect_error", "connect_timeout", "disconnect", "read_timeout", "deadline", "ssl", "network_error",
+})
+_SITE_4XX = frozenset({403, 408, 425, 429})
+
+
+def is_site_failure(cause: str) -> bool:
+    """이 실패가 기사가 아니라 사이트(또는 출발지와 사이트 사이)의 문제를 가리키는가. 연결·읽기 실패, 5xx, 403·429 등."""
+    if cause in _SITE_CAUSES:
+        return True
+    if cause.startswith("http_") and cause[5:].isdigit():
+        code = int(cause[5:])
+        return code >= 500 or code in _SITE_4XX
+    return False
+
+
 def fetch_page(
     url: str,
     *,

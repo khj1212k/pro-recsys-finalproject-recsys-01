@@ -18,7 +18,7 @@ from db.connection import get_connection, release_connection
 from config.retention import BODY_RETENTION_DAYS, RETRYABLE_EXTRACT_STATUSES
 from config.settings import Settings
 from .cleaners import clean_text_lite, is_drop_article
-from .fetch import fetch_page
+from .fetch import fetch_page, is_site_failure
 
 logger = logging.getLogger(__name__)
 
@@ -80,9 +80,11 @@ def _record_ok_or_duplicate(conn, cur, raw_news_id, cleaned) -> str:
 class DispatchPlan:
     """어느 기사를 다음에 보낼지 정한다(부모 프로세스에서만 쓴다, ADR 0026 결정 9).
 
-    - 언론사별 차단기: 같은 언론사 기사의 다운로드가 결과 도착 순서로 연달아 breaker_failures번 실패하면,
-      그 언론사의 남은 기사는 이번 실행에서 보내지 않는다. 성공(ok·dropped·empty·duplicate)이 오면 0으로 돌린다.
-      'error'(파서·DB 예외)는 네트워크 문제가 아니므로 세지도 되돌리지도 않는다.
+    - 언론사별 차단기: 같은 언론사 기사의 다운로드가 결과 도착 순서로 연달아 breaker_failures번 사이트 단위 원인
+      (연결·읽기 실패, 5xx, 403·429 - fetch.is_site_failure)으로 실패하면, 그 언론사의 남은 기사는 이번 실행에서
+      보내지 않는다. 성공(ok·dropped·empty·duplicate)이 오면 0으로 돌린다. 기사 단위 실패(404·410 같은 4xx, 크기·
+      리다이렉트 상한)와 'error'(파서·DB 예외)는 세지도 되돌리지도 않는다 - 대상이 raw_news_id 순이라 앞서 실패한
+      죽은 URL이 회차 맨 앞에 몰려 오는데, 그것으로 건강한 언론사의 새 기사를 미루면 안 된다.
     - 실행 시간 예산: deadline(clock 기준 시각)이 지나면 남은 기사를 하나도 보내지 않는다. 이미 보낸 기사는
       요청 상한(fetch.py) 안에서 끝난다.
     미룬 기사는 DB에 쓰지 않으므로 시도 횟수(MAX_EXTRACT_ATTEMPTS)를 쓰지 않고 다음 실행에서 다시 대상이 된다.
@@ -115,7 +117,7 @@ class DispatchPlan:
 
     def record(self, result: ExtractionResult) -> None:
         press = result.press_name
-        if result.status == "fetch_failed":
+        if result.status == "fetch_failed" and is_site_failure(result.fetch_cause):
             self.consecutive_failures[press] += 1
             if (self.breaker_failures > 0 and press not in self.tripped
                     and self.consecutive_failures[press] >= self.breaker_failures):
@@ -124,7 +126,7 @@ class DispatchPlan:
                     f"   [Breaker] {press}: 다운로드 {self.consecutive_failures[press]}건 연속 실패 - "
                     "이번 실행의 남은 기사는 다음 실행으로 미룬다"
                 )
-        elif result.status != "error":
+        elif result.status not in ("fetch_failed", "error"):  # 기사 단위 실패·예외는 세지도 되돌리지도 않는다
             self.consecutive_failures[press] = 0
 
 
