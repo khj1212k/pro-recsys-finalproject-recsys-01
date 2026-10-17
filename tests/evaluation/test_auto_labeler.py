@@ -509,3 +509,50 @@ def test_extension_worst_case_is_one_guard_reservation_per_planned_call(proto, p
                                             proto.schemas[u.kind], bytes_per_token=cfg.bytes_per_token)
         want += (est * 0.50 + proto.max_tokens(u.kind) * 3.00) / 1e6
     assert lab.worst_case_usd(group) == pytest.approx(want)
+
+
+# ---------------------------------------------------------------- 리포트 (evaluation/llm/e0_auto_label_report.py)
+
+
+def test_kappa_and_agreement_definitions():
+    from evaluation.llm import e0_auto_label_report as rep
+
+    assert rep.kappa([(True, True), (False, False)]) == 1.0
+    assert rep.kappa([(True, True), (True, True)]) is None                     # 한 범주만 - 정의 안 됨
+    assert rep.kappa([(True, False), (False, True)]) == -1.0
+    pairs = [(True, True), (True, False), (False, False), (False, False)]
+    assert rep.kappa(pairs) == 0.5
+    ag = rep.agreement(pairs, ["x", "y", "z", "w"])
+    assert (ag["k"], ag["n"], ag["disagreement_ids"]) == (3, 4, ["y"])
+
+
+def test_report_counts_ids_and_labels_only_and_passes_the_leak_guard(proto, pkg, tmp_path):
+    from evaluation.llm import e0_auto_label_report as rep
+
+    fake = FakeGemini(proto)
+    lab = make_labeler(proto, pkg, fake)
+    lab.run(spent_usd=lambda: 0.0)
+    items = [{"item_id": i, "split": "eval", "order": n, "articles": []} for n, i in enumerate(sorted(pkg.clusters))]
+    ends = {"r1-c1": {"outcome": "completed"}, "r1-c2": {"outcome": "skipped"}, "r2-c3": {"outcome": "completed"}}
+    nodes = [{"node": "eval_newsletter", "attempt": 1, "item_id": "r1-c1", "criteria": {"style": 5}, "decision": "FAIL",
+              "n_unsupported_claims": 2},
+             {"node": "eval_cluster", "item_id": "r1-c2", "call_parsed": True, "decision": "FAIL"}]
+    (pkg.run_dir / "nodes.jsonl").write_text("".join(json.dumps(n) + "\n" for n in nodes))
+    report, guard = rep.build(proto, pkg, items=items, ends=ends, nodes=nodes, now=NOW)
+    a = report["run_a"]
+    assert a["clusters"]["single_event"]["k"] == 3 and a["outputs"]["fact_error_ge1"] == {"k": 2, "n": 2, "rate": 1.0,
+                                                                                            "wilson95": [0.3424, 1.0]}
+    assert a["outputs"]["key_fact_coverage_micro"]["k"] == 4 and a["outputs"]["tone_drift"]["n"] == 1
+    assert report["run_a_vs_run_b"]["publishable"]["n"] == 2
+    jt = report["labeler_vs_judge_v2"]["judge_decision_vs_publishable"]["table"]
+    assert jt == {"judge_pass_pub_Y": 0, "judge_pass_pub_N": 0, "judge_fail_pub_Y": 0, "judge_fail_pub_N": 1}
+    assert report["labeler_vs_cluster_evaluator"]["first_cluster_eval_vs_single_event"]["table"]["fail_single_Y"] == 1
+    assert "checker_vs_auto_labeler_first_draft" in a["a8_8_uses"] and "relabel" not in a["a8_8_uses"]
+    md = rep.render_md(report)
+    out = tmp_path / "r.md"
+    guard.write_text(out, md)
+    guard.write_text(tmp_path / "r.json", json.dumps(report, ensure_ascii=False))
+    for text in ("지어낸 본문", "지어낸 사실", "지어낸 근거", DRAFT["sentence"]):
+        assert text not in md and text not in json.dumps(report, ensure_ascii=False)
+    with pytest.raises(al.LeakRefused):
+        guard.write_text(tmp_path / "bad.md", md + "\n" + pkg.clusters["r2-c3"]["articles"][2]["body"])
