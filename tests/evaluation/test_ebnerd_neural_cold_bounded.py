@@ -4,6 +4,10 @@ P2 콜드 표본(60,000 요청 x 풀 약 235 ≈ 1,410만 쌍)을 한 번에 채
 LightGBM 입력 행렬·신경망 스칼라 블록·스태커 입력을 쌍 조각으로 만든다. 표본·시드·순서·모델은 그대로이고, 저장되는 요청별
 지표 배열과 단위 메타가 한 번에 만드는 경로(P1이 쓰는 경로)와 **비트 단위로 같아야** 한다. 여기서 그것을 합성 데이터와
 (있으면) ebnerd_demo에서 확인한다. 수치는 해석하지 않는다(배선과 동일성만 본다).
+
+로컬(macOS) 재현 메모: 핀(torch 2.11.0)이 아닌 torch 빌드(예: 2.14.0)를 빌려 돌리면 LightGBM과 torch가 각자 실어 온
+libomp 두 벌 때문에, conftest가 LightGBM을 먼저 불러도 LightGBM Dataset을 만들 때 프로세스가 abort될 수 있다.
+그때는 KMP_DUPLICATE_LIB_OK=TRUE를 주고 돌린다(판정용 실행이 도는 Linux 런타임과 CI에는 필요 없다).
 """
 import json
 import shutil
