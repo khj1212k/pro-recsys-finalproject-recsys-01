@@ -47,16 +47,17 @@ def test_ingest_fails_loudly_when_every_rss_feed_failed(monkeypatch):
         ingest.run(ctx)
     # 실패해도 여기까지의 수집 통계는 job_runs에 남도록 ctx.stats에 들어가 있어야 한다
     assert ctx.stats["rss"]["failed_feeds"] == 2
+    assert ctx.warnings == []  # 실패 메시지 하나로 알린다 - 피드마다 경고를 덧붙이지 않는다
 
 
-def _ingest_rss_only(monkeypatch, policy_briefing):
-    """rss 단계만 도는 ingest. RSS는 정상, 정책브리핑 수집은 policy_briefing(함수)로 바꿔 끼운다."""
+def _ingest_rss_only(monkeypatch, policy_briefing, rss=None):
+    """rss 단계만 도는 ingest. RSS는 rss(기본: 정상), 정책브리핑 수집은 policy_briefing(함수)로 바꿔 끼운다."""
     from jobs.tasks import ingest
     import crawler.rss_collector as rss_module
     import crawler.policy_briefing as policy_module
 
-    monkeypatch.setattr(rss_module, "collect_rss", lambda hours: {
-        "inserted": 3, "skipped": 1, "failed_feeds": 0, "per_feed": {"a": {"inserted": 3}}})
+    rss = rss or {"inserted": 3, "skipped": 1, "failed_feeds": 0, "per_feed": {"a": {"inserted": 3}}}
+    monkeypatch.setattr(rss_module, "collect_rss", lambda hours: rss)
     monkeypatch.setattr(policy_module, "collect_policy_briefing", policy_briefing)
     monkeypatch.setattr(ingest, "news_raw_snapshot", lambda: {"total": 0})
     checkpoints = []
@@ -108,6 +109,27 @@ def test_ingest_without_service_key_records_skip_without_warning(monkeypatch):
 
     assert ctx.stats["policy_briefing"]["skipped"] == "no service key"
     assert ctx.warnings == []
+
+
+def test_ingest_warns_for_each_failed_rss_feed_but_succeeds(monkeypatch):
+    """2026-10-17 Tier 0 run 946~952의 모양: 동아일보 RSS가 RemoteDisconnected로 실패해 신규 기사 0건이고, 추출 대상에
+    동아일보가 없어 추출 경고도 없이 succeeded로 끝났다 - 수집량이 0인데 알림이 없었다. RSS 단계에서 못 읽은 피드도
+    피드마다 경고한다(ADR 0026 결정 9). 피드 하나의 실패로 실행을 실패시키지는 않는다."""
+    rss = {"inserted": 4, "skipped": 0, "failed_feeds": 2, "per_feed": {
+        "동아일보": {"press": "동아일보", "inserted": 0,
+                    "error": "RemoteDisconnected: Remote end closed connection without response"},
+        "경향신문": {"press": "경향신문", "inserted": 4, "error": None},
+        "한국경제": {"press": "한국경제", "inserted": 0,
+                    "error": "feed unreadable (HTTP 403): <unknown>:1:0: undefined entity"},
+    }}
+    ingest, ctx, _ = _ingest_rss_only(monkeypatch, lambda: {"skipped": "no service key"}, rss=rss)
+
+    ingest.run(ctx)
+
+    assert ctx.warnings == [
+        "동아일보: RSS 수집 실패 (RemoteDisconnected) - 이번 회차 신규 기사 0건",
+        "한국경제: RSS 수집 실패 (feed unreadable (HTTP 403)) - 이번 회차 신규 기사 0건",
+    ]
 
 
 def _ingest_extract_only(monkeypatch, extract_stats, extra_argv=()):

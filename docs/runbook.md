@@ -103,8 +103,11 @@ docker compose exec db psql -U newsletter -d newsletter -c "
   프로세스 그룹에 SIGTERM을 직접 보낸다(유예 60초, `stop_grace_period`). 유예 안에 끝나지 않거나 OOM·SIGKILL로
   죽은 실행은 `running`으로 남았다가 다음 실행이 `abandoned`로 바꾸고 알림을 보낸다.
 - `running` 행의 `stats`는 잡이 도는 동안 갱신된다(ingest는 단계마다, embed는 배치마다) - 강제 종료된 실행도 어디까지 했는지 남는다.
-- `succeeded`여도 `stats->'warnings'`가 있으면 알림이 간다(예: 한 언론사의 본문 다운로드가 연달아 실패해 남은
-  기사를 다음 실행으로 미뤘다, 추출 시간 예산을 다 썼다).
+- `succeeded`여도 `stats->'warnings'`가 있으면 알림이 간다(예: RSS 피드 하나를 읽지 못했다, 한 언론사의 본문
+  다운로드가 연달아 실패해 남은 기사를 다음 실행으로 미뤘다, 추출 시간 예산을 다 썼다). RSS 경고는 피드마다
+  `<피드>: RSS 수집 실패 (<원인 종류>) - 이번 회차 신규 기사 0건`이다 - 그 언론사는 추출 대상이 없을 수 있어 추출
+  경고가 나지 않으므로 이것이 그 회차의 유일한 신호다. 모든 RSS 피드를 읽지 못하면 ingest는 `failed`로 끝난다.
+  피드별 원인 전문은 `stats->'rss'->'per_feed'-><피드>->>'error'`다.
   ingest가 본문 다운로드 실패로 `failed`가 되는 것은 실패가 한 언론사로 설명되지 않을 때다 - 건강하지 않은 언론사가
   두 곳 이상이거나, 가장 많이 실패한 언론사를 빼고도 받은 기사 5건 이상 중 절반 이상이 실패했을 때
   ([ADR 0026](adr/0026-hosting-tiers-and-contingency.md) 결정 9). 이 규칙을 넣기 전 코드(Tier 0 VM의 `13801fc` 포함)는

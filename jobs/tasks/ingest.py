@@ -120,6 +120,22 @@ def collect_policy_briefing_safely(ctx) -> Dict[str, Any]:
     return result
 
 
+def warn_failed_feeds(ctx, rss: Dict[str, Any]) -> None:
+    """RSS 단계에서 읽지 못한 피드마다 경고한다(ADR 0026 결정 9).
+
+    피드를 못 읽으면 그 언론사의 이번 회차 신규 기사가 0건이라 추출 단계에 그 언론사 대상이 없을 수 있고, 그러면
+    추출 경고도 나지 않는다. 2026-10-16 ~ 10-17 Tier 0에서 동아일보 RSS가 RemoteDisconnected로 실패한 회차 다수는
+    추출 대상에 동아일보가 없어 succeeded·경고 없음으로 끝났다 - 수집량이 0인데 알림이 없었다.
+    모든 피드가 실패한 경우는 run()이 실패로 끝내므로 여기까지 오지 않는다."""
+    for feed, feed_stats in (rss.get("per_feed") or {}).items():
+        error = (feed_stats or {}).get("error")
+        if error:
+            # 원인 종류만 적는다: "RemoteDisconnected: Remote end closed ..." -> "RemoteDisconnected",
+            # "feed unreadable (HTTP 403): ..." -> "feed unreadable (HTTP 403)"
+            kind = str(error).split(":", 1)[0].strip()[:80]
+            ctx.warn(f"{feed}: RSS 수집 실패 ({kind}) - 이번 회차 신규 기사 0건")
+
+
 def _press_counts(counts: Dict[str, int]) -> Tuple[int, int]:
     """(받은 기사 수, 그중 실패 수). 미룬 기사는 받지 않았으므로 빼고 센다."""
     attempted = sum(n for status, n in counts.items() if status != "deferred")
@@ -193,6 +209,7 @@ def run(ctx) -> Dict[str, Any]:
         ctx.stats["policy_briefing"] = collect_policy_briefing_safely(ctx)
         if rss["per_feed"] and rss["failed_feeds"] == len(rss["per_feed"]):
             raise RuntimeError(f"모든 RSS 피드({rss['failed_feeds']}개) 수집 실패 - 네트워크/DNS를 확인하세요")
+        warn_failed_feeds(ctx, rss)
         ctx.checkpoint()
 
     if "extract" in stages:
