@@ -9,13 +9,18 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from jobs.runtime import resolve_git_sha
-from jobs.schedule import SLOT_MATCH_TOLERANCE, expected_slots, match_slots, parse_crontab
+from jobs.schedule import JOB_RE, SLOT_MATCH_TOLERANCE, expected_slots, match_slots, parse_crontab
 
 WINDOW_HOURS = 24
 # 본문 보존 잡(retention)은 하루 한 번 돈다. 만료된 지 이보다 오래된 본문이 남아 있으면 잡이 돌지 않은 것이다.
 RETENTION_OVERDUE_HOURS = 26
-# 호스트 밖 백업은 매일 18:10 UTC(scripts/oci/tier0-backup.cron). 하루를 거르면 경고한다.
-BACKUP_OVERDUE_HOURS = 30
+# 호스트 밖 백업은 매일 18:10 UTC(scripts/oci/tier0-backup.cron)에 돌고 1~3분 걸린다. 이 리포트는 00:10 UTC
+# (docker/crontab.micro)라 정상이면 리포트 시점의 경과는 약 6시간이고, 한 번 거르면 약 30시간이다. 기준은 하루 주기에
+# 여유 2시간 - 한 번 거른 백업을 바로 다음 리포트가 경고한다(테스트가 두 crontab의 시각으로 확인한다).
+BACKUP_OVERDUE_HOURS = 26
+# 호스트 스크립트의 실행은 jobs.run의 잡이 아니어서 abandon_stale이 닿지 않는다. 이보다 오래 'running'인 'backup'·
+# 'restore_check' 행은 끝나지 못한 실행(OOM·재부팅·kill)으로 보고 실패로 센다. 정상 실행은 백업 약 1분, 복원 검증 약 20초다.
+HOST_RUN_STALE_HOURS = 1
 # 복원 검증은 28일마다(tier0_backup.py daily). 한 번 거르면 경고한다.
 RESTORE_CHECK_OVERDUE_DAYS = 35
 # 유휴 지표는 백업과 같은 cron에서 매일 잰다. 이보다 오래된 측정은 "모름"으로 본다.
@@ -173,20 +178,31 @@ def format_schedule(schedule: Dict[str, Any]) -> str:
     return line
 
 
+def _failures(n: int, stuck: int) -> str:
+    return f"{n}" + (f"(그중 끝나지 않은 실행 {stuck})" if stuck else "")
+
+
 def format_backup(backup: Dict[str, Any]) -> str:
+    failed = _failures(backup.get("failed_24h", 0), backup.get("stuck_24h", 0))
     if not backup.get("last_success_at"):
-        tail = f", 최근 {WINDOW_HOURS}시간 실패 {backup.get('failed_24h', 0)}" if backup.get("failed_24h") else ""
+        tail = f", 최근 {WINDOW_HOURS}시간 실패 {failed}" if backup.get("failed_24h") else ""
         return f"- 호스트 밖 백업: 기록 없음(job_runs에 '{HOST_BACKUP_JOB}' 성공이 없다 - 런북 6.5){tail}"
+    if backup.get("full_disabled"):
+        full = "본문 사본 꺼짐(full_enabled 아님)"
+    else:
+        full = f"최근 본문 사본 {_mb(backup.get('full_bytes'))}/{backup.get('full_body_rows', '?')}건"
     line = (
         f"- 호스트 밖 백업(OCI Object Storage, 런북 6.5): 마지막 성공 {backup['hours_since']:.1f}시간 전"
-        f"({_utc_short(backup['last_success_at'])}, 본문 없는 사본 {_mb(backup.get('nobody_bytes'))} · "
-        f"최근 본문 사본 {_mb(backup.get('full_bytes'))}/{backup.get('full_body_rows', '?')}건), "
-        f"그 뒤 수집 {backup['rows_since']}건, 최근 {WINDOW_HOURS}시간 실패 {backup['failed_24h']}"
+        f"({_utc_short(backup['last_success_at'])}, 본문 없는 사본 {_mb(backup.get('nobody_bytes'))} · {full}), "
+        f"그 뒤 수집 {backup['rows_since']}건, 최근 {WINDOW_HOURS}시간 실패 {failed}"
     )
     if backup.get("restore_check_at"):
         line += f" / 복원 검증 마지막 {_utc_short(backup['restore_check_at'])}({backup['restore_check_days']:.0f}일 전)"
     else:
         line += " / 복원 검증 기록 없음"
+    if backup.get("restore_failed_24h"):
+        line += f", 최근 {WINDOW_HOURS}시간 복원 검증 실패 " + _failures(backup["restore_failed_24h"],
+                                                                     backup.get("restore_stuck_24h", 0))
     for w in backup.get("warnings") or []:
         line += f" / {w}"
     return line
@@ -226,13 +242,22 @@ def ops_warnings(backup: Optional[Dict[str, Any]]) -> List[str]:
         out.append(f"호스트 밖 백업이 {backup['hours_since']:.0f}시간째 없다(기준 {BACKUP_OVERDUE_HOURS}시간) - "
                    "VM의 /var/log/newsletter-backup.log와 job_runs의 'backup' 행을 본다(런북 6.5)")
     if backup.get("failed_24h"):
-        out.append(f"최근 {WINDOW_HOURS}시간 호스트 밖 백업 실패 {backup['failed_24h']}회(job_runs의 'backup' 행의 error)")
+        out.append(f"최근 {WINDOW_HOURS}시간 호스트 밖 백업 실패 {backup['failed_24h']}회"
+                   f"{_stuck_note(backup.get('stuck_24h'))}(job_runs의 '{HOST_BACKUP_JOB}' 행의 status·error)")
+    if backup.get("restore_failed_24h"):
+        out.append(f"최근 {WINDOW_HOURS}시간 복원 검증 실패 {backup['restore_failed_24h']}회"
+                   f"{_stuck_note(backup.get('restore_stuck_24h'))}(job_runs의 '{RESTORE_CHECK_JOB}' 행의 status·error)")
     days = backup.get("restore_check_days")
     if days is None or days > RESTORE_CHECK_OVERDUE_DAYS:
         out.append(f"복원 검증이 {'한 번도 없다' if days is None else f'{days:.0f}일째 없다'}"
                    f"(기준 {RESTORE_CHECK_OVERDUE_DAYS}일) - 런북 6.5의 복원 검증")
     out.extend(backup.get("warnings") or [])
     return out
+
+
+def _stuck_note(stuck: Optional[int]) -> str:
+    return (f" - 그중 {stuck}회는 {HOST_RUN_STALE_HOURS}시간 넘게 'running'으로 남은 행(OOM·재부팅·kill로 끝나지 못한 실행)"
+            if stuck else "")
 
 
 def read_crontab() -> Optional[Tuple[str, str]]:
@@ -251,21 +276,42 @@ def disabled_jobs() -> List[str]:
     return sorted({name.strip() for name in os.getenv("JOBS_DISABLED", "").split(",") if name.strip()})
 
 
-def image_first_run(cur, git_sha: Optional[str]) -> Optional[datetime]:
-    """이 코드(이미지)로 돈 첫 잡의 시작 시각. crontab은 이미지에 들어 있어 배포 때만 바뀐다 - 배포 전 회차를 지금
-    crontab으로 세지 않으려고 쓴다(예: 배포로 새로 생긴 줄의 회차를 배포 전 시각에 '건너뜀'으로 세지 않는다)."""
-    if not git_sha:
+def crontab_jobs(crontab: Optional[Tuple[str, str]]) -> List[str]:
+    """crontab의 jobs.run 잡 이름(세지 못하는 줄 포함)."""
+    if crontab is None:
+        return []
+    entries, unsupported = parse_crontab(crontab[1])
+    jobs = {e.job for e in entries}
+    for line in unsupported:
+        match = JOB_RE.search(line)
+        if match:
+            jobs.add(match.group(1))
+    return sorted(jobs)
+
+
+def image_first_run(cur, git_sha: Optional[str], jobs: Sequence[str]) -> Optional[datetime]:
+    """이 코드(이미지)로 스케줄러가 돌린 첫 잡의 시작 시각. crontab은 이미지에 들어 있어 배포 때만 바뀐다 - 배포 전 회차를
+    지금 crontab으로 세지 않으려고 쓴다(예: 배포로 새로 생긴 줄의 회차를 배포 전 시각에 '건너뜀'으로 세지 않는다).
+    crontab의 jobs.run 잡만 본다: 같은 커밋으로 깐 호스트 스크립트('backup' 등)나 `compose run` 일회성 잡이 스케줄러보다
+    먼저 돌았을 수 있다."""
+    if not git_sha or not jobs:
         return None
-    cur.execute("SELECT min(started_at) FROM job_runs WHERE git_sha = %s", (git_sha,))
+    cur.execute("SELECT min(started_at) FROM job_runs WHERE git_sha = %s AND job = ANY(%s)", (git_sha, list(jobs)))
     row = cur.fetchone()
     return row[0] if row else None
 
 
 def schedule_status(cur, now: datetime, crontab: Optional[Tuple[str, str]],
                     disabled: Sequence[str] = (), since: Optional[datetime] = None) -> Dict[str, Any]:
-    """정시 회차(예정 vs 시작). now는 DB의 now(). since(이 이미지의 첫 실행)가 창 안이면 그 뒤만 센다."""
+    """정시 회차(예정 vs 시작). now는 DB의 now(). since(이 이미지의 첫 실행)가 창 안이면 그 뒤만 센다.
+
+    crontab의 시각은 컨테이너 TZ(UTC)다. DB의 now()는 세션 TimeZone의 aware 시각이라 UTC로 바꿔 센다 - 그대로 쓰면
+    세션이 KST일 때 하루 한 번 도는 잡의 회차가 9시간 어긋난다."""
     if crontab is None:
         return {"crontab": None}
+    now = now.astimezone(timezone.utc)
+    if since is not None:
+        since = since.astimezone(timezone.utc)
     name, text = crontab
     entries, unsupported = parse_crontab(text)
     start = now - timedelta(hours=WINDOW_HOURS)
@@ -301,16 +347,26 @@ def _latest_success(cur, job: str) -> Tuple[Optional[datetime], Dict[str, Any]]:
     return (row[0], row[1] or {}) if row else (None, {})
 
 
+def _host_failures(cur, job: str, window: str) -> Tuple[int, int]:
+    """창 안에 시작한 호스트 스크립트 실행 중 (실패 수, 그중 끝나지 못한 실행 수). 실패 = failed·abandoned 또는
+    HOST_RUN_STALE_HOURS 넘게 'running'인 행 - cron이 시작한 뒤 프로세스가 죽으면 행이 'running'으로 남는다."""
+    cur.execute(
+        "SELECT count(*) FILTER (WHERE status IN ('failed', 'abandoned')), "
+        "count(*) FILTER (WHERE status = 'running' AND started_at < now() - make_interval(hours => %s)) "
+        "FROM job_runs WHERE job = %s AND started_at >= now() - %s::interval",
+        (HOST_RUN_STALE_HOURS, job, window),
+    )
+    failed, stuck = cur.fetchone()
+    return failed + stuck, stuck
+
+
 def backup_status(cur, now: datetime, window: str) -> Dict[str, Any]:
     """tier0_backup.py가 남긴 'backup'·'restore_check' 행에서 마지막 성공, 실패 수, 그 뒤 수집량."""
     finished, stats = _latest_success(cur, HOST_BACKUP_JOB)
-    cur.execute(
-        "SELECT count(*) FROM job_runs WHERE job = %s AND status IN ('failed', 'abandoned') "
-        "AND started_at >= now() - %s::interval",
-        (HOST_BACKUP_JOB, window),
-    )
-    (failed,) = cur.fetchone()
-    out: Dict[str, Any] = {"last_success_at": None, "failed_24h": failed}
+    failed, stuck = _host_failures(cur, HOST_BACKUP_JOB, window)
+    restore_failed, restore_stuck = _host_failures(cur, RESTORE_CHECK_JOB, window)
+    out: Dict[str, Any] = {"last_success_at": None, "failed_24h": failed, "stuck_24h": stuck,
+                           "restore_failed_24h": restore_failed, "restore_stuck_24h": restore_stuck}
     if finished is None:
         return out
     snapshot = stats.get("snapshot_at_utc")
@@ -326,6 +382,7 @@ def backup_status(cur, now: datetime, window: str) -> Dict[str, Any]:
         "snapshot_at_utc": snapshot_at.isoformat(),
         "rows_since": rows_since,
         "nobody_bytes": (stats.get("nobody") or {}).get("bytes"),
+        "full_disabled": bool((stats.get("full") or {}).get("disabled")),
         "full_bytes": (stats.get("full") or {}).get("bytes"),
         "full_body_rows": (stats.get("full") or {}).get("body_rows"),
         "warnings": list(stats.get("warnings") or []),
@@ -404,8 +461,9 @@ def run(ctx) -> Dict[str, Any]:
         recsys_by_source = impression_sources(cur, window)
         cur.execute("SELECT now()")
         (now,) = cur.fetchone()
-        schedule = schedule_status(cur, now, read_crontab(), disabled_jobs(),
-                                   since=image_first_run(cur, resolve_git_sha()))
+        crontab = read_crontab()
+        schedule = schedule_status(cur, now, crontab, disabled_jobs(),
+                                   since=image_first_run(cur, resolve_git_sha(), crontab_jobs(crontab)))
         backup = backup_status(cur, now, window)
         idle = idle_status(cur, now)
 
