@@ -411,8 +411,9 @@ STOPPED에서 START로 되살리는 경로는 아직 겪어 보지 않았다. �
    (`oci iam dynamic-group update --dynamic-group-id <id> --matching-rule "instance.id = '<새 OCID>'"`).
 2. `db`만 올린다(빈 DB). `migrate`·`scheduler`는 아직 올리지 않는다 — 스키마는 사본이 만든다.
 3. 최신 `full/` 객체를 Mac의 디스크에 쓰지 않고 VM으로 흘려 보내 복원한다(본문이 있다 — ADR 0023 개정 2026-10-17 2). `full/`이 없으면
-   (만든 지 하루 남짓에 지워진다) `nobody/daily/`의 최신을 쓰고 `--with-bodies`를 뺀다 — 본문 없이 되살아나고 본문이 있던 행은
-   "비운 행"으로 표시된다.
+   (만든 지 하루 남짓에 지워진다, `full_enabled`를 켜지 않았으면 처음부터 없다) `nobody/daily/`의 최신을 쓰고 `--with-bodies`를 뺀다 —
+   본문 없이 되살아나고 본문이 있던 행은 "비운 행"으로 표시된다. 받은 아카이브는 `drill/`에 둔다(ADR 0023 개정 2의 위치 표, 같은 명령
+   끝에서 지운다) - 스크립트가 시작할 때 비우는 `work/`에 두면 복원 전에 지워진다.
 
 ```bash
 ssh -F .ops/micro/ssh_config micro 'cd ~/newsletter-recsys && sudo docker compose up -d db'
@@ -521,16 +522,18 @@ Tier 0는 고친 코드로 재배포돼 있어야 한다(아니면 A1과 Tier 0�
 
 | 단계 | 하는 일 | `job_runs` |
 |---|---|---|
-| backup | 같은 스냅숏에서 본문 없는 사본(`nobody/daily/`, 35일 뒤 삭제 · 그달 첫 사본은 `nobody/monthly/`에도)과 최근 27일 본문 사본(`full/`, 1일 뒤 삭제)을 만들어 인스턴스 주체로 올리고, 버킷 목록의 크기·MD5로 확인한다 | `backup` |
+| backup | 같은 스냅숏에서 본문 없는 사본(`nobody/daily/`, 35일 뒤 삭제 · 그달 첫 사본은 `nobody/monthly/`에도)과 최근 27일 본문 사본(`full/`, 1일 뒤 삭제 - 설정 `full_enabled`를 켰을 때만)을 만들어 인스턴스 주체로 올리고, 버킷 목록의 크기·MD5로 확인한다 | `backup` |
 | idle-check | `idle_check.py`의 7일 계산(5절)을 VM에서 인스턴스 주체로 | `idle_check` |
 | restore-check | 마지막 성공이 28일 넘었으면 방금 올린 본문 없는 사본을 일회용 DB `restore_check`에 복원해 대조하고 지운다 | `restore_check` |
 
-VM의 자격은 이 버킷에 객체 만들기·목록 보기와 compute agent 지표 읽기뿐이다(내려받기·지우기·덮어쓰기 없음, 비밀 없음). 일하는 디렉터리
+VM의 자격은 이 버킷에 객체 만들기·목록 보기와 compute agent 지표 읽기뿐이다(내려받기·지우기·덮어쓰기 없음, 백업용 API 키·사전 인증 URL
+없음 - 수집 스택의 `.env`는 따로 있다). 일하는 디렉터리
 `/var/lib/newsletter-backup/work`는 실행이 끝나면 비고, 다음 실행도 시작할 때 비운다. 한 번에 약 2~3분, 최대 RSS 약 80 MB(증거 11).
 
 **매일 확인.** `daily_report`(00:10 UTC)의 "호스트 밖 백업"·"유휴 회수 위험" 줄(마지막 성공 경과, 그 뒤 수집량, 실패 수, 복원 검증 경과,
-회수 위험 수준). 백업이 30시간 넘게 없거나 실패했거나 복원 검증이 35일 넘게 없으면, `full/` 객체가 3일 넘게 남아 있으면(수명 주기
-규칙이 돌지 않음) 경고한다. 직접 볼 때:
+회수 위험 수준). 경고 조건: 백업이 26시간 넘게 없다(리포트는 백업 약 6시간 뒤라 한 번 거르면 다음 리포트에서 약 30시간), 최근 24시간에
+백업·복원 검증이 실패했다(1시간 넘게 `running`으로 남은 행 포함 - cron이 띄운 프로세스가 죽은 경우), 복원 검증이 35일 넘게 없다, `full/`
+객체가 60시간 넘게 남아 있다(정상 수명은 최대 약 54시간 - 수명 주기 규칙이 돌지 않음. 지우기는 "내리기"의 bulk-delete를 Mac에서). 직접 볼 때:
 
 ```bash
 ssh -F .ops/micro/ssh_config micro 'sudo tail -n 3 /var/log/newsletter-backup.log | cut -c1-400'
@@ -541,7 +544,8 @@ oci os object list -ns $NS -bn newsletter-tier0-backups --fields name,size,timeC
   --query 'data[].{n:name,mb:size,t:"time-created"}' --output table     # Mac(관리자 자격)에서
 ```
 
-**설치·갱신** (처음 한 번, 그리고 스크립트가 바뀐 커밋이 main에 들어갈 때마다. 2026-10-17 설치는 브랜치 커밋 `0efc2f5` - 병합 뒤 main의 판으로 다시 깐다)
+**설치·갱신** (처음 한 번, 그리고 스크립트가 바뀐 커밋이 main에 들어갈 때마다. 2026-10-17 설치는 브랜치 커밋 `0efc2f5` - 병합 뒤 main의 판으로 다시 깐다.
+`0efc2f5`는 `full_enabled` 설정이 생기기 전 판이라 설정과 무관하게 매일 `full/`을 올린다)
 
 1. OCI 쪽(Mac, 관리자 자격 — 한 번만): 버킷(Standard, `--public-access-type NoPublicAccess`, 버전 관리 끔), 동적 그룹
    `newsletter-micro-backup`(`instance.id = '<VM OCID>'`), 정책 `newsletter-tier0-backup`(ADR 0026 증거 11의 3문장), 수명 주기 규칙
@@ -567,6 +571,8 @@ oci os object list -ns $NS -bn newsletter-tier0-backups --fields name,size,timeC
 
    `/etc/newsletter-backup.conf`(0600 root, 기계별 값 — 저장소에 넣지 않는다):
    `{"namespace": "<$NS>", "bucket": "newsletter-tier0-backups", "compose_dir": "/home/ubuntu/newsletter-recsys", "db_user": "newsletter", "db_name": "newsletter", "work_dir": "/var/lib/newsletter-backup"}`
+   본문 사본(`full/`)은 여기에 `"full_enabled": true`(JSON 참)를 넣어야 만든다. [ADR 0023](adr/0023-data-sources-copyright-retention.md) 개정
+   2026-10-17 2가 main에 병합(승인)된 뒤에만 넣는다 — 그 전에는 넣지 않고 본문 없는 사본만 올린다. `daily_report` 줄에는 "본문 사본 꺼짐"으로 나온다.
 4. 확인: `sudo env PATH=/opt/oci-cli/bin:$PATH python3 /opt/newsletter-backup/tier0_backup.py --config /etc/newsletter-backup.conf backup --dry-run`
    (올리지 않고 크기·건수만) → 같은 명령의 `daily`를 한 번 손으로 → 위 "매일 확인"의 두 조회.
 
@@ -579,13 +585,21 @@ oci os object list -ns $NS -bn newsletter-tier0-backups --fields name,size,timeC
 D=$(mktemp -d); NAME=$(oci os object list -ns $NS -bn newsletter-tier0-backups --prefix nobody/daily/ --fields name,timeCreated \
   --query 'max_by(data, &"time-created").name' --raw-output)
 oci os object get -ns $NS -bn newsletter-tier0-backups --name "$NAME" --file $D/drill.tar
-[ "$(shasum -a 256 $D/drill.tar | cut -d' ' -f1)" = "$(oci os object head -ns $NS -bn newsletter-tier0-backups --name "$NAME" \
-  --query '"opc-meta-sha256"' --raw-output)" ] && echo sha256 일치
-scp -F .ops/micro/ssh_config $D/drill.tar micro:/tmp/ && rm -rf $D
-ssh -F .ops/micro/ssh_config micro 'sudo install -d -m 0700 /var/lib/newsletter-backup/drill && sudo mv /tmp/drill.tar /var/lib/newsletter-backup/drill/ \
-  && sudo python3 /opt/newsletter-backup/tier0_backup.py --config /etc/newsletter-backup.conf restore-check \
-       --archive /var/lib/newsletter-backup/drill/drill.tar --target-db restore_check_drill; sudo rm -rf /var/lib/newsletter-backup/drill'
+WANT=$(oci os object head -ns $NS -bn newsletter-tier0-backups --name "$NAME" --query '"opc-meta-sha256"' --raw-output)
+if [ -n "$WANT" ] && [ "$(shasum -a 256 $D/drill.tar | cut -d' ' -f1)" = "$WANT" ]; then
+  echo sha256 일치
+  scp -F .ops/micro/ssh_config $D/drill.tar micro:/tmp/ \
+  && ssh -F .ops/micro/ssh_config micro 'sudo install -d -m 0700 /var/lib/newsletter-backup/drill && sudo mv /tmp/drill.tar /var/lib/newsletter-backup/drill/ \
+    && sudo python3 /opt/newsletter-backup/tier0_backup.py --config /etc/newsletter-backup.conf restore-check \
+         --archive /var/lib/newsletter-backup/drill/drill.tar --target-db restore_check_drill; sudo rm -rf /var/lib/newsletter-backup/drill /tmp/drill.tar'
+else
+  echo "sha256이 객체 메타데이터와 다르다 - 복원하지 않는다"
+fi
+rm -rf $D
 ```
+
+받은 아카이브는 `work/`가 아니라 `drill/`에 둔다 - 스크립트는 시작할 때 `work/`를 비운다. `drill/`은 ADR 0023 개정 2026-10-17 2의 위치
+표에 있는 자리이고, 같은 명령 줄 끝에서 지운다.
 
 대조 항목: 테이블마다 행 수, Alembic 리비전, 제약·인덱스 수(NOT VALID 0), 본문 0행, `news_raw` 최근 수집 시각. 하나라도 다르면
 종료 코드 1이고 `job_runs`의 `restore_check` 행에 이유가 남는다. 일회용 DB는 성공·실패와 무관하게 지운다.
