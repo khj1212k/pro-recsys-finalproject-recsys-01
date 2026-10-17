@@ -1,5 +1,7 @@
 # RSS 수집기
+import socket
 import time
+from contextlib import contextmanager
 import feedparser, logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
@@ -17,9 +19,28 @@ logger = logging.getLogger(__name__)
 KST = timezone(timedelta(hours=9))
 
 
+@contextmanager
+def _socket_timeout(seconds):
+    """이 블록에서 새로 여는 소켓의 대기 1번(연결·읽기)을 seconds로 묶는다.
+
+    feedparser는 urllib을 timeout 없이 부르고 timeout 인자도 받지 않는다 - 그래서 프로세스 기본값을 잠깐 바꾼다.
+    ingest의 RSS 단계는 한 스레드에서 차례로 돌고, DB 연결(psycopg2/libpq)은 파이썬 소켓을 쓰지 않아 영향이 없다.
+    """
+    previous = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(seconds)
+    try:
+        yield
+    finally:
+        socket.setdefaulttimeout(previous)
+
+
 def _fetch_feed(url):
     # 한국경제는 feedparser 기본 UA("feedparser/x.y ...")에 403을 준다 - UA를 명시한다.
-    return feedparser.parse(url, agent=Settings.HTTP_USER_AGENT)
+    # 소켓 대기 1번은 RSS_SOCKET_TIMEOUT_S(120초)로 묶는다(ADR 0026 결정 9). 응답 헤더나 본문 도중에 걸린 시간 초과는
+    # feedparser가 잡지 않고 올리므로 collect_rss가 그 피드의 error로 남긴다(재시도 없음). 연결 단계의 시간 초과는
+    # feedparser가 bozo로 돌려줘 parse_feed_with_retry가 MAX_FETCH_RETRIES번까지 다시 보낸다.
+    with _socket_timeout(Settings.RSS_SOCKET_TIMEOUT_S):
+        return feedparser.parse(url, agent=Settings.HTTP_USER_AGENT)
 
 
 def parse_feed_with_retry(url, parse_fn=None, max_attempts=None, sleep_fn=time.sleep):

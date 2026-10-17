@@ -233,26 +233,69 @@ def test_press_breaker_and_deferred_articles_are_reported_but_not_counted_as_fai
 
 
 def test_time_budget_exhaustion_warns(monkeypatch):
-    stats = _extract_stats({"세계일보": {"ok": 30, "deferred": 12}}, time_budget_s=2400.0,
+    stats = _extract_stats({"세계일보": {"ok": 30, "deferred": 12}}, time_budget_s=2700.0,
                            time_budget_exhausted=True, deferred_reasons={"time_budget": 12})
-    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats, ["--extract-time-budget-s", "2400"])
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats, ["--extract-deadline-s", "2700"])
+    monkeypatch.setattr(ingest, "_clock", lambda: 0.0)
 
     ingest.run(ctx)
 
-    assert ctx.extract_calls == [{"workers": None, "time_budget_s": 2400.0}]
-    assert ctx.warnings == ["본문 추출 시간 예산 2400.0초를 다 써서 12건을 다음 실행으로 미룸"]
+    assert ctx.extract_calls == [{"workers": None, "time_budget_s": 2700.0}]
+    assert ctx.stats["extract"]["deadline_s"] == 2700.0
+    assert ctx.warnings == ["본문 추출 시간 예산 2700초(ingest 시작 뒤 2700초 마감)를 다 써서 12건을 다음 실행으로 미룸"]
 
 
-def test_extract_time_budget_flag_must_be_positive():
+def _ingest_rss_then_extract(monkeypatch, rss_seconds, argv):
+    """RSS 단계가 rss_seconds초 걸린 것처럼 시계를 돌리고, 추출 단계가 받은 시간 예산을 돌려준다."""
+    from jobs.tasks import ingest
+    import crawler.content_extractor as extractor_pkg
+    import crawler.policy_briefing as policy_module
+    import crawler.rss_collector as rss_module
+
+    now = [1000.0]
+
+    def slow_rss(hours):
+        now[0] += rss_seconds
+        return {"inserted": 1, "skipped": 0, "failed_feeds": 0, "per_feed": {"a": {"inserted": 1}}}
+
+    budgets = []
+
+    class FakeExtractor:
+        def extract_parallel_with_stats(self, workers=None, time_budget_s=None):
+            budgets.append(time_budget_s)
+            return _extract_stats({"a": {"ok": 1}}, time_budget_s=time_budget_s)
+
+    monkeypatch.setattr(ingest, "_clock", lambda: now[0])
+    monkeypatch.setattr(rss_module, "collect_rss", slow_rss)
+    monkeypatch.setattr(policy_module, "collect_policy_briefing", lambda: {"skipped": "no service key"})
+    monkeypatch.setattr(extractor_pkg, "ContentExtractor", FakeExtractor)
+    monkeypatch.setattr(ingest, "news_raw_snapshot", lambda: {"total": 0})
+    ctx = JobContext(job="ingest", args=build_parser().parse_args(["ingest", "--stages", "rss,extract", *argv]))
+    ingest.run(ctx)
+    return budgets
+
+
+def test_extract_deadline_is_measured_from_ingest_start_so_a_slow_rss_stage_shortens_extraction(monkeypatch):
+    """다음 정시 회차와 겹치지 않게 하는 것은 잡이 끝나는 시각이다. 추출 예산을 추출 시작부터 재면 RSS 단계가
+    늦을수록(관측 최대 321초, 상한 없음) 잡 끝이 그만큼 밀린다 - 마감은 ingest 시작부터 잰다(ADR 0026 결정 9)."""
+    assert _ingest_rss_then_extract(monkeypatch, 500, ["--extract-deadline-s", "2700"]) == [2200.0]
+    # RSS가 마감을 거의 다 써도 추출은 최소 60초 돈다(앞서 실패한 기사만 계속 미뤄지지 않게)
+    assert _ingest_rss_then_extract(monkeypatch, 2690, ["--extract-deadline-s", "2700"]) == [60.0]
+    # 마감을 주지 않으면(수동 실행) 제한 없음
+    assert _ingest_rss_then_extract(monkeypatch, 500, []) == [None]
+
+
+def test_extract_deadline_flag_must_be_positive():
     parser = build_parser()
-    assert parser.parse_args(["ingest"]).extract_time_budget_s is None
+    assert parser.parse_args(["ingest"]).extract_deadline_s is None
     with pytest.raises(SystemExit):
-        parser.parse_args(["ingest", "--extract-time-budget-s", "0"])
+        parser.parse_args(["ingest", "--extract-deadline-s", "0"])
 
 
 def test_scheduled_ingest_lines_bound_extraction_before_the_next_hourly_slot():
-    """매시 :05 ingest가 다음 회차를 건너뛰게 하지 않도록 crontab은 추출 시간 예산을 준다(ADR 0026 결정 9).
-    예산 + RSS 관측 최대(321초) + 보낸 기사 하나의 요청 상한(2 x 30초 + 2초)이 1시간보다 충분히 작아야 한다."""
+    """매시 :05 ingest가 다음 회차를 건너뛰게 하지 않도록 crontab은 ingest 시작부터 잰 추출 마감을 준다(ADR 0026 결정 9).
+    마감 + 이미 보낸 기사 하나의 요청 상한(2 x 30초 + 2초)이 다음 회차(:05)보다 충분히 앞서야 한다(:55 안).
+    RSS 단계는 마감 안에 들어가므로 따로 더하지 않는다 - 대신 RSS 요청의 소켓 대기 1번에 상한이 있어야 한다."""
     from pathlib import Path
 
     from config.settings import Settings
@@ -266,9 +309,10 @@ def test_scheduled_ingest_lines_bound_extraction_before_the_next_hourly_slot():
         fields = lines[0].split()
         assert fields[:5] == ["5", "*", "*", "*", "*"]
         args = parser.parse_args(fields[8:])
-        assert args.extract_time_budget_s is not None, name
+        assert args.extract_deadline_s is not None, name
         in_flight = Settings.EXTRACT_FETCH_ATTEMPTS * Settings.EXTRACT_REQUEST_DEADLINE_S + Settings.EXTRACT_RETRY_BACKOFF_S
-        assert args.extract_time_budget_s + 321 + in_flight <= 50 * 60, name
+        assert args.extract_deadline_s + in_flight <= 50 * 60, name
+    assert 0 < Settings.RSS_SOCKET_TIMEOUT_S <= 120
 
 
 def test_generate_skips_before_clustering_when_kill_switch_file_exists(tmp_path, monkeypatch):

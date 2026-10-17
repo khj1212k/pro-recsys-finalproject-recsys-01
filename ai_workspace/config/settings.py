@@ -162,6 +162,10 @@ class BaseSettings:
         "HTTP_USER_AGENT", "Mozilla/5.0 (compatible; newsletter-recsys/1.0)"
     )
     MAX_FETCH_RETRIES: int = 3  # RSS 피드·정책브리핑 API 네트워크 요청 최대 재시도 횟수
+    # RSS 피드 요청의 소켓 대기 1번(연결·읽기 각각) 상한(초, crawler/rss_collector.py). 예전에는 상한이 없어 응답 없이
+    # 붙잡는 서버에 ingest가 끝없이 멈출 수 있었다. VM에서 성공한 동아일보 RSS는 요청 전체가 30~321초, 첫 바이트까지
+    # 최대 74초였다(ADR 0026 증거 10 c) - 요청 전체가 아니라 대기 1번에 거는 넉넉한 값이라 그런 느린 성공은 끊지 않는다.
+    RSS_SOCKET_TIMEOUT_S: float = float(os.getenv("RSS_SOCKET_TIMEOUT_S", "120"))
     # 기사 본문 요청(crawler/content_extractor/fetch.py, ADR 0026 결정 9). 요청 1번은 연결 10초, 소켓 읽기 1번
     # 15초, 본문을 다 받을 때까지 30초 안에 끝나야 한다. 같은 실행 안에서는 2번까지(사이 대기 2초) 보낸다.
     # 예전(trafilatura.fetch_url 3번)에는 응답 없이 끊는 서버에 기사 1건이 HTTP 요청 9번·대기 약 3분이 됐다.

@@ -32,6 +32,11 @@ PRESS_ALL_FAILED_MIN = 3
 PRESS_FAILURE_RATIO_LIMIT = 0.5
 UNHEALTHY_PRESS_LIMIT = 2
 
+# --extract-deadline-s는 ingest 시작부터 잰다 - RSS 단계가 늦을수록 추출 시간이 준다. RSS가 마감을 거의 다 써도
+# 추출은 이만큼은 돈다(앞서 실패한 기사만 계속 미뤄지지 않게).
+EXTRACT_MIN_BUDGET_S = 60.0
+_clock = time.monotonic  # 테스트에서 바꿔 끼운다
+
 
 def add_arguments(parser) -> None:
     parser.add_argument(
@@ -40,9 +45,10 @@ def add_arguments(parser) -> None:
     )
     parser.add_argument("--rss-hours", type=int, default=100, help="RSS 항목 발행 시각 cutoff(시간)")
     parser.add_argument("--workers", type=int, default=None, help="본문 추출 프로세스 수 (기본: Settings.PARALLEL_WORKERS)")
-    parser.add_argument("--extract-time-budget-s", type=_positive_float, default=None,
-                        help="본문 추출 단계 시간 예산(초). 넘으면 새 기사를 보내지 않고 남은 기사는 다음 실행으로 미룸 "
-                             "(시도 횟수를 쓰지 않음). 스케줄러는 다음 정시 회차 전에 끝나도록 지정한다")
+    parser.add_argument("--extract-deadline-s", type=_positive_float, default=None,
+                        help="본문 추출 마감(초, ingest 시작부터 잰다). 지나면 새 기사를 보내지 않고 남은 기사는 다음 실행으로 "
+                             "미룸(시도 횟수를 쓰지 않음). RSS 단계가 길어지면 그만큼 추출 시간이 준다(최소 60초). "
+                             "스케줄러는 다음 정시 회차 전에 끝나도록 지정한다")
     parser.add_argument("--embed-batch-size", type=int, default=None, help="임베딩 배치 크기 (기본: Settings.EMBEDDING_BATCH_SIZE)")
     parser.add_argument("--embed-limit", type=int, default=None, help="이번 실행에서 임베딩할 최대 기사 수 (오래된 것부터)")
     parser.add_argument("--embed-time-budget-s", type=float, default=None,
@@ -168,7 +174,9 @@ def check_extract_health(ctx, stats: Dict[str, Any]) -> None:
 
     budget_deferred = (stats.get("deferred_reasons") or {}).get("time_budget", 0)
     if stats.get("time_budget_exhausted"):
-        ctx.warn(f"본문 추출 시간 예산 {stats.get('time_budget_s')}초를 다 써서 {budget_deferred}건을 다음 실행으로 미룸")
+        deadline = stats.get("deadline_s")
+        when = f"(ingest 시작 뒤 {deadline:g}초 마감)" if deadline else ""
+        ctx.warn(f"본문 추출 시간 예산 {stats.get('time_budget_s'):g}초{when}를 다 써서 {budget_deferred}건을 다음 실행으로 미룸")
 
     attempted_total = failed_total = 0
     worst, worst_attempted, worst_failed = None, 0, 0
@@ -197,6 +205,7 @@ def check_extract_health(ctx, stats: Dict[str, Any]) -> None:
 def run(ctx) -> Dict[str, Any]:
     from config.settings import Settings
 
+    job_started = _clock()
     args = ctx.args
     stages = parse_stages(args.stages)
     ctx.stats["stages"] = stages
@@ -215,10 +224,15 @@ def run(ctx) -> Dict[str, Any]:
     if "extract" in stages:
         from crawler.content_extractor import ContentExtractor
 
+        deadline_s = getattr(args, "extract_deadline_s", None)
+        budget_s = None
+        if deadline_s is not None:
+            # 다음 정시 회차와 겹치지 않게 하는 것은 추출 단계 길이가 아니라 잡이 끝나는 시각이다(ADR 0026 결정 9)
+            budget_s = round(max(EXTRACT_MIN_BUDGET_S, deadline_s - (_clock() - job_started)), 1)
         ctx.stats["extract"] = _timed(
-            ContentExtractor().extract_parallel_with_stats, args.workers,
-            time_budget_s=getattr(args, "extract_time_budget_s", None),
+            ContentExtractor().extract_parallel_with_stats, args.workers, time_budget_s=budget_s,
         )
+        ctx.stats["extract"]["deadline_s"] = deadline_s
         ctx.checkpoint()
         check_extract_health(ctx, ctx.stats["extract"])
 
