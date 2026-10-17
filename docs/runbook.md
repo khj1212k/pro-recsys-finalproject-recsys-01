@@ -339,9 +339,14 @@ rm -r /tmp/m4
 테스트 DB에서 `RECSYS_PARITY_MODEL_FILE=/tmp/m4/poolneg_mask0_s0.txt pytest -m integration tests/integration/test_feature_parity.py`.
 
 **활성 휴리스틱과 콜드스타트 임계 (ADR 0014, 0031).** `RECSYS_HEURISTIC_SET`(기본 `b`; `a`는 ADR 0014 사전 등록 6의 전환이 성립했을
-때만, `prior`는 heuristic-v1로 되돌리기), `RECSYS_MIN_PERSONAL_EVENTS`(기본 0). 6시간 클릭 수 조회 실패는
+때만, `prior`는 되돌리기), `RECSYS_MIN_PERSONAL_EVENTS`(기본 0). 6시간 클릭 수 조회 실패는
 `GET /recsys/stats`의 `popularity.clicks_error`, 임계에 걸린 사용자는 `profile.below_min_events`로 센다.
 `RECSYS_SHORT_TERM_HOURS`·`RECSYS_SHORT_TERM_MAX_CLICKS`는 없어졌다(남아 있어도 읽지 않는다).
+
+`prior`는 M5 전의 요청 경로로 돌아간다: heuristic-v1, 콜드 경로와 후보 출처 `popular`의 `compute_scores` 순서, 6시간 클릭 수 조회 없음
+(ADR 0014 변경 기록 1). 그래서 지연 때문에 되돌릴 때도 쓸 수 있다. 지연의 운영 임계는 ADR 0014 구현 기록 4다 —
+`fallback.timeout` / `requests`가 하루 1%를 넘거나 `recsys-bench`의 16 클라이언트 p95가 290ms를 넘으면 c6의 정의를 바꾸지 않는
+최적화를 먼저 적용하고, 급하면 `prior`나 이전 이미지로 되돌린다. `GET /recsys/stats`의 카운터는 워커 프로세스별로 뜬 뒤의 누적이라 두 시각의 차로 본다.
 
 ## 10. 스키마 변경 반영
 

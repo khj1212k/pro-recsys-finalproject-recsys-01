@@ -541,5 +541,5 @@ docker-build 잡이 이미지를 빌드해 같은 스모크를 돌린다(실행 
    16 클라이언트 p95 240~245ms → 260~289ms, 8~32 클라이언트에서 시간 초과 폴백 0건 → 라운드마다 5~18건(약 1,600요청 중). ADR 0014가
    사전 등록한 규칙(16 클라이언트 p95 < 300ms, 1 클라이언트 p50 증가 ≤ 5ms)으로는 예산 안이다. 표와 쿼리 단위 수치는 ADR 0014 구현 기록 3.
 4. **설정.** `RECSYS_HEURISTIC_SET`(b | a | prior), `RECSYS_MIN_PERSONAL_EVENTS`(0)을 더하고 `RECSYS_SHORT_TERM_HOURS`·
-   `RECSYS_SHORT_TERM_MAX_CLICKS`를 없앴다.
+   `RECSYS_SHORT_TERM_MAX_CLICKS`를 없앴다. `prior`는 1의 조회까지 없는 M5 전의 요청 경로다(ADR 0014 변경 기록 1).
 5. **shadow.** 등록할 모델(EB-NeRD M4 `poolneg_mask0`·`poolneg` seed 0)과 등록 도구는 ADR 0037이다. 등록은 아직 하지 않았다.
