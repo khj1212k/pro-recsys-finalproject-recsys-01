@@ -10,6 +10,12 @@ from config.settings import Settings
 
 logger = logging.getLogger(__name__)
 
+# 시간대 없는 pubDate는 KST 벽시계 시각으로 읽는다 (docs/adr/0008 "2026-10-06 갱신").
+# 설정된 피드는 모두 한국 언론사이고, 그중 AI타임스가 "2026-10-06 09:00:00"처럼 시간대를 빼고 내보낸다.
+# 여기에 UTC를 붙이던 때에는 발행 시각이 9시간 뒤(수집 시각보다 미래)로 저장됐다.
+# 한국은 서머타임이 없어 고정 +09:00이면 되고, 이미지에 tzdata가 없어도 된다.
+KST = timezone(timedelta(hours=9))
+
 
 def _fetch_feed(url):
     # 한국경제는 feedparser 기본 UA("feedparser/x.y ...")에 403을 준다 - UA를 명시한다.
@@ -94,7 +100,7 @@ def collect_rss(hours: int = 100) -> Dict[str, Any]:
                         try:
                             dt_str = e.get('published') or e.get('updated')
                             dt = date_parser.parse(dt_str)
-                            if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
+                            if dt.tzinfo is None: dt = dt.replace(tzinfo=KST)
                             if dt >= cutoff:
                                 entries.append((e.link, e.title, dt)) # cutoff 시간 이후의 기사만 추가
                             else:

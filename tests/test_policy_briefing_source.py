@@ -296,10 +296,14 @@ PRE_RUNTIME_NEWS_RAW_COLUMNS = {
     "raw_news_id", "press_id", "raw_news_title", "raw_news_content", "raw_news_url",
     "raw_news_created_at", "raw_news_crawled_at", "embedding_result",
 }
-# f87f7378672e·d48994e9d26e(수집 런타임, 현재 Alembic head) 적용 후
+# f87f7378672e·d48994e9d26e(수집 런타임) 적용 후
 RUNTIME_NEWS_RAW_COLUMNS = PRE_RUNTIME_NEWS_RAW_COLUMNS | {
     "raw_news_extract_status", "raw_news_extracted_at", "raw_news_extract_attempts",
     "raw_news_content_sha256",
+}
+# f1db3221e45f(본문 보존, ADR 0023, 현재 Alembic head) 적용 후
+RETENTION_NEWS_RAW_COLUMNS = RUNTIME_NEWS_RAW_COLUMNS | {
+    "raw_news_content_length", "raw_news_content_purged_at", "raw_news_kogl_type",
 }
 
 
@@ -387,6 +391,25 @@ def test_insert_on_runtime_schema_marks_rows_extracted_so_the_web_extractor_skip
     assert "ON CONFLICT DO NOTHING" in sql and "ON CONFLICT (" not in sql
     # 스키마 조회는 수집 1회당 1번
     assert sum("information_schema.columns" in q for q in cur.queries) == 1
+
+
+def test_insert_on_retention_schema_records_body_length_and_kogl_type(monkeypatch):
+    """f1db3221e45f 뒤: 본문 길이(글자 수)와 공공누리 유형을 행마다 남긴다. 비운 시각은 쓰지 않는다(보존 잡의 몫)."""
+    cur, sql, rows = _collect_with_schema(monkeypatch, RETENTION_NEWS_RAW_COLUMNS)
+
+    for row in rows:
+        assert row["raw_news_content_length"] == len(row["raw_news_content"])
+        assert row["raw_news_kogl_type"] == 1
+        assert "raw_news_content_purged_at" not in row
+        assert row["raw_news_extract_status"] == "'ok'"
+    assert "ON CONFLICT DO NOTHING" in sql
+
+
+def test_insert_on_runtime_schema_does_not_write_retention_columns(monkeypatch):
+    """보존 마이그레이션 전 스키마(d48994e9d26e)에서는 길이·유형 컬럼을 쓰지 않는다(없는 컬럼)."""
+    cur, sql, rows = _collect_with_schema(monkeypatch, RUNTIME_NEWS_RAW_COLUMNS)
+
+    assert not {"raw_news_content_length", "raw_news_kogl_type"} & set(rows[0])
 
 
 # --------------------------------------------------------------------------- 파이프라인 Stage1 연결

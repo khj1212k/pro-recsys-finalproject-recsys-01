@@ -88,6 +88,9 @@ python -m evaluation.clustering.metrics \
 | `calibration.py` | Cohen's κ·Spearman, 클러스터 단위 2-fold 임계값 선택, 자기선호 DiD, ClusterEvaluator ROC |
 | `bakeoff_analysis.py` | 사전 등록 규칙을 기계적으로 적용해 승자·judge·게이트 결정 |
 | `gate_probe.py` | 결정론적 게이트의 오탐/검출 프로브(LLM·DB 호출 없음) |
+| `frozen_export.py` | 실험 입력의 동결 반출: `news_raw`의 시간 창(E0은 도구가 계산하는 날짜 창)을 읽기 전용 트랜잭션 하나로 메인 체크아웃의 `data/exports/<T0>/`에 뽑고, 매니페스트·본문 30일 정리를 맡는다. CLI는 `scripts/export_news_raw.py` ([ADR 0036](../docs/adr/0036-experiment-data-path-frozen-export-file-stand-ins.md), 절차는 [런북 9절](../docs/runbook-hosting.md)) |
+| `embedding_pack.py` | 원격 임베딩 잡이 돌려주는 팩(ids·벡터·본문·제목 해시·매니페스트)의 형식과 반출본 대조. CLI는 `scripts/import_embeddings.py` |
+| `e0_store.py` | 운영 코드를 고치지 않고 DB 없이 클러스터링·생성 경로를 돌리는 파일 대역(로더·저장·기록 전용 임베더)과 운영 함수 계약 검사. E0 러너가 쓴다(러너는 아직 없다) |
 
 전체 흐름 (실제 LLM 호출 단계는 비용이 든다 - `config/llm_pricing.yaml` 단가, 킬 스위치를 존중한다):
 
@@ -136,9 +139,11 @@ python -m evaluation.llm.gate_probe --newsletters 'data/team_archive/newsletters
   `recsys_core`는 저장소 루트에서 `python -m evaluation.recsys.ebnerd.run_ebnerd ...`로 실행하면 import된다.
 - demo 데이터 기반 테스트(로더·과제 구성·전 구간 스모크)는 데이터가 있어야 돈다. git worktree에서는
   `EBNERD_ROOT=<메인 체크아웃>/data/benchmarks/ebnerd`를 지정해 실행한다(없으면 skip).
-- **콜드 regime 사슬(v1.2, 결과 대기)**: 인기도 0·저트래픽·작은 풀·짧은 히스토리에서 랭커가 얼마나 버티는지 재는
+- **콜드 regime 사슬(v1.2)**: 인기도 0·저트래픽·작은 풀·짧은 히스토리에서 랭커가 얼마나 버티는지 재는
   실험 묶음이다. 규칙은 [ADR 0013 "A2 사전 등록"](../docs/adr/0013-ranker-v2-design.md)과
-  `ebnerd/preregistration/cold-v1.2.yaml`에 결과 전에 고정했다.
+  `ebnerd/preregistration/cold-v1.2.yaml`에 결과 전에 고정했다. 판정용 실행은 2026-10-06에 끝났고, 결과는
+  [`reports/recsys/ebnerd_v1_2_cold`](../reports/recsys/ebnerd_v1_2_cold.md)(실행 기록 `ebnerd_v1_2_cold_run.json`), 판정과 해석은
+  ADR 0013 "A2 결과"에 있다.
   - `ebnerd/neural/cold.py`(히스토리 절단·인기도 0 강제 — 이후 신경망 비교와 공유), `cold_transforms.py`(학습 마스킹,
     유저 서브샘플, 풀 축소, 요청 내 랭크, 축소 CTR, 릴리스 양자화), `candidate_config.py`(서빙 5출처 라운드로빈·cap),
     `heuristic_fit.py`(4항 가중치 적합), `cold_verdicts.py`(기계 판정), `run_cold.py`(단계별 체크포인트 실행기),

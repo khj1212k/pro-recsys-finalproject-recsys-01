@@ -5,7 +5,9 @@
 #   docker compose up -d --build        # db + migrate(1회) + scheduler (api는 뜨지 않음)
 #
 # - worker/migrate/scheduler는 수집 전용 이미지(docker/ingest.Dockerfile, torch 없음)를 쓴다.
-# - 스케줄은 docker/crontab.micro: ingest(rss,extract, 추출 워커 2개)·popularity·daily_report만.
+# - 스케줄은 docker/crontab.micro: ingest(rss,extract, 추출 워커 2개)·popularity·daily_report·retention만.
+#   .env의 SCHEDULER_JOBS_DISABLED(쉼표 구분)에 잡 이름을 넣으면 이미지를 다시 빌드하지 않고 그 줄을 끈다
+#   (`docker compose up -d scheduler`로 반영, 수동 실행 `run --rm worker <job>`에는 걸리지 않는다).
 #   embed·cluster·generate·train은 이 호스트에서 돌지 않는다.
 # - api는 profiles로 기본 기동에서 뺀다(공개 데모 단계에서 `--profile api`로 켠다).
 # - Postgres는 1 GB에 맞춰 버퍼·연결 수를 줄인다.
@@ -43,6 +45,8 @@ services:
     image: newsletter-recsys/ingest:${IMAGE_TAG:-local}
     entrypoint: ["sh", "/app/docker/scheduler-entrypoint.sh", "/app/docker/crontab.micro"]
     mem_limit: ${SCHEDULER_MEM_LIMIT:-512m}
+    environment:
+      JOBS_DISABLED: ${SCHEDULER_JOBS_DISABLED:-}
 
   api:
     profiles: ["api"]

@@ -25,7 +25,8 @@ MERGE_SQL = os.path.join(REPO_ROOT, "scripts", "oci", "merge_tier0_news_raw.sql"
 EXPORT_SQL = (
     "COPY (SELECT p.press_name, n.raw_news_title, n.raw_news_content, n.raw_news_url, "
     "n.raw_news_created_at, n.raw_news_crawled_at, n.raw_news_extract_status, n.raw_news_extracted_at, "
-    "n.raw_news_extract_attempts, n.raw_news_content_sha256 "
+    "n.raw_news_extract_attempts, n.raw_news_content_sha256, n.raw_news_content_length, "
+    "n.raw_news_content_purged_at, n.raw_news_kogl_type "
     "FROM news_raw n JOIN press p USING (press_id) ORDER BY n.raw_news_id) "
     "TO STDOUT WITH (FORMAT csv, HEADER)"
 )
@@ -237,3 +238,42 @@ def test_merge_rolls_back_when_target_press_name_is_ambiguous(database_url, pg_c
     assert done.returncode == PSQL_SCRIPT_ERROR, (done.returncode, done.stderr)
     assert "둘 이상 있다" in done.stderr
     assert _rows(pg_conn, dst) == before
+
+
+def _add_purged(pg_conn, schema, press_id, url, *, sha, length, crawled_at="2026-09-20 03:05:00"):
+    """보존 기한(ADR 0023)이 지나 본문을 비운 행: 본문 NULL, 길이·비운 시각·해시는 남아 있다."""
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            f'INSERT INTO "{schema}".news_raw (press_id, raw_news_title, raw_news_content, raw_news_url, '
+            "raw_news_created_at, raw_news_crawled_at, raw_news_extract_status, raw_news_extracted_at, "
+            "raw_news_extract_attempts, raw_news_content_sha256, raw_news_content_length, raw_news_content_purged_at) "
+            "VALUES (%s, '비운 기사', NULL, %s, %s, %s, 'ok', %s, 1, %s, %s, '2026-10-20 17:50:00+00')",
+            (press_id, url, "2026-09-20 11:40:00+09", crawled_at, "2026-09-20 03:06:00+00", sha, length),
+        )
+
+
+def test_merge_keeps_purged_rows_purged(database_url, pg_conn, psql_bin, tiers):
+    """원본에서 본문을 비운 행은 본문 없이(NULL) 비운 시각·길이·해시와 함께 들어간다. 대상의 ok 행과 해시가
+    같으면 duplicate가 되지만 본문 칸은 NULL로 남는다(''로 바꾸면 비운 행의 CHECK를 어긴다). 본문은 되살아나지 않는다."""
+    src, dst = tiers
+    tag = uuid.uuid4().hex[:8]
+    u = {k: f"https://example.com/{tag}/{k}" for k in ("anchor", "purged", "purged_dup")}
+    dst_a = _add_press(pg_conn, dst, f"언론사A-{tag}")
+    src_a = _add_press(pg_conn, src, f"언론사A-{tag}")
+    _add_news(pg_conn, dst, dst_a, u["anchor"], title="대상 기사", content="본문 A", status="ok", sha=SHA_A)
+    _add_purged(pg_conn, src, src_a, u["purged"], sha=SHA_B, length=1234)
+    _add_purged(pg_conn, src, src_a, u["purged_dup"], sha=SHA_A, length=99)
+
+    done = _merge(psql_bin, database_url, dst, _export_csv(psql_bin, database_url, src))
+
+    assert done.returncode == 0, done.stderr
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            f"SELECT raw_news_url, raw_news_content, raw_news_extract_status, raw_news_content_sha256, "
+            f"raw_news_content_length, raw_news_content_purged_at IS NOT NULL "
+            f'FROM "{dst}".news_raw'
+        )
+        rows = {r[0]: r[1:] for r in cur.fetchall()}
+    assert rows[u["purged"]] == (None, "ok", SHA_B, 1234, True)
+    assert rows[u["purged_dup"]] == (None, "duplicate", SHA_A, 99, True)
+    assert rows[u["anchor"]][:2] == ("본문 A", "ok")

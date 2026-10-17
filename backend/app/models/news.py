@@ -1,7 +1,7 @@
 from typing import Optional, List
 from datetime import datetime, timezone
 from sqlmodel import Field, SQLModel, JSON, Column
-from sqlalchemy import CheckConstraint, DateTime, Index, SmallInteger, String, text
+from sqlalchemy import CheckConstraint, DateTime, Index, Integer, SmallInteger, String, text
 from pgvector.sqlalchemy import Vector
 
 from sqlalchemy.dialects.postgresql import TSVECTOR
@@ -47,12 +47,24 @@ class NewsRaw(SQLModel, table=True):
             "uq_news_raw_content_sha256_ok", "raw_news_content_sha256", unique=True,
             postgresql_where=text("raw_news_extract_status = 'ok'"),
         ),
+        # 본문 보존(f1db3221e45f, ADR 0023): 비운 행에는 본문이 없고 길이가 남는다.
+        CheckConstraint(
+            "raw_news_content_purged_at IS NULL "
+            "OR (raw_news_content IS NULL AND raw_news_content_length IS NOT NULL)",
+            name="ck_news_raw_purged_body_gone",
+        ),
+        CheckConstraint(
+            "raw_news_kogl_type IS NULL OR raw_news_kogl_type BETWEEN 1 AND 4",
+            name="ck_news_raw_kogl_type",
+        ),
     )
 
     raw_news_id: Optional[int] = Field(default=None, primary_key=True)
     press_id: int = Field(foreign_key="press.press_id")
     raw_news_title: str
-    raw_news_content: str
+    # 보존 기한(ADR 0023, 수집 후 30일)이 지난 상업 언론사 본문은 NULL이다(jobs/tasks/retention.py).
+    # ''는 "추출했지만 본문 없음"(dropped/empty/duplicate/fetch_failed)이다.
+    raw_news_content: Optional[str] = None
     raw_news_url: str
     embedding_result: List[float] = Field(default=None, sa_column=Column(Vector(1024)))
     # 2026-09 마이그레이션(e725a62ffef1) 이전에는 VARCHAR였다. RSS 수집기가 쓰는
@@ -76,6 +88,14 @@ class NewsRaw(SQLModel, table=True):
     )
     # 정제된 본문의 sha256(hex). 본문 보존 기한이 지나 본문을 비워도 중복 판정용으로 남긴다.
     raw_news_content_sha256: Optional[str] = Field(default=None, sa_column=Column(String(64)))
+    # 본문 글자 수(char_length). 본문을 쓸 때 함께 쓰고, 본문을 비운 뒤에도 남는다(f1db3221e45f).
+    raw_news_content_length: Optional[int] = Field(default=None, sa_column=Column(Integer))
+    # 본문을 비운 시각. NULL이면 비운 적 없음.
+    raw_news_content_purged_at: Optional[datetime] = Field(
+        default=None, sa_column=Column(DateTime(timezone=True))
+    )
+    # 정책브리핑 기사의 공공누리 유형(1~4). 상업 언론사 행은 NULL.
+    raw_news_kogl_type: Optional[int] = Field(default=None, sa_column=Column(SmallInteger))
 
 # 5. 뉴스 레터 (News_Letter)
 class NewsLetter(SQLModel, table=True):
