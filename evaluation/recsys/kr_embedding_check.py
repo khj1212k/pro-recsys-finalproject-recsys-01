@@ -13,8 +13,10 @@
   다수 클래스 비율보다 높다.
 - **서술**(판정에 쓰지 않음): 언론사별 원래 섹션, 언론사를 건너는 예측(한 언론사의 기사를 다른 언론사의 기사만으로),
   언론사 라벨(8개 언론사 전체), 거의 같은 기사(코사인 ≥ 0.95)를 이웃에서 뺀 민감도, k = 5·20.
-- 라벨 규칙·범주 대응·분석 목록·기준은 kNN 결과를 보기 전에 이 파일에 고정했다(URL 경로의 모양과 섹션별 건수만
-  보고 정했다). 결과는 이 파일을 커밋한 뒤의 깨끗한 작업 트리에서 한 번 낸다.
+- 기준(k = 10 leave-one-out, ≥ 0.6, 다수 클래스보다 높음)은 ADR 0031 결정 5에 2026-10-06부터 적혀 있었다. 라벨 규칙·
+  범주 대응·분석 목록은 이 점검을 만들며 정했고(URL 경로의 모양과 섹션별 건수만 보고), 이 파일을 커밋한 뒤 깨끗한
+  작업 트리에서 한 번 돌렸다. 그 전에 실제 반출본으로 돌리지 않았다는 것은 작성자의 진술이다 - 사전 등록한 실행이
+  아니며 증거 등급은 `descriptive`다.
 
 무엇을 하지 않는가
 - 추천 정확도가 아니다. 클릭을 쓰지 않는다. "임베딩 공간이 한국어 뉴스의 주제 구조를 담는가"만 본다.
@@ -320,7 +322,44 @@ def verdict(primary: Mapping[str, Any]) -> Dict[str, Any]:
     return {"rule": f"kNN(k={K}) LOO 정확도 >= {THRESHOLD} 이고 다수 클래스 비율보다 높다", "threshold": THRESHOLD,
             **checks, "met": all(checks.values()),
             "ci_lower_ge_threshold": primary["ci95"]["accuracy"][0] >= THRESHOLD,
-            "unit": "기사(뉴스레터 아님)"}
+            "unit": "기사(뉴스레터 아님)", "registered_unit": "뉴스레터 500건 이상",
+            "unit_matches_registered_rule": False}
+
+
+def verdict_label(v: Mapping[str, Any]) -> str:
+    """판정을 한 낱말로 줄일 때 쓰는 말. 등록한 단위(뉴스레터)가 아니면 '대리 기준'이라고 붙인다.
+
+    v1 JSON(코드 2d66f96)에는 `unit_matches_registered_rule`가 없다 - 그 실행도 기사 단위였으므로 없으면 False로 읽는다.
+    """
+    prefix = "" if v.get("unit_matches_registered_rule", False) else "대리 기준 "
+    return prefix + ("충족" if v["met"] else "불충족")
+
+
+def reference_class_counts(result: Mapping[str, Any]) -> Dict[str, Dict[str, int]]:
+    """언론사를 건너는 예측마다 이웃 쪽 언론사의 서비스 범주별 기사 수(건수만). label_coverage와 범주 대응에서 센다."""
+    cov, service_map = result["label_coverage"], result["meta"]["params"]["service_map"]
+    out: Dict[str, Dict[str, int]] = {}
+    for key, r in result["cross_press"].items():
+        ref_press = key.split("<-", 1)[1]
+        counts = {c: 0 for c in r["classes"]}
+        for section, n in cov[ref_press]["sections"].items():
+            cat = service_map.get(ref_press, {}).get(section)
+            if cat is not None:
+                counts[cat] = counts.get(cat, 0) + int(n)
+        out[key] = counts
+    return out
+
+
+def sparse_reference_classes(result: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """이웃 쪽 기사가 k/2보다 적은 범주. k개 이웃 중 그 범주의 표가 이웃 쪽 건수를 넘지 못해 다수결로 거의 이기지 못한다."""
+    out: List[Dict[str, Any]] = []
+    for key, counts in reference_class_counts(result).items():
+        r = result["cross_press"][key]
+        for i, c in enumerate(r["classes"]):
+            if counts[c] * 2 < r["k"]:
+                out.append({"pair": key, "label": c, "n_ref": counts[c], "support": r["per_class"][i]["support"],
+                            "correct": int(r["confusion"][i][i])})
+    return out
 
 
 # ------------------------------------------------------------------ 입력
@@ -588,9 +627,9 @@ def render_markdown(result: Mapping[str, Any]) -> str:
         f"**ADR 0031 결정 5 기준** ({v['rule']}, 단위는 {v['unit']}): 정확도 {_f(pr['accuracy'])}"
         f" {'≥' if v['accuracy_ge_threshold'] else '<'} {v['threshold']},"
         f" 다수 클래스 {_f(pr['baselines']['majority']['accuracy'])}보다 {'높다' if v['above_majority'] else '높지 않다'},"
-        f" n = {pr['n']:,} {'≥' if v['n_ge_500'] else '<'} 500 → **{'충족' if v['met'] else '불충족'}**."
+        f" n = {pr['n']:,} {'≥' if v['n_ge_500'] else '<'} 500 → **{verdict_label(v)}**."
         f" 정확도 구간의 하한 {_f(pr['ci95']['accuracy'][0])}은 기준 {'이상' if v['ci_lower_ge_threshold'] else '미만'}이다"
-        " (기준은 점추정에 건 것이다).",
+        " (기준은 점추정에 건 것이다). 등록한 단위(뉴스레터 500건 이상)의 기준은 이 점검으로 채워지지 않는다(미측정).",
         "",
         "범주별(1차):",
         "",
@@ -630,12 +669,24 @@ def render_markdown(result: Mapping[str, Any]) -> str:
         "",
         "### 언론사를 건너는 예측 (서비스 범주, 이웃은 다른 언론사의 기사만)",
         "",
-        "한 언론사 안의 문체·형식이 아니라 주제가 이웃을 정하는지 보려는 것이다. 이웃 쪽 언론사에 없는 범주는 맞힐 수 없다.",
+        "한 언론사 안의 문체·형식이 아니라 주제가 이웃을 정하는지 보려는 것이다. 이웃 쪽 언론사에 없거나 이웃 쪽 기사가"
+        " k/2보다 적은 범주는 거의 맞힐 수 없다(k개 이웃 중 그 범주의 표가 이웃 쪽 건수를 넘지 못한다). 그런 범주가 있으면"
+        " macro-F1이 그만큼 낮아진다. 질의 쪽 건수가 적은 범주도 macro-F1을 크게 흔든다(범주마다 같은 무게).",
         "",
         *_table(["질의 ← 이웃", "n (질의)", "n (이웃)", "정확도", "95% 구간", "macro-F1", "95% 구간", "다수 클래스(질의)"],
                 [[key.replace("<-", " ← "), r["n"], r["n_ref"], _f(r["accuracy"]), _ci(r["ci95"]["accuracy"]),
                   _f(r["macro_f1"]), _ci(r["ci95"]["macro_f1"]), _f(r["baselines"]["majority"]["accuracy"])]
                  for key, r in result["cross_press"].items()]),
+        "",
+        "이웃 쪽 언론사의 범주별 기사 수(건수만):",
+        "",
+        *_table(["질의 ← 이웃", *next(iter(result["cross_press"].values()))["classes"]],
+                [[key.replace("<-", " ← "), *[counts[c] for c in result["cross_press"][key]["classes"]]]
+                 for key, counts in reference_class_counts(result).items()]),
+        "",
+        "이웃 쪽 기사가 k/2 미만인 범주: " + ("; ".join(
+            f"{s['pair'].replace('<-', ' ← ')}의 `{s['label']}`(이웃 {s['n_ref']}건, 질의 {s['support']}건 중 맞힌 수"
+            f" {s['correct']})" for s in sparse_reference_classes(result)) or "없음") + ".",
         "",
         f"### 언론사 라벨 ({len(result['press_label']['classes'])}개 언론사 전체)",
         "",

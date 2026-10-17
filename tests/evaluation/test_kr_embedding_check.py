@@ -165,6 +165,47 @@ def test_verdict_needs_threshold_majority_and_500_items():
     assert kr.verdict(primary(499, 0.9, 0.3, 0.85))["met"] is False
 
 
+def test_the_verdict_is_called_a_proxy_because_the_unit_is_articles_not_newsletters():
+    v = kr.verdict({"n": 600, "accuracy": 0.7, "ci95": {"accuracy": [0.65, 0.75]},
+                    "baselines": {"majority": {"accuracy": 0.5}}})
+    assert v["unit_matches_registered_rule"] is False and v["registered_unit"].startswith("뉴스레터")
+    assert kr.verdict_label(v) == "대리 기준 충족"
+    assert kr.verdict_label({**v, "met": False}) == "대리 기준 불충족"
+    # v1 JSON(코드 2d66f96)에는 키가 없다 - 기사 단위였으므로 대리로 읽는다
+    assert kr.verdict_label({"met": True}) == "대리 기준 충족"
+    assert kr.verdict_label({"met": True, "unit_matches_registered_rule": True}) == "충족"
+
+
+def _cross_press_result():
+    # 언론사 A·B, 범주 c1·c2. A의 섹션 z는 범주 대응이 없다.
+    return {
+        "label_coverage": {"A": {"sections": {"y": 20, "x": 3, "z": 5}}, "B": {"sections": {"X": 12, "Y": 1}}},
+        "meta": {"params": {"service_map": {"A": {"x": "c1", "y": "c2"}, "B": {"X": "c1", "Y": "c2"}}}},
+        "cross_press": {
+            "B<-A": {"classes": ["c1", "c2"], "k": 10, "per_class": [{"support": 12}, {"support": 1}],
+                     "confusion": [[0, 12], [0, 1]]},
+            "A<-B": {"classes": ["c1", "c2"], "k": 10, "per_class": [{"support": 3}, {"support": 20}],
+                     "confusion": [[3, 0], [20, 0]]},
+        },
+    }
+
+
+def test_cross_press_reference_counts_are_the_other_press_mapped_to_service_categories():
+    counts = kr.reference_class_counts(_cross_press_result())
+    assert counts == {"B<-A": {"c1": 3, "c2": 20}, "A<-B": {"c1": 12, "c2": 1}}
+
+
+def test_reference_classes_with_fewer_than_half_k_articles_are_flagged():
+    sparse = kr.sparse_reference_classes(_cross_press_result())
+    assert sparse == [
+        {"pair": "B<-A", "label": "c1", "n_ref": 3, "support": 12, "correct": 0},
+        {"pair": "A<-B", "label": "c2", "n_ref": 1, "support": 20, "correct": 0},
+    ]
+    result = _cross_press_result()
+    result["cross_press"]["B<-A"]["k"] = result["cross_press"]["A<-B"]["k"] = 2  # 3·1건 모두 k/2(=1) 이상
+    assert kr.sparse_reference_classes(result) == []
+
+
 # ------------------------------------------------------------------ 반출본 읽기와 산출물
 
 
@@ -247,6 +288,15 @@ def test_a_run_on_a_fake_export_carries_no_title_body_or_url(tmp_path):
     assert result["sensitivity"]["near_dup_excluded"]["top1_cos"]["share_ge_near_dup"] == 0.0
     assert result["meta"]["data"]["pack"]["title_only_vectors"] is False
     assert json.loads(kr.dump_json(result)) == json.loads(json.dumps(result, ensure_ascii=False))
+    md = kr.render_markdown(result)
+    assert "→ **대리 기준 불충족**" in md  # n < 500
+    assert "이웃 쪽 언론사의 범주별 기사 수(건수만):" in md and "이웃 쪽 기사가 k/2 미만인 범주: 없음." in md
+    # 이웃 쪽 범주별 건수는 반대 방향 예측의 질의 쪽 건수와 같다(같은 기사 집합을 두 번 센다)
+    counts = kr.reference_class_counts(result)
+    for key, other in (("동아일보<-매일경제", "매일경제<-동아일보"), ("매일경제<-동아일보", "동아일보<-매일경제")):
+        r = result["cross_press"][other]
+        assert counts[key] == {c["label"]: c["support"] for c in r["per_class"]}
+        assert sum(counts[key].values()) == result["cross_press"][key]["n_ref"]
 
 
 def test_inputs_that_do_not_match_their_manifests_are_refused(tmp_path):
@@ -278,3 +328,7 @@ def test_the_committed_report_is_the_render_of_the_committed_json():
     assert result["meta"]["format"] == kr.FORMAT and result["meta"]["code"]["dirty"] is False
     assert result["meta"]["n_boot"] == kr.N_BOOT
     assert result["meta"]["params"] == json.loads(json.dumps(kr.params(), ensure_ascii=False))
+    counts = kr.reference_class_counts(result)
+    for key, other in (("동아일보<-매일경제", "매일경제<-동아일보"), ("매일경제<-동아일보", "동아일보<-매일경제")):
+        assert counts[key] == {c["label"]: c["support"] for c in result["cross_press"][other]["per_class"]}
+        assert sum(counts[key].values()) == result["cross_press"][key]["n_ref"]
