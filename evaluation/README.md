@@ -90,7 +90,15 @@ python -m evaluation.clustering.metrics \
 | `gate_probe.py` | 결정론적 게이트의 오탐/검출 프로브(LLM·DB 호출 없음) |
 | `frozen_export.py` | 실험 입력의 동결 반출: `news_raw`의 시간 창(E0은 도구가 계산하는 날짜 창)을 읽기 전용 트랜잭션 하나로 메인 체크아웃의 `data/exports/<T0>/`에 뽑고, 매니페스트·본문 30일 정리를 맡는다. CLI는 `scripts/export_news_raw.py` ([ADR 0036](../docs/adr/0036-experiment-data-path-frozen-export-file-stand-ins.md), 절차는 [런북 9절](../docs/runbook-hosting.md)) |
 | `embedding_pack.py` | 원격 임베딩 잡이 돌려주는 팩(ids·벡터·본문·제목 해시·매니페스트)의 형식과 반출본 대조. CLI는 `scripts/import_embeddings.py` |
-| `e0_store.py` | 운영 코드를 고치지 않고 DB 없이 클러스터링·생성 경로를 돌리는 파일 대역(로더·저장·기록 전용 임베더)과 운영 함수 계약 검사. E0 러너가 쓴다(러너는 아직 없다) |
+| `e0_store.py` | 운영 코드를 고치지 않고 DB 없이 클러스터링·생성 경로를 돌리는 파일 대역(로더·저장·기록 전용 임베더)과 운영 함수 계약 검사. E0 러너가 쓴다 |
+| `embed_job.py` | 원격(Colab T4) 기사 임베딩 잡: 운영 임베더·Stage3 텍스트 식·배치로 반출본을 임베딩해 팩을 만든다(파트 체크포인트, fp32 대조, 결정론 확인). 드라이버는 `scripts/colab_embed_articles.py`, 커널 런처는 `scripts/colab_embed_launch.py`, 핀은 `requirements-colab-embed.txt` |
+| `e0_baseline.py` | E0 러너([ADR 0009 A8](../docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md)): `prepare`(표본·순서·스냅숏, LLM 호출 없음), `run`(시작 검사 → pre-flight → warmup → eval, 재개), `--dry-run`(합성 반출본 + 페이크 LLM 전송 계층으로 사슬 전체). 절차는 [런북 10절](../docs/runbook-hosting.md) |
+| `e0_registered.py` | E0 등록값(yaml과 테스트로 묶임)과 시작 검사(A8.2 a~e, 실행 전 기록) |
+| `e0_sample.py` | E0 표본: 날짜 창별 운영 클러스터링 → 등록한 층화 추출 → 처리 순서, 매니페스트 |
+| `e0_instrument.py` | E0 계측(HTTP 시도·complete() 두 층, 노드 갱신)과 HTTP 시도마다의 예산 가드·원장 |
+| `e0_report.py` | E0 리포트(`reports/llm/e0_baseline_v1.{json,md}`): A8.3 지표, 실패 분류, 잔액 대조, 텍스트 누출 검사 |
+| `e0_labels.py` | E0 블라인드 내보내기(첫 초안 + 다른 저장본, 재라벨 5/3, 라벨 마감)와 라벨 지표 |
+| `e0_synthetic.py` | 드라이 런 재료: 합성 반출본·팩, 페이크 LLM 전송 계층(결정론적 장애 섞기) |
 
 전체 흐름 (실제 LLM 호출 단계는 비용이 든다 - `config/llm_pricing.yaml` 단가, 킬 스위치를 존중한다):
 

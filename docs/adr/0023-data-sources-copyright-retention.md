@@ -267,6 +267,15 @@
 
 위 표의 여섯 줄은 [실행 계획 2.6절](../design/2026-10-06-llm-v2-execution-plan.md)의 표와 같은 위치다(문구만 구현 상태에 맞게 더했다).
 
+**구현 상태 덧붙임 (2026-10-17, E0 러너·임베딩 잡 PR).** 위 표에서 "없음"이던 두 줄의 수단이 들어갔다. 규칙은 바꾸지 않았다.
+- Colab VM 디스크: `scripts/colab_embed_articles.py`가 본문을 세션에 직접 올린 반출본으로만 받고(서명 URL은 본문이 없는 모델 스냅숏에만),
+  잡이 끝나면 - 완료·예산 중단·실패·입력 거절 어느 경우든 - 같은 프로세스에서 입력 파일을 지우고 남은 파일의 이름·크기를 `out/cleanup.json`과
+  로그에 남긴다. 세션은 그 뒤 사람이 끝낸다. 테스트: `tests/evaluation/test_colab_embed_driver.py`.
+- 라벨링 입력(`data/labels/<run>/clusters.jsonl`): E0 내보내기(`evaluation/llm/e0_labels.py`)가 `retention.json`에 마감(표본 중 가장 오래된
+  기사의 `crawled_at` + 30일)을 적고, `labels.LabelStore`는 열 때 마감이 지났으면 본문을 지우며 라벨링 UI는 마감 뒤에 과제를 내주지 않는다.
+  마감 기록 없이 본문이 든 입력은 UI가 열지 않는다. bake-off의 `export-blind`는 아직 마감을 쓰지 않으므로 그 입력도 UI가 열지 않는다.
+  `data/evalsets/<이름>/articles.jsonl`은 E0이 쓰지 않는다(E0의 본문은 반출본에서 바로 읽는다). 테스트: `tests/evaluation/test_e0_labels.py`.
+
 ### 2.6절 밖에서 더한 위치 — 따로 승인받는다
 아래 세 줄은 실행 계획 2.6절의 표에 **없다**. 기존 런북(6.4·6.5)과 bake-off 도구가 이미 쓰는 위치라서 같은 규칙 아래 두려고 적었다.
 **사용자 결정 6의 기본값("2.6의 표대로")을 승인하는 것만으로는 이 세 줄이 승인되지 않는다** — PR에서 따로 묻는다.

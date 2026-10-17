@@ -15,7 +15,7 @@ from typing import Optional
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 
-from evaluation.llm.labels import LabelError, LabelStore
+from evaluation.llm.labels import LabelError, LabelStore, has_bodies, is_expired, read_retention
 
 INDEX_HTML = Path(__file__).resolve().parent / "labeling" / "index.html"
 LABELS_ROOT = Path(__file__).resolve().parents[2] / "data" / "labels"
@@ -26,7 +26,11 @@ def create_app(labels_dir: Path, now=None) -> FastAPI:
 
     def store() -> LabelStore:
         # 요청마다 새로 읽는다: 라벨 파일은 작고, 다른 탭/재시작 사이의 상태 불일치를 없앤다
-        return LabelStore(labels_dir, now=now) if now else LabelStore(labels_dir)
+        s = LabelStore(labels_dir, now=now) if now else LabelStore(labels_dir)
+        if s.expired:
+            # 라벨 마감(본문 보존 기한)이 지났다 - 본문은 방금 지웠고 과제를 내주지 않는다(ADR 0023 개정)
+            raise HTTPException(410, "라벨 마감이 지나 기사 본문을 지웠습니다")
+        return s
 
     def task_payload(s: LabelStore, kind: str, target_id: str, round_: int) -> dict:
         existing = s.latest(kind, round_).get(target_id)
@@ -86,6 +90,14 @@ def main(argv: Optional[list] = None) -> int:
     labels_dir = LABELS_ROOT / args.run
     if not (labels_dir / "outputs.jsonl").exists():
         parser.error(f"{labels_dir}/outputs.jsonl이 없습니다 - 먼저 bakeoff export-blind를 실행하세요")
+    from datetime import datetime, timezone
+
+    if read_retention(labels_dir) is None and has_bodies(labels_dir):
+        parser.error("라벨 마감(retention.json)이 없는 입력에 기사 본문이 있습니다 - 마감을 적는 내보내기로 다시 만드세요"
+                     "(ADR 0023 개정)")
+    if is_expired(labels_dir, datetime.now(timezone.utc)):
+        LabelStore(labels_dir)  # 여는 김에 본문을 지운다
+        parser.error("라벨 마감이 지났습니다 - 기사 본문을 지웠고 UI를 열지 않습니다(ADR 0023)")
     uvicorn.run(create_app(labels_dir), host="127.0.0.1", port=args.port, log_level="warning")
     return 0
 

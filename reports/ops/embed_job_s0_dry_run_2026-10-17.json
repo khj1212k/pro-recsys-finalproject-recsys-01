@@ -1,0 +1,146 @@
+{
+ "format": "embed-job-s0/1",
+ "what": "기사 임베딩 원격 잡(scripts/colab_embed_articles.py + evaluation/llm/embed_job.py)의 S0 드라이 런. 합성 텍스트 300건(evaluation.llm.embed_job.synthetic_rows, 지어낸 낱말) - 기사 본문 없음, LLM 호출 없음",
+ "data_source": "합성(synthetic_rows(n=300, seed=20261017)). 한국어 기사가 아니므로 토큰/문자 비율과 길이 분포는 실제와 다르다",
+ "run_at_utc": {
+  "session_requested": "2026-10-16T17:12:30Z",
+  "session_released": "2026-10-16T17:15:35Z"
+ },
+ "command": "colab --config <임시 세션 상태> run --gpu T4 -s llm-wp2-s0 --timeout 1000 s0_launcher.py  (런처가 코드 tarball을 풀고 `colab_embed_articles.py run --synthetic 300 --cu-rate 1.07 --cu-cap 0.3`을 부른다)",
+ "code": {
+  "commit": "c616ebee028cad5d4f8d5889015bc081b6ebd6c3",
+  "commit_note": "이 PR의 리베이스 전 커밋(지금은 어느 브랜치에도 없다 - 코드는 tarball_sha256으로 묶인다). embed_job.py·colab_embed_articles.py·embedding_pack.py·frozen_export.py는 PR의 HEAD와 바이트 단위로 같다. requirements-colab-embed.txt는 핀 9개가 같고 머리말 주석만 다르다(torch cu130 확인 표기, numpy를 고정하지 않는 이유). tarball 안에서 HEAD와 다른 것: m4_colab_driver.py(main의 줄마다 flush 수정 전 판), ai_workspace/config의 settings.py·retention.py와 pipeline/stages.py(뒤에 main에 들어온 본문 보존 잡 - BODY_RETENTION_DAYS와 Stage3 body_purged 집계; 임베딩 텍스트 식·_length_sorted_batches·모델 인자는 같다)",
+  "tarball_sha256": "ed8d7ea054071b6f2bacd0c9e6ea3e30b2dec046081fd07b35dee7d905c7f120"
+ },
+ "runtime": {
+  "gpu": "Tesla T4",
+  "cuda": "13.0",
+  "python": "3.13.15",
+  "cpu_count": 2,
+  "ram_gb": 12.7
+ },
+ "pins_check": {
+  "result": "핀 9개 일치",
+  "installed": {
+   "flagembedding": "1.2.5",
+   "transformers": "4.38.2",
+   "tokenizers": "0.15.2",
+   "sentence-transformers": "2.2.2",
+   "huggingface-hub": "0.36.2",
+   "safetensors": "0.8.0",
+   "accelerate": "1.15.0",
+   "python-dotenv": "1.2.3",
+   "torch": "2.11.0+cu130"
+  }
+ },
+ "versions": {
+  "python": "3.13.15",
+  "torch": "2.11.0+cu130",
+  "FlagEmbedding": "1.2.5",
+  "transformers": "4.38.2",
+  "tokenizers": "0.15.2",
+  "sentence-transformers": "2.2.2",
+  "huggingface-hub": "0.36.2",
+  "safetensors": "0.8.0",
+  "accelerate": "1.15.0",
+  "numpy": "2.1.3",
+  "cuda": "13.0",
+  "gpu": "Tesla T4"
+ },
+ "model_revision": {
+  "resolved": "5617a9f61b028005a4858fdac845db406aefb181",
+  "expected": "5617a9f61b028005a4858fdac845db406aefb181"
+ },
+ "timing_s": {
+  "session_wall_mac_clock": 185,
+  "driver_wall": 175.6,
+  "install": 25,
+  "model_load_including_download": 95.59,
+  "encode_300": 24.963,
+  "job_total": 151.6
+ },
+ "throughput": {
+  "rows": 300,
+  "articles_per_s": 12.018,
+  "tokens": 203880,
+  "tokens_per_s": 8167.3,
+  "mean_tokens_per_row": 679.6,
+  "chars": 486899,
+  "tokens_truncated": 0,
+  "gpu_peak_mem_gb": 1.8,
+  "batch_size": 8,
+  "sort_window": 64,
+  "precision": "fp16"
+ },
+ "determinism": {
+  "rows": 64,
+  "bitwise_equal": true,
+  "max_abs_diff": 0.0
+ },
+ "fp16_vs_fp32": {
+  "n": 100,
+  "seed": 20261006,
+  "model_fp16_vs_fp32": {
+   "n": 100,
+   "p10": 0.9999905714168865,
+   "min": 0.9999284225629707,
+   "mean": 0.9999946920304577
+  },
+  "stored_f16_vs_fp32": {
+   "n": 100,
+   "p10": 0.9999905714178887,
+   "min": 0.9999284225629508,
+   "mean": 0.9999946889636964
+  }
+ },
+ "compute_units": {
+  "rate_cu_per_hour": 1.07,
+  "rate_basis": "colab usage의 계정 사용률이 실행 전 1.15/h(다른 세션 2개)에서 실행 중 2.22/h로 올랐다 - 차이 1.07/h",
+  "estimate_session": 0.055,
+  "driver_estimate": 0.0522,
+  "balance_before": {
+   "value": 195.76,
+   "read_at_utc": "2026-10-16T17:12:26Z"
+  },
+  "balance_after": {
+   "value": 195.63,
+   "read_at_utc": "2026-10-16T17:17:04Z 직후"
+  },
+  "balance_note": "잔액 차이 0.13에는 같은 시간에 돈 다른 세션 2개(1.15/h x 약 5분 = 약 0.09)가 들어 있다. 이 세션의 몫은 약 0.04~0.06이다(표시 단위 0.01)",
+  "cap": 0.3
+ },
+ "session_check": "실행 뒤 colab sessions에 이 세션이 없고 계정 사용률이 1.15/h로 돌아왔다(남은 두 세션은 다른 작업의 것)",
+ "pack_written": {
+  "files": {
+   "emb.f16.npy": {
+    "sha256": "fb11d0b1362a73e4153ab26d0c4ac81594ee44ff87576134746adbdd18969203",
+    "bytes": 614528
+   },
+   "ids.npy": {
+    "sha256": "b57d1a3abfbf395610b1e1d02d18d7985c5aab8719c3607e94b4f34c60d82282",
+    "bytes": 2528
+   },
+   "content_sha256.txt": {
+    "sha256": "55176a379ea33c61a23bd8b83a919d21c78905be1a4e0e13bd26fa64a47039c2",
+    "bytes": 19500
+   },
+   "title_sha256.txt": {
+    "sha256": "b45d3728a9ed02f0d832092036cc4ddde3170032af3398280512a375960344cd",
+    "bytes": 19500
+   }
+  },
+  "norm": {
+   "min": 0.9997562276653711,
+   "max": 1.0002419026744513,
+   "max_abs_deviation": 0.00024377233462891112
+  },
+  "note": "합성 입력으로 쓴 팩(반출본 신원 'synthetic') - E0에 쓰지 않는다. 형식·정규화 확인용"
+ },
+ "extrapolation_estimate": {
+  "label": "[추정] - 합성 텍스트의 처리량을 실제 기사에 옮긴 값",
+  "rows": "E0 반출 5일 창 약 5.6k행(ADR 0036 컨텍스트의 창별 행 수)",
+  "encode_s": "5,600행 x 평균 900토큰 / 8,167토큰/s ≈ 620초",
+  "total_s": "설치·모델 로드 약 2분 + 인코딩 약 10분 + fp32 대조 100건 약 20초 ≈ 13분",
+  "cu": "≈ 0.23 CU (1.07 CU/h). 등록 상한 4 CU(실행 계획 5절 결정 7)"
+ }
+}

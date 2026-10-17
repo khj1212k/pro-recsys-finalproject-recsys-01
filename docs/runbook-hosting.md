@@ -788,7 +788,7 @@ git check-ignore -v data/exports/<T0>/articles.jsonl                  # .gitigno
   `pre_run_record`)에 옮겨 적고, 만료일을 `.ops/RUNNING.md`에도 적는다.
 
 ### 9.5 임베딩 팩 대조
-임베딩 잡(Colab)은 다음 PR이다. 잡이 돌려준 팩을 `data/exports/<T0>/embeddings/`에 받은 뒤:
+임베딩 잡(Colab T4)은 10.2절이다. 잡이 돌려준 팩을 `data/exports/<T0>/embeddings/`에 받은 뒤:
 
 ```bash
 python scripts/import_embeddings.py --export-dir data/exports/<T0> --pack-dir data/exports/<T0>/embeddings
@@ -818,4 +818,93 @@ python scripts/import_embeddings.py --export-dir data/exports/<T0> --pack-dir da
 - 디렉터리를 통째로 지우지 않고 본문만 지우는 이유: 매니페스트와 해시가 남아야 실험의 실행 전 기록에 적은 sha256을 나중에도 대조할 수 있다.
 - 한 실험이 끝나면(라벨 리포트가 커밋되면) 만료 전이라도 그 반출본의 본문을 지운다.
 - 지우는 것은 파일의 내용이다. 저장 장치 수준의 복구 불가능성은 보장하지 않는다(ADR 0023 개정 "남는 위험").
+
+## 10. E0 기준선 측정 — 원격 임베딩, 실행 전 기록, 실행, 리포트, 라벨 ([ADR 0009 A8](adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md))
+
+**2026-10-17 현재 E0은 돌리지 않았다.** 도구는 합성 입력과 페이크 LLM 전송 계층으로만 확인했다
+(`python -m evaluation.llm.e0_baseline --dry-run`, 실제 기사·실제 호출 없음). 순서는 A8.0 그대로이고, 한 단계라도 건너뛰면 러너가 시작하지 않는다.
+명령은 전부 **메인 체크아웃**에서 `PYTHONPATH=ai_workspace`로 돌린다(워크트리의 편집 설치가 섞이지 않게). Mac 규칙대로 계산이 있는 명령에는
+`nice -n 19 env OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2`를 붙인다.
+
+### 10.1 code_sha와 반출
+1. E0 러너 PR의 main 병합 커밋이 `code_sha`다. ADR 0023 개정(2026-10-06)도 main에 있어야 한다(그 병합 커밋 = `adr_0023_amendment_commit`).
+2. 메인 체크아웃: `git fetch origin && git checkout --detach <code_sha>`, `git status --porcelain`이 비어 있다.
+3. 9절대로 반출하되 **날짜 창 5개**로: `python scripts/export_news_raw.py export --days 5 --psql-command "..."`. 러너는 마지막 3개 창부터 쓰고
+   표본이 모자라면 하루씩 늘린다(A8.1). 출력의 `identity_sha256`이 `--export-identity`와 `export_manifest_sha256`이다.
+
+### 10.2 임베딩 (Colab T4 세션 하나, 상한 4 CU)
+```bash
+git archive --format=tar.gz -o /tmp/e0emb_code.tar.gz <code_sha> ai_workspace/config ai_workspace/core ai_workspace/pipeline \
+  evaluation/__init__.py evaluation/llm/__init__.py evaluation/llm/embed_job.py evaluation/llm/embedding_pack.py \
+  evaluation/llm/frozen_export.py scripts/colab_embed_articles.py scripts/m4_colab_driver.py requirements-colab-embed.txt
+shasum -a 256 /tmp/e0emb_code.tar.gz                    # = <code_tar_sha>
+colab usage                                             # 실행 전 잔액·사용률(다른 세션의 사용률도 적는다)
+colab new -s e0-embed --gpu T4
+colab upload -s e0-embed /tmp/e0emb_code.tar.gz /content/e0emb/code.tar.gz
+colab upload -s e0-embed data/exports/<T0>/manifest.json /content/e0emb/input/manifest.json
+colab upload -s e0-embed data/exports/<T0>/articles.jsonl /content/e0emb/input/articles.jsonl
+colab exec -s e0-embed --timeout 3600 --env E0EMB_CODE_SHA256=<code_tar_sha> \
+  --env 'E0EMB_DRIVER_ARGS_JSON=["run","--workdir","/content/e0emb","--code-tarball","/content/e0emb/code.tar.gz","--code-sha256","<code_tar_sha>","--export-identity","<identity_sha256>","--cu-rate","1.07","--cu-cap","4"]' \
+  -f scripts/colab_embed_launch.py
+```
+- 본문은 세션에 직접 올린다. GCS·Drive에 올리지 않는다(ADR 0023 개정). 출력에 `cleanup: 입력 파일 2개 삭제(done), 입력 디렉터리 남음=False`가
+  있어야 한다 - 실패·예산 중단이어도 입력은 지워진다.
+- 팩과 기록을 받는다:
+  ```bash
+  mkdir -p data/exports/<T0>/embeddings data/exports/<T0>/embed_job
+  for f in ids.npy emb.f16.npy content_sha256.txt title_sha256.txt embeddings_manifest.json; do
+    colab download -s e0-embed /content/e0emb/out/pack/$f data/exports/<T0>/embeddings/$f; done
+  for f in job.json compute.json cleanup.json run.log; do
+    colab download -s e0-embed /content/e0emb/out/$f data/exports/<T0>/embed_job/$f; done
+  colab stop -s e0-embed && colab usage                 # 실행 뒤 잔액 → colab_cu_used(다른 세션 몫을 뺀 값과 compute.json의 추정을 함께 적는다)
+  python scripts/import_embeddings.py --export-dir data/exports/<T0> --pack-dir data/exports/<T0>/embeddings
+  ```
+- 세션이 잡 도중에 사라지면: 새 세션에서 같은 업로드를 하고 같은 명령에 `--resume-bundle`(미리 `bundle` 하위 명령으로 받아 둔 파트 묶음)과
+  `--resume-bundle-sha256`을 더한다. 15분 안팎의 잡이라 보통은 처음부터 다시 돌리는 편이 낫다.
+
+### 10.3 표본과 실행 전 기록 (LLM 호출 없음)
+```bash
+nice -n 19 env OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 PYTHONPATH=ai_workspace \
+  python -m evaluation.llm.e0_baseline prepare --export-dir data/exports/<T0> --pack-dir data/exports/<T0>/embeddings
+```
+`evaluation/llm/evalsets/e0-baseline-v1.jsonl`(id·해시·길이·order만)을 쓰고 실행 전 기록에 옮길 값을 출력한다: `export_*`, `embeddings_sha256`,
+`embeddings_fp16_vs_fp32_cos`, `day_windows_utc`, `snapshot_sha256`, `sample_manifest_sha256`, `bucket_allocation`, `code_sha_candidate`,
+`ai_workspace_diff_since_b64da14`, 그리고 `frame`(`full` 또는 9~14개로 가는 `short_n`)과 라벨 마감(`label_deadline_utc`). 종료 코드 3
+(`void_frame_too_small`, 5개 창으로도 eval 9개 미만)이면 void(프레임 부족)를 A8.10에 적고 10.1부터 다시, 4(`export_too_narrow`)면 `--days 5`로
+다시 반출한다. 이 값과 `colab_cu_used`,
+`adr_0023_amendment_commit`, 사용자 결정 두 개(`newsletter_embedder`, `label_subset`)를 yaml `pre_run_record`와 A8.10에 적어 **문서 전용 PR**
+(yaml·매니페스트·ADR만)로 main에 넣는다. 그 PR이 병합되기 전에는 생성 호출을 하지 않는다. 시각 값(`export_t0_kst`, `export_body_expires_at`,
+`day_windows_utc`의 각 끝점)은 출력 그대로 **따옴표로 감싼 문자열**로 적는다 - 따옴표가 없으면 yaml이 날짜로 읽어 러너가 시작하지 않는다
+(`yaml.safe_dump`로 옮기면 알아서 감싼다).
+
+### 10.4 실행 (pre-flight → warmup 2 → eval 15, 상한 $1.00, 누적 $1.50, 벽시계 2시간)
+1. 실행 직전에 선불 잔액(AI Studio 결제 화면, ₩)과 읽은 시각을 적는다. `PYTHONPATH=ai_workspace python -m core.llm.spend_cli summary`로 지출
+   원장(ADR 0035)이 멀쩡한지 본다. 2026-10-17 현재 메인 체크아웃에는 원장이 없다 - 첫 유료 실행 전에 사람이 `spend_cli init`으로 만든다(가드는
+   원장을 만들지 않는다). 러너가 다시 확인한다 - 원장이 없거나 전체 상한 여유가 $2.00 미만이면 시작하지 않는다.
+2. 메인 체크아웃을 실행 전 기록 PR이 병합된 main으로 맞춘다(`git checkout --detach origin/main`, 깨끗한 트리). `GEMINI_API_KEY`가 환경에 있다.
+3. ```bash
+   caffeinate -i nice -n 19 env OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 PYTHONPATH=ai_workspace \
+     python -m evaluation.llm.e0_baseline run --export-dir data/exports/<T0> --pack-dir data/exports/<T0>/embeddings
+   ```
+   화면에는 `[e0] eval 3 처리 · 누적 $0.0123` 같은 줄만 나온다. 시작 검사가 하나라도 실패하면 사유 목록과 종료 코드 2로 끝나고 아무것도
+   만들지 않는다. 기록은 `data/experiments/e0/<run>/`(저장소 밖)이다. `run`에는 사전 등록·매니페스트 경로를 바꾸는 옵션이 없다 - 러너는
+   등록한 경로의 두 파일을 읽고, 그 내용이 `git show HEAD:<경로>`와 같지 않으면(커밋하지 않은 사본·고친 값) 시작하지 않는다(A8.2 e).
+4. 프로세스가 죽었을 때만(절전·크래시·네트워크·운영자 중지) 같은 명령에 `--resume <run> --resume-reason "<사유>"`를 붙여 다시 돌린다. 돌던
+   클러스터는 `interrupted`로 닫히고 다시 돌지 않는다. 예산·인프라로 멈춘 run은 이어 돌지 않는다(부분 실행이거나 void다 - A8.5·A8.6).
+
+### 10.5 리포트와 라벨
+1. 마지막 호출 24시간 뒤 잔액을 다시 읽는다. 그 사이 다른 Gemini 호출이 있었는지 적는다.
+2. ```bash
+   PYTHONPATH=ai_workspace python -m evaluation.llm.e0_report --run data/experiments/e0/<run> --export-dir data/exports/<T0> \
+     --balance-before <₩> --balance-before-at <시각> --balance-after <₩> --balance-after-at <시각> --billing-fx 1400 --other-gemini-calls no
+   ```
+   `reports/llm/e0_baseline_v1.{json,md}`를 쓴다(텍스트 조각이 있으면 쓰지 않는다). 커밋하면서 `reports/README.md`의 예약 행을 링크로 바꾸고,
+   ADR 0010 증거에 첫 실제 차단율을 날짜와 함께 덧붙인다(A8.7).
+3. ```bash
+   PYTHONPATH=ai_workspace python -m evaluation.llm.e0_labels export-blind --run data/experiments/e0/<run> --export-dir data/exports/<T0>
+   PYTHONPATH=ai_workspace python -m evaluation.llm.labeling_app --run e0-baseline-v1-<run>    # 127.0.0.1:8765, 밤 세션 ≤1h
+   ```
+   클러스터 라벨을 먼저 모두 단다. 재라벨은 48시간 뒤 `?round=2`. 라벨 마감(retention.json) 뒤에는 UI가 열리지 않고 본문이 지워진다.
+4. 라벨이 끝나면 2의 명령에 `--labels-dir data/labels/e0-baseline-v1-<run> --label-hours <실측>`을 더해 리포트를 다시 만든다.
+5. 라벨 리포트를 커밋하면 반출본의 본문을 만료 전이라도 지운다: `python scripts/export_news_raw.py purge --dir data/exports/<T0> --everything`.
 
