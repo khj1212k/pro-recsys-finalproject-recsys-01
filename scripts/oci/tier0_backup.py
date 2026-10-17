@@ -13,6 +13,8 @@ VM 호스트의 cron(`scripts/oci/tier0-backup.cron` → /etc/cron.d/)이 root�
           -> nobody/daily/ (수명 주기 규칙이 35일 뒤 삭제), 그달의 첫 사본은 nobody/monthly/에도 (삭제 규칙 없음)
   full    nobody의 셋 + news_raw.bodies.copy.gz(최근 27일 수집분과 재배포 가능 출처의 본문)
           -> full/ (수명 주기 규칙이 1일 뒤 삭제). 이름에 만료일 = 든 상업 언론사 본문 중 가장 오래된 것의 수집 + 30일
+          설정 `full_enabled`가 true일 때만 만든다(기본 꺼짐 - 본문 사본의 위치는 ADR 0023 개정 2026-10-17 2가 승인돼야 한다).
+          꺼져 있으면 본문은 VM 작업 디렉터리에도 쓰지 않는다.
 
 full에 27일까지만 담는 이유(ADR 0023): 덤프는 행 단위로 지울 수 없어 가장 오래된 본문이 만료될 때 통째로 지워야
 한다. 보존 잡이 매일 돌면 DB 전체 덤프의 가장 오래된 본문은 늘 30일 직전이라 뜨자마자 만료된다. Object Storage의
@@ -28,6 +30,8 @@ full에 27일까지만 담는 이유(ADR 0023): 덤프는 행 단위로 지울 �
   daily          cron용: backup → idle-check → 복원 검증이 28일 넘게 없었으면 방금 올린 본문 없는 사본으로 restore-check
 
 종료 코드: 0 성공, 1 실패, 2 잘못된 인자, 4 다른 실행이 돌고 있어 건너뜀.
+DB 도구의 오류 출력은 오류 줄만, 따옴표 안 값을 지우고 싣는다(scrub_db_stderr) - COPY 오류의 CONTEXT·DETAIL 줄에는 행 내용(제목·본문
+조각)이 실릴 수 있다. job_runs.error와 cron 로그에는 건수·해시·시각과 오류 종류만 남긴다(ADR 0023).
 일하는 디렉터리(--work-dir)는 실행이 끝나면 비운다(성공·실패 모두). 시작할 때도 지난 실행이 남긴 파일을 지운다 -
 full 사본에는 본문이 있으므로 VM 디스크에 남기지 않는다(ADR 0023 개정 2026-10-17의 "VM의 백업 작업 디렉터리").
 """
@@ -44,6 +48,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import urllib.request
 from dataclasses import dataclass, field
@@ -65,6 +70,11 @@ BODY_RETENTION_DAYS = 30
 # full 사본이 Object Storage에 머무는 최대 기간(1일 삭제 규칙 + 다음 UTC 자정 올림 + 하루 한 번 실행)보다 넉넉하게.
 FULL_MIN_REMAINING_DAYS = 3
 BODY_BACKUP_MAX_AGE_DAYS = BODY_RETENTION_DAYS - FULL_MIN_REMAINING_DAYS  # 27
+# 수명 주기 규칙이 도는지 보는 경고 기준(시간). D일 18:1x에 만든 full 객체는 수정 시각이 D+1 00:00으로 올림된 뒤 1일 → D+2 00:00부터
+# 대상이고 규칙은 하루 한 번 돈다 → 늦어도 D+3 00:00 전에 지워진다. 목록은 매일 같은 시각의 백업이 보므로 정상이어도 D+2 조회(약 48시간)
+# 에는 남아 있을 수 있고, D+3 조회(약 72시간)에는 없어야 한다. 그 사이 값이라 오탐 없이 D+3 조회에서 잡는다 - 72로 두면 D+3 조회가
+# 몇 분만 일러도(71.98시간) 놓치고 하루 뒤에야 경고한다. D+3 18:1x는 그 객체의 가장 오래된 상업 본문이 30일에 닿는 무렵이다.
+FULL_LIFECYCLE_ALERT_HOURS = 60
 # 재배포 가능 출처(config/sources.py). 면제 조건은 jobs/tasks/retention.py의 EXEMPT_SQL과 같은 식이다(테스트가 대조).
 EXEMPT_PRESS_NAMES = ("정책브리핑",)
 EXEMPT_SQL_TEMPLATE = "(p.press_name = ANY(%(exempt_presses)s) AND COALESCE(n.raw_news_kogl_type, 1) = 1)"
@@ -233,9 +243,9 @@ def bucket_summary(objects: Iterable[Dict[str, Any]], now: datetime) -> Dict[str
 
 
 def lifecycle_warnings(summary: Dict[str, Any]) -> List[str]:
-    """full 객체가 3일 넘게 남아 있으면 수명 주기 규칙이 돌지 않는 것이다(본문 30일을 넘길 수 있다)."""
+    """full 객체가 FULL_LIFECYCLE_ALERT_HOURS 넘게 남아 있으면 수명 주기 규칙이 돌지 않는 것이다(본문 30일을 넘길 수 있다)."""
     age = summary.get("oldest_full_age_hours")
-    if age is not None and age > FULL_MIN_REMAINING_DAYS * 24:
+    if age is not None and age > FULL_LIFECYCLE_ALERT_HOURS:
         return [f"full/ 객체가 {age}시간째 남아 있다 - 1일 삭제 규칙이 돌지 않는다(버킷 수명 주기·서비스 정책 확인, 런북 6.5)"]
     return []
 
@@ -299,6 +309,37 @@ def clear_dir(path: str) -> List[str]:
     return removed
 
 
+_DB_ERROR_LINE_RE = re.compile(r"\b(?:ERROR|FATAL|PANIC|error|fatal):")
+# 셋째 갈래: 닫히지 않은 따옴표(값이 줄을 넘긴 경우) 뒤는 줄 끝까지 버린다.
+_QUOTED_RE = re.compile(r'"([^"]*)"|\'([^\']*)\'|(["\']).*$')
+# 이 스키마의 식별자(소문자 테이블·열·제약 이름)만 남긴다. 기사 문장이나 대소문자가 섞인 값은 지운다.
+_IDENT_RE = re.compile(r"^[a-z_][a-z0-9_.$]{0,62}$")
+STDERR_MAX_LINES = 3
+STDERR_MAX_CHARS = 600
+
+
+def scrub_db_stderr(raw: Any) -> str:
+    """psql·pg_dump·pg_restore의 stderr에서 실을 수 있는 부분만 남긴다. 행 내용이 실릴 수 있는 줄(CONTEXT·DETAIL·HINT·
+    QUERY·LINE·'Command was' 등)은 버리고 오류 줄(ERROR:·FATAL:·error:)만, 따옴표 안의 값은 소문자 식별자 모양(테이블·열
+    이름)이 아니면 '…'로 바꾼다 - COPY 오류의 CONTEXT에는 문제 행의 내용이, 형식 오류 메시지에는 그 값이 따옴표 안에 들어간다."""
+    text = raw.decode(errors="replace") if isinstance(raw, (bytes, bytearray)) else str(raw or "")
+
+    def quoted(m: "re.Match[str]") -> str:
+        if m.group(3) is not None:
+            return m.group(3) + "…"
+        value = m.group(1) if m.group(1) is not None else m.group(2)
+        q = '"' if m.group(1) is not None else "'"
+        return f"{q}{value}{q}" if _IDENT_RE.match(value) else f"{q}…{q}"
+
+    kept = [_QUOTED_RE.sub(quoted, line.strip()) for line in text.splitlines() if _DB_ERROR_LINE_RE.search(line)]
+    if not kept:
+        return "(오류 줄 없음 - stderr 내용은 싣지 않는다)"
+    out = " | ".join(kept[:STDERR_MAX_LINES])
+    if len(kept) > STDERR_MAX_LINES:
+        out += f" | 외 오류 줄 {len(kept) - STDERR_MAX_LINES}개"
+    return out[:STDERR_MAX_CHARS]
+
+
 # --------------------------------------------------------------------------- DB와 업로드 (외부 명령)
 
 @dataclass
@@ -323,7 +364,7 @@ class Db:
                               input=input_text.encode() if input_text is not None else None)
         if proc.returncode != 0:
             raise BackupError(f"{what or argv[len(self.exec_prefix)]} 실패(종료 코드 {proc.returncode}): "
-                              f"{proc.stderr.decode(errors='replace').strip()[-800:]}")
+                              f"{scrub_db_stderr(proc.stderr)}")
         return proc
 
     def psql_script(self, sql: str, *, dbname: Optional[str] = None, variables: Optional[Dict[str, str]] = None,
@@ -347,9 +388,11 @@ class SnapshotSession:
 
     def __init__(self, db: Db):
         self.db = db
+        # stderr는 cron 로그로 그대로 흘리지 않고 임시 파일에 받아, 실패했을 때 scrub_db_stderr를 거쳐 싣는다.
+        self.stderr = tempfile.TemporaryFile()
         self.proc = subprocess.Popen(
             db.cmd("psql", "-X", "-q", "-A", "-t", "-v", "ON_ERROR_STOP=1"),
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, cwd=db.cwd, env=db.env,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.stderr, text=True, cwd=db.cwd, env=db.env,
         )
         self.snapshot = validate_snapshot_id(self._ask(
             "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;\nSELECT pg_export_snapshot();"))
@@ -361,7 +404,10 @@ class SnapshotSession:
         while True:
             line = self.proc.stdout.readline()
             if line == "":
-                raise BackupError(f"스냅숏 세션이 끝났다(종료 코드 {self.proc.poll()})")
+                self.proc.wait(timeout=60)
+                self.stderr.seek(0)
+                raise BackupError(f"스냅숏 세션이 끝났다(종료 코드 {self.proc.returncode}): "
+                                  f"{scrub_db_stderr(self.stderr.read())}")
             if line.strip() == self.END:
                 return "\n".join(lines).strip()
             lines.append(line.rstrip("\n"))
@@ -378,6 +424,7 @@ class SnapshotSession:
                 self.proc.wait(timeout=60)
             except Exception:
                 self.proc.kill()
+        self.stderr.close()
 
 
 def snapshot_copy_argv(db: Db, snapshot: str, copy_sql: str) -> List[str]:
@@ -397,7 +444,7 @@ def copy_out_gzip(db: Db, argv: List[str], path: str) -> int:
             out.write(chunk)
     err = proc.stderr.read()
     if proc.wait() != 0:
-        raise BackupError(f"COPY 실패(종료 코드 {proc.returncode}): {err.decode(errors='replace').strip()[-800:]}")
+        raise BackupError(f"COPY 실패(종료 코드 {proc.returncode}): {scrub_db_stderr(err)}")
     return rows
 
 
@@ -414,7 +461,7 @@ def copy_in_gzip(db: Db, argv: List[str], path: str, *, prefix: bytes = b"", suf
         pass
     err = proc.stderr.read()
     if proc.wait() != 0:
-        raise BackupError(f"COPY FROM 실패(종료 코드 {proc.returncode}): {err.decode(errors='replace').strip()[-800:]}")
+        raise BackupError(f"COPY FROM 실패(종료 코드 {proc.returncode}): {scrub_db_stderr(err)}")
 
 
 @dataclass
@@ -513,8 +560,9 @@ class BackupResult:
 
 def build_archives(db: Db, work: str, *, body_max_age_days: int = BODY_BACKUP_MAX_AGE_DAYS,
                    script_git_sha: Optional[str] = None,
-                   exempt_presses: Sequence[str] = EXEMPT_PRESS_NAMES) -> BackupResult:
-    """같은 스냅숏에서 두 아카이브를 만든다(올리지는 않는다). 표준출력·manifest에는 건수·크기·해시·시각만 남긴다."""
+                   exempt_presses: Sequence[str] = EXEMPT_PRESS_NAMES, full: bool = True) -> BackupResult:
+    """같은 스냅숏에서 두 아카이브를 만든다(올리지는 않는다). 표준출력·manifest에는 건수·크기·해시·시각만 남긴다.
+    full=False면 본문 없는 사본만 만든다 - 본문을 읽는 COPY 자체를 돌리지 않는다."""
     if not 1 <= body_max_age_days <= BODY_BACKUP_MAX_AGE_DAYS:
         raise BackupError(f"본문 사본 기간은 1~{BODY_BACKUP_MAX_AGE_DAYS}일이어야 한다: {body_max_age_days}")
     os.makedirs(work, mode=0o700, exist_ok=True)
@@ -544,10 +592,10 @@ def build_archives(db: Db, work: str, *, body_max_age_days: int = BODY_BACKUP_MA
         news = session.json(
             "SELECT json_build_object('rows', count(*), 'bodies_in_db', count(*) FILTER (WHERE raw_news_content <> ''), "
             "'max_crawled_at_utc', max(raw_news_crawled_at)) FROM public.news_raw")
-        bodies = session.json(bodies_stats_sql(meta["cutoff_utc"], exempt_presses))
+        bodies = session.json(bodies_stats_sql(meta["cutoff_utc"], exempt_presses)) if full else None
         snapshot_at = parse_utc(meta["snapshot_at_utc"])
-        oldest = bodies.get("oldest_commercial_crawled_at_utc")
-        expires_at = full_expiry(parse_utc(oldest) if oldest else None, snapshot_at)
+        oldest = bodies.get("oldest_commercial_crawled_at_utc") if full else None
+        expires_at = full_expiry(parse_utc(oldest) if oldest else None, snapshot_at) if full else None
 
         paths = {name: os.path.join(work, name) for name in ARCHIVE_MEMBERS["full"]}
         dump = db.cmd("pg_dump", "-Fc", "--snapshot", session.snapshot, "--exclude-table-data", "public.news_raw")
@@ -557,13 +605,13 @@ def build_archives(db: Db, work: str, *, body_max_age_days: int = BODY_BACKUP_MA
                                     paths["news_raw.nobody.copy.gz"])
         body_rows = copy_out_gzip(db, snapshot_copy_argv(db, session.snapshot,
                                                          bodies_copy_sql(meta["cutoff_utc"], exempt_presses)),
-                                  paths["news_raw.bodies.copy.gz"])
+                                  paths["news_raw.bodies.copy.gz"]) if full else None
     finally:
         session.close()
 
     if nobody_rows != counts["news_raw"]:
         raise BackupError(f"news_raw 사본 행 수 {nobody_rows}가 스냅숏의 count(*) {counts['news_raw']}와 다르다")
-    if body_rows != bodies["rows"]:
+    if full and body_rows != bodies["rows"]:
         raise BackupError(f"본문 사본 행 수 {body_rows}가 스냅숏의 조회 {bodies['rows']}와 다르다")
 
     base = {
@@ -579,8 +627,10 @@ def build_archives(db: Db, work: str, *, body_max_age_days: int = BODY_BACKUP_MA
                      "content_rule": "'' 그대로, 본문이 있던 행은 NULL"},
     }
     names = object_names(snapshot_at, expires_at)
+    if not full:
+        del names["full"]
     result = BackupResult(stats={"snapshot_at_utc": snapshot_at.isoformat(), "names": names})
-    for kind in ("nobody", "full"):
+    for kind in ("nobody", "full") if full else ("nobody",):
         manifest = dict(base, kind=kind, files={})
         if kind == "full":
             manifest["bodies"] = {
@@ -602,7 +652,11 @@ def build_archives(db: Db, work: str, *, body_max_age_days: int = BODY_BACKUP_MA
         os.unlink(mpath)
         result.archives[kind] = archive
         result.stats[kind] = {"bytes": file_digests(archive)["bytes"], "news_raw_rows": nobody_rows}
-    result.stats["full"].update({"body_rows": body_rows, "expires_at_utc": expires_at.isoformat() if expires_at else None})
+    if full:
+        result.stats["full"].update({"body_rows": body_rows,
+                                     "expires_at_utc": expires_at.isoformat() if expires_at else None})
+    else:
+        result.stats["full"] = {"disabled": True}
     result.stats["table_rows"] = counts
     result.stats["alembic_version"] = alembic
     for member in ARCHIVE_MEMBERS["full"]:
@@ -612,10 +666,10 @@ def build_archives(db: Db, work: str, *, body_max_age_days: int = BODY_BACKUP_MA
 
 
 def run_backup(db: Db, uploader: Optional[Uploader], work: str, *, body_max_age_days: int = BODY_BACKUP_MAX_AGE_DAYS,
-               script_git_sha: Optional[str] = None, keep: Sequence[str] = (),
+               script_git_sha: Optional[str] = None, keep: Sequence[str] = (), full: bool = True,
                now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)) -> BackupResult:
-    """아카이브를 만들고(uploader가 있으면) 올린다. keep에 없는 아카이브는 끝나면 지운다."""
-    result = build_archives(db, work, body_max_age_days=body_max_age_days, script_git_sha=script_git_sha)
+    """아카이브를 만들고(uploader가 있으면) 올린다. keep에 없는 아카이브는 끝나면 지운다. full=False면 full/을 올리지 않는다."""
+    result = build_archives(db, work, body_max_age_days=body_max_age_days, script_git_sha=script_git_sha, full=full)
     try:
         if uploader is not None:
             names = result.stats["names"]
@@ -625,8 +679,9 @@ def run_backup(db: Db, uploader: Optional[Uploader], work: str, *, body_max_age_
             if not uploader.list(names["monthly"]):
                 result.stats["monthly"] = upload_verified(uploader, names["monthly"], result.archives["nobody"],
                                                           {**meta, "kind": "nobody"})
-            result.stats["full"].update(upload_verified(uploader, names["full"], result.archives["full"],
-                                                        {**meta, "kind": "full"}))
+            if "full" in result.archives:
+                result.stats["full"].update(upload_verified(uploader, names["full"], result.archives["full"],
+                                                            {**meta, "kind": "full"}))
             summary = bucket_summary(uploader.list(), now())
             result.stats["bucket"] = summary
             result.stats["warnings"] = lifecycle_warnings(summary)
@@ -795,7 +850,8 @@ def load_config(path: Optional[str]) -> Dict[str, Any]:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="tier0_backup.py", description=__doc__.splitlines()[0])
-    p.add_argument("--config", help="JSON: namespace, bucket, compose_dir, db_user, db_name, work_dir (기계별 값, 저장소 밖)")
+    p.add_argument("--config", help="JSON: namespace, bucket, compose_dir, db_user, db_name, work_dir, full_enabled "
+                                    "(기계별 값, 저장소 밖)")
     p.add_argument("--compose-dir", help="docker compose 프로젝트 디렉터리(VM의 ~ubuntu/newsletter-recsys)")
     p.add_argument("--db-exec", help=f"DB 도구 앞에 붙일 명령(기본 {DEFAULT_DB_EXEC!r}, 빈 문자열이면 로컬 도구)")
     p.add_argument("--db-user")
@@ -806,6 +862,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--oci-auth", default=os.getenv("OCI_CLI_AUTH", "instance_principal"))
     p.add_argument("--git-sha", default=os.getenv("TIER0_BACKUP_GIT_SHA"))
     p.add_argument("--no-record", action="store_true", help="job_runs에 남기지 않는다")
+    p.add_argument("--full-enabled", choices=("true", "false"),
+                   help="본문 사본(full/)을 만들어 올릴지. 기본은 config의 full_enabled, 없으면 false")
     sub = p.add_subparsers(dest="command", required=True)
     b = sub.add_parser("backup")
     b.add_argument("--dry-run", action="store_true", help="아카이브를 만들고 크기·건수만 보인 뒤 지운다(올리지 않음)")
@@ -832,6 +890,8 @@ def resolve(args: argparse.Namespace) -> argparse.Namespace:
                          ("bucket", DEFAULT_BUCKET)):
         if getattr(args, key) is None:
             setattr(args, key, cfg.get(key, default))
+    # 본문 사본은 명시적으로 켠 기계에서만 만든다(JSON true만 켬으로 본다 - "false" 같은 문자열을 켬으로 읽지 않는다).
+    args.full = args.full_enabled == "true" if args.full_enabled else cfg.get("full_enabled") is True
     return args
 
 
@@ -886,13 +946,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     db = make_db(args)
     try:
         if args.command == "backup" and args.dry_run:
-            result = run_backup(db, None, work, body_max_age_days=args.body_max_age_days, script_git_sha=args.git_sha)
+            result = run_backup(db, None, work, body_max_age_days=args.body_max_age_days, script_git_sha=args.git_sha,
+                                full=args.full)
             log({"command": "backup", "dry_run": True, "stats": result.stats})
             return EXIT_OK
         if args.command == "backup":
             return recorded(db, HOST_BACKUP_JOB, args, lambda: run_backup(
                 db, make_uploader(args), work, body_max_age_days=args.body_max_age_days,
-                script_git_sha=args.git_sha).stats)
+                script_git_sha=args.git_sha, full=args.full).stats)
         if args.command == "idle-check":
             os.environ.setdefault("OCI_CLI_AUTH", args.oci_auth)
             return recorded(db, IDLE_CHECK_JOB, args, lambda: run_idle_check(args.days))
@@ -930,7 +991,7 @@ def run_daily(db: Db, args: argparse.Namespace, work: str) -> int:
 
     def backup() -> Dict[str, Any]:
         result = run_backup(db, make_uploader(args), work, body_max_age_days=args.body_max_age_days,
-                            script_git_sha=args.git_sha, keep=("nobody",))
+                            script_git_sha=args.git_sha, keep=("nobody",), full=args.full)
         kept.update(result.archives)
         return result.stats
 

@@ -159,6 +159,32 @@ def test_bucket_summary_groups_by_prefix_and_flags_a_stuck_lifecycle_rule():
     assert tb.lifecycle_warnings(tb.bucket_summary(objects[:3], now)) == []
 
 
+def _backup_cron_time():
+    cron = (REPO / "scripts" / "oci" / "tier0-backup.cron").read_text(encoding="utf-8")
+    line = next(l for l in cron.splitlines() if "tier0_backup.py" in l and not l.startswith("#"))
+    minute, hour, *_ = line.split()
+    return int(hour), int(minute)
+
+
+@pytest.mark.parametrize("listed_late_by", [timedelta(0), timedelta(minutes=2), timedelta(hours=2)])
+def test_a_stuck_lifecycle_rule_is_caught_by_the_listing_on_day_3_without_false_alarms_on_day_2(listed_late_by):
+    """D일 백업이 만든 full 객체: 정상이면 D+3 00:00 전에 지워진다(수정 시각 올림 + 1일 + 하루 한 번). 매일 같은 시각의
+    목록이 보는 나이는 D+2에 약 48시간(아직 남아 있을 수 있다), D+3에 약 72시간(없어야 한다). 72시간 기준이면 D+3 목록이
+    몇 분만 일러도(71.98시간) 놓쳤다. listed_late_by: 그날 목록이 업로드보다 늦은 만큼(실행 시간·nice)."""
+    hour, minute = _backup_cron_time()
+    created = datetime(2026, 10, 17, hour, minute, tzinfo=UTC) + timedelta(minutes=2)  # 업로드는 시작 뒤 1~3분
+    objects = [{"name": "full/x.tar", "size": 1, "time-created": created.isoformat()}]
+    day = timedelta(days=1)
+    for d, warns in ((1, False), (2, False), (3, True)):
+        listed = created - timedelta(minutes=2) + d * day + listed_late_by - timedelta(seconds=72)  # 이른 쪽으로 치우친 목록
+        assert bool(tb.lifecycle_warnings(tb.bucket_summary(objects, listed))) is warns, (d, listed)
+    # 정상 수명(최대 D+3 00:00) 동안은 언제 목록을 봐도 경고하지 않는다
+    latest_normal_deletion = (created + day).replace(hour=0, minute=0) + day + day
+    assert (latest_normal_deletion - created).total_seconds() / 3600 < tb.FULL_LIFECYCLE_ALERT_HOURS
+    # D+3 목록 시각은 그 객체의 가장 오래된 상업 본문이 30일에 닿는 무렵이다(스냅숏 + 3일 이상 남겨 담는다)
+    assert tb.FULL_LIFECYCLE_ALERT_HOURS < tb.FULL_MIN_REMAINING_DAYS * 24 - 6
+
+
 def test_clear_dir_removes_leftover_files_but_keeps_the_directory(tmp_path):
     (tmp_path / "full.tar").write_bytes(b"x")
     (tmp_path / "restore").mkdir()
@@ -175,6 +201,114 @@ def test_copy_out_counts_rows_and_gzip_round_trips(tmp_path):
     assert gzip.open(path).read() == b"1\ta\n2\tb\n"
     with pytest.raises(tb.BackupError):
         tb.copy_out_gzip(db, ["sh", "-c", "echo boom >&2; exit 3"], str(tmp_path / "bad.gz"))
+
+
+STDERR_WITH_ROW = (
+    "psql:<stdin>:4: ERROR:  extra data after last expected column\n"
+    "CONTEXT:  COPY tier0_restore_bodies, line 1: \"1\t합성 기사 문장 SENTINEL-BODY 조각\textra\"\n"
+    "psql:<stdin>:5: ERROR:  invalid input syntax for type bigint: \"SENTINEL-BODY 다음 값\"\n"
+    "DETAIL:  Failing row contains (1, SENTINEL-BODY).\n"
+    "HINT:  SENTINEL-BODY\n"
+)
+
+
+def test_db_stderr_keeps_error_kinds_and_identifiers_but_not_row_content():
+    out = tb.scrub_db_stderr(STDERR_WITH_ROW.encode())
+    assert "SENTINEL" not in out and "합성" not in out
+    assert "extra data after last expected column" in out and 'invalid input syntax for type bigint: "…"' in out
+    kept = tb.scrub_db_stderr('ERROR:  null value in column "raw_news_content" of relation "news_raw" violates not-null')
+    assert '"raw_news_content"' in kept and '"news_raw"' in kept
+    assert tb.scrub_db_stderr('ERROR:  bad value "SENTINEL-BODY 줄이 넘어감') == 'ERROR:  bad value "…'
+    assert "SENTINEL" not in tb.scrub_db_stderr("CONTEXT:  COPY x, line 2: SENTINEL-BODY")
+    assert len(tb.scrub_db_stderr("\n".join(["ERROR: x"] * 50))) <= tb.STDERR_MAX_CHARS
+
+
+def _failing(tmp_path, stderr_text):
+    """psql처럼 stdin을 읽고 stderr에 여러 줄을 쓴 뒤 1로 끝나는 명령."""
+    path = tmp_path / "stderr.txt"
+    path.write_text(stderr_text, encoding="utf-8")
+    return ["sh", "-c", 'cat > /dev/null; cat "$0" >&2; exit 1', str(path)]
+
+
+def test_copy_and_tool_failures_do_not_carry_row_content(tmp_path):
+    db = tb.Db(exec_prefix=[], user=None, name="x")
+    src = tmp_path / "in.gz"
+    with gzip.open(src, "wb") as f:
+        f.write(b"1\tSENTINEL-BODY\textra\n")
+    for call in (lambda: tb.copy_in_gzip(db, _failing(tmp_path, STDERR_WITH_ROW), str(src)),
+                 lambda: tb.copy_out_gzip(db, _failing(tmp_path, STDERR_WITH_ROW), str(tmp_path / "out.gz")),
+                 lambda: db.run(_failing(tmp_path, STDERR_WITH_ROW), input_text="x", what="pg_restore data")):
+        with pytest.raises(tb.BackupError) as exc:
+            call()
+        assert "SENTINEL" not in str(exc.value) and "ERROR:" in str(exc.value)
+
+
+def test_a_failed_run_keeps_row_content_out_of_job_runs_error_and_the_cron_log(tmp_path, monkeypatch, capsys):
+    recorded = []
+
+    class Recorder:
+        def __init__(self, db, job, sha):
+            self.job = job
+
+        def start(self):
+            pass
+
+        def finish(self, status, stats, error=None):
+            recorded.append((status, error))
+
+    def failing_backup(db, uploader, work, **kw):
+        tb.copy_out_gzip(db, _failing(tmp_path, STDERR_WITH_ROW), os.path.join(work, "x.gz"))
+
+    monkeypatch.setattr(tb, "JobRecorder", Recorder)
+    monkeypatch.setattr(tb, "run_backup", failing_backup)
+    rc = tb.main(["--work-dir", str(tmp_path / "root"), "--namespace", "ns", "--db-exec", "", "backup"])
+    assert rc == tb.EXIT_FAILED
+    (status, error), = recorded
+    assert status == "failed" and "COPY 실패" in error and "SENTINEL" not in error
+    out = capsys.readouterr()
+    assert "SENTINEL" not in out.out and "SENTINEL" not in out.err
+
+
+def test_the_body_copy_is_off_unless_the_machine_config_turns_it_on(tmp_path):
+    def full(cfg, *cli):
+        path = tmp_path / "c.json"
+        path.write_text(json.dumps(cfg))
+        return tb.resolve(tb.build_parser().parse_args(["--config", str(path), *cli, "backup"])).full
+
+    assert full({}) is False
+    assert full({"full_enabled": True}) is True
+    assert full({"full_enabled": "true"}) is False  # 문자열은 켬으로 읽지 않는다
+    assert full({"full_enabled": False}) is False
+    assert full({"full_enabled": True}, "--full-enabled", "false") is False
+    assert full({}, "--full-enabled", "true") is True
+    assert tb.resolve(tb.build_parser().parse_args(["backup"])).full is False  # 설정 파일 없이
+
+
+def test_daily_without_full_enabled_uploads_only_the_body_free_copies(tmp_path, monkeypatch, capsys):
+    calls = []
+    _fake_build(tmp_path, monkeypatch, calls)
+    up = FakeUploader()
+
+    class NullRecorder:
+        def __init__(self, *a):
+            pass
+
+        def start(self):
+            pass
+
+        def finish(self, *a, **kw):
+            pass
+
+    monkeypatch.setattr(tb, "JobRecorder", NullRecorder)
+    monkeypatch.setattr(tb, "Uploader", lambda **kw: up)
+    root = tmp_path / "r"
+    assert tb.main(["--work-dir", str(root), "--namespace", "ns", "--db-exec", "", "--no-record", "backup"]) == 0
+    assert calls == [False]
+    assert [n for n, _ in up.puts] == ["nobody/daily/tier0-20261017T181000Z.nobody.tar",
+                                       "nobody/monthly/tier0-2026-10.nobody.tar"]
+    event = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert event["stats"]["full"] == {"disabled": True} and "full" not in event["stats"]["names"]
+    assert list((root / "work").iterdir()) == []
 
 
 class FakeUploader:
@@ -194,16 +328,22 @@ class FakeUploader:
         return [o for n, o in sorted(self.objects.items()) if n.startswith(prefix)]
 
 
-def _fake_build(tmp_path, monkeypatch):
+def _fake_build(tmp_path, monkeypatch, calls=None):
     def build(db, work, **kw):
+        full = kw.get("full", True)
+        if calls is not None:
+            calls.append(full)
         archives = {}
-        for kind in ("nobody", "full"):
+        for kind in ("nobody", "full") if full else ("nobody",):
             p = Path(work) / f"{kind}.tar"
             p.write_bytes(kind.encode() * 10)
             archives[kind] = str(p)
         snap = datetime(2026, 10, 17, 18, 10, tzinfo=UTC)
-        stats = {"snapshot_at_utc": snap.isoformat(), "names": tb.object_names(snap, snap + timedelta(days=26)),
-                 "nobody": {"bytes": 60}, "full": {"bytes": 40, "body_rows": 3}}
+        names = tb.object_names(snap, snap + timedelta(days=26))
+        if not full:
+            del names["full"]
+        stats = {"snapshot_at_utc": snap.isoformat(), "names": names, "nobody": {"bytes": 60},
+                 "full": {"bytes": 40, "body_rows": 3} if full else {"disabled": True}}
         return tb.BackupResult(stats=stats, archives=archives)
     monkeypatch.setattr(tb, "build_archives", build)
 
