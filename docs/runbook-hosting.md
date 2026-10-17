@@ -560,9 +560,56 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
   count(*) FILTER (WHERE status <> 'succeeded') AS failed FROM job_runs WHERE job = 'ingest' GROUP BY 1 ORDER BY 1\""
 ```
 
-하루 `runs`가 24보다 적으면 그만큼 건너뛴 것이다. 지금까지 긴 회차는 동아일보 요청 실패와 같이 나타났다
-(fetch_failed 343건 중 339건이 동아일보, 원인 미확정). 손볼 수 있는 곳은 추출 요청의 시간 제한·재시도 횟수와
-언론사별 격리인데, 아직 바꾸지 않았다 - 바꾸면 ADR 0026을 갱신한다.
+하루 `runs`가 24보다 적으면 그만큼 건너뛴 것이다.
+
+**원인(2026-10-17 진단, [ADR 0026](adr/0026-hosting-tiers-and-contingency.md) 증거 10).** 동아일보 서버가 VM에서 온
+기사 요청을 응답 없이 끊거나(연결·TLS는 되고 약 4초 뒤 빈 응답) 아무것도 보내지 않고 붙잡아 둔다. 같은 시각 Mac에서
+보낸 같은 URL·같은 User-Agent 요청은 0.1~0.3초에 200이었다(20/20, VM은 0/20). HTTP 응답이 아예 없으므로
+4xx/5xx·리다이렉트 문제가 아니고, 내려받은 페이지에서는 본문이 그대로 추출된다(최근 7일 동아일보 `empty` 0건) — 페이지 개편도 아니다. 긴 회차는 이 실패가 trafilatura 안의 숨은 재시도(호출 1번에 요청 3번 +
+30초 대기)와 우리 재시도 3번에 곱해진 결과다 — 09-26 ~ 10-17 ingest 418회에서 추출 시간 ≈ 181초 + 실패 기사 1건당
+120.5초(R² 0.96). VM의 IP 하나 때문인지, OCI 대역·일본 출발이라서인지는 가르지 못했다(VM이 한 대뿐).
+
+**코드의 대응(브랜치 `fix/extraction-donga-failures`, ADR 0026 결정 9 — Tier 0에는 아직 배포하지 않았다).**
+- 기사 요청 1번은 연결 10초·읽기 15초·전체 30초 상한, 숨은 재시도 없음. 같은 실행 안에서는 2번까지(대기 2초).
+- 같은 언론사 기사가 연달아 3건 다운로드에 실패하면 그 언론사의 남은 기사는 이번 실행에서 받지 않는다(DB에 쓰지 않으므로
+  시도 횟수를 쓰지 않고 다음 실행에서 다시 대상이 된다).
+- crontab의 `--extract-time-budget-s 2400`: 40분이 지나면 새 기사를 보내지 않고 남은 기사는 다음 회차로 미룬다.
+- 한 언론사만의 실패는 경고(원인 개수·미룬 건수 포함)로 알리고 실행은 성공시킨다(규칙은 [runbook.md](runbook.md) 잡 상태 절).
+  그래서 배포 뒤의 "잡 성공률"은 규칙이 바뀐 만큼 저절로 오른다 — 수집 품질은 아래처럼 언론사별 실패·미룬 건수와 정시
+  회차 수로 본다.
+
+배포는 4.1 절차를 따른다. 배포 뒤 회차별 확인:
+
+```bash
+ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db \
+  psql -U newsletter -d newsletter -c \"SELECT id, status, to_char(started_at, 'MM-DD HH24:MI') AS started, \
+  round(extract(epoch FROM finished_at - started_at)) AS took_s, stats->'extract'->>'fetch_failed' AS ff, \
+  stats->'extract'->>'deferred' AS deferred, stats->'extract'->'press_breaker' AS breaker, \
+  stats->'extract'->'fetch_fail_causes' AS causes, stats->'extract'->>'time_budget_exhausted' AS budget_hit \
+  FROM job_runs WHERE job = 'ingest' ORDER BY id DESC LIMIT 24\""
+```
+
+`breaker`가 매 회차 동아일보로 차 있으면 차단이 이어지는 것이다. 그동안 동아일보는 회차마다 가장 오래된 3~4건만 시험 삼아
+받고(그 기사들이 시도 상한 3회를 채우면 다음 기사로 넘어간다) 나머지는 기다린다. 미룬 기사도 수집 후 30일(ADR 0023)이
+지나면 대상에서 빠진다. `budget_hit`이 `true`인 회차가 이어지면 대상이 예산보다 많은 것이다 — 어느 언론사가 시간을 쓰는지
+`causes`의 `read_timeout`·`deadline`(요청마다 15~30초)을 본다.
+
+원인을 다시 확인할 때(같은 시각 VM과 Mac에서 같은 URL을 받는다. 본문은 저장하지 않고 상태 코드·시간만 본다):
+
+```bash
+URL=<news_raw에서 고른 동아일보 fetch_failed 기사 URL>
+FMT='%{http_code} connect=%{time_connect} ttfb=%{time_starttransfer} total=%{time_total} bytes=%{size_download}\n'
+UA='trafilatura/2.2.0 (+https://github.com/adbar/trafilatura)'
+ssh -F .ops/micro/ssh_config micro "curl -sS -o /dev/null -A '$UA' --max-time 45 -w '$FMT' '$URL'" &
+curl -sS -o /dev/null -A "$UA" --max-time 45 -w "$FMT" "$URL"; wait
+```
+
+VM 쪽이 `Empty reply from server`(약 4초) 또는 0바이트 시간 초과이고 Mac 쪽이 200이면 증거 10과 같은 상태다.
+
+값을 바꾸려면 `ai_workspace/config/settings.py`의 `EXTRACT_*` 기본값이나 crontab을 고쳐 다시 배포한다(compose는 이 환경변수를
+컨테이너로 넘기지 않는다). 차단을 피하려고 User-Agent를 바꾸거나 프록시·다른 주소로 우회하지 않는다 — 증거 10에서 브라우저
+User-Agent도 똑같이 막혔다. 동아일보를 어디서 얼마나 수집할지(지금처럼 VM에서 받을 수 있는 만큼 / 클라우드가 아닌 곳에서 동아일보만 /
+Tier 0 피드에서 빼기)는 정하지 않았다(사용자 결정 대기).
 
 ### 6.7 AI타임스 기존 행의 발행 시각 보정 (제안 — 실행하지 않았다)
 

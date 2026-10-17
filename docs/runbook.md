@@ -103,8 +103,13 @@ docker compose exec db psql -U newsletter -d newsletter -c "
   프로세스 그룹에 SIGTERM을 직접 보낸다(유예 60초, `stop_grace_period`). 유예 안에 끝나지 않거나 OOM·SIGKILL로
   죽은 실행은 `running`으로 남았다가 다음 실행이 `abandoned`로 바꾸고 알림을 보낸다.
 - `running` 행의 `stats`는 잡이 도는 동안 갱신된다(ingest는 단계마다, embed는 배치마다) - 강제 종료된 실행도 어디까지 했는지 남는다.
-- `succeeded`여도 `stats->'warnings'`가 있으면 알림이 간다(예: 한 언론사 기사 3건 이상이 전부 다운로드 실패).
-  본문 다운로드 실패(`fetch_failed`+`error`)가 대상의 50% 이상(대상 5건 이상)이면 ingest는 `failed`로 끝난다.
+- `succeeded`여도 `stats->'warnings'`가 있으면 알림이 간다(예: 한 언론사의 본문 다운로드가 연달아 실패해 남은
+  기사를 다음 실행으로 미뤘다, 추출 시간 예산을 다 썼다).
+  ingest가 본문 다운로드 실패로 `failed`가 되는 것은 실패가 한 언론사로 설명되지 않을 때다 - 건강하지 않은 언론사가
+  두 곳 이상이거나, 가장 많이 실패한 언론사를 빼고도 받은 기사 5건 이상 중 절반 이상이 실패했을 때
+  ([ADR 0026](adr/0026-hosting-tiers-and-contingency.md) 결정 9). 이 규칙을 넣기 전 코드(Tier 0 VM의 `13801fc` 포함)는
+  "대상 5건 이상 중 50% 이상 실패면 `failed`"다 - 어느 규칙으로 돈 실행인지는 `job_runs.git_sha`로 가른다.
+  언론사별 실패 원인 개수는 `stats->'extract'->'fetch_fail_causes'`, 미룬 기사는 `stats->'extract'->'deferred'`다.
 - embed 행의 `device`가 `mps`면 호스트 에이전트, `cpu`면 컨테이너 실행이다.
 
 호스트 임베딩 에이전트:

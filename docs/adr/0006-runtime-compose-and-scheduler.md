@@ -94,6 +94,8 @@
    `job_runs.stats`는 끝에서만이 아니라 도중에도 쓴다(ingest 단계마다, embed 배치마다). ingest는 본문 다운로드 실패
    (`fetch_failed`+`error`)가 대상 5건 이상 중 50% 이상이면 실패, 한 언론사 3건 이상이 전부 실패하면 경고한다.
    추출 중 예외(`error`)도 시도 횟수를 올려 `MAX_EXTRACT_ATTEMPTS`(3)까지만 다시 받는다.
+   **2026-10-17:** 이 실패 조건은 [ADR 0026](0026-hosting-tiers-and-contingency.md) 결정 9가 언론사별로 바꿨다 - 한 언론사만의
+   실패(Tier 0에서 동아일보가 VM 출발 요청을 거부)는 경고로 알리고, 실패가 한 언론사로 설명되지 않을 때만 실행을 실패시킨다.
 10. **본문 해시로 중복 기사를 거른다**(Alembic `d48994e9d26e`). 동아일보 total.xml은 같은 기사를 `/news/list/...`로
     내보냈다가 분류 뒤 `/news/It/...`처럼 섹션 경로로 다시 내보낸다 - URL UNIQUE로는 못 막는다(증거 1).
     정제 본문의 sha256을 `raw_news_content_sha256`에 저장하고 `'ok'` 행 사이 부분 unique 인덱스로 막는다. 사본은
