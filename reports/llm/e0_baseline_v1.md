@@ -215,7 +215,15 @@
 
 ## 사람 라벨
 
-- {"status": "pending"}
+- {"status": "none", "reason": "사용자 결정(2026-10-17): 사람 라벨을 달지 않는다 - 자동 라벨로 대체(ADR 0009 A8.13)"}
+
+## 자동 라벨(ADR 0009 A8.13)
+
+- 정의·주의·행별 값은 [reports/llm/e0_auto_labels_v1.md](e0_auto_labels_v1.md). 라벨러 gemini-3-flash-preview (gemini-3-flash-preview), 비용 $0.328228. 자동 라벨러(LLM)의 판단이고 정확도는 재지 않았다. 라벨러·generator·judge v2가 모두 Gemini다.
+- 발행 가능률(자동 라벨, 주 지표 저장본 Y / n_p): 11/15 = 0.733 [0.480, 0.891]; 첫 초안만 11/14 = 0.786 [0.524, 0.924]
+- 사실 오류 ≥1(출력): 3/14 = 0.214 [0.076, 0.476]; 핵심 사실 커버리지(사실 단위): 58/74 = 0.784 [0.677, 0.862]; single_event: 11/15 = 0.733 [0.480, 0.891]
+- 런 a 대 b 일치: publishable 8/10 = 0.800 [0.490, 0.943], single_event 11/11 = 1.000 [0.741, 1.000] (κ는 참고로만)
+- 라벨러 대 judge v2 shadow(첫 초안): 7/14 = 0.500 [0.268, 0.732], 표 {"judge_pass_pub_Y": 4, "judge_pass_pub_N": 0, "judge_fail_pub_Y": 7, "judge_fail_pub_N": 3}
 
 ## 선언된 이탈(A8.2)
 
