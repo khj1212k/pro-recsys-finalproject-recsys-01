@@ -59,6 +59,10 @@ class RecsysConfig:
     # 개인 신호가 전혀 없는 사용자(profile_source = none)는 explore_slots_cold칸. explore_enabled=false나
     # 칸 수 0이면 결정론 목록을 그대로 낸다. propensity가 맞으려면 top_k가 표시 단계의 한도(20) 이하여야
     # 한다 - 계획한 화면이 잘려 나가면 그 요청의 propensity는 기록하지 않는다.
+    # 기본값을 켜 두는 이유는 무작위화에만 기대는 두 측정이다(ADR 0025 "부분 채택", 2026-10-17): E13(같은 층의
+    # 결정론 칸 대 탐색 칸 클릭률, evaluation/recsys/online.py)과 탐색 칸의 위치별 클릭률(위치 편향). 이 로그로
+    # 다른 정책의 클릭률을 추정하는 쓰임(오프폴리시 평가)은 E9를 통과하지 못해 결정에 쓰지 않는다. 기본값을
+    # 바꾸면 ADR 0025의 상태와 환경변수 표도 함께 바꾼다(tests/recsys/test_exploration_default_matches_adr.py).
     explore_enabled: bool = True
     explore_slots: int = 2
     explore_slots_cold: int = 4
