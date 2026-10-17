@@ -138,10 +138,22 @@ class FakeRepo:
     def item_window_counts(self, news_letter_ids, click_starts, inview_start, end):
         # 노출 창이 빈 호출(활성 휴리스틱의 6시간 클릭 수, ADR 0014)과 어댑터의 인기도 집계를 따로 센다.
         self._call("item_click_counts" if inview_start >= end else "item_window_counts")
+        # 클릭·노출을 한 번씩만 훑는다(아이템 수 x 로그 수로 훑으면 요청마다 부르는 재생 테스트가 느려진다).
+        wanted = set(news_letter_ids)
+        widest = min(click_starts) if click_starts else end
+        click_ats: Dict[int, List[datetime]] = {}
+        for _, _, nid, at in self.clicks:
+            if nid in wanted and widest <= at < end:
+                click_ats.setdefault(nid, []).append(at)
+        views_of: Dict[int, int] = {}
+        for _, nid, at in self.impressions:
+            if nid in wanted and inview_start <= at < end:
+                views_of[nid] = views_of.get(nid, 0) + 1
         out = {}
         for nid in news_letter_ids:
-            clicks = tuple(sum(1 for c in self.clicks if c[2] == nid and s <= c[3] < end) for s in click_starts)
-            views = sum(1 for _, i, at in self.impressions if i == nid and inview_start <= at < end)
+            ats = click_ats.get(nid, ())
+            clicks = tuple(sum(1 for at in ats if s <= at) for s in click_starts)
+            views = views_of.get(nid, 0)
             if any(clicks) or views:
                 out[nid] = WindowCounts(clicks, views)
         return out
