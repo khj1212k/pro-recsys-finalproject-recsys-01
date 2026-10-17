@@ -571,9 +571,13 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 
 **코드의 대응(브랜치 `fix/extraction-donga-failures`, ADR 0026 결정 9 — Tier 0에는 아직 배포하지 않았다).**
 - 기사 요청 1번은 연결 10초·읽기 15초·전체 30초 상한, 숨은 재시도 없음. 같은 실행 안에서는 2번까지(대기 2초).
-- 같은 언론사 기사가 연달아 3건 다운로드에 실패하면 그 언론사의 남은 기사는 이번 실행에서 받지 않는다(DB에 쓰지 않으므로
-  시도 횟수를 쓰지 않고 다음 실행에서 다시 대상이 된다).
-- crontab의 `--extract-time-budget-s 2400`: 40분이 지나면 새 기사를 보내지 않고 남은 기사는 다음 회차로 미룬다.
+- 같은 언론사 기사가 연달아 3건 사이트 단위 원인(연결·읽기 실패, 5xx, 403·429 등)으로 다운로드에 실패하면 그 언론사의 남은
+  기사는 이번 실행에서 받지 않는다(DB에 쓰지 않으므로 시도 횟수를 쓰지 않고 다음 실행에서 다시 대상이 된다). 404·410 같은
+  기사 단위 실패는 세지 않는다 — 앞서 실패한 죽은 URL이 회차 맨 앞에 와도 건강한 언론사의 새 기사를 미루지 않는다.
+- crontab의 `--extract-deadline-s 2700`: ingest 시작 뒤 45분(:50)이 지나면 새 기사를 보내지 않고 남은 기사는 다음 회차로
+  미룬다. 추출 시작이 아니라 ingest 시작부터 재므로 RSS 단계가 늦으면 그만큼 추출 시간이 준다(최소 60초).
+- RSS 요청은 소켓 대기 1번(연결·읽기 각각)이 120초(`RSS_SOCKET_TIMEOUT_S`)를 넘으면 끊는다. 요청 전체 상한은 아니다 —
+  VM에서 성공한 동아일보 RSS는 30~321초가 걸렸다.
 - 한 언론사만의 실패는 경고(원인 개수·미룬 건수 포함)로 알리고 실행은 성공시킨다(규칙은 [runbook.md](runbook.md) 잡 상태 절).
   RSS 단계에서 읽지 못한 피드도 피드마다 경고한다(`동아일보: RSS 수집 실패 (RemoteDisconnected) - 이번 회차 신규 기사 0건`).
   10-16 22:05 ~ 10-17 05:05 UTC에는 동아일보 RSS가 8회 중 7회 실패했고, 그중 추출 대상에 동아일보가 없던 회차는 경고 없이
@@ -586,16 +590,23 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 ```bash
 ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db \
   psql -U newsletter -d newsletter -c \"SELECT id, status, to_char(started_at, 'MM-DD HH24:MI') AS started, \
-  round(extract(epoch FROM finished_at - started_at)) AS took_s, stats->'extract'->>'fetch_failed' AS ff, \
-  stats->'extract'->>'deferred' AS deferred, stats->'extract'->'press_breaker' AS breaker, \
-  stats->'extract'->'fetch_fail_causes' AS causes, stats->'extract'->>'time_budget_exhausted' AS budget_hit \
+  round(extract(epoch FROM finished_at - started_at)) AS took_s, stats->'rss'->>'failed_feeds' AS rss_failed, \
+  stats->'extract'->>'fetch_failed' AS ff, stats->'extract'->>'deferred' AS deferred, \
+  stats->'extract'->'press_breaker' AS breaker, stats->'extract'->'fetch_fail_causes' AS causes, \
+  stats->'extract'->'fetch_ok_latency' AS ok_latency, stats->'extract'->>'time_budget_exhausted' AS budget_hit \
   FROM job_runs WHERE job = 'ingest' ORDER BY id DESC LIMIT 24\""
 ```
 
 `breaker`가 매 회차 동아일보로 차 있으면 차단이 이어지는 것이다. 그동안 동아일보는 회차마다 가장 오래된 3~4건만 시험 삼아
 받고(그 기사들이 시도 상한 3회를 채우면 다음 기사로 넘어간다) 나머지는 기다린다. 미룬 기사도 수집 후 30일(ADR 0023)이
 지나면 대상에서 빠진다. `budget_hit`이 `true`인 회차가 이어지면 대상이 예산보다 많은 것이다 — 어느 언론사가 시간을 쓰는지
-`causes`의 `read_timeout`·`deadline`(요청마다 15~30초)을 본다.
+`causes`의 `read_timeout`·`deadline`(요청마다 15~30초)을 본다. `rss_failed`가 0보다 크면 `warnings`에 피드별 RSS 경고가 있다
+(그 회차에 그 언론사의 신규 기사는 0건).
+
+`ok_latency`는 다운로드에 성공한 요청의 시간 구간(`<5s`·`5-15s`·`>=15s`) 개수다. 어느 언론사의 `>=15s`가 늘면서 같은 언론사의
+`read_timeout`·`deadline`도 늘면, 읽기 15초·요청 30초 상한이 느리지만 결국 성공하던 요청을 끊고 있을 수 있다 — 차단(빈 응답
+`disconnect`, 0바이트 붙잡기)과 이것으로 가른다. 배포 전 기준값은 없다(예전 코드는 요청 시간을 남기지 않았다). 상한을 바꿀지는
+그때 `ok` 건수와 함께 본다.
 
 미시도 잔량(차단기가 미루기만 하고 처리량이 새 기사를 못 따라가면 쌓인다 — ADR 0026 증거 10 (f), 배포 전 동아일보 0건). 미룬
 기사는 최종 `fetch_failed`로 세어지지 않으므로 실패 비율과 따로 본다:
@@ -609,7 +620,28 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 ```
 
 `never_tried`가 하루 넘게 늘거나 `oldest_h`가 몇 시간을 넘으면 동아일보가 처리량에 묶인 것이다 — 차단기 기준(`EXTRACT_PRESS_BREAKER_FAILURES`,
-코드 기본값 3)을 다시 정할지는 그때 수집량(`ok`)과 함께 본다.
+코드 기본값 3)을 다시 정할지는 그때 수집량(`ok`)과 함께 본다. 다른 선택지는 시도 순서다: 지금은 대상이 `ORDER BY raw_news_id`라
+차단 중에는 회차마다 시험 요청 3~4건이 앞서 실패한 재시도 기사에 가고 새 기사가 밀린다. 언론사 안에서 시도한 적 없는 기사를
+먼저 보내려면 `extractor.py`의 대상 조회를 `ORDER BY (N.raw_news_extract_status IS NOT NULL), N.raw_news_id`로 바꾼다(코드
+변경·배포 필요, ADR 0026 결정 9 "시도 순서").
+
+차단기 기준을 다시 따져 볼 때(ADR 0026 증거 10 f를 다시 낸다): 회차 번호·시각·상태·시도 횟수만 내려받는다(URL·제목·본문 없음).
+`news_raw`에는 기사마다 마지막 시도만 남으므로, 마지막 시도 시각이 ingest 회차의 시작~끝 안에 드는 기사만 나온다:
+
+```bash
+ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T \
+  -e PGOPTIONS='-c default_transaction_read_only=on' db psql -U newsletter -d newsletter -A -F '|' -c \"\
+  WITH runs AS (SELECT id, started_at, coalesce(finished_at, now()) AS finished_at FROM job_runs \
+    WHERE job = 'ingest' AND started_at >= now() - interval '7 days') \
+  SELECT r.id, n.raw_news_id, n.raw_news_extracted_at, n.raw_news_extract_status, n.raw_news_extract_attempts \
+  FROM news_raw n JOIN press p USING (press_id) \
+  JOIN runs r ON n.raw_news_extracted_at BETWEEN r.started_at AND r.finished_at \
+  WHERE p.press_name = '동아일보' ORDER BY r.id, n.raw_news_extracted_at, n.raw_news_id\"" > donga_seq.psv
+```
+
+회차마다 이 순서로 처음부터 보내고, 다운로드 실패(`fetch_failed`)가 연달아 기준 수가 되면 그 실패까지는 보낸 것으로 치고 그
+회차의 나머지를 미룬다(성공이 끼면 0부터). 보낸 쪽과 미룬 쪽의 다운로드 성공 비율, 실패 기사 중 요청이 간 몫, 회차당 보낸
+건수를 센다. 이 파일은 저장소에 넣지 않고 다 쓰면 지운다.
 
 원인을 다시 확인할 때(같은 시각 VM과 Mac에서 같은 URL을 받는다. 본문은 저장하지 않고 상태 코드·시간만 본다):
 
