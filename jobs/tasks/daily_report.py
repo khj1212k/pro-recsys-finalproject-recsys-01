@@ -8,6 +8,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+from jobs.runtime import resolve_git_sha
 from jobs.schedule import SLOT_MATCH_TOLERANCE, expected_slots, match_slots, parse_crontab
 
 WINDOW_HOURS = 24
@@ -151,6 +152,8 @@ def format_schedule(schedule: Dict[str, Any]) -> str:
         return "- 정시 회차: 세지 않음(SCHEDULER_CRONTAB 없음 - 스케줄러 밖에서 돌린 리포트)"
     parts = []
     for job, s in sorted(schedule["jobs"].items(), key=lambda kv: (-len(kv[1]["missed"]), kv[0])):
+        if not s["scheduled"]:
+            continue  # 창 안에 예정 회차가 없는 잡(하루 한 번 도는 잡의 배포 직후 등)
         text = f"{job} {s['started']}/{s['scheduled']}"
         missed = s["missed"]
         if missed:
@@ -159,7 +162,9 @@ def format_schedule(schedule: Dict[str, Any]) -> str:
             more = f" 외 {len(missed) - MISSED_SLOTS_SHOWN}" if len(missed) > MISSED_SLOTS_SHOWN else ""
             text += f"(건너뜀 {len(missed)}: {shown}{more} UTC, 성공 {s['succeeded']})"
         parts.append(text)
-    line = (f"- 정시 회차(최근 {WINDOW_HOURS}시간, {schedule['crontab']} 기준 시작/예정): "
+    since = (f", 이 코드가 처음 돈 {_utc_short(schedule['counted_since'])}부터"
+             if schedule.get("counted_since") else "")
+    line = (f"- 정시 회차(최근 {WINDOW_HOURS}시간{since}, {schedule['crontab']} 기준 시작/예정): "
             + (", ".join(parts) if parts else "jobs.run 줄 없음"))
     if schedule.get("disabled"):
         line += f" / 꺼 둔 잡: {', '.join(schedule['disabled'])}"
@@ -246,14 +251,28 @@ def disabled_jobs() -> List[str]:
     return sorted({name.strip() for name in os.getenv("JOBS_DISABLED", "").split(",") if name.strip()})
 
 
+def image_first_run(cur, git_sha: Optional[str]) -> Optional[datetime]:
+    """이 코드(이미지)로 돈 첫 잡의 시작 시각. crontab은 이미지에 들어 있어 배포 때만 바뀐다 - 배포 전 회차를 지금
+    crontab으로 세지 않으려고 쓴다(예: 배포로 새로 생긴 줄의 회차를 배포 전 시각에 '건너뜀'으로 세지 않는다)."""
+    if not git_sha:
+        return None
+    cur.execute("SELECT min(started_at) FROM job_runs WHERE git_sha = %s", (git_sha,))
+    row = cur.fetchone()
+    return row[0] if row else None
+
+
 def schedule_status(cur, now: datetime, crontab: Optional[Tuple[str, str]],
-                    disabled: Sequence[str] = ()) -> Dict[str, Any]:
-    """정시 회차(예정 vs 시작). now는 DB의 now()."""
+                    disabled: Sequence[str] = (), since: Optional[datetime] = None) -> Dict[str, Any]:
+    """정시 회차(예정 vs 시작). now는 DB의 now(). since(이 이미지의 첫 실행)가 창 안이면 그 뒤만 센다."""
     if crontab is None:
         return {"crontab": None}
     name, text = crontab
     entries, unsupported = parse_crontab(text)
     start = now - timedelta(hours=WINDOW_HOURS)
+    counted_since = None
+    if since is not None and since - SLOT_MATCH_TOLERANCE > start:
+        start = since - SLOT_MATCH_TOLERANCE
+        counted_since = since.isoformat()
     slots = expected_slots(entries, start, now, disabled)
     runs: Dict[str, List[Tuple[datetime, str]]] = {job: [] for job in slots}
     if slots:
@@ -268,7 +287,7 @@ def schedule_status(cur, now: datetime, crontab: Optional[Tuple[str, str]],
         m = match_slots(job_slots, runs[job])
         m["missed"] = [t.isoformat() for t in m["missed"]]
         jobs[job] = m
-    return {"crontab": name, "jobs": jobs, "unsupported": unsupported,
+    return {"crontab": name, "jobs": jobs, "unsupported": unsupported, "counted_since": counted_since,
             "disabled": sorted(set(disabled) & {e.job for e in entries})}
 
 
@@ -385,7 +404,8 @@ def run(ctx) -> Dict[str, Any]:
         recsys_by_source = impression_sources(cur, window)
         cur.execute("SELECT now()")
         (now,) = cur.fetchone()
-        schedule = schedule_status(cur, now, read_crontab(), disabled_jobs())
+        schedule = schedule_status(cur, now, read_crontab(), disabled_jobs(),
+                                   since=image_first_run(cur, resolve_git_sha()))
         backup = backup_status(cur, now, window)
         idle = idle_status(cur, now)
 
