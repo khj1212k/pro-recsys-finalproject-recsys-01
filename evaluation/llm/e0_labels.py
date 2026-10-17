@@ -193,14 +193,15 @@ def _overlap(a: Tuple[str, int, int], b: Tuple[str, int, int]) -> bool:
 
 
 def label_metrics(labels_dir: Path, run_dir: Path, items: Sequence[Dict[str, Any]], ends: Dict[str, Dict[str, Any]],
-                  record: Dict[str, Any]) -> Dict[str, Any]:
+                  record: Dict[str, Any], label_files_dir: Optional[Path] = None) -> Dict[str, Any]:
+    """`label_files_dir`를 주면 라벨 파일을 거기서 읽는다(E0 자동 라벨러의 런 디렉터리, ADR 0009 A8.13)."""
     from evaluation.llm.e0_report import ratio
 
     labels_dir, run_dir = Path(labels_dir), Path(run_dir)
     key_doc = json.loads((run_dir / BLIND_KEY).read_text(encoding="utf-8")) if (run_dir / BLIND_KEY).exists() else None
     if not key_doc or not (labels_dir / "outputs.jsonl").exists():
         return {"status": "pending"}
-    data = label_store.load_labels(labels_dir)
+    data = label_store.load_labels(labels_dir, label_files_dir=label_files_dir)
     out1, cl1 = data["output"][1], data["cluster"][1]
     if not out1 and not cl1:
         return {"status": "pending"}
