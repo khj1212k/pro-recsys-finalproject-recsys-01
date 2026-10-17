@@ -202,7 +202,7 @@ E8의 대응(`pop_clicks_6h` 상위)과 같아진다. 하네스 E8은 동점을 
 1. **2026-10-17 — 되돌리기 세트 `prior`의 범위를 넓혔다(사전 등록 4·5).** 사전 등록 5는 `prior`를 `heuristic-v1` + 콜드 경로
    `popularity-v1`로 정했고, 처음 구현(`0b8c53a`)은 후보 출처 `popular`를 세트와 무관하게 6시간 클릭 순서(사전 등록 4)로 두었다.
    이제 `prior`일 때는 `popular` 출처도 M5 전의 `compute_scores` 순서이고 스코어링도 클릭 수를 읽지 않아, 요청 경로에서 6시간 클릭 수
-   조회가 사라진다(`82a4485`, `pipeline.RealtimeRecommender.uses_clicks`).
+   조회가 사라진다(`e343ebc`, `pipeline.RealtimeRecommender.uses_clicks`).
    - 사유: 이 변경에서 측정된 위험은 지연 여유의 감소(구현 기록 3)인데, 그 이유로 `prior`로 되돌려도 새 조회가 남으면 되돌리기가
      불완전하다(검토 지적).
    - 결과 열람: 구현 기록 3의 지연 결과를 **본 뒤**의 변경이다. 전환 규칙(사전 등록 6)의 결과는 없다(노출 0건). 추천 품질의 결과는
@@ -263,7 +263,7 @@ CI `recsys-bench`(GitHub 호스티드 러너 4코어, 합성 데이터: 뉴스�
 결과 캐시를 끈 `service.recommend` 직접 호출, 라운드 3번), 2026-10-17 같은 워크플로로 한 번씩:
 - 기준: `main` `d9e5b17`(workflow_dispatch, 실행 39007472166). 사전 등록 커밋 `b34c7ee`와 `backend/`·`evaluation/serving/`·`recsys_core/`·
   `ai_workspace/recommend_engine/`·recsys-bench 워크플로 파일(`.github/workflows/recsys-bench.yml`)이 같다(`git diff` 빈 결과).
-- 구현: `b260657`(push, 실행 39007472185). 그 뒤 `backend/`가 바뀐 것은 `prior` 경로뿐이다("사전 등록 이후 변경 기록" 1, `82a4485`) —
+- 구현: `b260657`(push, 실행 39007472185). 그 뒤 `backend/`가 바뀐 것은 `prior` 경로뿐이다("사전 등록 이후 변경 기록" 1, `e343ebc`) —
   기본 세트 (b)의 요청 경로는 같다.
 
 | `dedicated_pool` | 기준 r0 / r1 / r2 | 구현 r0 / r1 / r2 |
@@ -294,3 +294,18 @@ CI `recsys-bench`(GitHub 호스티드 러너 4코어, 합성 데이터: 뉴스�
   - 위 수치는 이 문서의 기록을 다시 쓰지 않는다. 임계를 바꾸려면 이 절에 날짜와 함께 덧붙인다.
 - 활성 자리가 어댑터 피처가 필요한 등록 모델이면, 요청 경로가 6시간 클릭 수를 두 번 읽는다(`ClickCounts`와 `load_popularity`의 첫
   창). 지금은 활성 모델이 없어 닿지 않는 경로다. 모델을 활성으로 올릴 때 한쪽 값을 다른 쪽에 재사용하게 고친다.
+
+### 5. 인용한 커밋 SHA에 대하여
+위의 `b34c7ee`·`0b8c53a`·`3cfb3cd`·`b260657`·`a8b54e3`·`e6df0f6`은 **CI 실행이 돈 시점의 SHA**다. 실행 기록과 아티팩트의 `meta.commit`
+(`reports/recsys/parity_v1_m5.json`)에 그 값이 남아 있어 그대로 둔다. PR을 열기 전에 브랜치를 main `9d6f5dc` 위로 rebase해서 브랜치 안의
+SHA는 달라졌다(내용은 같고 순서도 같다 — 사전 등록 커밋이 여전히 서빙 코드 커밋보다 앞이다). ADR 0033 "인용한 커밋 SHA에 대하여"와
+같은 처리다. `e343ebc`(변경 기록 1)는 rebase 뒤의 것이다.
+
+| CI 실행 시점의 SHA | rebase 뒤 | 커밋 제목 |
+|---|---|---|
+| `b34c7ee` | `3c22652` | docs(adr): ADR 0014 사전 등록 — 활성 휴리스틱 v2 … (구현 전, 결과 없음) |
+| `0b8c53a` | `9e8744e` | feat(recsys): 활성 휴리스틱 heuristic-v2와 RECSYS_MIN_PERSONAL_EVENTS |
+| `3cfb3cd` | `64a2ebd` | docs(eval): 클릭 반응 합성 점검에 클릭마다 갱신되는 장기 벡터 표를 더하고 … |
+| `b260657` | `e777893` | feat(eval): 요청 경로 벤치에 6시간 클릭 수 조회와 클릭 순서 popular 출처를 … |
+| `a8b54e3` | `c6ef6e2` | feat(scripts): EB-NeRD M4 모델 shadow 등록 도구 … (ADR 0037) |
+| `e6df0f6` | `21b59d0` | test(integration): 클릭 반응 통합 테스트를 클릭 이력의 장기 상태와 클릭 API의 상태 갱신으로 돈다 |

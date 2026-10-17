@@ -79,7 +79,7 @@ python -m evaluation.recsys.serving_parity --database-url postgresql://... \
   목록을 만들기 전에는 비교할 "모델의 서빙 목록"이 없다(지금 목록을 만드는 것은 휴리스틱이다).
 
 ## M5 재실행 (2026-10-17, ADR 0014 — 후보 `popular` 출처가 6시간 클릭 순서가 된 뒤)
-`parity_v1_m5.json`은 CI 실행 **39007956452**(커밋 `e6df0f6`)의 integration 잡이 올린 아티팩트 `recsys-parity`를 그대로 옮긴
+`parity_v1_m5.json`은 CI 실행 **39007956452**(커밋 `e6df0f6`, rebase 뒤 `21b59d0` — ADR 0014 구현 기록 5)의 integration 잡이 올린 아티팩트 `recsys-parity`를 그대로 옮긴
 것이다. 스키마 지문은 위 실행과 같다(`7ce82418…995d`). 시드·모델·재생 절차가 같고, 바뀐 것은 서빙 코드다(활성 휴리스틱
 heuristic-v2-b, `popular` 출처의 클릭 순서, 단기 벡터의 정의 통일).
 
