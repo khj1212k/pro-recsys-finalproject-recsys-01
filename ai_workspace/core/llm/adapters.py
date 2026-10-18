@@ -58,11 +58,14 @@ class OpenAICompatLLMClient(LLMClient):
         supports_json_schema: bool = True,
         rate_limiter: Optional[SimpleRateLimiter] = None,
         client: Optional[Any] = None,
+        reasoning_effort: Optional[str] = None,
     ):
         self.provider = provider
         self.model = model
         self.supports_json_schema = supports_json_schema
         self._rate_limiter = rate_limiter or SimpleRateLimiter(0.0)
+        # None이면 요청에 싣지 않는다(프로바이더 기본값). 값 검증과 역할별 env 해석은 registry가 한다.
+        self.reasoning_effort = reasoning_effort
 
         if client is not None:
             self._client = client
@@ -135,6 +138,10 @@ class OpenAICompatLLMClient(LLMClient):
                     success=True,
                     provider=self.provider,
                     model=self.model,
+                    total_tokens=usage.total_tokens,
+                    thinking_tokens=usage.thinking_tokens,
+                    cached_tokens=usage.cached_tokens,
+                    reasoning_effort=self.reasoning_effort,
                 )
 
                 return LLMResult(
@@ -166,13 +173,6 @@ class OpenAICompatLLMClient(LLMClient):
                 )
                 # 응답은 왔다(과금됨). usage를 알면 실제 값으로, 모르면(SDK 안에서 난 검증 오류) 예약액으로.
                 spend.settle("schema_invalid", LLMUsage.from_openai(getattr(e, "usage", None)))
-                if not self._wait_before_retry(backoff, call_start):
-                    break
-                backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
-                continue
-
-            except openai.APIStatusError as e:
-                last_error = str(e)
                 # 스키마 실패는 응답마다 과금된다. 같은 요청의 재시도는 MAX_LLM_SCHEMA_RETRIES회까지만 -
                 # 전송 계층 재시도(429/5xx/타임아웃, 과금되지 않거나 짧게 끝남)의 상한 MAX_RETRIES와 따로 센다.
                 if schema_failures > Settings.MAX_LLM_SCHEMA_RETRIES:
@@ -182,6 +182,13 @@ class OpenAICompatLLMClient(LLMClient):
                         error=f"max retries (schema {Settings.MAX_LLM_SCHEMA_RETRIES}) exhausted: {last_error}",
                         schema_failures=schema_failures,
                     )
+                if not self._wait_before_retry(backoff, call_start):
+                    break
+                backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
+                continue
+
+            except openai.APIStatusError as e:
+                last_error = str(e)
                 last_status = e.status_code
                 latency = time.time() - attempt_start
                 get_metrics_collector().record_call(
@@ -310,6 +317,10 @@ class OpenAICompatLLMClient(LLMClient):
         time.sleep(backoff)
         return True
 
+    def _request_options(self) -> Dict[str, Any]:
+        """요청 본문에 덧붙이는 선택 인자. 지금은 reasoning_effort뿐이고, 설정하지 않았으면 비어 있다."""
+        return {"reasoning_effort": self.reasoning_effort} if self.reasoning_effort else {}
+
     def _call_structured(self, messages, schema, temperature, max_tokens):
         response = self._client.chat.completions.parse(
             model=self.model,
@@ -317,6 +328,7 @@ class OpenAICompatLLMClient(LLMClient):
             response_format=schema,
             temperature=temperature,
             max_tokens=max_tokens,
+            **self._request_options(),
         )
         message = response.choices[0].message
         parsed = message.parsed
@@ -333,6 +345,7 @@ class OpenAICompatLLMClient(LLMClient):
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            **self._request_options(),
         )
         if schema is not None:
             kwargs["response_format"] = {"type": "json_object"}

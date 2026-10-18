@@ -31,6 +31,20 @@ class LLMCallRecord:
     # 재시도 불가능한 특정 실패 사유를 안정적인 코드로 남긴다("length", "content_filter",
     # "kill_switch" 등). 성공 호출이나 코드화되지 않은 실패는 빈 문자열로 남는다.
     error_type: str = ""
+    # 프로바이더가 보고한 경우에만 채운다(없으면 None - 0과 다르다). thinking_tokens는
+    # LLMUsage.thinking_tokens(OpenAI 호환 usage의 completion_tokens_details.reasoning_tokens)와 같은 값이다.
+    total_tokens: Optional[int] = None
+    thinking_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None
+    # 이 호출을 보낼 때 요청에 실은 reasoning_effort. 실지 않았으면(프로바이더 기본값) 빈 문자열.
+    reasoning_effort: str = ""
+
+
+def _count(items) -> Dict[str, int]:
+    out: Dict[str, int] = defaultdict(int)
+    for item in items:
+        out[item] += 1
+    return out
 
 
 class LLMMetricsCollector:
@@ -89,7 +103,11 @@ class LLMMetricsCollector:
         success: bool = True,
         provider: str = "unknown",
         model: str = "unknown",
-        error_type: str = ""
+        error_type: str = "",
+        total_tokens: Optional[int] = None,
+        thinking_tokens: Optional[int] = None,
+        cached_tokens: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
     ):
         """Record a single LLM API call"""
         record = LLMCallRecord(
@@ -101,7 +119,11 @@ class LLMMetricsCollector:
             success=success,
             provider=provider,
             model=model,
-            error_type=error_type
+            error_type=error_type,
+            total_tokens=total_tokens,
+            thinking_tokens=thinking_tokens,
+            cached_tokens=cached_tokens,
+            reasoning_effort=reasoning_effort or "",
         )
         with self._lock:
             self.calls.append(record)
@@ -138,6 +160,7 @@ class LLMMetricsCollector:
                 "avg_input_tokens": 0,
                 "avg_output_tokens": 0,
                 "avg_latency_seconds": 0,
+                "usage_reported": self._usage_reported(),
                 "by_purpose": {},
                 "by_model": {}
             }
@@ -199,11 +222,27 @@ class LLMMetricsCollector:
             "avg_output_tokens": (total_output / successful_count) if successful_count else 0,
             "avg_latency_seconds": total_latency / total_attempts,
             "total_latency_seconds": total_latency,
+            "usage_reported": self._usage_reported(),
             "by_purpose": dict(by_purpose),
             "by_model": dict(by_model),
             "batch_duration_seconds": (self.batch_end_time or time.time()) - (self.batch_start_time or time.time())
         }
     
+    def _usage_reported(self) -> Dict:
+        """프로바이더가 total/thinking/cached 토큰을 보고한 호출만의 합과 그 호출 수.
+
+        보고하지 않은 호출(None)은 0으로 세지 않는다 - 합이 0이어도 "보고된 0"인지 "보고 없음"인지
+        구분되도록 호출 수를 함께 적는다. 보고한 호출이 하나도 없으면 합은 None이다.
+        """
+        out: Dict = {}
+        for name in ("total_tokens", "thinking_tokens", "cached_tokens"):
+            values = [getattr(c, name) for c in self.calls if getattr(c, name) is not None]
+            out[name] = {"calls_reporting": len(values), "sum": sum(values) if values else None}
+        out["reasoning_effort_calls"] = dict(
+            sorted(_count(c.reasoning_effort or "unset" for c in self.calls).items())
+        )
+        return out
+
     def print_summary(self):
         """Print formatted summary to logger"""
         summary = self.get_summary()
