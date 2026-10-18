@@ -2,8 +2,10 @@
 # CI(.github/workflows/ci.yml)와 같은 명령을 둔다. 예외는 report-charts·report-charts-check 하나다 - 리포트 JSON에서
 # docs/assets/*.svg를 다시 만드는 명령이고, CI에서는 tests/test_portfolio_charts.py가 같은 대조를 한다.
 # 파이썬 환경은 `make venv`가 만드는 .venv다 (다른 환경을 쓰려면 PY=경로를 준다).
+# 차트 타깃은 표준 라이브러리만 써서 .venv 없이 시스템 python3로 돈다 (다른 파이썬은 CHART_PY=경로).
 
 PY ?= .venv/bin/python
+CHART_PY ?= python3
 PYTEST ?= $(PY) -m pytest -q
 # 테스트 범위를 좁히려면 TESTS=tests/경로 (기본: 전체)
 TESTS ?= tests/
@@ -33,8 +35,8 @@ itest: ## 통합 테스트 - 전용 테스트 DB의 TEST_DATABASE_URL이 필요�
 lint: ## ruff - 돌지 못하는 코드만 잡는 보수적 규칙 (pyproject.toml), uv 필요
 	uvx --from "ruff==0.16.9" ruff check .
 
-report-charts: ## 커밋된 리포트 JSON에서 docs/assets/*.svg를 다시 쓴다 (표준 라이브러리만, 설치할 것 없음)
-	$(PY) scripts/portfolio_charts.py
+report-charts: ## 커밋된 리포트 JSON에서 docs/assets/*.svg를 다시 쓴다 (표준 라이브러리만, .venv 없이 python3로 돈다)
+	$(CHART_PY) scripts/portfolio_charts.py
 
 report-charts-check: ## 쓰지 않고, 커밋된 SVG가 리포트 JSON에서 만든 것과 다르면 실패한다
-	$(PY) scripts/portfolio_charts.py --check
+	$(CHART_PY) scripts/portfolio_charts.py --check

@@ -15,7 +15,7 @@ README와 케이스 스터디가 쓰는 차트(SVG)다. 손으로 그리지 않�
 ```bash
 python scripts/portfolio_charts.py           # docs/assets/*.svg 를 다시 쓴다
 python scripts/portfolio_charts.py --check   # 쓰지 않고, 커밋된 SVG와 다르면 종료 코드 1
-make report-charts                           # 위 첫 줄과 같다 (파이썬은 PY로 고른다, 기본 .venv/bin/python)
+make report-charts                           # 위 첫 줄과 같다 (파이썬은 CHART_PY로 고른다, 기본 python3 - .venv가 없어도 돈다)
 make report-charts-check                     # 위 둘째 줄과 같다
 ```
 
