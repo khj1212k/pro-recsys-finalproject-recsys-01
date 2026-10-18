@@ -4,6 +4,7 @@ import os
 import sys
 from types import SimpleNamespace
 
+import openai
 import pytest
 
 sys.path.insert(
@@ -11,8 +12,9 @@ sys.path.insert(
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ai_workspace"),
 )
 
-from tests.llm_fakes import FakeOpenAIClient, make_response  # noqa: E402
+from tests.llm_fakes import FakeOpenAIClient, make_response, make_status_error, make_timeout_error  # noqa: E402
 
+import core.llm.adapters as adapters_module  # noqa: E402
 import core.llm.registry as registry  # noqa: E402
 from core.llm.adapters import OpenAICompatLLMClient  # noqa: E402
 from core.llm.schemas import ClusterEval  # noqa: E402
@@ -195,3 +197,44 @@ def test_a_reported_zero_is_distinguished_from_no_report():
 
 def test_empty_collector_summary_has_the_usage_section():
     assert LLMMetricsCollector().get_summary()["usage_reported"]["total_tokens"] == {"calls_reporting": 0, "sum": None}
+
+
+def _length_error():
+    return openai.LengthFinishReasonError(completion=SimpleNamespace(usage=None))
+
+
+@pytest.mark.parametrize("responses,attempts", [
+    # pre-flight에서 본 실제 실패: gemini-3.5-flash-lite가 reasoning_effort=none을 HTTP 400으로 거부했다
+    ([make_status_error(400, "reasoning_effort none is not supported")], 1),
+    ([make_response("x", parsed=None)] * 3, 3),  # 스키마 검증 실패: 재시도 2회 -> 응답 3개
+    ([_length_error()], 1),
+    ([openai.ContentFilterFinishReasonError(completion=None)], 1),
+    ([RuntimeError("boom")], 1),
+    ([make_timeout_error(), make_timeout_error(), make_response("{}", parsed=_parsed())], 3),  # 실패 2 + 성공 1
+], ids=["http_400", "schema_retries", "length", "content_filter", "unexpected_error", "timeouts_then_ok"])
+def test_every_attempt_that_carried_the_effort_records_it_including_failures(monkeypatch, responses, attempts):
+    """실패한 시도도 요청에는 effort를 실었다. 기록이 'unset'이면 원인 설정이 요약에서 사라진다."""
+    monkeypatch.setattr(adapters_module.time, "sleep", lambda *_a, **_k: None)
+    fake = FakeOpenAIClient(responses=list(responses))
+    client = OpenAICompatLLMClient(provider="gemini", model="m", client=fake, reasoning_effort="none")
+
+    client.complete(MESSAGES, schema=ClusterEval, purpose="cluster_eval")
+
+    sent = fake.chat.completions.parse_calls + fake.chat.completions.create_calls
+    assert len(sent) == attempts and all(call["reasoning_effort"] == "none" for call in sent)
+    records = LLMMetricsCollector().calls
+    assert len(records) == attempts
+    assert [r.reasoning_effort for r in records] == ["none"] * attempts
+    assert LLMMetricsCollector().get_summary()["usage_reported"]["reasoning_effort_calls"] == {"none": attempts}
+
+
+def test_a_call_blocked_before_any_request_does_not_claim_an_effort(monkeypatch):
+    """킬 스위치로 요청이 나가지 않은 호출은 effort를 실은 적이 없으므로 'unset'으로 센다."""
+    monkeypatch.setenv("LLM_KILL_SWITCH", "1")
+    fake = FakeOpenAIClient(responses=[])
+    client = OpenAICompatLLMClient(provider="gemini", model="m", client=fake, reasoning_effort="none")
+
+    result = client.complete(MESSAGES, schema=ClusterEval, purpose="cluster_eval")
+
+    assert result.error == "kill_switch" and fake.chat.completions.call_count == 0
+    assert LLMMetricsCollector().get_summary()["usage_reported"]["reasoning_effort_calls"] == {"unset": 1}

@@ -36,7 +36,8 @@ class LLMCallRecord:
     total_tokens: Optional[int] = None
     thinking_tokens: Optional[int] = None
     cached_tokens: Optional[int] = None
-    # 이 호출을 보낼 때 요청에 실은 reasoning_effort. 실지 않았으면(프로바이더 기본값) 빈 문자열.
+    # 이 호출을 보낼 때 요청에 실은 reasoning_effort(실패한 시도도 포함). 실지 않았으면(프로바이더 기본값)
+    # 빈 문자열이고, 킬 스위치·지출 가드로 요청 자체가 나가지 않은 호출도 빈 문자열이다.
     reasoning_effort: str = ""
 
 

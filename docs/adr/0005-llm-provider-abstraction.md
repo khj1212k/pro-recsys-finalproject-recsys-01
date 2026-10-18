@@ -156,7 +156,8 @@
    미설정이면 요청 본문에 이 키가 **없다** — E0까지의 요청과 같다(`tests/test_reasoning_effort_env.py`). 알 수 없는 값은 조용히 무시하지 않고 `ValueError`로 거부한다(비용 가정이 바뀌므로). 전달을 문서로 확인한 프로바이더(`gemini`, OpenAI 호환 계층 문서
    https://ai.google.dev/gemini-api/docs/openai, 갱신 2026-09-02, 접근 2026-10-06)에만 허용하고, 다른 프로바이더에 값을 설정하면 거부한다. 레지스트리의 인스턴스 캐시 키는 effort를 설정했을 때만 `(provider, model, effort)`이고 미설정은 예전과 같은 `(provider, model)`이다
    (generator와 tone은 기본 모델이 같아 effort가 다르면 인스턴스를 나눠야 하고, E0 합성 실행이 `(provider, model)` 키로 페이크를 끼운다).
-2. **usage 기록.** `LLMUsage`의 `total_tokens`·`thinking_tokens`·`cached_tokens`(nullable)는 ADR 0035가 이미 넣었고(실행 계획의 `thought_tokens`는 코드의 `thinking_tokens`다), 이번에 `llm_metrics`의 호출 기록과 요약(`usage_reported`)에 같은 값과 요청의 `reasoning_effort`를 싣는다.
+2. **usage 기록.** `LLMUsage`의 `total_tokens`·`thinking_tokens`·`cached_tokens`(nullable)는 ADR 0035가 이미 넣었고(실행 계획의 `thought_tokens`는 코드의 `thinking_tokens`다), 이번에 `llm_metrics`의 호출 기록과 요약(`usage_reported`)에 같은 값과 요청에 실은 `reasoning_effort`를 싣는다(성공한 시도뿐 아니라 HTTP 400·스키마 실패·`length`·`content_filter`·타임아웃 등 실패한 시도도 같다 -
+   `tests/test_reasoning_effort_env.py`; 킬 스위치·지출 가드로 요청이 나가지 않은 호출은 `unset`으로 센다).
    프로바이더가 보고하지 않은 값은 0이 아니라 `None`이고, 요약은 합과 함께 "보고한 호출 수"를 적는다.
 3. **재시도 금지 목록.** `LLMResult.no_retry_reason`이 킬 스위치·HTTP 401/402/403/404·`length`·`content_filter`를 `infra`/`length`/`content_filter`로 분류하고, 그래프와 생성기·문체 변환기가 그 사유가 있으면 같은 호출을 되풀이하지 않는다.
    "닫은 갭 1"이 적은 "기존 실패 처리 경로를 그대로 타서 뉴스레터를 저장하지 않고 끝난다"는 서술은 이 부록 이후 클러스터 단위로도 맞다 — 클러스터는 `skipped`가 아니라 `failure_reason="infra"`로 닫힌다.

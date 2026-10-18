@@ -165,7 +165,7 @@ class OpenAICompatLLMClient(LLMClient):
                 get_metrics_collector().record_call(
                     purpose=purpose, input_tokens=0, output_tokens=0,
                     latency_seconds=latency, success=False,
-                    provider=self.provider, model=self.model,
+                    provider=self.provider, model=self.model, reasoning_effort=self.reasoning_effort,
                 )
                 logger.warning(
                     "%s/%s: 구조화 출력 검증 실패 (attempt %s/%s): %s",
@@ -194,7 +194,7 @@ class OpenAICompatLLMClient(LLMClient):
                 get_metrics_collector().record_call(
                     purpose=purpose, input_tokens=0, output_tokens=0,
                     latency_seconds=latency, success=False,
-                    provider=self.provider, model=self.model,
+                    provider=self.provider, model=self.model, reasoning_effort=self.reasoning_effort,
                 )
                 # 5xx가 연속 실패 임계에 닿거나 402(선불 잔액 소진)면 여기서 LLMCircuitOpen이 난다 -
                 # 백오프를 기다리며 재시도를 태우지 않는다.
@@ -224,6 +224,7 @@ class OpenAICompatLLMClient(LLMClient):
                     purpose=purpose, input_tokens=0, output_tokens=0,
                     latency_seconds=latency, success=False,
                     provider=self.provider, model=self.model, error_type="length",
+                    reasoning_effort=self.reasoning_effort,
                 )
                 logger.error(
                     "%s/%s: 길이 제한으로 구조화 출력 실패 (재시도 불가): %s",
@@ -244,6 +245,7 @@ class OpenAICompatLLMClient(LLMClient):
                     purpose=purpose, input_tokens=0, output_tokens=0,
                     latency_seconds=latency, success=False,
                     provider=self.provider, model=self.model, error_type="content_filter",
+                    reasoning_effort=self.reasoning_effort,
                 )
                 logger.error(
                     "%s/%s: 콘텐츠 필터에 의해 응답 거부됨 (재시도 불가): %s",
@@ -264,7 +266,7 @@ class OpenAICompatLLMClient(LLMClient):
                 get_metrics_collector().record_call(
                     purpose=purpose, input_tokens=0, output_tokens=0,
                     latency_seconds=latency, success=False,
-                    provider=self.provider, model=self.model,
+                    provider=self.provider, model=self.model, reasoning_effort=self.reasoning_effort,
                 )
                 logger.warning(
                     "%s/%s: 연결/타임아웃 오류 (attempt %s/%s), 재시도: %s",
@@ -283,7 +285,7 @@ class OpenAICompatLLMClient(LLMClient):
                 get_metrics_collector().record_call(
                     purpose=purpose, input_tokens=0, output_tokens=0,
                     latency_seconds=latency, success=False,
-                    provider=self.provider, model=self.model,
+                    provider=self.provider, model=self.model, reasoning_effort=self.reasoning_effort,
                 )
                 logger.error("%s/%s: 예상치 못한 오류: %s", self.provider, self.model, e)
                 spend.settle("error")
