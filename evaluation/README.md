@@ -72,7 +72,7 @@ python -m evaluation.clustering.metrics \
   않음) 개체/인용구는 `rapidfuzz` 유사도 임계값으로 판정한다.
 - `compare_rewrite(original, rewritten, ...)` — 톤 변환(격식체→캐주얼체)
   전후의 숫자/날짜/개체 드리프트(추가/누락)를 비교해 `DriftReport`를
-  반환한다. 추후 LangGraph 게이트의 입력이 된다.
+  반환한다. LangGraph 문체 드리프트 게이트(`ai_workspace/workflow/gates.py`, ADR 0010)의 입력이다.
 
 ### `evaluation/llm/` — LLM bake-off와 judge 보정 (ADR 0009/0010)
 
