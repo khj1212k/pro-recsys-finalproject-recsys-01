@@ -15,6 +15,8 @@ README와 케이스 스터디가 쓰는 차트(SVG)다. 손으로 그리지 않�
 ```bash
 python scripts/portfolio_charts.py           # docs/assets/*.svg 를 다시 쓴다
 python scripts/portfolio_charts.py --check   # 쓰지 않고, 커밋된 SVG와 다르면 종료 코드 1
+make report-charts                           # 위 첫 줄과 같다 (파이썬은 CHART_PY로 고른다, 기본 python3 - .venv가 없어도 돈다)
+make report-charts-check                     # 위 둘째 줄과 같다
 ```
 
 출력은 시각이나 난수 없이 입력 JSON에서만 정해져서, 같은 JSON이면 바이트까지 같다. 막대·점·신뢰구간뿐 아니라 캡션의 표본 크기, 부트스트랩 횟수, trial·seed 수, 결합 하한도 JSON에서 읽는다. `tests/test_portfolio_charts.py`가 커밋된 SVG와 새로 만든 것이 같은지, 차트에 들어간 핵심 수치가 리포트와 같은지 확인한다. 리포트를 새로 만들었으면 스크립트를 한 번 돌려 SVG를 같이 커밋한다.
