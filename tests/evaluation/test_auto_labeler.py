@@ -2,6 +2,7 @@
 
 전부 페이크 전송과 지어낸 기사·초안(실제 기사 아님)으로 돈다. 지출 가드(ADR 0035)는 tests/conftest.py가 준 임시 원장을 쓴다.
 """
+import hashlib
 import json
 import logging
 import os
@@ -246,7 +247,7 @@ def test_publishable_follows_guide_rules_and_never_upgrades_the_labelers_no():
     assert al.compose_publishable(dict(raw, publishable=False), n_errors=0, n_facts=4, covered=4)[0] is False
     assert al.compose_publishable(raw, n_errors=0, n_facts=0, covered=0)[1]["coverage_ok"] is True
     ok, rules = al.compose_publishable(raw, n_errors=0, n_facts=None, covered=None)
-    assert ok is True and rules["coverage_ok"] is None
+    assert ok is None and rules["coverage_ok"] is None                    # 커버리지를 모르면 합성하지 않는다(사후 검토)
 
 
 # ---------------------------------------------------------------- 전송과 지출 가드
@@ -566,7 +567,7 @@ def test_report_counts_ids_and_labels_only_and_passes_the_leak_guard(proto, pkg,
     assert "정할 수 없다" in caveats and "낮춘다'는 방향 서술은 A8.14에서 정정" in caveats
     assert "judge FAIL·라벨러 publishable 0건" in caveats and "modelVersion" in caveats       # fake 응답의 modelVersion은 등록 버전이 아니다
     md = rep.render_md(report)
-    assert md.count("[탐색 - 사전 등록 아님]") == 2 and "한 범주만 냄(일치가 정보 없음)" in md and "항상 참" in md
+    assert md.count("[탐색 - 사전 등록 아님]") == 2 + 5 and "한 범주만 냄(일치가 정보 없음)" in md and "항상 참" in md
     out = tmp_path / "r.md"
     guard.write_text(out, md)
     guard.write_text(tmp_path / "r.json", json.dumps(report, ensure_ascii=False))
@@ -733,20 +734,7 @@ def test_configure_budget_never_raises_a_cap_the_operator_set_lower(proto, monke
     assert env["LLM_BUDGET_RUN_USD"] == "0.50" and env["LLM_BUDGET_DAY_USD"] == "1.00"    # 없거나 읽을 수 없으면 등록값
 
 
-def test_preflight_switches_thinking_spelling_after_the_schema_mode_and_then_gives_up(proto, pkg):
-    class LowerCaseRefused(FakeGemini):
-        def __call__(self, url, headers, body, timeout):
-            if body["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "minimal":
-                self.calls.append(body)
-                return 400, {"error": {"status": "INVALID_ARGUMENT"}}
-            return super().__call__(url, headers, body, timeout)
-
-    lab = make_labeler(proto, pkg, LowerCaseRefused(proto))
-    pf = al.preflight(proto, lab.transport)
-    assert pf["changes"] == ["schema_mode", "thinking_spelling"]
-    assert pf["schema_mode"] == "json_mode" and pf["thinking_spelling"] == "upper"
-    assert {k: v["status"] for k, v in pf["results"].items()} == {k: "ok" for k in al.KINDS}
-
+def test_preflight_gives_up_after_every_registered_combination_was_refused(proto, pkg):
     class AlwaysRefused(FakeGemini):
         def __call__(self, url, headers, body, timeout):
             self.calls.append(body)
@@ -757,7 +745,8 @@ def test_preflight_switches_thinking_spelling_after_the_schema_mode_and_then_giv
     with pytest.raises(al.InfraStop) as e:
         al.preflight(proto, lab.transport)
     assert e.value.status == 400 and lab.transport.schema_mode == "json_mode" and lab.transport.thinking_spelling == "upper"
-    assert len(refused.calls) == 3          # 처음 + 바꾼 것 둘, 그 뒤에는 더 바꾸지 않는다
+    combos = [("responseJsonSchema" in c["generationConfig"], c["generationConfig"]["thinkingConfig"]["thinkingLevel"]) for c in refused.calls]
+    assert combos == [(True, "minimal"), (False, "minimal"), (True, "MINIMAL"), (False, "MINIMAL")]    # 하나씩 바꾼 뒤 둘 다, 그 뒤에는 더 바꾸지 않는다
 
 
 # ---------------------------------------------------------------- 재개와 기록의 빈틈 (리뷰 반영)
@@ -856,3 +845,255 @@ def test_a_quote_the_labeler_could_not_place_in_the_draft_is_not_kept_in_the_lab
     assert quoted not in json.dumps(row, ensure_ascii=False)
     assert quoted in (lab.store.root / "rationales.jsonl").read_text(encoding="utf-8")      # 근거 파일에만 있고 마감에 지운다
     assert row["label"]["publishable"] is False and row["auto"]["rules"]["no_fact_errors"] is False    # 오류 수에는 센다
+
+
+# ---------------------------------------------------------------- 사후 검토 (PR #41 병합 뒤)
+
+
+AFTER_DEADLINE = datetime(2026, 11, 13, tzinfo=timezone.utc)
+
+
+def _run_all(proto, pkg, **kw):
+    fake = FakeGemini(proto, **kw)
+    lab = make_labeler(proto, pkg, fake)
+    lab.run(spent_usd=lambda: 0.0)
+    return lab
+
+
+def test_purge_expired_blanks_article_bodies_not_only_the_free_text_file(proto, pkg):
+    """마감 뒤 자동 라벨러·리포트 CLI가 먼저 부르는 정리가 본문도 지운다(ADR 0023 '열 때마다 정리')."""
+    assert label_store.has_bodies(pkg.labels_dir)
+    assert al.purge_expired(pkg.labels_dir, proto.id, now=NOW) is False
+    assert label_store.has_bodies(pkg.labels_dir)                    # 마감 전에는 그대로
+    assert al.purge_expired(pkg.labels_dir, proto.id, now=AFTER_DEADLINE) is True
+    assert not label_store.has_bodies(pkg.labels_dir)
+    rows = [json.loads(l) for l in (pkg.labels_dir / "clusters.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert all(a["title"] and a["body"] is None for r in rows for a in r["articles"])        # 제목·id는 남는다
+    assert al.purge_expired(pkg.labels_dir, proto.id, now=AFTER_DEADLINE) is False          # 여러 번 불러도 같다
+
+
+@pytest.mark.parametrize("which", ["labeler", "report"])
+def test_opening_a_cli_after_the_deadline_leaves_no_article_bodies_even_though_it_refuses(cli, proto, which, monkeypatch):
+    from evaluation.llm import e0_auto_label_report as rep
+
+    (cli.labels / "retention.json").write_text(json.dumps({"expires_at_utc": "2026-10-01T00:00:00Z"}))
+    assert label_store.has_bodies(cli.labels)
+    with pytest.raises(al.ProtocolError, match="마감"):
+        al.main(["status"]) if which == "labeler" else rep.main(["--out", str(cli.labels.parent / "r")])
+    assert not label_store.has_bodies(cli.labels)
+
+
+def test_key_facts_text_is_redacted_from_the_label_files_at_the_deadline(proto, pkg):
+    """라벨러의 핵심 사실은 기사 문장 조각을 담을 수 있다 - 마감에 본문 사본처럼 지운다(길이·해시·근거 id만 남긴다)."""
+    lab = _run_all(proto, pkg)
+    files = [lab.store.root / f"run-{r}" / "cluster_labels.jsonl" for r in "ab"]
+    before = [f.read_text(encoding="utf-8") for f in files]
+    assert "지어낸 사실 0" in before[0]
+    assert al.purge_expired(pkg.labels_dir, proto.id, now=NOW) is False
+    assert [f.read_text(encoding="utf-8") for f in files] == before                            # 마감 전에는 그대로
+    assert al.purge_expired(pkg.labels_dir, proto.id, now=AFTER_DEADLINE) is True
+    for f in files:
+        text = f.read_text(encoding="utf-8")
+        assert "지어낸 사실" not in text
+        rows = [json.loads(l) for l in text.splitlines()]
+        assert rows and all(r["label"]["key_facts"] for r in rows)
+        want = [hashlib.sha256(f"지어낸 사실 {i}".encode("utf-8")).hexdigest()[:16] for i in range(3)]
+        for r in rows:
+            assert [kf["sha256_16"] for kf in r["label"]["key_facts"]] == want
+            for kf in r["label"]["key_facts"]:
+                assert kf["text"] == "" and kf["source_ids"] and kf["n_chars"] == len("지어낸 사실 0")
+    after = [f.read_bytes() for f in files]
+    assert al.purge_expired(pkg.labels_dir, proto.id, now=AFTER_DEADLINE) is False
+    assert [f.read_bytes() for f in files] == after                                           # 여러 번 불러도 같다
+    store = label_store.LabelStore(pkg.labels_dir, now=lambda: AFTER_DEADLINE, label_files_dir=lab.store.root / "run-a")
+    assert {t: len(r["label"]["key_facts"]) for t, r in store.latest("cluster", 1).items()} == {"r1-c1": 3, "r1-c2": 3, "r2-c3": 3}
+    assert (stat.S_IMODE(files[0].stat().st_mode)) == 0o600
+
+
+def test_coverage_that_cannot_be_known_gives_no_composed_output_label(proto, tmp_path):
+    """A8.13 (b)6의 publishable은 커버리지를 포함한 논리곱이다 - 규칙 2를 알 수 없으면 Y로 합성하지 않는다."""
+    raw = {"publishable": True, "style": 4, "headline_mismatch": False}
+    ok, rules = al.compose_publishable(raw, n_errors=0, n_facts=None, covered=None)
+    assert ok is None and rules["coverage_ok"] is None
+
+    clean = {"analysis": "지어낸 근거", "fact_errors": [], "style": 5, "headline_mismatch": False, "publishable": True}
+
+    def run_with(name, overrides):
+        labels, run = make_package(tmp_path / name)
+        fake = FakeGemini(proto, overrides=overrides)
+        lab = make_labeler(proto, al.load_package(labels, run, now=NOW), fake)
+        lab._run_group([al.Unit("a", "cluster", "r1-c1")])
+        lab._run_group([al.Unit("a", k, "o1") for k in ("output", "coverage", "tone")])
+        return lab
+
+    lab = run_with("invalid", {"output": lambda u, n: clean, "coverage": lambda u, n: "not json"})
+    assert lab.done_units()[("a", "coverage", "o1")]["status"] == "invalid"
+    assert "o1" not in lab.output_labels("a")                              # 커버리지 라벨이 없다 -> 출력 라벨은 없는 것으로 센다
+
+    lab = run_with("missing", {"output": lambda u, n: clean, "cluster": lambda u, n: "not json"})      # 기준 클러스터 라벨이 없다
+    assert lab.cluster_labels("a") == {} and "o1" not in lab.output_labels("a")
+
+    lab = run_with("ok", {"output": lambda u, n: clean})                                      # 커버리지가 정상이면 행이 있다
+    row = lab.output_labels("a")["o1"]
+    assert row["auto"]["rules"]["coverage_ok"] is not None and row["auto"]["coverage_basis"] == "a"
+
+
+def test_preflight_attributes_a_400_to_the_one_setting_that_needs_changing(proto, pkg):
+    """스키마 칸은 받는데 thinkingLevel 소문자만 거절하면 철자만 바꾼다 - 스키마 방식까지 JSON 모드로 내리지 않는다."""
+
+    class LowerCaseRefused(FakeGemini):
+        def __call__(self, url, headers, body, timeout):
+            if body["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "minimal":
+                self.calls.append(body)
+                return 400, {"error": {"status": "INVALID_ARGUMENT"}}
+            return super().__call__(url, headers, body, timeout)
+
+    lab = make_labeler(proto, pkg, LowerCaseRefused(proto))
+    pf = al.preflight(proto, lab.transport)
+    assert pf["changes"] == ["thinking_spelling"]
+    assert pf["schema_mode"] == "json_schema" and pf["thinking_spelling"] == "upper"
+    assert {k: v["status"] for k, v in pf["results"].items()} == {k: "ok" for k in al.KINDS}
+
+
+def test_preflight_rechecks_the_earlier_kinds_under_the_settings_it_ends_with(proto, pkg):
+    """뒤의 호출 종류에서 설정을 바꿨다면 앞 종류도 바뀐 설정으로 다시 확인한다 - 확인하지 않은 설정을 매니페스트에 쓰지 않는다."""
+
+    class CoverageRefusesSchema(FakeGemini):
+        def __call__(self, url, headers, body, timeout):
+            if "responseJsonSchema" in body["generationConfig"] and self.kind_of(body) == "coverage":
+                self.calls.append(body)
+                return 400, {"error": {"status": "INVALID_ARGUMENT"}}
+            return super().__call__(url, headers, body, timeout)
+
+    fake = CoverageRefusesSchema(proto)
+    lab = make_labeler(proto, pkg, fake)
+    pf = al.preflight(proto, lab.transport)
+    assert pf["changes"] == ["schema_mode"] and pf["schema_mode"] == "json_mode"
+    for kind, res in pf["results"].items():
+        assert res["status"] == "ok" and res["settings"] == {"schema_mode": "json_mode", "thinking_spelling": "lower"}, kind
+    ok_calls = [(fake.kind_of(c), "responseJsonSchema" in c["generationConfig"]) for c in fake.calls]
+    assert [k for k in al.KINDS if (k, False) not in ok_calls] == []                      # 네 종류 모두 JSON 모드 요청이 나갔다
+
+
+def test_preflight_tries_each_registered_change_alone_before_both_then_gives_up(proto, pkg):
+    class BothRefused(FakeGemini):
+        def __call__(self, url, headers, body, timeout):
+            gen = body["generationConfig"]
+            if "responseJsonSchema" in gen and gen["thinkingConfig"]["thinkingLevel"] == "minimal":
+                self.calls.append(body)
+                return 400, {"error": {"status": "INVALID_ARGUMENT"}}
+            if "responseJsonSchema" in gen or gen["thinkingConfig"]["thinkingLevel"] == "minimal":
+                self.calls.append(body)
+                return 400, {"error": {"status": "INVALID_ARGUMENT"}}
+            return super().__call__(url, headers, body, timeout)
+
+    lab = make_labeler(proto, pkg, BothRefused(proto))
+    pf = al.preflight(proto, lab.transport)
+    assert pf["changes"] == ["schema_mode", "thinking_spelling"] and {v["status"] for v in pf["results"].values()} == {"ok"}
+
+
+def test_extension_soft_cap_follows_a_lower_run_cap_the_operator_set(proto, pkg, monkeypatch):
+    """A8.13 (b)5의 소프트 정지는 가드의 런 상한에 닿기 전에 멈추려는 것이다 - 운영자가 상한을 낮췄으면 같이 내려간다."""
+    lab = make_labeler(proto, pkg, FakeGemini(proto))
+    for cap, want in (("0.50", 0.45), ("0.30", 0.25), ("0.80", 0.45), ("0.04", -0.01)):
+        monkeypatch.setenv("LLM_BUDGET_RUN_USD", cap)
+        assert lab.extension_soft_cap_usd() == pytest.approx(want), cap
+    monkeypatch.setenv("LLM_BUDGET_RUN_USD", "0.30")
+    for g in lab.plan_a():
+        lab._run_group(g)
+    first, rest = lab.plan_b()
+    for g in first:
+        lab._run_group(g)
+    out = lab.run(spent_usd=lambda: 0.26)          # 0.26 + 최악 예약액 > 0.25 -> 상한 0.30의 가드 거부에 닿기 전에 멈춘다
+    assert out["extension_stopped_before"] == rest[0][0].target
+
+
+def _report_for(proto, pkg, nodes=()):
+    from evaluation.llm import e0_auto_label_report as rep
+
+    lab = _run_all(proto, pkg)
+    items = [{"item_id": i, "split": "eval", "order": n, "articles": []} for n, i in enumerate(sorted(pkg.clusters))]
+    ends = {"r1-c1": {"outcome": "completed"}, "r1-c2": {"outcome": "skipped"}, "r2-c3": {"outcome": "completed"}}
+    (pkg.run_dir / "nodes.jsonl").write_text("".join(json.dumps(n) + "\n" for n in nodes))
+    report, _ = rep.build(proto, pkg, items=items, ends=ends, nodes=list(nodes), now=NOW)
+    return rep, report, lab
+
+
+def test_the_registered_reporting_unit_is_the_relabel_targets_and_the_pooled_values_are_reference(proto, pkg):
+    """A8.8 재라벨의 보고 단위(출력 publishable k/5, 클러스터 single_event k/3)는 재라벨 대상만이다 - 확장분을 합친 값이 머리 수치가 아니다."""
+    rep, report, lab = _report_for(proto, pkg)
+    sub = report["run_a_vs_run_b"]["registered_relabel_subset"]
+    assert sub["targets"] == {"clusters": ["r2-c3"], "outputs": ["o2"]} == {k: pkg.relabel[k] for k in ("clusters", "outputs")}
+    assert (sub["publishable"]["k"], sub["publishable"]["n"]) == (1, 1) and (sub["single_event"]["k"], sub["single_event"]["n"]) == (1, 1)
+    assert sub["targets_missing_in_run_b"] == {"clusters": [], "outputs": []}
+    assert report["run_a_vs_run_b"]["publishable"]["n"] == 2                  # 전체(확장분 포함)는 따로 있다
+    md = rep.render_md(report)
+    assert "**등록된 보고 단위**(A8.8 재라벨, 재라벨 대상만 - 출력 1, 클러스터 1)" in md and "**참고값**" in md
+    assert md.index("**등록된 보고 단위**") < md.index("재라벨 대상 + 확장분 publishable")
+
+
+def test_the_registered_subset_notes_when_run_a_gave_one_category_only(proto, pkg):
+    from evaluation.llm import e0_auto_label_report as rep
+
+    def label(pub):
+        return {"label": {"publishable": pub, "single_event": pub}}
+
+    a_out = {f"o{i}": label(True) for i in range(5)}
+    b_out = {**{f"o{i}": label(True) for i in range(3)}, "o3": label(False), "o4": label(False)}
+    sub = rep.registered_relabel_agreement({}, {}, a_out, b_out, {"outputs": sorted(a_out), "clusters": []})
+    pub = sub["publishable"]
+    assert (pub["k"], pub["n"], pub["kappa_reference_only"]) == (3, 5, 0.0)
+    assert pub["run_a_one_category_only"] is True and pub["one_category_only"] is False and pub["disagreement_ids"] == ["o3", "o4"]
+    assert sub["single_event"]["n"] == 0
+    assert "런 a는 한 범주만 냄" in rep._r(pub)
+
+
+def test_run_agreement_marks_every_measure_outside_the_registered_list_as_exploratory(proto, pkg):
+    _, report, _ = _report_for(proto, pkg)
+    ag = report["run_a_vs_run_b"]
+    registered = ("single_event", "publishable", "fact_error_present", "style_exact", "style_within_1", "tone_drift",
+                  "coverage_per_fact_same_facts")
+    exploratory = ("outlier_set_exact", "main_event_present", "publishable_labeler_raw", "fact_error_count_equal", "headline_mismatch")
+    for key in registered:
+        assert "exploratory_not_preregistered" not in ag[key], key
+    for key in exploratory:
+        assert ag[key]["exploratory_not_preregistered"] is True, key
+
+
+def test_the_exploratory_judge_comparison_says_when_it_counts_the_same_pairs(proto, pkg):
+    rep, report, _ = _report_for(proto, pkg, nodes=[{"node": "eval_newsletter", "attempt": 1, "item_id": "r1-c1", "criteria": {"style": 5},
+                                                     "decision": "FAIL", "n_unsupported_claims": 2}])
+    cmp_ = report["labeler_vs_judge_v2"]
+    assert cmp_["judge_unsupported_vs_fact_error"]["same_pairs_as_registered_comparison"] is True
+    assert "같은 쌍을 센 것" in rep.render_md(report)
+
+    # judge는 PASS인데 근거 없는 주장이 있는 경우(임계값이 다르다면 생긴다)에는 같은 쌍이 아니다
+    rep, report, _ = _report_for(proto, pkg, nodes=[{"node": "eval_newsletter", "attempt": 1, "item_id": "r1-c1", "criteria": {"style": 5},
+                                                     "decision": "PASS", "n_unsupported_claims": 2}])
+    assert report["labeler_vs_judge_v2"]["judge_unsupported_vs_fact_error"]["same_pairs_as_registered_comparison"] is False
+    assert "같은 쌍을 센 것" not in rep.render_md(report)
+
+
+def test_the_report_says_it_cannot_be_rebuilt_after_the_package_deadline(proto, pkg):
+    _, report, _ = _report_for(proto, pkg)
+    text = " ".join(report["caveats"])
+    assert "마감" in text and "거절한다" in text and "커밋된 JSON이 원자료" in text
+
+
+def test_run_b_output_labels_say_which_run_their_coverage_numbers_refer_to(proto, pkg):
+    """런 b의 커버리지는 런 a의 핵심 사실로 물었다 - 런 b 클러스터 라벨의 사실 목록이 달라도 행이 기준을 스스로 밝힌다(사람 도구로 run-b를 읽지 않는다)."""
+
+    def cluster(user, n):
+        ids = [int(x) for x in re.findall(r"\[기사 id=(\d+)\]", user)]
+        count = 3 if n <= 3 else 4                                  # 런 a(앞 3건)는 사실 3개, 런 b는 4개
+        return {"analysis": "", "single_event": True, "outlier_ids": [],
+                "key_facts": [{"text": f"지어낸 사실 {i}", "source_ids": [ids[0]]} for i in range(count)]}
+
+    lab = _run_all(proto, pkg, overrides={"cluster": cluster})
+    b_clusters, b_outputs = lab.cluster_labels("b"), lab.output_labels("b")
+    assert {len(r["label"]["key_facts"]) for r in b_clusters.values()} == {4}
+    assert set(b_outputs) == {"o1", "o2"}
+    for oid, row in b_outputs.items():
+        assert row["auto"]["coverage_basis"] == "a" and row["auto"]["coverage_n_facts"] == 3
+        assert all(0 <= i < 3 for i in row["label"]["key_facts_covered"])
+        assert len(b_clusters[pkg.outputs_by_id[oid]["item_id"]]["label"]["key_facts"]) != row["auto"]["coverage_n_facts"]

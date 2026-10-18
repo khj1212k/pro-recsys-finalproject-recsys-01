@@ -6,13 +6,16 @@ data/labels/<run>/ 아래(gitignore):
   cluster_labels.jsonl, output_labels.jsonl     <- 이 모듈이 쓰는 라벨 (append-only)
 
 마감(retention.json의 expires_at_utc)이 지나면 LabelStore를 열 때 clusters.jsonl의 기사 본문을 지운다(제목·URL·id와
-라벨은 남는다). 라벨링 UI는 마감 뒤에는 과제를 내주지 않는다.
+라벨은 남는다). 라벨링 UI는 마감 뒤에는 과제를 내주지 않는다. E0 자동 라벨러(ADR 0009 A8.13)의 라벨 파일에는 기사 문장 조각이
+든 칸이 둘 있다 - 라벨러의 자유 텍스트(auto/*/rationales.jsonl)와 클러스터 라벨의 핵심 사실 문장(key_facts[].text). 둘 다
+같은 때에 지운다(핵심 사실은 길이·해시로 바꾼다).
 
 라벨 행: {"target_id", "round": 1|2, "labeled_at": ISO8601, "label": {...}}. 같은 (target, round)를
 다시 저장하면 마지막 행이 이긴다(이력은 남는다). 2차(round 2)는 intra-rater 재라벨이다:
 relabel.json에 있는 대상만, 1차 라벨 후 min_hours_between_rounds가 지나야 받는다.
 """
 
+import hashlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -98,10 +101,38 @@ AUTO_DIR = "auto"                              # <labels_dir>/auto/<프로토콜
 AUTO_FREE_TEXT_FILE = "rationales.jsonl"       # 라벨러가 쓴 근거 텍스트(응답 전체). 패키지 마감에 지운다
 
 
-def purge_auto_free_text(labels_dir: Path, now: datetime) -> int:
-    """마감이 지났으면 자동 라벨러의 자유 텍스트 파일(`auto/*/rationales.jsonl`)을 지우고 지운 파일 수를 돌려준다.
+def _redact_key_facts(path: Path) -> int:
+    """클러스터 라벨 파일의 핵심 사실 문장(`key_facts[].text`)을 길이(`n_chars`)와 해시(`sha256_16`)로 바꾸고 바꾼 사실 수를 돌려준다.
 
-    라벨 값 파일(run-a|run-b/*_labels.jsonl)과 호출 기록은 남긴다(id·값·수치뿐이다). 여러 번 불러도 같다.
+    핵심 사실은 라벨러가 기사를 읽고 쓴 문장이라 기사 문장의 조각이 그대로 들어갈 수 있다(E0에서 137개 중 44개가 기사 제목·본문과
+    16자 조각이 같았다). 사실의 개수와 `source_ids`는 남으므로 커버리지 분모와 근거 id는 그대로 읽힌다. 이미 지운 칸(`text`가 비었다)은
+    건드리지 않는다 - 여러 번 불러도 같다.
+    """
+    rows = _read_jsonl(path)
+    changed = 0
+    for row in rows:
+        for fact in (row.get("label") or {}).get("key_facts") or []:
+            text = fact.get("text")
+            if text:
+                fact["n_chars"] = len(text)
+                fact["sha256_16"] = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+                fact["text"] = ""
+                changed += 1
+    if changed:
+        tmp = path.with_name(path.name + ".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
+        os.replace(tmp, path)
+    return changed
+
+
+def purge_auto_free_text(labels_dir: Path, now: datetime) -> int:
+    """마감이 지났으면 자동 라벨러가 쓴 문장을 지우고 지운 것의 수를 돌려준다(여러 번 불러도 같다).
+
+    지우는 것: 자유 텍스트 파일(`auto/*/rationales.jsonl`, 파일 수)과 클러스터 라벨 파일(`auto/*/run-*/cluster_labels.jsonl`)의
+    핵심 사실 문장(사실 수). 남기는 것: 라벨 값 파일과 호출 기록의 id·값·수치·길이·해시. 출력 라벨의 `fact_errors[].text`는 우리가
+    생성한 초안의 부분 문자열이라 초안(기한 없음, ADR 0023)과 같은 대접이다.
     """
     labels_dir = Path(labels_dir)
     if not is_expired(labels_dir, now):
@@ -110,12 +141,14 @@ def purge_auto_free_text(labels_dir: Path, now: datetime) -> int:
     for path in sorted((labels_dir / AUTO_DIR).glob(f"*/{AUTO_FREE_TEXT_FILE}")):
         path.unlink()
         removed += 1
+    for path in sorted((labels_dir / AUTO_DIR).glob("*/run-*/cluster_labels.jsonl")):
+        removed += _redact_key_facts(path)
     return removed
 
 
 def purge_expired_bodies(labels_dir: Path, now: datetime) -> int:
-    """마감이 지났으면 clusters.jsonl의 본문과 자동 라벨러의 자유 텍스트를 지우고 지운 건수(본문을 비운 기사 + 지운 파일)를
-    돌려준다(여러 번 불러도 같다)."""
+    """마감이 지났으면 clusters.jsonl의 본문과 자동 라벨러가 쓴 문장(자유 텍스트 파일, 핵심 사실 문장)을 지우고 지운 건수(본문을
+    비운 기사 + `purge_auto_free_text`가 센 것)를 돌려준다(여러 번 불러도 같다)."""
     labels_dir = Path(labels_dir)
     if not is_expired(labels_dir, now):
         return 0

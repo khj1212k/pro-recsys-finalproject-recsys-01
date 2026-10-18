@@ -1,10 +1,10 @@
 {
  "kind": "e0_auto_labels",
  "format": 1,
- "generated_at": "2026-10-18T05:36:36.872785+00:00",
+ "generated_at": "2026-10-18T06:56:15.217569+00:00",
  "header": {
   "command": "python -m evaluation.llm.e0_auto_label_report",
-  "head_sha": "ce611a0f84e5fe0f193b09e1a1f6eac043f05b4e",
+  "head_sha": "3cf1493cbdfea76f679517370dede8da25c6bd28",
   "protocol": "e0-auto-labels-v1",
   "protocol_sha256": "b3aa857d6303227f4d4724892eae7b2325552b1fa67dada7421ed6460248a479",
   "adr": "docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md#A8.13",
@@ -41,7 +41,6 @@
   "in_client_spend": {
    "run_id": "e0-auto-labels-v1",
    "run_usd": 0.328228,
-   "total_usd": 0.483842,
    "caps_usd": {
     "run": 0.5,
     "day": 1.0,
@@ -631,6 +630,56 @@
    "oe245be876f"
   ],
   "run_b_selection": "재라벨 대상 + item_id 순서로 예산이 허락한 만큼이다. 멈춘 지점은 비용으로만 정해졌고 라벨 값과 무관하다. 그 뒤의 항목은 크기와 관계없이 모두 빠졌으므로 대표 표본이 아니다.",
+  "registered_relabel_subset": {
+   "targets": {
+    "clusters": [
+     "r1-c51",
+     "r2-c14",
+     "r3-c149"
+    ],
+    "outputs": [
+     "o1200206d98",
+     "o1acd87ba0a",
+     "o432cfeb6b5",
+     "o9ad5016cc8",
+     "oa610149f6d"
+    ]
+   },
+   "targets_missing_in_run_b": {
+    "clusters": [],
+    "outputs": []
+   },
+   "publishable": {
+    "k": 3,
+    "n": 5,
+    "rate": 0.6,
+    "wilson95": [
+     0.2307,
+     0.8824
+    ],
+    "kappa_reference_only": 0.0,
+    "one_category_only": false,
+    "disagreement_ids": [
+     "o1acd87ba0a",
+     "o432cfeb6b5"
+    ],
+    "run_a_one_category_only": true
+   },
+   "single_event": {
+    "k": 3,
+    "n": 3,
+    "rate": 1.0,
+    "wilson95": [
+     0.4385,
+     1.0
+    ],
+    "kappa_reference_only": null,
+    "one_category_only": true,
+    "disagreement_ids": [],
+    "run_a_one_category_only": true
+   },
+   "note": "A8.8 재라벨이 등록한 보고 단위다(출력 publishable 일치 k/5, 클러스터 single_event 일치 k/3, 대상은 내보내기가 seed로 미리 고른 relabel.json). 이 값이 자기 일관성의 등록된 측정이고, 같은 절의 '재라벨 대상 + 확장분' 값은 참고값이다."
+  },
   "single_event": {
    "k": 11,
    "n": 11,
@@ -655,7 +704,8 @@
    "one_category_only": false,
    "disagreement_ids": [
     "r1-c29"
-   ]
+   ],
+   "exploratory_not_preregistered": true
   },
   "main_event_present": {
    "k": 11,
@@ -667,7 +717,8 @@
    ],
    "kappa_reference_only": null,
    "one_category_only": true,
-   "disagreement_ids": []
+   "disagreement_ids": [],
+   "exploratory_not_preregistered": true
   },
   "publishable": {
    "k": 8,
@@ -696,7 +747,8 @@
    "one_category_only": false,
    "disagreement_ids": [
     "o432cfeb6b5"
-   ]
+   ],
+   "exploratory_not_preregistered": true
   },
   "fact_error_present": {
    "k": 9,
@@ -724,7 +776,8 @@
    "one_category_only": false,
    "disagreement_ids": [
     "o432cfeb6b5"
-   ]
+   ],
+   "exploratory_not_preregistered": true
   },
   "style_exact": {
    "k": 8,
@@ -767,7 +820,8 @@
    "one_category_only": false,
    "disagreement_ids": [
     "o432cfeb6b5"
-   ]
+   ],
+   "exploratory_not_preregistered": true
   },
   "tone_drift": {
    "k": 10,
@@ -796,7 +850,7 @@
     "o432cfeb6b5#2"
    ]
   },
-  "note": "κ는 정의되면 참고로만 적고 해석하지 않는다(A8.8 재라벨의 보고 규칙). 런 b의 coverage는 런 a의 핵심 사실로 물었다."
+  "note": "κ는 정의되면 참고로만 적고 해석하지 않는다(A8.8 재라벨의 보고 규칙). 런 b의 coverage는 런 a의 핵심 사실로 물었다. '재라벨 대상 + 확장분' 값은 확장분(대표 표본이 아니다)을 합친 참고값이고, 등록된 보고 단위는 registered_relabel_subset이다."
  },
  "labeler_vs_judge_v2": {
   "judge_decision_vs_publishable": {
@@ -850,7 +904,8 @@
     "oc5801514de",
     "oca51eacbc4"
    ],
-   "exploratory_not_preregistered": true
+   "exploratory_not_preregistered": true,
+   "same_pairs_as_registered_comparison": true
   },
   "note": "judge v2 shadow(첫 초안, 기본 임계값)와 자동 라벨러(런 a). 둘 다 Gemini - 같은 계열이고 어느 쪽도 정답이 아니다. judge 판정 × publishable은 A8.13 (c)5(A8.8 쓰임 4)의 계산이고, '근거 없는 주장 × 사실 오류'는 탐색(사전 등록 아님)이다."
  },
@@ -1392,6 +1447,7 @@
   "기사당 앞 1500자만 보여 줬다(가이드는 전체 본문). 생성기가 보는 것(긴 순 기사 10건 × 앞 1500자)은 라벨러가 보는 것(모든 기사의 앞 1500자) 안에 있으므로, 이 창이 사실 오류율과 발행 가능률을 어느 쪽으로 치우치게 하는지는 이 자료로 정할 수 없다 (A8.13 (b)3의 '사실 오류를 늘리고 발행 가능률을 낮춘다'는 방향 서술은 A8.14에서 정정했다).",
   "thinking은 최소(minimal), temperature 1.0(기본값). 런 b는 재라벨 대상 + 예산 안의 나머지라 전 항목이 아니다.",
   "n이 작다(클러스터 15, 출력 14). 비율의 Wilson 95% CI가 넓다. 가설 검정은 없다.",
+  "패키지 마감(머리말 package_expires_at_utc) 뒤에는 이 리포트를 만든 명령(python -m evaluation.llm.e0_auto_label_report)이 거절한다 - 기사 본문이 지워져 유출 검사를 할 수 없기 때문이다. 그 뒤에는 커밋된 JSON이 원자료이고, 라벨 파일(auto/…)에는 id·라벨 값·수치와 근거 id가 남으므로 수치는 거기서 다시 셀 수 있다(핵심 사실 문장과 라벨러의 자유 텍스트는 마감에 지운다).",
   "라벨러와 judge v2의 불일치 7건은 judge FAIL·라벨러 publishable 7건, judge PASS·라벨러 not publishable 0건이다(첫 초안 14건). 한쪽으로 쏠려 있다는 사실만 있고 어느 쪽이 맞는지는 모른다 - 라벨러가 judge보다 관대하거나 같은 계열 생성물에 호의적이어서 발행 가능률이 높게 나왔을 가능성도, judge가 엄격할 가능성도 배제하지 못한다.",
   "응답의 modelVersion은 gemini-3-flash-preview뿐이라 프로토콜에 적은 models.list 버전(3-flash-preview-12-2025)으로 고정됐는지는 확인하지 못했다(preview 모델은 제공사가 동작을 바꿀 수 있다)."
  ]
