@@ -258,7 +258,7 @@ anon 3.9MiB / file 9.1MiB, 2026-09-26 00:16 UTC)였다. 그래서 범위는 11~4
    `.in`이 직접 `==`로 거는 것은 두 묶음뿐이다: 추천 평가 리포트를 만든 버전(`evaluation/requirements.txt`)과 API 이미지 버전
    (`backend/requirements.txt`의 fastapi·python-jose·passlib·bcrypt, PR #26의 sqlalchemy 2.0.46·sqlmodel 0.0.31).
    두 묶음이 겹치는 fastapi는 API 이미지 값이 이긴다(라우터 테스트가 이미지가 싣는 FastAPI에서 돈다).
-   `tests/test_ci_requirements_lock.py`가 원본과의 일치와 "워크플로가 잠금 파일만 쓴다"를 대조한다.
+   `tests/test_ci_requirements_lock.py`가 원본과의 일치를 대조하고, `ci.yml`에 잠금 파일 밖에서 패키지를 설치하는 스텝(이름을 받는 `pip install`, `uv add|sync`, 다른 requirements 파일)이 없는지, pytest를 돌리는 잡마다 잠금 파일 설치가 pytest 앞에 정확히 한 번인지도 본다.
 2. **별도 잠금은 합치지 않는다.** `docker/requirements-worker.txt`·`requirements-ingest.txt`(이미지), `backend/requirements.txt`(API
    이미지), `requirements-colab*.txt`(원격 런타임: `ebnerd-neural.yml`이 같은 핀과 파이썬 3.13으로 돈다)는 배포 대상에 맞춘
    파일이다. `recsys-bench.yml`·`sim-ope-validation.yml`은 측정 환경 자체가 기록된 워크플로라 이 개정에서 건드리지 않았다
