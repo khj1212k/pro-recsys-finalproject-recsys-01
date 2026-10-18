@@ -99,10 +99,11 @@ SOURCE_PINS: Dict[Tuple[str, str], str] = {
         "e43e3daf2dab78c22a6c04707a07324788ab637f85854f0bc9e36471420fb53d",
     # 연결·저장·임베딩 UPDATE를 부르는 쪽.
     # 2026-10-18 갱신(WP3 C2): 바뀐 것은 저장에 넘기는 article_ids를 current_article_ids(클러스터 전체)에서
-    # 실제로 쓴 기사의 id(current_articles)로 정하는 한 줄뿐이다. 대역의 save_news_letter는 받은 article_ids를
-    # 그대로 남기므로 대역이 하는 일은 달라지지 않는다. 앞 값: 1187eb50c8d4(E0 실행 시점의 main 본문).
+    # 클러스터 평가를 거쳐 남은 기사의 id(current_articles)로 정하는 한 줄뿐이다. 대역의 save_news_letter는 받은
+    # article_ids를 그대로 남기므로 대역이 하는 일은 달라지지 않는다. 앞 값: 1187eb50c8d4(E0 실행 시점의 main 본문).
+    # 같은 날 뒤이은 검토에서 함수 안 주석의 서술만 고쳐(코드 불변) 2dfb604811dc에서 2f4ec5a22c5c로 한 번 더 갱신했다.
     ("workflow.nodes", "save_newsletter_to_db"):
-        "2dfb604811dca8694b1e515565070f90efb77055490cb46a7b73c249bc3e5a03",
+        "2f4ec5a22c5ca86e618c20b227c657f02e52ccd688e79894e8e5129d687dea63",
     # 임베더를 부르고 빈 결과를 다루는 쪽
     ("workflow.nodes", "embed_newsletter_node"):
         "cb8d70bb5a2c0e59d95eb4036b13eb1aa2ac47962793e091d0eac050d5de8226",

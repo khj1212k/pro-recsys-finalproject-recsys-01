@@ -502,9 +502,11 @@ def route_after_tone_drift(state: AgentState) -> str:
 
 
 def _used_article_ids(state: AgentState) -> list:
-    """뉴스레터 생성에 실제로 쓴 기사의 id(중복 없이, current_articles 순서대로).
+    """클러스터 평가를 거쳐 남은 기사(current_articles)의 id(중복 없이, 그 순서대로).
 
-    current_articles가 비어 있는 입력(그래프 밖에서 만든 state)만 current_article_ids로 폴백한다.
+    평가가 뺀 이상치·버린 서브그룹의 기사는 들어 있지 않다. 생성기가 프롬프트에 실제로 넣은 기사 목록이
+    아니다(10개를 넘는 클러스터는 그중 일부만 넣는다). current_articles가 비어 있는 입력(그래프 밖에서
+    만든 state)만 current_article_ids로 폴백한다.
     """
     used = []
     for art in state.get("current_articles") or []:
@@ -542,9 +544,11 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
         newsletter_to_save["content"] = draft.get("content") or ""
     embedding = state.get("newsletter_embedding")  # 원본 기반 임베딩
     # 클러스터 평가가 아웃라이어를 빼거나 서브그룹 하나만 남기면 current_articles만 줄어든다.
-    # current_article_ids(원래 클러스터 전체)로 저장하면 생성에 쓰이지 않은 기사까지 news_letter_id가
+    # current_article_ids(원래 클러스터 전체)로 저장하면 평가가 뺀 기사까지 news_letter_id가
     # 채워져 다음 클러스터링의 `news_letter_id IS NULL` 필터에서 영구 제외되고 raw_news_count도
-    # 부풀려진다. 그래서 실제로 생성에 쓴 기사의 id만 연결한다(C2, docs/adr/0010 Addendum 2026-10-18).
+    # 부풀려진다. 그래서 평가를 거쳐 남은 기사(current_articles)의 id만 연결한다(C2, docs/adr/0010
+    # Addendum 2026-10-18). 생성기는 그중 본문이 긴 순 10개만 프롬프트에 넣으므로(MAX_PROMPT_ARTICLES),
+    # 10개를 넘는 클러스터에서는 프롬프트에 없던 기사도 연결된다.
     article_ids = _used_article_ids(state)
     cluster_id = state["current_cluster_id"]
     
