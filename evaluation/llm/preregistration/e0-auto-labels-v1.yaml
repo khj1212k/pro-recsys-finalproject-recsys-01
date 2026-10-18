@@ -1,0 +1,88 @@
+# E0 자동 라벨 프로토콜 - ADR 0009 A8.13. 이 파일과 A8.13이 다르면 A8.13이 옳다.
+# 사람 라벨(A8.8)을 달지 않기로 한 사용자 결정(2026-10-17)에 따라 그 자리를 자동 라벨러로 채운다.
+# 이 파일은 첫 자동 라벨 호출 전에 커밋한다. 커밋 뒤 바꾸려면 A8.x 개정으로만 하고 그때까지 만든 라벨의
+# 열람 여부를 적는다. evaluation/llm/auto_labeler.py는 시작할 때 아래 해시·값과 실제 값을 대조해 다르면 호출하지 않는다.
+id: e0-auto-labels-v1
+registered_at: "2026-10-17"
+adr: docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md#A8.13
+replaces: "e0-baseline-v1 human_labels (A8.8) - 사람 라벨은 이 E0에 없다"
+results_viewed:
+  e0_baseline_report: "yes"        # reports/llm/e0_baseline_v1.* (A8.12)
+  automated_labels: "no"           # 이 파일을 커밋하는 시점까지 라벨러 호출 0건
+
+package:                           # <메인 체크아웃>/data 아래(gitignore). ADR 0023 개정의 허용 위치
+  labels_dir: labels/e0-baseline-v1-run-20261017T054231Z
+  run_dir: experiments/e0/run-20261017T054231Z
+  clusters: 15
+  outputs: 14
+  expires_at_utc: "2026-11-12T00:05:07Z"   # retention.json. 이 시각 뒤에는 라벨러가 돌지 않는다
+
+labeler:
+  provider: gemini
+  model: gemini-3-flash-preview    # 선정 규칙과 후보 표는 A8.13 (b)1. 요청받은 "가장 강한 모델"이 아니다(비용 상한)
+  model_version_listed: 3-flash-preview-12-2025   # models.list의 version. 응답의 modelVersion을 호출마다 기록한다
+  not_generator: gemini-3.5-flash-lite
+  not_judge_v2: gemini-3.1-flash-lite
+  endpoint: "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+  model_list_checked_at: "2026-10-17T14:54+09:00"   # models.list(생성 호출 없음), generateContent 지원 모델 46개
+  availability_checked_with: countTokens          # 무료, 생성 없음. 2.5 계열 3개는 404(no longer available to new users)
+  temperature: 1.0                 # models.list가 밝힌 이 모델의 기본값. 튜닝하지 않는다
+  seeds: {a: 20261017, b: 20261018}
+  thinking_level: minimal          # 이 모델이 허용하는 최소(끌 수 없다). 비용 상한 때문(A8.13 (b)2)
+  max_output_tokens: {cluster: 4096, output: 4096, coverage: 1024, tone: 1024}
+  schema_mode: json_schema         # responseMimeType=application/json + responseJsonSchema. pre-flight가 400이면 json_mode로(A8.13 (b)7)
+  thinking_level_spelling: lower   # "minimal". pre-flight가 400이면 "MINIMAL"로(A8.13 (b)7)
+  article_body_chars: 1500         # generator.ARTICLE_PROMPT_CHARS와 같은 기사당 창
+  concurrency: 1
+  request_timeout_s: 120
+  transport_retries: {max_attempts: 4, backoff_s: [2, 4, 8], retry_on: [http_429, http_5xx, timeout, connection]}
+  rule_repair_attempts: 1          # 규칙 위반(가이드의 저장 거부 규칙)이면 위반 코드만 덧붙여 한 번 더 묻는다
+
+prompts:
+  dir: evaluation/llm/auto_label_prompts/v1
+  sha256:
+    cluster.txt: da98dd81f747081afaf409988b3ec9c5ee76b4d125561bee84a360276ad8bab4
+    output.txt: 3a9e0b38278ca8ff3f9ee16a1605a35bae3ff3b23f5d96be76ef506635a3f2ce
+    coverage.txt: c3361ac957a553baa538eaed976381733ffa4668c0eb6ef9cc0fbbb746f36a38
+    tone.txt: 87960fcc785ae1a4979f73d716d1c8e8438271df552bdf37117ec8cf0975bd85
+    schemas.json: b1d8eff30647df339bb17f52b474317effd6eada4be8bcb35ef74e6f07659f42
+  # 사용자 메시지는 아래 틀(string.Template)로 실행 때 조립한다. 기사·초안 텍스트는 패키지에서만 온다.
+  user_formats:
+    article: "[기사 id=$id] 언론사: $press\n제목: $title\n본문(앞 ${chars}자까지):\n$body\n"
+    draft: "[형식체 초안]\ntitle: $title\nsentence: $sentence\ncontent:\n$content\n"
+    converted: "[문체 변환본]\ntitle: $title\nsummary: $summary\ncontent:\n$content\n"
+    fact: "[$index] $text\n"
+    cluster_user: "다음 클러스터의 기사 ${n}건에 라벨을 단다.\n\n$articles"
+    output_user: "다음 원문 기사 ${n}건과 형식체 초안 하나에 라벨을 단다.\n\n$articles\n$draft"
+    coverage_user: "[핵심 사실]\n$facts\n$draft"
+    tone_user: "$draft\n$converted"
+    repair_suffix: "\n\n[직전 응답이 지키지 못한 규칙]\n$violations\n규칙을 지켜 처음부터 다시 답한다."
+
+runs:                              # 두 런은 서로의 라벨을 보지 않는다(coverage만 예외, 아래). 런 a를 전부 끝낸 뒤 런 b
+  a: {targets: all}                # 클러스터 15, 출력 14(+ coverage 14, tone 14)
+  b:
+    first: relabel_json            # A8.8 재라벨 대상(내보내기가 seed로 미리 고른 relabel.json): 클러스터 3, 출력 5
+    then: remaining_by_item_id     # 클러스터 -> 그 클러스터의 출력 순서. 아래 extension_soft_cap_usd까지
+    extension_soft_cap_usd: 0.45   # 다음 항목 호출들의 최악 예약액 합 + 이 런 상한의 지출이 넘으면 그 항목부터 시작하지 않는다
+    coverage_key_facts_from: a     # 사람 도구에서도 2차 출력 라벨의 커버리지 기준은 1차 클러스터 라벨이다(labels.py)
+order_within_item: [cluster, output, coverage, tone]
+calls:
+  cluster: {per: cluster, inputs: [articles]}
+  output: {per: output, inputs: [articles, formal_draft]}                    # 핵심 사실·변환본·게이트·judge는 주지 않는다
+  coverage: {per: output, inputs: [same_run_key_facts, formal_draft]}        # 기사 본문 없음. 핵심 사실이 없으면 호출하지 않는다
+  tone: {per: output, inputs: [formal_draft, saved_converted]}              # 저장 형식체 sha256 = 첫 초안 sha256이고 변환본이 있을 때만
+
+budget:                            # ADR 0035 가드(core.llm.budget)가 시도마다 예약·정산한다
+  cap_usd: 0.50
+  env: {LLM_RUN_ID: e0-auto-labels-v1, LLM_BUDGET_RUN_USD: "0.50", LLM_BUDGET_DAY_USD: "1.00"}
+  min_headroom_usd: {day: 0.50, total: 0.50}   # 시작 전에 이만큼 남지 않았으면 시작하지 않는다
+  projection_usd: [0.302, 0.347]   # A8.13 (b)1의 표: 런 a 전부 + 런 b 재라벨 대상. countTokens 실측 입력, 출력 토큰 가정, thinking 0~200/호출
+
+abort:
+  - budget_refusal                 # LLMBudgetExceeded·LLMBudgetUnavailable·LLMUnpricedModel: 즉시 멈춤, 만든 라벨은 남긴다
+  - infra                          # 400(pre-flight 뒤)·401·402·403·404, 서킷브레이커
+  - preflight_failure
+  - expired_package
+no_rerun_to_improve: true          # (런, 대상, 호출)마다 한 번. 재개는 결과가 저장되지 않은 것만 이어 간다
+
+report: reports/llm/e0_auto_labels_v1   # .json + .md. id·라벨·건수·비율만

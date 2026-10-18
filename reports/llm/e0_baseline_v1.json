@@ -1,4 +1,96 @@
 {
+ "automated_labels": {
+  "cost_usd": 0.328228,
+  "fact_error_ge1": {
+   "k": 3,
+   "n": 14,
+   "rate": 0.2143,
+   "wilson95": [
+    0.0757,
+    0.4759
+   ]
+  },
+  "key_fact_coverage": {
+   "k": 58,
+   "n": 74,
+   "rate": 0.7838,
+   "wilson95": [
+    0.6773,
+    0.8623
+   ]
+  },
+  "labeler_model": "gemini-3-flash-preview",
+  "labeler_model_versions_seen": [
+   "gemini-3-flash-preview"
+  ],
+  "labeler_vs_judge_v2": {
+   "k": 7,
+   "kappa_reference_only": 0.1967,
+   "n": 14,
+   "rate": 0.5,
+   "table": {
+    "judge_fail_pub_N": 3,
+    "judge_fail_pub_Y": 7,
+    "judge_pass_pub_N": 0,
+    "judge_pass_pub_Y": 4
+   },
+   "wilson95": [
+    0.268,
+    0.732
+   ]
+  },
+  "note": "자동 라벨러(LLM)의 판단이고 정확도는 재지 않았다. 라벨러·generator·judge v2가 모두 Gemini다.",
+  "protocol": "e0-auto-labels-v1",
+  "publishable_first_draft": {
+   "k": 11,
+   "n": 14,
+   "rate": 0.7857,
+   "wilson95": [
+    0.5241,
+    0.9243
+   ]
+  },
+  "publishable_primary": {
+   "k": 11,
+   "n": 15,
+   "rate": 0.7333,
+   "wilson95": [
+    0.4805,
+    0.891
+   ]
+  },
+  "report": "reports/llm/e0_auto_labels_v1.md",
+  "run_a_vs_b_publishable": {
+   "k": 8,
+   "kappa_reference_only": 0.4118,
+   "n": 10,
+   "rate": 0.8,
+   "wilson95": [
+    0.4902,
+    0.9433
+   ]
+  },
+  "run_a_vs_b_single_event": {
+   "k": 11,
+   "kappa_reference_only": 1.0,
+   "n": 11,
+   "rate": 1.0,
+   "wilson95": [
+    0.7412,
+    1.0
+   ]
+  },
+  "single_event": {
+   "k": 11,
+   "n": 15,
+   "rate": 0.7333,
+   "wilson95": [
+    0.4805,
+    0.891
+   ]
+  },
+  "status": "complete"
+ },
  "balance_reconciliation": {
   "ledger_sum_usd": 0.155614,
   "note": "실행 전·마지막 호출 24시간 뒤의 잔액을 읽어 다시 만든다",
@@ -781,7 +873,7 @@
   "n_p": 15
  },
  "format": "e0-report/1",
- "generated_at": "2026-10-17T05:43:57Z",
+ "generated_at": "2026-10-18T05:37:34Z",
  "guard": {
   "caps_usd": {
    "e0_cumulative": 1.5,
@@ -947,7 +1039,8 @@
   "wall_clock_reached": null
  },
  "human_labels": {
-  "status": "pending"
+  "reason": "사용자 결정(2026-10-17): 사람 라벨을 달지 않는다 - 자동 라벨로 대체(ADR 0009 A8.13)",
+  "status": "none"
  },
  "kind": "descriptive_baseline",
  "metrics": {

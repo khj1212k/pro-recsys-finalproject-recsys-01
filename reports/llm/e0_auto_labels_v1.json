@@ -1,0 +1,1398 @@
+{
+ "kind": "e0_auto_labels",
+ "format": 1,
+ "generated_at": "2026-10-18T05:36:36.872785+00:00",
+ "header": {
+  "command": "python -m evaluation.llm.e0_auto_label_report",
+  "head_sha": "ce611a0f84e5fe0f193b09e1a1f6eac043f05b4e",
+  "protocol": "e0-auto-labels-v1",
+  "protocol_sha256": "b3aa857d6303227f4d4724892eae7b2325552b1fa67dada7421ed6460248a479",
+  "adr": "docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md#A8.13",
+  "e0_run": "run-20261017T054231Z",
+  "package_expires_at_utc": "2026-11-12T00:05:07Z",
+  "labeler_model": "gemini-3-flash-preview",
+  "labeler_model_versions_seen": [
+   "gemini-3-flash-preview"
+  ],
+  "generator_model": "gemini-3.5-flash-lite",
+  "judge_v2_model": "gemini-3.1-flash-lite",
+  "seeds": {
+   "a": 20261017,
+   "b": 20261018
+  },
+  "temperature": 1.0,
+  "thinking_level": "minimal",
+  "article_body_chars": 1500,
+  "schema_mode_used": "json_schema",
+  "thinking_spelling_used": "lower",
+  "preflight": {
+   "cluster": "ok",
+   "output": "ok",
+   "coverage": "ok",
+   "tone": "ok"
+  },
+  "preflight_changes": [],
+  "cost_cap_usd": 0.5,
+  "budget_env": {
+   "LLM_RUN_ID": "e0-auto-labels-v1",
+   "LLM_BUDGET_RUN_USD": "0.50",
+   "LLM_BUDGET_DAY_USD": "1.00"
+  },
+  "in_client_spend": {
+   "run_id": "e0-auto-labels-v1",
+   "run_usd": 0.328228,
+   "total_usd": 0.483842,
+   "caps_usd": {
+    "run": 0.5,
+    "day": 1.0,
+    "total": 3.0
+   },
+   "open_reservations": 0
+  },
+  "invocations": [
+   {
+    "at": "2026-10-17T06:29:12.001526+00:00",
+    "stop": null,
+    "result": {
+     "stats": {
+      "labeled": 79
+     },
+     "resent_after_crash": 0,
+     "extension_stopped_before": "r1-c22",
+     "extension_groups_total": 14
+    },
+    "spent_run_usd": 0.2571175
+   },
+   {
+    "at": "2026-10-17T06:31:08.809530+00:00",
+    "stop": null,
+    "result": {
+     "stats": {
+      "labeled": 19
+     },
+     "resent_after_crash": 0,
+     "extension_stopped_before": "r2-c8",
+     "extension_groups_total": 14
+    },
+    "spent_run_usd": 0.328228
+   }
+  ],
+  "human_labels": "없음 - 사용자 결정(2026-10-17, ADR 0009 A8.13 (a))",
+  "results_viewed": "A8.13 커밋까지 자동 라벨 0건. 이 리포트가 자동 라벨의 첫 집계다"
+ },
+ "calls": {
+  "preflight": {
+   "http_attempts": 4,
+   "status": {
+    "200": 4
+   },
+   "transport_errors": {},
+   "outcome": {
+    "ok": 4
+   },
+   "finish_reason": {
+    "STOP": 4
+   },
+   "tokens": {
+    "prompt": 3338,
+    "candidates": 448,
+    "thoughts": 0,
+    "cached": 0,
+    "total": 3786
+   },
+   "cost_usd": 0.003013,
+   "latency_s": {
+    "n": 4,
+    "median": 2.0315,
+    "min": 1.153,
+    "max": 2.86,
+    "sum": 8.076
+   },
+   "by_kind": {
+    "cluster": {
+     "attempts": 1,
+     "cost_usd": 0.001017
+    },
+    "output": {
+     "attempts": 1,
+     "cost_usd": 0.001267
+    },
+    "coverage": {
+     "attempts": 1,
+     "cost_usd": 0.000284
+    },
+    "tone": {
+     "attempts": 1,
+     "cost_usd": 0.000445
+    }
+   }
+  },
+  "labeling": {
+   "http_attempts": 98,
+   "status": {
+    "200": 98
+   },
+   "transport_errors": {},
+   "outcome": {
+    "ok": 98
+   },
+   "finish_reason": {
+    "STOP": 98
+   },
+   "tokens": {
+    "prompt": 517800,
+    "candidates": 22105,
+    "thoughts": 0,
+    "cached": 104162,
+    "total": 539905
+   },
+   "cost_usd": 0.325215,
+   "latency_s": {
+    "n": 98,
+    "median": 2.1615,
+    "min": 1.187,
+    "max": 5.864,
+    "sum": 245.861
+   },
+   "by_kind": {
+    "cluster": {
+     "attempts": 26,
+     "cost_usd": 0.149662
+    },
+    "output": {
+     "attempts": 24,
+     "cost_usd": 0.135782
+    },
+    "coverage": {
+     "attempts": 24,
+     "cost_usd": 0.01634
+    },
+    "tone": {
+     "attempts": 24,
+     "cost_usd": 0.023431
+    }
+   }
+  },
+  "model_versions": [
+   "gemini-3-flash-preview"
+  ]
+ },
+ "units": {
+  "a": {
+   "cluster": {
+    "labeled": 15
+   },
+   "output": {
+    "labeled": 14
+   },
+   "coverage": {
+    "labeled": 14
+   },
+   "tone": {
+    "labeled": 14
+   }
+  },
+  "b": {
+   "cluster": {
+    "labeled": 11
+   },
+   "output": {
+    "labeled": 10
+   },
+   "coverage": {
+    "labeled": 10
+   },
+   "tone": {
+    "labeled": 10
+   }
+  },
+  "repaired_then_labeled": 0,
+  "violation_codes": {}
+ },
+ "denominators": {
+  "n_p": 15,
+  "clusters_in_package": 15,
+  "outputs_in_package": 14,
+  "outputs_with_saved_conversion": 14,
+  "relabel_targets": {
+   "clusters": [
+    "r1-c51",
+    "r2-c14",
+    "r3-c149"
+   ],
+   "outputs": [
+    "o1200206d98",
+    "o1acd87ba0a",
+    "o432cfeb6b5",
+    "o9ad5016cc8",
+    "oa610149f6d"
+   ]
+  }
+ },
+ "run_a": {
+  "clusters": {
+   "n_clusters_labeled": 15,
+   "single_event": {
+    "k": 11,
+    "n": 15,
+    "rate": 0.7333,
+    "wilson95": [
+     0.4805,
+     0.891
+    ]
+   },
+   "with_outliers": {
+    "k": 4,
+    "n": 15,
+    "rate": 0.2667,
+    "wilson95": [
+     0.109,
+     0.5195
+    ]
+   },
+   "outliers_per_cluster": {
+    "n": 15,
+    "median": 0.0,
+    "min": 0.0,
+    "max": 5.0,
+    "sum": 9.0
+   },
+   "key_facts_per_cluster": {
+    "n": 15,
+    "median": 5.0,
+    "min": 4.0,
+    "max": 6.0,
+    "sum": 78.0
+   },
+   "no_main_event": 0
+  },
+  "outputs": {
+   "n_outputs_labeled": 14,
+   "publishable": {
+    "k": 11,
+    "n": 14,
+    "rate": 0.7857,
+    "wilson95": [
+     0.5241,
+     0.9243
+    ]
+   },
+   "publishable_labeler_raw": {
+    "k": 11,
+    "n": 14,
+    "rate": 0.7857,
+    "wilson95": [
+     0.5241,
+     0.9243
+    ]
+   },
+   "rule_made_no": {
+    "coverage_ok": 1,
+    "labeler_publishable": 3,
+    "no_fact_errors": 3
+   },
+   "fact_error_ge1": {
+    "k": 3,
+    "n": 14,
+    "rate": 0.2143,
+    "wilson95": [
+     0.0757,
+     0.4759
+    ]
+   },
+   "fact_errors_per_output": {
+    "n": 14,
+    "median": 0.0,
+    "min": 0.0,
+    "max": 1.0,
+    "sum": 3.0
+   },
+   "fact_error_types": {
+    "date": 1,
+    "other": 2
+   },
+   "unlocated_fact_errors": 0,
+   "ambiguous_spans_first_occurrence_used": 0,
+   "style": {
+    "4": 4,
+    "5": 10
+   },
+   "headline_mismatch": {
+    "k": 0,
+    "n": 14,
+    "rate": 0.0,
+    "wilson95": [
+     0.0,
+     0.2153
+    ]
+   },
+   "key_fact_coverage_micro": {
+    "k": 58,
+    "n": 74,
+    "rate": 0.7838,
+    "wilson95": [
+     0.6773,
+     0.8623
+    ]
+   },
+   "coverage_basis": {
+    "a": 14
+   },
+   "tone_drift": {
+    "k": 0,
+    "n": 14,
+    "rate": 0.0,
+    "wilson95": [
+     0.0,
+     0.2153
+    ]
+   },
+   "tone_drift_not_applicable": 0
+  },
+  "a8_8_uses": {
+   "status": "complete",
+   "labeled": {
+    "outputs": 14,
+    "outputs_total": 14,
+    "clusters": 15,
+    "clusters_total": 15
+   },
+   "publishable_primary": {
+    "k": 11,
+    "n": 15,
+    "rate": 0.7333,
+    "wilson95": [
+     0.4805,
+     0.891
+    ]
+   },
+   "publishable_saved_only": {
+    "k": 11,
+    "n": 14,
+    "rate": 0.7857,
+    "wilson95": [
+     0.5241,
+     0.9243
+    ]
+   },
+   "publishable_first_draft": {
+    "k": 11,
+    "n": 14,
+    "rate": 0.7857,
+    "wilson95": [
+     0.5241,
+     0.9243
+    ]
+   },
+   "outcome_by_single_event": {
+    "saved": {
+     "single_event_Y": 11,
+     "single_event_N": 3
+    },
+    "skipped": {
+     "single_event_Y": 0,
+     "single_event_N": 1
+    }
+   },
+   "saved": {
+    "gate_miss_number_quote_errors": 0,
+    "advisory_entity_flag_overlaps_labeler_span": {
+     "k": 0,
+     "n": 3,
+     "rate": 0.0,
+     "wilson95": [
+      0.0,
+      0.5615
+     ]
+    },
+    "note": "정답 대비가 아니다 - 참고 개체명 항목 중 라벨러 구간과 겹친 비율이다. 게이트 누락 건수는 라벨러가 센 number·quote 오류(저장본)다."
+   },
+   "judge_shadow_vs_publishable": {
+    "table": {
+     "judge_pass_pub_Y": 4,
+     "judge_pass_pub_N": 0,
+     "judge_fail_pub_Y": 7,
+     "judge_fail_pub_N": 3
+    },
+    "agreement": {
+     "k": 7,
+     "n": 14,
+     "rate": 0.5,
+     "wilson95": [
+      0.268,
+      0.732
+     ]
+    },
+    "note": "κ는 참고로만(A2), n이 작아 선정에 쓰지 않는다"
+   },
+   "key_fact_coverage": {
+    "k": 58,
+    "n": 74,
+    "rate": 0.7838,
+    "wilson95": [
+     0.6773,
+     0.8623
+    ]
+   },
+   "fact_error_types": {
+    "date": 1,
+    "other": 2
+   },
+   "checker_vs_auto_labeler_first_draft": {
+    "checker_block_overlaps_labeler_span": {
+     "k": 0,
+     "n": 0,
+     "rate": null,
+     "wilson95": null
+    },
+    "labeler_number_span_overlaps_checker": {
+     "k": 0,
+     "n": 0,
+     "rate": null,
+     "wilson95": null
+    },
+    "labeler_quote_span_overlaps_checker": {
+     "k": 0,
+     "n": 0,
+     "rate": null,
+     "wilson95": null
+    },
+    "draft_level_2x2": {
+     "blocked_and_error": 0,
+     "blocked_no_error": 0,
+     "passed_and_error": 0,
+     "passed_no_error": 14
+    },
+    "computed_values_counted_as_fp": null,
+    "note": "A8.8 쓰임 3의 계산을 자동 라벨(런 a)에 그대로 한 값이다. 사람 정답이 아니므로 '정밀도·재현율'이 아니라 검사기 차단 구간 중 라벨러 구간과 겹친 비율(checker_block_overlaps_labeler_span), 라벨러 number·quote 구간 중 검사기와 겹친 비율(labeler_*_span_overlaps_checker)로 읽는다."
+   }
+  }
+ },
+ "run_b": {
+  "clusters": {
+   "n_clusters_labeled": 11,
+   "single_event": {
+    "k": 9,
+    "n": 11,
+    "rate": 0.8182,
+    "wilson95": [
+     0.523,
+     0.9486
+    ]
+   },
+   "with_outliers": {
+    "k": 2,
+    "n": 11,
+    "rate": 0.1818,
+    "wilson95": [
+     0.0514,
+     0.477
+    ]
+   },
+   "outliers_per_cluster": {
+    "n": 11,
+    "median": 0.0,
+    "min": 0.0,
+    "max": 1.0,
+    "sum": 2.0
+   },
+   "key_facts_per_cluster": {
+    "n": 11,
+    "median": 5.0,
+    "min": 4.0,
+    "max": 6.0,
+    "sum": 59.0
+   },
+   "no_main_event": 0
+  },
+  "outputs": {
+   "n_outputs_labeled": 10,
+   "publishable": {
+    "k": 7,
+    "n": 10,
+    "rate": 0.7,
+    "wilson95": [
+     0.3968,
+     0.8922
+    ]
+   },
+   "publishable_labeler_raw": {
+    "k": 8,
+    "n": 10,
+    "rate": 0.8,
+    "wilson95": [
+     0.4902,
+     0.9433
+    ]
+   },
+   "rule_made_no": {
+    "coverage_ok": 1,
+    "labeler_publishable": 2,
+    "no_fact_errors": 2,
+    "no_headline_mismatch": 1
+   },
+   "fact_error_ge1": {
+    "k": 2,
+    "n": 10,
+    "rate": 0.2,
+    "wilson95": [
+     0.0567,
+     0.5098
+    ]
+   },
+   "fact_errors_per_output": {
+    "n": 10,
+    "median": 0.0,
+    "min": 0.0,
+    "max": 1.0,
+    "sum": 2.0
+   },
+   "fact_error_types": {
+    "date": 1,
+    "other": 1
+   },
+   "unlocated_fact_errors": 0,
+   "ambiguous_spans_first_occurrence_used": 0,
+   "style": {
+    "4": 2,
+    "5": 8
+   },
+   "headline_mismatch": {
+    "k": 1,
+    "n": 10,
+    "rate": 0.1,
+    "wilson95": [
+     0.0179,
+     0.4042
+    ]
+   },
+   "key_fact_coverage_micro": {
+    "k": 43,
+    "n": 53,
+    "rate": 0.8113,
+    "wilson95": [
+     0.6864,
+     0.8941
+    ]
+   },
+   "coverage_basis": {
+    "a": 10
+   },
+   "tone_drift": {
+    "k": 0,
+    "n": 10,
+    "rate": 0.0,
+    "wilson95": [
+     0.0,
+     0.2775
+    ]
+   },
+   "tone_drift_not_applicable": 0
+  }
+ },
+ "run_a_vs_run_b": {
+  "n_clusters_both": 11,
+  "n_outputs_both": 10,
+  "cluster_ids_both": [
+   "r1-c111",
+   "r1-c22",
+   "r1-c29",
+   "r1-c51",
+   "r1-c52",
+   "r1-c70",
+   "r2-c14",
+   "r2-c19",
+   "r2-c60",
+   "r2-c70",
+   "r3-c149"
+  ],
+  "output_ids_both": [
+   "o0d8d6d6ee0",
+   "o1200206d98",
+   "o1acd87ba0a",
+   "o1e0fd1317e",
+   "o432cfeb6b5",
+   "o9ad5016cc8",
+   "oa610149f6d",
+   "ob65239c2cc",
+   "oc5801514de",
+   "oca51eacbc4"
+  ],
+  "cluster_ids_only_in_run_a": [
+   "r2-c8",
+   "r3-c11",
+   "r3-c2",
+   "r3-c52"
+  ],
+  "output_ids_only_in_run_a": [
+   "o208f0f1a4c",
+   "o4c5eb0674a",
+   "oa50cd38cf2",
+   "oe245be876f"
+  ],
+  "run_b_selection": "재라벨 대상 + item_id 순서로 예산이 허락한 만큼이다. 멈춘 지점은 비용으로만 정해졌고 라벨 값과 무관하다. 그 뒤의 항목은 크기와 관계없이 모두 빠졌으므로 대표 표본이 아니다.",
+  "single_event": {
+   "k": 11,
+   "n": 11,
+   "rate": 1.0,
+   "wilson95": [
+    0.7412,
+    1.0
+   ],
+   "kappa_reference_only": 1.0,
+   "one_category_only": false,
+   "disagreement_ids": []
+  },
+  "outlier_set_exact": {
+   "k": 10,
+   "n": 11,
+   "rate": 0.9091,
+   "wilson95": [
+    0.6226,
+    0.9838
+   ],
+   "kappa_reference_only": 0.7179,
+   "one_category_only": false,
+   "disagreement_ids": [
+    "r1-c29"
+   ]
+  },
+  "main_event_present": {
+   "k": 11,
+   "n": 11,
+   "rate": 1.0,
+   "wilson95": [
+    0.7412,
+    1.0
+   ],
+   "kappa_reference_only": null,
+   "one_category_only": true,
+   "disagreement_ids": []
+  },
+  "publishable": {
+   "k": 8,
+   "n": 10,
+   "rate": 0.8,
+   "wilson95": [
+    0.4902,
+    0.9433
+   ],
+   "kappa_reference_only": 0.4118,
+   "one_category_only": false,
+   "disagreement_ids": [
+    "o1acd87ba0a",
+    "o432cfeb6b5"
+   ]
+  },
+  "publishable_labeler_raw": {
+   "k": 9,
+   "n": 10,
+   "rate": 0.9,
+   "wilson95": [
+    0.5958,
+    0.9821
+   ],
+   "kappa_reference_only": 0.6154,
+   "one_category_only": false,
+   "disagreement_ids": [
+    "o432cfeb6b5"
+   ]
+  },
+  "fact_error_present": {
+   "k": 9,
+   "n": 10,
+   "rate": 0.9,
+   "wilson95": [
+    0.5958,
+    0.9821
+   ],
+   "kappa_reference_only": 0.6154,
+   "one_category_only": false,
+   "disagreement_ids": [
+    "o432cfeb6b5"
+   ]
+  },
+  "fact_error_count_equal": {
+   "k": 9,
+   "n": 10,
+   "rate": 0.9,
+   "wilson95": [
+    0.5958,
+    0.9821
+   ],
+   "kappa_reference_only": 0.6154,
+   "one_category_only": false,
+   "disagreement_ids": [
+    "o432cfeb6b5"
+   ]
+  },
+  "style_exact": {
+   "k": 8,
+   "n": 10,
+   "rate": 0.8,
+   "wilson95": [
+    0.4902,
+    0.9433
+   ],
+   "kappa_reference_only": 0.375,
+   "one_category_only": false,
+   "disagreement_ids": [
+    "o1e0fd1317e",
+    "o9ad5016cc8"
+   ]
+  },
+  "style_within_1": {
+   "k": 10,
+   "n": 10,
+   "rate": 1.0,
+   "wilson95": [
+    0.7225,
+    1.0
+   ],
+   "styles_seen": [
+    4,
+    5
+   ],
+   "always_true_by_range": true
+  },
+  "headline_mismatch": {
+   "k": 9,
+   "n": 10,
+   "rate": 0.9,
+   "wilson95": [
+    0.5958,
+    0.9821
+   ],
+   "kappa_reference_only": 0.0,
+   "one_category_only": false,
+   "disagreement_ids": [
+    "o432cfeb6b5"
+   ]
+  },
+  "tone_drift": {
+   "k": 10,
+   "n": 10,
+   "rate": 1.0,
+   "wilson95": [
+    0.7225,
+    1.0
+   ],
+   "kappa_reference_only": null,
+   "one_category_only": true,
+   "disagreement_ids": []
+  },
+  "coverage_per_fact_same_facts": {
+   "k": 51,
+   "n": 53,
+   "rate": 0.9623,
+   "wilson95": [
+    0.8725,
+    0.9896
+   ],
+   "kappa_reference_only": 0.8767,
+   "one_category_only": false,
+   "disagreement_ids": [
+    "o1acd87ba0a#2",
+    "o432cfeb6b5#2"
+   ]
+  },
+  "note": "κ는 정의되면 참고로만 적고 해석하지 않는다(A8.8 재라벨의 보고 규칙). 런 b의 coverage는 런 a의 핵심 사실로 물었다."
+ },
+ "labeler_vs_judge_v2": {
+  "judge_decision_vs_publishable": {
+   "table": {
+    "judge_pass_pub_Y": 4,
+    "judge_pass_pub_N": 0,
+    "judge_fail_pub_Y": 7,
+    "judge_fail_pub_N": 3
+   },
+   "k": 7,
+   "n": 14,
+   "rate": 0.5,
+   "wilson95": [
+    0.268,
+    0.732
+   ],
+   "kappa_reference_only": 0.1967,
+   "one_category_only": false,
+   "disagreement_ids": [
+    "o0d8d6d6ee0",
+    "o1acd87ba0a",
+    "o9ad5016cc8",
+    "oa50cd38cf2",
+    "ob65239c2cc",
+    "oc5801514de",
+    "oca51eacbc4"
+   ]
+  },
+  "judge_unsupported_vs_fact_error": {
+   "table": {
+    "judge_unsupported_ge1_err_Y": 3,
+    "judge_unsupported_ge1_err_N": 7,
+    "judge_unsupported_0_err_Y": 0,
+    "judge_unsupported_0_err_N": 4
+   },
+   "k": 7,
+   "n": 14,
+   "rate": 0.5,
+   "wilson95": [
+    0.268,
+    0.732
+   ],
+   "kappa_reference_only": 0.1967,
+   "one_category_only": false,
+   "disagreement_ids": [
+    "o0d8d6d6ee0",
+    "o1acd87ba0a",
+    "o9ad5016cc8",
+    "oa50cd38cf2",
+    "ob65239c2cc",
+    "oc5801514de",
+    "oca51eacbc4"
+   ],
+   "exploratory_not_preregistered": true
+  },
+  "note": "judge v2 shadow(첫 초안, 기본 임계값)와 자동 라벨러(런 a). 둘 다 Gemini - 같은 계열이고 어느 쪽도 정답이 아니다. judge 판정 × publishable은 A8.13 (c)5(A8.8 쓰임 4)의 계산이고, '근거 없는 주장 × 사실 오류'는 탐색(사전 등록 아님)이다."
+ },
+ "labeler_vs_cluster_evaluator": {
+  "first_cluster_eval_vs_single_event": {
+   "table": {
+    "pass_single_Y": 11,
+    "pass_single_N": 2,
+    "fail_single_Y": 0,
+    "fail_single_N": 2
+   },
+   "k": 13,
+   "n": 15,
+   "rate": 0.8667,
+   "wilson95": [
+    0.6212,
+    0.9626
+   ],
+   "kappa_reference_only": 0.5946,
+   "one_category_only": false,
+   "disagreement_ids": [
+    "r1-c29",
+    "r3-c2"
+   ]
+  },
+  "exploratory_not_preregistered": true,
+  "note": "탐색(A8.13 (c)에 없는 비교): ClusterEvaluator(judge 모델, 첫 판정)와 자동 라벨러(런 a). 같은 계열."
+ },
+ "by_size_bucket_run_a": {
+  "3-4": {
+   "clusters": 5,
+   "clusters_labeled": 5,
+   "saved": 4,
+   "single_event": {
+    "k": 4,
+    "n": 5,
+    "rate": 0.8,
+    "wilson95": [
+     0.3755,
+     0.9638
+    ]
+   },
+   "outputs_labeled": 4,
+   "publishable": {
+    "k": 3,
+    "n": 4,
+    "rate": 0.75,
+    "wilson95": [
+     0.3006,
+     0.9544
+    ]
+   },
+   "fact_error_ge1": {
+    "k": 1,
+    "n": 4,
+    "rate": 0.25,
+    "wilson95": [
+     0.0456,
+     0.6994
+    ]
+   }
+  },
+  "5-9": {
+   "clusters": 5,
+   "clusters_labeled": 5,
+   "saved": 5,
+   "single_event": {
+    "k": 3,
+    "n": 5,
+    "rate": 0.6,
+    "wilson95": [
+     0.2307,
+     0.8824
+    ]
+   },
+   "outputs_labeled": 5,
+   "publishable": {
+    "k": 4,
+    "n": 5,
+    "rate": 0.8,
+    "wilson95": [
+     0.3755,
+     0.9638
+    ]
+   },
+   "fact_error_ge1": {
+    "k": 1,
+    "n": 5,
+    "rate": 0.2,
+    "wilson95": [
+     0.0362,
+     0.6245
+    ]
+   }
+  },
+  "10+": {
+   "clusters": 5,
+   "clusters_labeled": 5,
+   "saved": 5,
+   "single_event": {
+    "k": 4,
+    "n": 5,
+    "rate": 0.8,
+    "wilson95": [
+     0.3755,
+     0.9638
+    ]
+   },
+   "outputs_labeled": 5,
+   "publishable": {
+    "k": 4,
+    "n": 5,
+    "rate": 0.8,
+    "wilson95": [
+     0.3755,
+     0.9638
+    ]
+   },
+   "fact_error_ge1": {
+    "k": 1,
+    "n": 5,
+    "rate": 0.2,
+    "wilson95": [
+     0.0362,
+     0.6245
+    ]
+   }
+  }
+ },
+ "rows": {
+  "clusters": [
+   {
+    "item_id": "r1-c111",
+    "n_articles": 6,
+    "bucket": "5-9",
+    "outcome": "completed",
+    "a_single_event": true,
+    "a_n_outliers": 0,
+    "a_n_key_facts": 5,
+    "b_single_event": true
+   },
+   {
+    "item_id": "r1-c22",
+    "n_articles": 19,
+    "bucket": "10+",
+    "outcome": "completed",
+    "a_single_event": true,
+    "a_n_outliers": 0,
+    "a_n_key_facts": 6,
+    "b_single_event": true
+   },
+   {
+    "item_id": "r1-c29",
+    "n_articles": 9,
+    "bucket": "5-9",
+    "outcome": "completed",
+    "a_single_event": false,
+    "a_n_outliers": 2,
+    "a_n_key_facts": 5,
+    "b_single_event": false
+   },
+   {
+    "item_id": "r1-c51",
+    "n_articles": 5,
+    "bucket": "5-9",
+    "outcome": "completed",
+    "a_single_event": true,
+    "a_n_outliers": 0,
+    "a_n_key_facts": 5,
+    "b_single_event": true
+   },
+   {
+    "item_id": "r1-c52",
+    "n_articles": 3,
+    "bucket": "3-4",
+    "outcome": "skipped",
+    "a_single_event": false,
+    "a_n_outliers": 1,
+    "a_n_key_facts": 4,
+    "b_single_event": false
+   },
+   {
+    "item_id": "r1-c70",
+    "n_articles": 3,
+    "bucket": "3-4",
+    "outcome": "completed",
+    "a_single_event": true,
+    "a_n_outliers": 0,
+    "a_n_key_facts": 5,
+    "b_single_event": true
+   },
+   {
+    "item_id": "r2-c14",
+    "n_articles": 7,
+    "bucket": "5-9",
+    "outcome": "completed",
+    "a_single_event": true,
+    "a_n_outliers": 0,
+    "a_n_key_facts": 5,
+    "b_single_event": true
+   },
+   {
+    "item_id": "r2-c19",
+    "n_articles": 30,
+    "bucket": "10+",
+    "outcome": "completed",
+    "a_single_event": true,
+    "a_n_outliers": 0,
+    "a_n_key_facts": 6,
+    "b_single_event": true
+   },
+   {
+    "item_id": "r2-c60",
+    "n_articles": 10,
+    "bucket": "10+",
+    "outcome": "completed",
+    "a_single_event": true,
+    "a_n_outliers": 0,
+    "a_n_key_facts": 6,
+    "b_single_event": true
+   },
+   {
+    "item_id": "r2-c70",
+    "n_articles": 4,
+    "bucket": "3-4",
+    "outcome": "completed",
+    "a_single_event": true,
+    "a_n_outliers": 0,
+    "a_n_key_facts": 5,
+    "b_single_event": true
+   },
+   {
+    "item_id": "r2-c8",
+    "n_articles": 41,
+    "bucket": "10+",
+    "outcome": "completed",
+    "a_single_event": false,
+    "a_n_outliers": 5,
+    "a_n_key_facts": 6,
+    "b_single_event": null
+   },
+   {
+    "item_id": "r3-c11",
+    "n_articles": 4,
+    "bucket": "3-4",
+    "outcome": "completed",
+    "a_single_event": true,
+    "a_n_outliers": 0,
+    "a_n_key_facts": 5,
+    "b_single_event": null
+   },
+   {
+    "item_id": "r3-c149",
+    "n_articles": 3,
+    "bucket": "3-4",
+    "outcome": "completed",
+    "a_single_event": true,
+    "a_n_outliers": 0,
+    "a_n_key_facts": 5,
+    "b_single_event": true
+   },
+   {
+    "item_id": "r3-c2",
+    "n_articles": 5,
+    "bucket": "5-9",
+    "outcome": "completed",
+    "a_single_event": false,
+    "a_n_outliers": 1,
+    "a_n_key_facts": 5,
+    "b_single_event": null
+   },
+   {
+    "item_id": "r3-c52",
+    "n_articles": 14,
+    "bucket": "10+",
+    "outcome": "completed",
+    "a_single_event": true,
+    "a_n_outliers": 0,
+    "a_n_key_facts": 5,
+    "b_single_event": null
+   }
+  ],
+  "outputs": [
+   {
+    "output_id": "o0d8d6d6ee0",
+    "item_id": "r1-c111",
+    "a_publishable": true,
+    "a_publishable_raw": true,
+    "a_n_fact_errors": 0,
+    "a_style": 5,
+    "a_n_covered": 5,
+    "a_n_facts": 5,
+    "a_tone_drift": false,
+    "b_publishable": true,
+    "b_publishable_raw": true,
+    "b_n_fact_errors": 0,
+    "b_style": 5,
+    "b_n_covered": 5,
+    "b_n_facts": 5,
+    "b_tone_drift": false
+   },
+   {
+    "output_id": "o1200206d98",
+    "item_id": "r1-c70",
+    "a_publishable": true,
+    "a_publishable_raw": true,
+    "a_n_fact_errors": 0,
+    "a_style": 5,
+    "a_n_covered": 4,
+    "a_n_facts": 5,
+    "a_tone_drift": false,
+    "b_publishable": true,
+    "b_publishable_raw": true,
+    "b_n_fact_errors": 0,
+    "b_style": 5,
+    "b_n_covered": 4,
+    "b_n_facts": 5,
+    "b_tone_drift": false
+   },
+   {
+    "output_id": "o1acd87ba0a",
+    "item_id": "r2-c19",
+    "a_publishable": true,
+    "a_publishable_raw": true,
+    "a_n_fact_errors": 0,
+    "a_style": 5,
+    "a_n_covered": 4,
+    "a_n_facts": 6,
+    "a_tone_drift": false,
+    "b_publishable": false,
+    "b_publishable_raw": true,
+    "b_n_fact_errors": 0,
+    "b_style": 5,
+    "b_n_covered": 3,
+    "b_n_facts": 6,
+    "b_tone_drift": false
+   },
+   {
+    "output_id": "o1e0fd1317e",
+    "item_id": "r2-c14",
+    "a_publishable": false,
+    "a_publishable_raw": false,
+    "a_n_fact_errors": 1,
+    "a_style": 5,
+    "a_n_covered": 5,
+    "a_n_facts": 5,
+    "a_tone_drift": false,
+    "b_publishable": false,
+    "b_publishable_raw": false,
+    "b_n_fact_errors": 1,
+    "b_style": 4,
+    "b_n_covered": 5,
+    "b_n_facts": 5,
+    "b_tone_drift": false
+   },
+   {
+    "output_id": "o208f0f1a4c",
+    "item_id": "r2-c8",
+    "a_publishable": false,
+    "a_publishable_raw": false,
+    "a_n_fact_errors": 1,
+    "a_style": 5,
+    "a_n_covered": 2,
+    "a_n_facts": 6,
+    "a_tone_drift": false
+   },
+   {
+    "output_id": "o432cfeb6b5",
+    "item_id": "r2-c60",
+    "a_publishable": true,
+    "a_publishable_raw": true,
+    "a_n_fact_errors": 0,
+    "a_style": 4,
+    "a_n_covered": 5,
+    "a_n_facts": 6,
+    "a_tone_drift": false,
+    "b_publishable": false,
+    "b_publishable_raw": false,
+    "b_n_fact_errors": 1,
+    "b_style": 4,
+    "b_n_covered": 6,
+    "b_n_facts": 6,
+    "b_tone_drift": false
+   },
+   {
+    "output_id": "o4c5eb0674a",
+    "item_id": "r3-c11",
+    "a_publishable": false,
+    "a_publishable_raw": false,
+    "a_n_fact_errors": 1,
+    "a_style": 4,
+    "a_n_covered": 5,
+    "a_n_facts": 5,
+    "a_tone_drift": false
+   },
+   {
+    "output_id": "o9ad5016cc8",
+    "item_id": "r3-c149",
+    "a_publishable": true,
+    "a_publishable_raw": true,
+    "a_n_fact_errors": 0,
+    "a_style": 4,
+    "a_n_covered": 3,
+    "a_n_facts": 5,
+    "a_tone_drift": false,
+    "b_publishable": true,
+    "b_publishable_raw": true,
+    "b_n_fact_errors": 0,
+    "b_style": 5,
+    "b_n_covered": 3,
+    "b_n_facts": 5,
+    "b_tone_drift": false
+   },
+   {
+    "output_id": "oa50cd38cf2",
+    "item_id": "r3-c2",
+    "a_publishable": true,
+    "a_publishable_raw": true,
+    "a_n_fact_errors": 0,
+    "a_style": 5,
+    "a_n_covered": 3,
+    "a_n_facts": 5,
+    "a_tone_drift": false
+   },
+   {
+    "output_id": "oa610149f6d",
+    "item_id": "r1-c29",
+    "a_publishable": true,
+    "a_publishable_raw": true,
+    "a_n_fact_errors": 0,
+    "a_style": 5,
+    "a_n_covered": 3,
+    "a_n_facts": 5,
+    "a_tone_drift": false,
+    "b_publishable": true,
+    "b_publishable_raw": true,
+    "b_n_fact_errors": 0,
+    "b_style": 5,
+    "b_n_covered": 3,
+    "b_n_facts": 5,
+    "b_tone_drift": false
+   },
+   {
+    "output_id": "ob65239c2cc",
+    "item_id": "r2-c70",
+    "a_publishable": true,
+    "a_publishable_raw": true,
+    "a_n_fact_errors": 0,
+    "a_style": 5,
+    "a_n_covered": 5,
+    "a_n_facts": 5,
+    "a_tone_drift": false,
+    "b_publishable": true,
+    "b_publishable_raw": true,
+    "b_n_fact_errors": 0,
+    "b_style": 5,
+    "b_n_covered": 5,
+    "b_n_facts": 5,
+    "b_tone_drift": false
+   },
+   {
+    "output_id": "oc5801514de",
+    "item_id": "r1-c22",
+    "a_publishable": true,
+    "a_publishable_raw": true,
+    "a_n_fact_errors": 0,
+    "a_style": 5,
+    "a_n_covered": 4,
+    "a_n_facts": 6,
+    "a_tone_drift": false,
+    "b_publishable": true,
+    "b_publishable_raw": true,
+    "b_n_fact_errors": 0,
+    "b_style": 5,
+    "b_n_covered": 4,
+    "b_n_facts": 6,
+    "b_tone_drift": false
+   },
+   {
+    "output_id": "oca51eacbc4",
+    "item_id": "r1-c51",
+    "a_publishable": true,
+    "a_publishable_raw": true,
+    "a_n_fact_errors": 0,
+    "a_style": 5,
+    "a_n_covered": 5,
+    "a_n_facts": 5,
+    "a_tone_drift": false,
+    "b_publishable": true,
+    "b_publishable_raw": true,
+    "b_n_fact_errors": 0,
+    "b_style": 5,
+    "b_n_covered": 5,
+    "b_n_facts": 5,
+    "b_tone_drift": false
+   },
+   {
+    "output_id": "oe245be876f",
+    "item_id": "r3-c52",
+    "a_publishable": true,
+    "a_publishable_raw": true,
+    "a_n_fact_errors": 0,
+    "a_style": 4,
+    "a_n_covered": 5,
+    "a_n_facts": 5,
+    "a_tone_drift": false
+   }
+  ]
+ },
+ "not_computable": [
+  {
+   "what": "사람 발행 가능률(A8.8 쓰임 1, bake-off 1차 지표의 정의 그대로의 값)",
+   "why": "사람 라벨 없음(사용자 결정 2026-10-17)"
+  },
+  {
+   "what": "judge 보정 - 사람 라벨 대비 κ·Spearman(ADR 0009 judge 선정, ADR 0010)",
+   "why": "사람 라벨 없음"
+  },
+  {
+   "what": "결정론 검사기의 정밀도·재현율(사람 정답 대비, ADR 0010 '측정하지 않은 것')",
+   "why": "사람 라벨 없음 - 라벨러 구간과의 겹침만 낸다"
+  },
+  {
+   "what": "사람 라벨 신뢰도(intra-rater)와 가이드 5절의 κ < 0.60 규칙",
+   "why": "사람 라벨 없음"
+  },
+  {
+   "what": "자동 라벨러 자신의 정확도",
+   "why": "정답이 없다 - 일치는 타당성을 보여 주지 않는다"
+  },
+  {
+   "what": "라벨 시간 실측(A8.7 label_hours_actual)",
+   "why": "사람 라벨 없음"
+  }
+ ],
+ "caveats": [
+  "라벨러(gemini-3-flash-preview)·generator(gemini-3.5-flash-lite)·judge v2(gemini-3.1-flash-lite)가 모두 Gemini다(같은 계열). 라벨러 대 judge 일치는 독립 검증이 아니다.",
+  "라벨러는 요청받은 '가장 강한 모델'이 아니다 - 비용 상한 $0.50 때문에 선정 규칙(A8.13 (b)1)이 고른 preview 모델이다.",
+  "기사당 앞 1500자만 보여 줬다(가이드는 전체 본문). 생성기가 보는 것(긴 순 기사 10건 × 앞 1500자)은 라벨러가 보는 것(모든 기사의 앞 1500자) 안에 있으므로, 이 창이 사실 오류율과 발행 가능률을 어느 쪽으로 치우치게 하는지는 이 자료로 정할 수 없다 (A8.13 (b)3의 '사실 오류를 늘리고 발행 가능률을 낮춘다'는 방향 서술은 A8.14에서 정정했다).",
+  "thinking은 최소(minimal), temperature 1.0(기본값). 런 b는 재라벨 대상 + 예산 안의 나머지라 전 항목이 아니다.",
+  "n이 작다(클러스터 15, 출력 14). 비율의 Wilson 95% CI가 넓다. 가설 검정은 없다.",
+  "라벨러와 judge v2의 불일치 7건은 judge FAIL·라벨러 publishable 7건, judge PASS·라벨러 not publishable 0건이다(첫 초안 14건). 한쪽으로 쏠려 있다는 사실만 있고 어느 쪽이 맞는지는 모른다 - 라벨러가 judge보다 관대하거나 같은 계열 생성물에 호의적이어서 발행 가능률이 높게 나왔을 가능성도, judge가 엄격할 가능성도 배제하지 못한다.",
+  "응답의 modelVersion은 gemini-3-flash-preview뿐이라 프로토콜에 적은 models.list 버전(3-flash-preview-12-2025)으로 고정됐는지는 확인하지 못했다(preview 모델은 제공사가 동작을 바꿀 수 있다)."
+ ]
+}

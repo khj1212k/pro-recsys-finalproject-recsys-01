@@ -332,3 +332,51 @@ def test_429_ratio_is_reported_over_n_p_and_over_every_sent_attempt(built):
     assert m3["http_status_counts_all_sent"]["429"] == 3 and m3["http_status_counts"]["429"] == 1
     assert set(m3["denominators"]) == {"rate_429", "http_status_counts", "rate_429_all_sent",
                                        "http_status_counts_all_sent"}
+
+
+def test_no_human_labels_and_the_automated_label_summary_are_rendered(built, tmp_path):
+    """ADR 0009 A8.13: 사람 라벨은 없고(사유), 자동 라벨 리포트의 머리 수치만 옮긴다."""
+    r, manifest, prereg = built
+    pending = rep.build_report(r.dir, prereg=prereg, manifest_path=manifest, human_labels_none="사용자 결정",
+                               auto_labels_report=tmp_path / "missing.json")
+    assert pending["human_labels"] == {"status": "none", "reason": "사용자 결정"}
+    assert pending["automated_labels"]["status"] == "pending"
+    ratio = {"k": 1, "n": 2, "rate": 0.5, "wilson95": [0.1, 0.9], "kappa_reference_only": None}
+    auto = {"header": {"protocol": "p", "labeler_model": "m", "labeler_model_versions_seen": ["m"]},
+            "calls": {"labeling": {"cost_usd": 0.2}, "preflight": {"cost_usd": 0.01}},
+            "run_a": {"a8_8_uses": {"status": "complete", "publishable_primary": ratio, "publishable_first_draft": ratio},
+                      "outputs": {"fact_error_ge1": ratio, "key_fact_coverage_micro": ratio},
+                      "clusters": {"single_event": ratio}},
+            "run_a_vs_run_b": {"publishable": ratio, "single_event": ratio},
+            "labeler_vs_judge_v2": {"judge_decision_vs_publishable": {"table": {"judge_pass_pub_Y": 1}, **ratio}}}
+    (tmp_path / "auto.json").write_text(json.dumps(auto))
+    done = rep.build_report(r.dir, prereg=prereg, manifest_path=manifest, human_labels_none="사용자 결정",
+                            auto_labels_report=tmp_path / "auto.json")
+    s = done["automated_labels"]
+    assert s["status"] == "complete" and s["cost_usd"] == 0.21 and s["publishable_primary"] == ratio
+    md = rep.render_md(done)
+    assert "## 자동 라벨(ADR 0009 A8.13)" in md and "1/2 = 0.500 [0.100, 0.900]" in md
+    assert "automated_labels" not in rep.build_report(r.dir, prereg=prereg, manifest_path=manifest)
+
+
+def test_the_automated_label_line_names_the_model_version_only_when_it_differs(built, tmp_path):
+    r, manifest, prereg = built
+    ratio = {"k": 1, "n": 2, "rate": 0.5, "wilson95": [0.1, 0.9], "kappa_reference_only": None}
+
+    def summary(versions):
+        auto = {"header": {"protocol": "p", "labeler_model": "m", "labeler_model_versions_seen": versions},
+                "calls": {"labeling": {"cost_usd": 0.2}, "preflight": {"cost_usd": 0.01}},
+                "run_a": {"a8_8_uses": {"status": "complete", "publishable_primary": ratio, "publishable_first_draft": ratio},
+                          "outputs": {"fact_error_ge1": ratio, "key_fact_coverage_micro": ratio},
+                          "clusters": {"single_event": ratio}},
+                "run_a_vs_run_b": {"publishable": ratio, "single_event": ratio},
+                "labeler_vs_judge_v2": {"judge_decision_vs_publishable": {"table": {"judge_pass_pub_Y": 1}, **ratio}}}
+        (tmp_path / "auto.json").write_text(json.dumps(auto))
+        done = rep.build_report(r.dir, prereg=prereg, manifest_path=manifest, human_labels_none="사용자 결정",
+                               auto_labels_report=tmp_path / "auto.json")
+        return rep.render_md(done)
+
+    same = summary(["m"])
+    assert "라벨러 m, 비용" in same and "m (m)" not in same
+    other = summary(["m-001"])
+    assert "라벨러 m (응답 modelVersion: m-001), 비용" in other

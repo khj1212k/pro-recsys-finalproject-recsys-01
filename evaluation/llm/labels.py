@@ -94,11 +94,32 @@ def is_expired(labels_dir: Path, now: datetime) -> bool:
     return now >= expires
 
 
-def purge_expired_bodies(labels_dir: Path, now: datetime) -> int:
-    """마감이 지났으면 clusters.jsonl의 본문을 지우고 지운 건수를 돌려준다(여러 번 불러도 같다)."""
+AUTO_DIR = "auto"                              # <labels_dir>/auto/<프로토콜 id>/ - E0 자동 라벨러(ADR 0009 A8.13)
+AUTO_FREE_TEXT_FILE = "rationales.jsonl"       # 라벨러가 쓴 근거 텍스트(응답 전체). 패키지 마감에 지운다
+
+
+def purge_auto_free_text(labels_dir: Path, now: datetime) -> int:
+    """마감이 지났으면 자동 라벨러의 자유 텍스트 파일(`auto/*/rationales.jsonl`)을 지우고 지운 파일 수를 돌려준다.
+
+    라벨 값 파일(run-a|run-b/*_labels.jsonl)과 호출 기록은 남긴다(id·값·수치뿐이다). 여러 번 불러도 같다.
+    """
     labels_dir = Path(labels_dir)
     if not is_expired(labels_dir, now):
         return 0
+    removed = 0
+    for path in sorted((labels_dir / AUTO_DIR).glob(f"*/{AUTO_FREE_TEXT_FILE}")):
+        path.unlink()
+        removed += 1
+    return removed
+
+
+def purge_expired_bodies(labels_dir: Path, now: datetime) -> int:
+    """마감이 지났으면 clusters.jsonl의 본문과 자동 라벨러의 자유 텍스트를 지우고 지운 건수(본문을 비운 기사 + 지운 파일)를
+    돌려준다(여러 번 불러도 같다)."""
+    labels_dir = Path(labels_dir)
+    if not is_expired(labels_dir, now):
+        return 0
+    removed_files = purge_auto_free_text(labels_dir, now)
     rows = _read_jsonl(labels_dir / "clusters.jsonl")
     blanked = 0
     for row in rows:
@@ -111,12 +132,16 @@ def purge_expired_bodies(labels_dir: Path, now: datetime) -> int:
         tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
         os.chmod(tmp, 0o600)
         os.replace(tmp, labels_dir / "clusters.jsonl")
-    return blanked
+    return blanked + removed_files
 
 
 class LabelStore:
-    def __init__(self, labels_dir: Path, now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)):
+    def __init__(self, labels_dir: Path, now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+                 label_files_dir: Optional[Path] = None):
         self.dir = Path(labels_dir)
+        # 라벨 파일(*_labels.jsonl)이 입력(clusters.jsonl 등)과 다른 곳에 있을 때 - E0 자동 라벨러는 런마다
+        # <labels_dir>/auto/<프로토콜>/run-a|run-b/에 같은 형식으로 쓴다(ADR 0009 A8.13). 없으면 labels_dir.
+        self.label_files_dir = Path(label_files_dir) if label_files_dir is not None else self.dir
         self.now = now
         # 마감이 지났으면 여는 김에 본문을 지운다(ADR 0023 개정: 열 때마다 정리)
         self.expired = is_expired(self.dir, self.now())
@@ -134,7 +159,7 @@ class LabelStore:
     def _path(self, kind: str) -> Path:
         if kind not in ("cluster", "output"):
             raise LabelError(f"알 수 없는 라벨 종류: {kind}")
-        return self.dir / f"{kind}_labels.jsonl"
+        return self.label_files_dir / f"{kind}_labels.jsonl"
 
     def latest(self, kind: str, round_: int) -> Dict[str, dict]:
         """target_id -> 마지막으로 저장된 라벨 행."""
@@ -246,8 +271,8 @@ class LabelStore:
         return label.model_dump()
 
 
-def load_labels(labels_dir: Path) -> dict:
+def load_labels(labels_dir: Path, label_files_dir: Optional[Path] = None) -> dict:
     """분석용: {"cluster": {1: {id: label}, 2: {...}}, "output": {...}} (마지막 저장값)."""
-    store = LabelStore(labels_dir)
+    store = LabelStore(labels_dir, label_files_dir=label_files_dir)
     return {kind: {r: {tid: row["label"] for tid, row in store.latest(kind, r).items()} for r in (1, 2)}
             for kind in ("cluster", "output")}
