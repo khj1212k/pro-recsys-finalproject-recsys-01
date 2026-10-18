@@ -8,7 +8,10 @@
     python -m evaluation.llm.auto_labeler status             # 건수·지출만(텍스트 없음)
 
 쓰는 곳(전부 <메인 체크아웃>/data/labels/<패키지>/auto/<프로토콜 id>/ 아래, gitignore, 0600):
-  run-a|run-b/cluster_labels.jsonl, output_labels.jsonl  <- `labels.LabelStore`와 같은 행 형식(+ 출처 칸 "auto")
+  run-a|run-b/cluster_labels.jsonl, output_labels.jsonl  <- `labels.LabelStore`와 같은 행 형식(+ 출처 칸 "auto"). run-a는 `load_labels`·
+      `label_metrics`가 그대로 읽는다. run-b의 출력 라벨은 `key_facts_covered` 번호가 **런 a의 핵심 사실** 기준이라(`auto.coverage_basis`
+      "a", `auto.coverage_n_facts`) 같은 디렉터리의 run-b 클러스터 라벨 사실 목록과 길이가 다를 수 있다 - `label_metrics`로 run-b
+      디렉터리를 읽으면 커버리지 분모가 틀리고 `LabelStore`가 행을 거절할 수 있다. 런 사이 비교는 `e0_auto_label_report`가 한다.
   units.jsonl      <- (런, 호출 종류, 대상)마다 시작·끝 행. 재개의 기준
   calls.jsonl      <- HTTP 시도마다 수치·id만(상태, 종료 사유, 토큰, 비용, 지연, 모델 버전)
   rationales.jsonl <- 라벨러 응답 전체(근거 텍스트 포함). 패키지 마감에 지운다(ADR 0023 개정)
@@ -357,12 +360,13 @@ def locate_span(field_text: str, text: str) -> Tuple[Optional[int], Optional[int
 
 
 def compose_publishable(raw: Dict[str, Any], *, n_errors: int, n_facts: Optional[int],
-                        covered: Optional[int]) -> Tuple[bool, Dict[str, Optional[bool]]]:
+                        covered: Optional[int]) -> Tuple[Optional[bool], Dict[str, Optional[bool]]]:
     """가이드 2.4의 규칙 1~4. 규칙상 Y여도 라벨러가 N이면 N(가이드 2.4 끝 문단).
 
     규칙 2(핵심 사실의 절반 이상이 빠지면 N)는 핵심 사실이 없는 클러스터면 건너뛴다(n_facts == 0 -> True).
-    커버리지를 알 수 없으면(클러스터 라벨이나 coverage 라벨이 없다: n_facts 또는 covered가 None) None으로 두고
-    나머지 규칙만으로 정한다 - 그런 행은 `auto.coverage_basis`로 드러나고 리포트가 따로 센다.
+    커버리지를 알 수 없으면(클러스터 라벨이나 coverage 라벨이 없다: n_facts 또는 covered가 None) 규칙 2가 None이고 publishable도
+    None이다 - A8.13 (b)6의 식은 커버리지를 포함한 논리곱이고, 무효 라벨은 '없는 것으로 센다'(코드가 고쳐 넣지 않는다). 나머지 규칙만
+    으로 Y를 합성하지 않는다. 호출한 쪽(`assemble_output`)은 이때 출력 라벨 행을 쓰지 않는다.
     """
     if n_facts == 0:
         coverage_ok: Optional[bool] = True
@@ -377,7 +381,9 @@ def compose_publishable(raw: Dict[str, Any], *, n_errors: int, n_facts: Optional
         "no_headline_mismatch": not raw["headline_mismatch"],
         "coverage_ok": coverage_ok,
     }
-    return all(v for v in rules.values() if v is not None), rules
+    if coverage_ok is None:
+        return None, rules
+    return all(rules.values()), rules
 
 
 # ---------------------------------------------------------------- 유출 방지
@@ -679,16 +685,16 @@ class Store:
 
 
 def purge_expired(pkg_labels_dir: Path, proto_id: str, now: Optional[datetime] = None) -> bool:
-    """패키지 마감이 지났으면 라벨러의 자유 텍스트(rationales.jsonl)를 지운다. 지웠으면 True.
+    """패키지 마감이 지났으면 기사 본문(`clusters.jsonl`)과 라벨러가 쓴 문장(자유 텍스트 파일, 핵심 사실 문장)을 지운다. 지운 것이
+    있으면 True.
 
-    같은 정리가 라벨 도구가 패키지를 열 때마다(`labels.purge_expired_bodies`) 돈다 - 이 함수는 이 CLI와 리포트가 먼저 부르는 자리다.
+    라벨 도구가 패키지를 열 때마다 도는 정리(`labels.purge_expired_bodies`, ADR 0023 개정 '열 때마다 정리')와 같은 것이다. 이 CLI와
+    리포트 CLI는 마감 뒤에 `load_package`가 거절하기 전에 이 함수를 먼저 부르므로, 여기서 본문까지 지워야 마감 뒤에 이 패키지를 열
+    도구(자동 라벨러·리포트)가 본문을 남겨 두지 않는다.
     """
     from evaluation.llm import labels as label_store
 
-    p = Path(pkg_labels_dir) / label_store.AUTO_DIR / proto_id / label_store.AUTO_FREE_TEXT_FILE
-    existed = p.exists()
-    label_store.purge_auto_free_text(Path(pkg_labels_dir), now or _now())
-    return existed and not p.exists()
+    return label_store.purge_expired_bodies(Path(pkg_labels_dir), now or _now()) > 0
 
 
 # ---------------------------------------------------------------- 라벨러
@@ -849,7 +855,7 @@ class Labeler:
                      "seed": self.proto.seed(u.run)}})
 
     def assemble_output(self, run: str, oid: str) -> Optional[Dict[str, Any]]:
-        """output·coverage·tone 단위가 다 끝났으면 사람 도구 형식의 출력 라벨 행을 쓴다."""
+        """output·coverage·tone 단위가 다 끝났으면 사람 도구 형식의 출력 라벨 행을 쓴다. 커버리지를 알 수 없으면 쓰지 않는다."""
         from evaluation.llm.labels import FactError, OutputLabel
 
         done = self.done_units()
@@ -892,6 +898,10 @@ class Labeler:
         else:  # 클러스터 라벨이 없거나 coverage 라벨이 무효 - 규칙 2를 알 수 없다
             n_facts, n_cov = None, None
         publishable, rules = compose_publishable(raw, n_errors=len(located) + len(unlocated), n_facts=n_facts, covered=n_cov)
+        if publishable is None:
+            # 커버리지를 모르면 publishable을 합성하지 않는다 - 이 출력의 라벨은 없는 것으로 센다(A8.13 (b)6). 단위 기록(units.jsonl)에
+            # coverage 단위의 상태가 남고, 리포트의 '분모'와 '라벨 단위'에서 라벨이 안 된 출력이 드러난다.
+            return None
         label = OutputLabel(fact_errors=located, key_facts_covered=covered, style=int(raw["style"]), publishable=publishable,
                             tone_drift=tone, notes="").model_dump()
         row = {"target_id": oid, "round": 1, "labeled_at": self.now().isoformat(), "label": label,
@@ -985,7 +995,7 @@ class Labeler:
         for g in first:
             self._run_group(g)
         self.log(f"run b relabel targets: {len(self.cluster_labels('b'))} clusters, {len(self.output_labels('b'))} outputs, ${spent_usd():.4f}")
-        soft = float(self.proto.doc["runs"]["b"]["extension_soft_cap_usd"])
+        soft = self.extension_soft_cap_usd()
         stopped_at = None
         done = self.done_units()
         for g in rest:
@@ -1000,7 +1010,19 @@ class Labeler:
             done = self.done_units()
             self.log(f"run b extension: {len(self.cluster_labels('b'))} clusters, {len(self.output_labels('b'))} outputs, ${spent_usd():.4f}")
         return {"stats": dict(self.stats), "resent_after_crash": self.resent, "extension_stopped_before": stopped_at,
-                "extension_groups_total": len(rest)}
+                "extension_groups_total": len(rest), "extension_soft_cap_usd": soft}
+
+    def extension_soft_cap_usd(self) -> float:
+        """런 b 확장의 소프트 정지 기준(USD). 등록값(`extension_soft_cap_usd`, 런 상한 $0.50보다 $0.05 아래)이다. 운영자가 환경에 더
+        낮은 런 상한을 걸어 뒀으면 같은 여유를 두고 같이 내려간다 - 소프트 정지는 가드의 런 상한 거부에 닿기 전에 항목 사이에서
+        멈추려는 장치이기 때문이다(A8.13 (b)5). 런 상한이 등록값보다 높아도 등록값 위로는 올리지 않는다."""
+        from core.llm import budget
+        from core.llm.spend_ledger import NUSD_PER_USD
+
+        soft = float(self.proto.doc["runs"]["b"]["extension_soft_cap_usd"])
+        margin = float(self.proto.doc["budget"]["cap_usd"]) - soft
+        run_cap = budget.BudgetConfig.from_env().caps.run_nusd / NUSD_PER_USD
+        return round(min(soft, run_cap - margin), 6)
 
 
 # ---------------------------------------------------------------- pre-flight (지어낸 문장, 기사 없음)
@@ -1023,37 +1045,56 @@ SYNTHETIC_FACTS = [{"text": "가상시 시립 도서관 세 곳이 밤 10시까�
                    {"text": "예산은 2억 원이다", "source_ids": [1]}]
 
 
+def _preflight_candidates(schema_mode: str, thinking_spelling: str) -> List[Tuple[str, str]]:
+    """(스키마 방식, thinkingLevel 철자) 후보를 시도 순서로. 지금 설정에서 시작해 등록한 두 가지만 바꾼다(A8.13 (b)7): 스키마 방식
+    -> 철자 -> 둘 다. 400은 어느 칸이 거절됐는지 알려 주지 않으므로(오류 본문을 저장하지 않는다) 하나만 바꿔서 통과하면 그것만 바꾼
+    것으로 남기고, 둘 다 바꾸는 것은 마지막이다."""
+    modes = [schema_mode] + (["json_mode"] if schema_mode == "json_schema" else [])
+    spellings = [thinking_spelling] + (["upper"] if thinking_spelling == "lower" else [])
+    candidates = [(schema_mode, thinking_spelling)]
+    candidates += [(m, thinking_spelling) for m in modes[1:]]
+    candidates += [(schema_mode, sp) for sp in spellings[1:]]
+    candidates += [(m, sp) for m in modes[1:] for sp in spellings[1:]]
+    return candidates
+
+
 def preflight(proto: Protocol, transport: GeminiTransport) -> Dict[str, Any]:
-    """호출 종류마다 1건. 400이면 등록한 두 가지(스키마 방식, thinkingLevel 철자)만 바꿔 다시 한다(A8.13 (b)7)."""
+    """호출 종류마다 1건. 400이면 등록한 두 가지(스키마 방식, thinkingLevel 철자)만 바꿔 다시 한다(A8.13 (b)7).
+
+    설정을 바꾸면 네 종류를 모두 바뀐 설정으로 처음부터 다시 확인한다 - 앞 종류가 이전 설정으로만 확인된 채 매니페스트에 바뀐
+    설정이 적히지 않게 한다. 결과마다 `settings`에 그 호출을 확인한 설정을 적는다. 마지막 후보도 400이면 `InfraStop`이다.
+    """
     calls = {
         "cluster": dict(articles=SYNTHETIC_ARTICLES),
         "output": dict(articles=SYNTHETIC_ARTICLES, draft=SYNTHETIC_DRAFT),
         "coverage": dict(facts=SYNTHETIC_FACTS, draft=SYNTHETIC_DRAFT),
         "tone": dict(draft=SYNTHETIC_DRAFT, converted=SYNTHETIC_CONVERTED),
     }
-    changes: List[str] = []
-    results = {}
-    for kind, kw in calls.items():
-        for _ in range(3):
-            system = system_prompt(proto, kind, transport.schema_mode)
+    start = (transport.schema_mode, transport.thinking_spelling)
+    candidates = _preflight_candidates(*start)
+    results: Dict[str, Any] = {}
+    for position, (mode, spelling) in enumerate(candidates):
+        transport.schema_mode, transport.thinking_spelling = mode, spelling
+        results, refused = {}, False
+        for kind, kw in calls.items():
+            system = system_prompt(proto, kind, mode)
             user = user_message(proto, kind, **kw)
             try:
                 res = transport.generate(kind, system, user, proto.seed("a"), meta={"run": "preflight", "target": kind,
                                                                                    "response_no": 1})
             except InfraStop as e:
-                if e.status == 400 and transport.schema_mode == "json_schema" and "schema_mode" not in changes:
-                    transport.schema_mode = "json_mode"
-                    changes.append("schema_mode")
-                    continue
-                if e.status == 400 and transport.thinking_spelling != "upper" and "thinking_spelling" not in changes:
-                    transport.thinking_spelling = "upper"
-                    changes.append("thinking_spelling")
-                    continue
+                if e.status == 400 and position + 1 < len(candidates):
+                    refused = True
+                    break
                 raise
             results[kind] = {"status": res.status, "finish_reason": res.finish_reason, "model_version": res.model_version,
                              "usage": res.usage, "latency_s": res.latency_s,
-                             "schema_ok": res.status == "ok"}
+                             "schema_ok": res.status == "ok",
+                             "settings": {"schema_mode": mode, "thinking_spelling": spelling}}
+        if not refused:
             break
+    changes = [name for name, before, after in (("schema_mode", start[0], transport.schema_mode),
+                                                 ("thinking_spelling", start[1], transport.thinking_spelling)) if before != after]
     return {"results": results, "schema_mode": transport.schema_mode, "thinking_spelling": transport.thinking_spelling,
             "changes": changes}
 
