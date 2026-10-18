@@ -92,10 +92,20 @@
   "status": "complete"
  },
  "balance_reconciliation": {
+  "abs_diff_usd": 3.3699,
+  "balance_after_at": "2026-10-18T14:48:00+09:00",
+  "balance_after_krw": 12500.0,
+  "balance_before_at": "2026-10-17T14:33:08+09:00",
+  "balance_before_krw": 8000.0,
+  "billing_fx_krw_per_usd": 1400.0,
+  "delta_krw": -4500.0,
+  "delta_usd": -3.214286,
   "ledger_sum_usd": 0.155614,
-  "note": "실행 전·마지막 호출 24시간 뒤의 잔액을 읽어 다시 만든다",
+  "note": "같은 기간 다른 Gemini 호출이 있어 delta_usd·abs_diff_usd는 판정에 쓰지 않는다(ADR 0009 A8.7). delta_usd = (balance_before − balance_after) / billing_fx라서 음수는 잔액이 늘었다는 뜻이다. 두 잔액이 같은 칸인지는 ADR 0009 A8.12의 기록을 본다",
+  "other_gemini_calls": true,
   "rule": "차이가 max($0.10, 원장 합의 15%)를 넘으면 '원장 불일치'(비용 수치 신뢰 불가, void 아님)",
-  "status": "미기록",
+  "status": "대조 불가",
+  "threshold_usd": 0.1,
   "unknowns": [
    "잔액 표시 단위",
    "반영 지연",
@@ -873,7 +883,7 @@
   "n_p": 15
  },
  "format": "e0-report/1",
- "generated_at": "2026-10-18T05:37:34Z",
+ "generated_at": "2026-10-18T06:30:08Z",
  "guard": {
   "caps_usd": {
    "e0_cumulative": 1.5,

@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 560" width="800" height="560" role="img" aria-labelledby="t d" font-family="-apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Segoe UI', sans-serif">
+<title id="t">EB-NeRD ablation 사슬의 단계별 nDCG@10 변화: 노출 재정렬과 전체 풀 랭킹</title>
+<desc id="d">노출 비클릭 네거티브로 바꾸는 단계는 노출 재정렬(P1)에서 +0.1868, 전체 풀 랭킹(P2)에서 −0.1307이다. 모델 교체(binary에서 LambdaRank)는 두 과제 모두 0에 가깝다.</desc>
+<rect x="0.5" y="0.5" width="799" height="559" rx="8" fill="#fcfcfb" stroke="#d9d8d4"/>
+<text x="24.0" y="30.0" font-size="16" fill="#0b0b0b" text-anchor="start" font-weight="bold">네거티브 분포가 과제를 정한다: 같은 단계, 반대 부호</text>
+<text x="24.0" y="50.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="normal">[EB-NeRD] ebnerd_small, 단계별 nDCG@10 변화(같은 요청의 쌍체 차이). 이 서비스의 성능이 아니다.</text>
+<rect x="24.0" y="67.0" width="12.0" height="12.0" rx="2" fill="#2a78d6"/>
+<text x="42.0" y="77.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="normal">개선(95% CI가 0 위)</text>
+<rect x="188.6" y="67.0" width="12.0" height="12.0" rx="2" fill="#eb6834"/>
+<text x="206.6" y="77.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="normal">악화(95% CI가 0 아래)</text>
+<text x="24.0" y="108.0" font-size="13" fill="#0b0b0b" text-anchor="start" font-weight="bold">P1 노출 재정렬 — 편집자가 보여 준 후보 안의 순위 (244,647 노출)</text>
+<line x1="268.0" y1="120.0" x2="268.0" y2="264.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="268.0" y="280.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">−0.15</text>
+<line x1="335.4" y1="120.0" x2="335.4" y2="264.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="335.4" y="280.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">−0.10</text>
+<line x1="402.9" y1="120.0" x2="402.9" y2="264.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="402.9" y="280.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">−0.05</text>
+<line x1="470.3" y1="120.0" x2="470.3" y2="264.0" stroke="#52514e" stroke-width="1.2"/>
+<text x="470.3" y="280.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">0.00</text>
+<line x1="537.7" y1="120.0" x2="537.7" y2="264.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="537.7" y="280.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">0.05</text>
+<line x1="605.1" y1="120.0" x2="605.1" y2="264.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="605.1" y="280.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">0.10</text>
+<line x1="672.6" y1="120.0" x2="672.6" y2="264.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="672.6" y="280.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">0.15</text>
+<line x1="740.0" y1="120.0" x2="740.0" y2="264.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="740.0" y="280.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">0.20</text>
+<text x="24.0" y="136.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">binary → LambdaRank(유저 그룹)</text>
+<rect x="470.3" y="126.0" width="1.3" height="12.0" rx="2" fill="#2a78d6"/>
+<line x1="471.3" y1="132.0" x2="471.9" y2="132.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="471.3" y1="129.0" x2="471.3" y2="135.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="471.9" y1="129.0" x2="471.9" y2="135.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="479.9" y="136.0" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="bold">+0.0010</text>
+<text x="24.0" y="160.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">유저 그룹 → 노출 그룹</text>
+<rect x="466.6" y="150.0" width="3.6" height="12.0" rx="2" fill="#eb6834"/>
+<line x1="466.3" y1="156.0" x2="466.9" y2="156.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="466.3" y1="153.0" x2="466.3" y2="159.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="466.9" y1="153.0" x2="466.9" y2="159.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="458.3" y="160.0" font-size="11" fill="#0b0b0b" text-anchor="end" font-weight="bold">−0.0027</text>
+<text x="24.0" y="184.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">무작위 → 노출 비클릭 네거티브</text>
+<rect x="470.3" y="174.0" width="251.9" height="12.0" rx="2" fill="#2a78d6"/>
+<line x1="719.0" y1="180.0" x2="725.6" y2="180.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="719.0" y1="177.0" x2="719.0" y2="183.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="725.6" y1="177.0" x2="725.6" y2="183.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="733.6" y="184.0" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="bold">+0.1868</text>
+<text x="24.0" y="208.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">+ trailing 인기도</text>
+<rect x="470.3" y="198.0" width="77.0" height="12.0" rx="2" fill="#2a78d6"/>
+<line x1="545.8" y1="204.0" x2="548.8" y2="204.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="545.8" y1="201.0" x2="545.8" y2="207.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="548.8" y1="201.0" x2="548.8" y2="207.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="556.8" y="208.0" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="bold">+0.0571</text>
+<text x="24.0" y="232.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">+ 단기·세션 벡터</text>
+<rect x="470.3" y="222.0" width="11.9" height="12.0" rx="2" fill="#2a78d6"/>
+<line x1="481.6" y1="228.0" x2="482.8" y2="228.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="481.6" y1="225.0" x2="481.6" y2="231.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="482.8" y1="225.0" x2="482.8" y2="231.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="490.8" y="232.0" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="bold">+0.0088</text>
+<text x="24.0" y="256.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">+ 카테고리 share·히스토리 길이</text>
+<rect x="470.3" y="246.0" width="11.9" height="12.0" rx="2" fill="#2a78d6"/>
+<line x1="481.4" y1="252.0" x2="483.1" y2="252.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="481.4" y1="249.0" x2="481.4" y2="255.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="483.1" y1="249.0" x2="483.1" y2="255.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="491.1" y="256.0" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="bold">+0.0089</text>
+<text x="24.0" y="310.0" font-size="13" fill="#0b0b0b" text-anchor="start" font-weight="bold">P2 전체 풀 랭킹 — 48시간 안 발행 기사 전부 (20,000 요청, 평균 후보 235개, 서빙형 과제)</text>
+<line x1="268.0" y1="322.0" x2="268.0" y2="466.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="268.0" y="482.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">−0.15</text>
+<line x1="335.4" y1="322.0" x2="335.4" y2="466.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="335.4" y="482.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">−0.10</text>
+<line x1="402.9" y1="322.0" x2="402.9" y2="466.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="402.9" y="482.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">−0.05</text>
+<line x1="470.3" y1="322.0" x2="470.3" y2="466.0" stroke="#52514e" stroke-width="1.2"/>
+<text x="470.3" y="482.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">0.00</text>
+<line x1="537.7" y1="322.0" x2="537.7" y2="466.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="537.7" y="482.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">0.05</text>
+<line x1="605.1" y1="322.0" x2="605.1" y2="466.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="605.1" y="482.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">0.10</text>
+<line x1="672.6" y1="322.0" x2="672.6" y2="466.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="672.6" y="482.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">0.15</text>
+<line x1="740.0" y1="322.0" x2="740.0" y2="466.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="740.0" y="482.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">0.20</text>
+<text x="24.0" y="338.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">binary → LambdaRank(유저 그룹)</text>
+<rect x="469.0" y="328.0" width="1.3" height="12.0" rx="2" fill="#eb6834"/>
+<line x1="467.8" y1="334.0" x2="470.2" y2="334.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="467.8" y1="331.0" x2="467.8" y2="337.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="470.2" y1="331.0" x2="470.2" y2="337.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="459.8" y="338.0" font-size="11" fill="#0b0b0b" text-anchor="end" font-weight="bold">−0.0010</text>
+<text x="24.0" y="362.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">유저 그룹 → 노출 그룹</text>
+<rect x="470.3" y="352.0" width="2.0" height="12.0" rx="2" fill="#2a78d6"/>
+<line x1="471.0" y1="358.0" x2="473.5" y2="358.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="471.0" y1="355.0" x2="471.0" y2="361.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="473.5" y1="355.0" x2="473.5" y2="361.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="481.5" y="362.0" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="bold">+0.0015</text>
+<text x="24.0" y="386.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">무작위 → 노출 비클릭 네거티브</text>
+<rect x="294.0" y="376.0" width="176.3" height="12.0" rx="2" fill="#eb6834"/>
+<line x1="287.3" y1="382.0" x2="300.5" y2="382.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="287.3" y1="379.0" x2="287.3" y2="385.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="300.5" y1="379.0" x2="300.5" y2="385.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="279.3" y="386.0" font-size="11" fill="#0b0b0b" text-anchor="end" font-weight="bold">−0.1307</text>
+<text x="24.0" y="410.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">+ trailing 인기도</text>
+<rect x="464.5" y="400.0" width="5.7" height="12.0" rx="2" fill="#eb6834"/>
+<line x1="461.3" y1="406.0" x2="467.8" y2="406.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="461.3" y1="403.0" x2="461.3" y2="409.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="467.8" y1="403.0" x2="467.8" y2="409.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="453.3" y="410.0" font-size="11" fill="#0b0b0b" text-anchor="end" font-weight="bold">−0.0043</text>
+<text x="24.0" y="434.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">+ 단기·세션 벡터</text>
+<rect x="470.3" y="424.0" width="6.6" height="12.0" rx="2" fill="#2a78d6"/>
+<line x1="475.8" y1="430.0" x2="478.0" y2="430.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="475.8" y1="427.0" x2="475.8" y2="433.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="478.0" y1="427.0" x2="478.0" y2="433.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="486.0" y="434.0" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="bold">+0.0049</text>
+<text x="24.0" y="458.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">+ 카테고리 share·히스토리 길이</text>
+<rect x="470.3" y="448.0" width="1.5" height="12.0" rx="2" fill="#2a78d6"/>
+<line x1="470.3" y1="454.0" x2="473.3" y2="454.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="470.3" y1="451.0" x2="470.3" y2="457.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="473.3" y1="451.0" x2="473.3" y2="457.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="481.3" y="458.0" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="bold">+0.0011</text>
+<text x="24.0" y="516.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">같은 노출 비클릭 모델(ranker_v2)의 nDCG@10: P1 0.6551, P2 0.0530 (popularity_6h는 P2 0.1168).</text>
+<text x="24.0" y="532.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">48h 풀 무작위 네거티브로 학습한 ranker_v2_poolneg: P2 0.2686, P1 0.4164 (P1에서는 무작위 수준).</text>
+<text x="24.0" y="548.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">출처: reports/recsys/ebnerd_v1.json (p1_ablation_diffs, p2_ablation_diffs, p1, p2). 수염 = 유저 단위 부트스트랩 95% CI.</text>
+</svg>

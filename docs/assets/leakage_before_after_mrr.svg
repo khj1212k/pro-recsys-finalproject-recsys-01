@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 424" width="800" height="424" role="img" aria-labelledby="t d" font-family="-apple-system, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Segoe UI', sans-serif">
+<title id="t">같은 모델을 point-in-time과 팀 방식 추론 시점으로 평가한 MRR</title>
+<desc id="d">코드 버전 세 개 모두 팀 방식 추론 시점(as-written)의 MRR이 point-in-time보다 높고, 쌍 차이의 95% 신뢰구간이 0을 제외한다.</desc>
+<rect x="0.5" y="0.5" width="799" height="423" rx="8" fill="#fcfcfb" stroke="#d9d8d4"/>
+<text x="24.0" y="30.0" font-size="16" fill="#0b0b0b" text-anchor="start" font-weight="bold">같은 모델, 추론 시점만 다르다: 누출을 걷어내면 MRR이 내려간다</text>
+<text x="24.0" y="50.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="normal">[team-synth] 팀이 남긴 LLM 합성 클릭, 평가 유저 31명. 절대값은 성능이 아니라 진단이다.</text>
+<rect x="24.0" y="67.0" width="12.0" height="12.0" rx="2" fill="#2a78d6"/>
+<text x="42.0" y="77.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="normal">point-in-time (정답을 못 보는 추론)</text>
+<rect x="292.2" y="67.0" width="12.0" height="12.0" rx="2" fill="#eb6834"/>
+<text x="310.2" y="77.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="normal">as-written (팀 방식: 정답이 피처에 들어감)</text>
+<line x1="170.0" y1="98.0" x2="170.0" y2="346.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="170.0" y="362.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">0.00</text>
+<line x1="262.5" y1="98.0" x2="262.5" y2="346.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="262.5" y="362.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">0.25</text>
+<line x1="355.0" y1="98.0" x2="355.0" y2="346.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="355.0" y="362.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">0.50</text>
+<line x1="447.5" y1="98.0" x2="447.5" y2="346.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="447.5" y="362.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">0.75</text>
+<line x1="540.0" y1="98.0" x2="540.0" y2="346.0" stroke="#e6e5e1" stroke-width="1"/>
+<text x="540.0" y="362.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">1.00</text>
+<text x="602.0" y="92.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="bold">누출 효과 ΔMRR</text>
+<text x="602.0" y="106.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">(as-written − point-in-time)</text>
+<text x="24.0" y="132.0" font-size="13" fill="#0b0b0b" text-anchor="start" font-weight="bold">team-final 코드</text>
+<text x="24.0" y="150.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">시드 5개</text>
+<rect x="170.0" y="118.0" width="208.5" height="18.0" rx="3" fill="#2a78d6"/>
+<line x1="330.3" y1="127.0" x2="433.3" y2="127.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="330.3" y1="123.0" x2="330.3" y2="131.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="433.3" y1="123.0" x2="433.3" y2="131.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="441.3" y="131.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">0.5636</text>
+<rect x="170.0" y="142.0" width="313.9" height="18.0" rx="3" fill="#eb6834"/>
+<line x1="441.1" y1="151.0" x2="518.5" y2="151.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="441.1" y1="147.0" x2="441.1" y2="155.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="518.5" y1="147.0" x2="518.5" y2="155.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="526.5" y="155.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">0.8485</text>
+<text x="602.0" y="137.0" font-size="15" fill="#0b0b0b" text-anchor="start" font-weight="bold">+0.2849</text>
+<text x="602.0" y="155.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">[+0.1581, +0.4177]</text>
+<text x="24.0" y="216.0" font-size="13" fill="#0b0b0b" text-anchor="start" font-weight="bold">fix-snapshot</text>
+<text x="24.0" y="234.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">시드 3개</text>
+<rect x="170.0" y="202.0" width="216.7" height="18.0" rx="3" fill="#2a78d6"/>
+<line x1="333.5" y1="211.0" x2="438.0" y2="211.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="333.5" y1="207.0" x2="333.5" y2="215.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="438.0" y1="207.0" x2="438.0" y2="215.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="446.0" y="215.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">0.5856</text>
+<rect x="170.0" y="226.0" width="293.7" height="18.0" rx="3" fill="#eb6834"/>
+<line x1="414.1" y1="235.0" x2="503.9" y2="235.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="414.1" y1="231.0" x2="414.1" y2="239.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="503.9" y1="231.0" x2="503.9" y2="239.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="511.9" y="239.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">0.7937</text>
+<text x="602.0" y="221.0" font-size="15" fill="#0b0b0b" text-anchor="start" font-weight="bold">+0.2080</text>
+<text x="602.0" y="239.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">[+0.0978, +0.3350]</text>
+<text x="24.0" y="300.0" font-size="13" fill="#0b0b0b" text-anchor="start" font-weight="bold">current 코드</text>
+<text x="24.0" y="318.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">시드 5개</text>
+<rect x="170.0" y="286.0" width="228.6" height="18.0" rx="3" fill="#2a78d6"/>
+<line x1="350.1" y1="295.0" x2="449.8" y2="295.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="350.1" y1="291.0" x2="350.1" y2="299.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="449.8" y1="291.0" x2="449.8" y2="299.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="457.8" y="299.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">0.6177</text>
+<rect x="170.0" y="310.0" width="297.2" height="18.0" rx="3" fill="#eb6834"/>
+<line x1="422.7" y1="319.0" x2="507.0" y2="319.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="422.7" y1="315.0" x2="422.7" y2="323.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<line x1="507.0" y1="315.0" x2="507.0" y2="323.0" stroke="#0b0b0b" stroke-width="1.5"/>
+<text x="515.0" y="323.0" font-size="12" fill="#0b0b0b" text-anchor="start" font-weight="normal">0.8033</text>
+<text x="602.0" y="305.0" font-size="15" fill="#0b0b0b" text-anchor="start" font-weight="bold">+0.1855</text>
+<text x="602.0" y="323.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">[+0.0865, +0.2957]</text>
+<text x="24.0" y="396.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">막대 = 시드 평균, 수염 = 시드×유저 nested bootstrap 95% CI(1,000회). Δ는 시드를 쌍으로 재표본한 쌍 CI.</text>
+<text x="24.0" y="412.0" font-size="11" fill="#52514e" text-anchor="start" font-weight="normal">출처: reports/recsys/team_repro_v2.json (headline_ci). 다중비교 보정 없음.</text>
+</svg>

@@ -1,16 +1,54 @@
-# AI 개인화 뉴스레터 추천 시스템
-
-한국 언론사 RSS 기사를 모아 같은 사건끼리 묶고, LLM으로 사건별 뉴스레터를 쓰고, 사용자별로 순위를 매겨 보여 주는 파이프라인이다.
+# 한국어 뉴스레터 추천·생성: 평가·서빙·LLM 실측 인프라를 다시 세운 fork
 
 [![CI](https://github.com/khj1212k/pro-recsys-finalproject-recsys-01/actions/workflows/ci.yml/badge.svg)](https://github.com/khj1212k/pro-recsys-finalproject-recsys-01/actions/workflows/ci.yml)
 
-이 저장소는 네이버 부스트캠프 AI Tech 8기 RecSys 트랙 5인 팀 프로젝트(2026.01–02)의 fork다. 팀 프로젝트가 끝난 시점은 `team-final` 태그(`ef7c176`, 2026-02-10)이고, 그 뒤 커밋은 김형준([@khj1212k](https://github.com/khj1212k))의 개인 작업이다. 팀 시절 설명과 팀원별 담당은 [아래 절](#팀-프로젝트-시절-202601-02)에 원래 표 그대로 남겼다.
+한국 언론사 RSS 기사를 모아 같은 사건끼리 묶고, LLM으로 사건별 뉴스레터를 쓰고, 사용자별로 순위를 매겨 보여 주는 파이프라인이다. 네이버 부스트캠프 AI Tech 8기 RecSys 트랙 5인 팀 프로젝트(2026.01–02, 팀의 마지막 커밋 [`ef7c176`](https://github.com/khj1212k/pro-recsys-finalproject-recsys-01/commit/ef7c176c4f795aad0d70e1c63ebd026065f4cd1e), 2026-02-10)를 fork해, 팀이 끝난 뒤 김형준([@khj1212k](https://github.com/khj1212k))이 혼자 평가 프로토콜, 서빙 경로, LLM 생성 실측 인프라를 다시 세웠다. 팀 시절의 추천 모델과 합성 데이터셋은 팀원의 작업이다([팀 소개](#팀-소개)). **배포된 사용자 서비스는 없고 실사용자도 없다.** 상시 도는 것은 1 GB 무료 VM의 수집기와 호스트 밖 백업뿐이다. 아래 '한눈에 보는 결과'의 수치는 모두 데이터 라벨이 붙은 오프라인 측정이고, 이 서비스의 성능이 아니다. 라벨: [team-synth] 팀이 남긴 LLM 합성 클릭, [EB-NeRD] 덴마크어 공개 뉴스 클릭 로그, [CI-synth] CI 테스트 DB의 합성 데이터, [KR-E0] 한국어 수집 기사 15클러스터, [KR-embed] 한국어 수집 기사의 임베딩 점검(정의는 [증거 요약표](docs/evidence-summary.md#읽는-법)).
 
-배포된 서비스가 아니다. 실사용자와 실사용 로그는 없다.
+## 한눈에 보는 결과
+
+가장 강한 세 가지:
+
+- **팀 평가 지표의 누출을 규명했다** [team-synth]. 같은 모델의 추론 시점만 바꾸면 팀 최종 코드의 MRR이 0.8485 → 0.5636이다(차이 +0.2849, 95% CI [+0.1581, +0.4177], 5 seed, 평가 유저 31명). 절대값은 성능이 아니라 진단이다. [케이스 01](docs/case-studies/01-team-metric-leakage.md) · [리포트](reports/recsys/team_repro_v2.md)
+- **학습 네거티브 분포가 과제를 정한다는 것을 사전 등록한 ablation 사슬로 쟀다** [EB-NeRD]. 노출 재정렬 nDCG@10은 0.3952 → 0.6551이지만 개선의 대부분은 학습 네거티브에서 왔고(+0.1868 [+0.1844, +0.1893]) LambdaRank 교체는 +0.0010이다. 같은 모델이 전체 후보 풀에서는 0.0530으로 popularity_6h(0.1168)보다 낮다. 사슬과 해석 규칙은 사전 등록이고 '대부분이 네거티브에서 왔다'는 읽기는 결과를 본 뒤의 서술이다. [케이스 02](docs/case-studies/02-negatives-define-the-task.md) · [리포트](reports/recsys/ebnerd_v1.md)
+- **LLM 생성 파이프라인을 2월 이후 처음 실제 기사로 완주해 쟀다** [KR-E0]. 15클러스터 중 14 생성, 첫 시도 스키마 통과 72/72, 클러스터당 중앙값 9.3초, 총 $0.155614. 사람 라벨 없이 자동 라벨러 기준 발행 가능률 11/15 = 0.733 [0.480, 0.891]이고 라벨러의 정확도는 재지 않았다. [케이스 03](docs/case-studies/03-first-llm-measurement.md) · [리포트](reports/llm/e0_baseline_v1.md)
+
+그 밖에:
+
+- **사전 등록한 신경망 비교에서 신경망이 튜닝한 LightGBM을 넘지 못했고, 그대로 기록했다** [EB-NeRD]. NRMS-lite − 튜닝한 LightGBM = −0.0215 [−0.0224, −0.0206](노출 재정렬), −0.0531 [−0.0562, −0.0498](전체 풀). 판정 4개 모두 `seed_rule_failed`(우위 입증 실패)이고 점추정과 CI는 모두 0 아래다. 범위는 [EB-NeRD]·NRMS-lite 한정이다. [리포트](reports/recsys/ebnerd_v1_3_neural.md) · [ADR 0013](docs/adr/0013-ranker-v2-design.md)
+- **train/serve parity를 CI 게이트로 만들었다** [CI-synth]. 서빙이 남긴 22열 피처와 오프라인 재계산이 max\|Δ\| 1.19e-7, 요청 198건의 순서 τ = 1이고, 첫 실행은 0.0397 어긋남(마이크로초 순서)을 잡았다. 모델은 무작위 데이터라 추천 품질이 아니다. [리포트](reports/recsys/parity_v1.md) · [ADR 0033](docs/adr/0033-train-serve-feature-parity.md)
+- **한국어 임베딩이 주제 구조를 담는지 점검했다** [KR-embed]. BGE-M3 섹션 kNN leave-one-out 정확도 0.7519 [0.7328, 0.7725] 대 다수 클래스 0.4640(n = 1,890). 클릭 예측력이 아니다. [리포트](reports/kr/embedding_check_v1.md)
+
+<p align="center">
+  <img src="docs/assets/leakage_before_after_mrr.svg" alt="같은 모델을 point-in-time과 팀 방식 추론 시점으로 평가한 MRR. 코드 버전 3개 모두 팀 방식이 높고 쌍 차이의 95% CI가 0을 제외한다." width="760"/>
+</p>
+<p align="center">
+  <img src="docs/assets/ebnerd_negatives_define_task.svg" alt="EB-NeRD ablation 사슬의 단계별 nDCG@10 변화. 노출 비클릭 네거티브 단계가 노출 재정렬에서는 +0.1868, 전체 풀 랭킹에서는 -0.1307이다." width="760"/>
+</p>
+
+## English TL;DR
+
+This repository is a fork of a five-person capstone (Naver Boostcamp AI Tech 8, a Korean news newsletter recommender and LLM generator; the team's last commit is `ef7c176`). After the team project ended, the owner rebuilt the evaluation, serving and LLM-measurement layers alone. Highlights: the team's recommender metric was inflated by inference-time leakage (MRR 0.8485 as written vs 0.5636 point-in-time; inflation +0.285, paired 95% CI [+0.158, +0.418]; synthetic team data, team-synth); on the public EB-NeRD benchmark, a preregistered ablation chain (read descriptively after the fact) shows most of the ranker gain comes from the training-negative distribution, not the model, and a tuned NRMS-lite neural user encoder did not beat tuned LightGBM (EB-NeRD only; preregistered verdict `seed_rule_failed`); a CI gate checks train/serve feature parity (max abs diff 1.19e-7, CI-synth data); and the generation pipeline was run end to end on 15 real Korean news clusters (14 produced a newsletter, KR-E0) for $0.16, scored by an automated labeler because no human labels exist. This is not a deployed service: there are no real users and no Korean click data, and every headline number carries a data label.
+
+## 읽기 경로
+
+이 문서의 위쪽과 [케이스 01](docs/case-studies/01-team-metric-leakage.md)만 읽으면 약 15분, 아래 셋을 모두 읽으면 약 40분이다.
+
+1. [케이스 스터디 3편](docs/case-studies/README.md): 각 2~3쪽, 문제 → 가설 → 측정 설계 → 결과 → 결정 → 한계.
+2. [증거 요약표](docs/evidence-summary.md): 주장 8개 × 데이터 출처 × 증거 등급 × 수치와 CI × 한계, 음성 결과와 철회.
+3. [ADR 색인](docs/adr/README.md): 결정 기록. 긴 ADR(0013 등)은 상태 문단과 결과 절만 먼저 읽는다.
+
+## 이 저장소가 주장하지 않는 것
+
+- 배포·운영 중인 추천 서비스, 실사용자 CTR 개선, 한국어 서비스의 추천 성능. 한국어 클릭은 0건이다. [EB-NeRD]·[team-synth]·[SIM]의 어떤 수치도 이 서비스의 성능이 아니다.
+- "검증된 랭커가 서빙 중이다". 등록된 랭커는 0개이고 목록은 휴리스틱이 만든다([ADR 0014](docs/adr/0014-active-heuristic-scorer-v2.md), [0037](docs/adr/0037-ebnerd-shadow-model-registration.md)).
+- "GBDT가 신경망보다 낫다"는 일반 주장. 비교는 [EB-NeRD]와 NRMS-lite(고정 BGE-M3 투영) 한정이다.
+- 사람이 검증한 LLM 생성 품질, 모델 선정, "사실성 게이트가 환각을 막는다". 사람 라벨이 없고, 게이트는 수치·인용 한정이며, judge는 기록만 한다.
+- 한국어 전이 확인. 한국어 kNN은 주제 구조 점검이다.
+- 팀 시절 추천 모델·합성 데이터셋의 소유, 팀 보고 MRR 0.897의 재현이나 설명.
 
 ---
 
-## 현재 상태 (2026-10-06 기준, 아래 첫 문단과 수집·데이터 정책 행은 2026-10-17 기준)
+## 현재 상태 (2026-10-18 기준, 수집·데이터 정책 행의 수치는 2026-10-17 기준)
 
 ```mermaid
 flowchart LR
@@ -25,16 +63,16 @@ flowchart LR
     R --> H[FastAPI] --> I[React]
 ```
 
-그림은 코드에 있는 경로다. 실제로 상시 도는 곳은 수집기 하나다(2026-10-17 기준): OCI Always Free VM(1 GB, [ADR 0026](docs/adr/0026-hosting-tiers-and-contingency.md))의 스케줄러가 `docker/crontab.micro`의 수집(RSS → 본문 추출, 매시)·인기도·일일 리포트·본문 보존(매일) 네 잡을 돌리고, VM 호스트의 cron이 매일 DB를 OCI Object Storage로 백업한다. 임베딩·클러스터링·생성은 어디에서도 상시 돌지 않는다 — 이 VM에서는 메모리가 모자라고, 전체 compose용 `docker/crontab`(임베딩·클러스터 통계 포함)을 띄운 호스트는 지금 없다. `generate`, `batch_fallback` 잡은 `docker/crontab`에서 꺼져 있다. 팀 시절의 학습 잡 `train`은 은퇴했고(불려도 아무것도 실행하지 않는다) `user_embed` 잡은 없앴다 - 장기 프로필은 클릭마다 갱신되는 상태다 ([ADR 0033](docs/adr/0033-train-serve-feature-parity.md)).
+그림은 코드에 있는 경로다. 실제로 상시 도는 곳은 수집기 하나이고, 사용자가 쓰는 서비스로 배포된 곳은 없다(2026-10-17 기준): OCI Always Free VM(1 GB, [ADR 0026](docs/adr/0026-hosting-tiers-and-contingency.md))의 스케줄러가 `docker/crontab.micro`의 수집(RSS → 본문 추출, 매시)·인기도·일일 리포트·본문 보존(매일) 네 잡을 돌리고, VM 호스트의 cron이 매일 DB를 OCI Object Storage로 백업한다. 임베딩·클러스터링·생성은 어디에서도 상시 돌지 않는다 — 이 VM에서는 메모리가 모자라고, 전체 compose용 `docker/crontab`(임베딩·클러스터 통계 포함)을 띄운 호스트는 지금 없다. `generate`, `batch_fallback` 잡은 `docker/crontab`에서 꺼져 있다. 팀 시절의 학습 잡 `train`은 은퇴했고(불려도 아무것도 실행하지 않는다) `user_embed` 잡은 없앴다 - 장기 프로필은 클릭마다 갱신되는 상태다 ([ADR 0033](docs/adr/0033-train-serve-feature-parity.md)).
 
 | 영역 | 지금 있는 것 | 아직 없는 것 |
 |---|---|---|
-| 수집 | RSS UPSERT, 재시도, 언론사별 본문 정제, docker compose + supercronic 잡 런타임과 실행 기록(`job_runs`), 본문 해시 중복 제거 ([ADR 0006](docs/adr/0006-runtime-compose-and-scheduler.md)), 정책브리핑 Open API 수집기 ([ADR 0023](docs/adr/0023-data-sources-copyright-retention.md)). Tier 0 VM 단독 수집(2026-09-26부터, 10-17 `news_raw` 31,097행), 매일 호스트 밖 백업(본문 없는 사본, 설정으로 켠 기계에서는 최근 27일 본문 사본도)과 28일마다 복원 검증, 일일 리포트의 정시 회차·백업 경과·유휴 회수 위험 줄 ([ADR 0026](docs/adr/0026-hosting-tiers-and-contingency.md) 결정 6) | 정시 회차 기준 95% 수집(09-26~10-06에 233회 중 198회 성공 85.0%, 27회는 앞 회차가 1시간을 넘겨 시작되지 않았다 - ADR 0026 증거 8), 정책브리핑 실제 수집(인증키 발급 전이라 0건) |
-| LLM | OpenAI 호환 어댑터 하나로 Gemini·Upstage·OpenAI 호출, 요청 타임아웃 60초·호출당 deadline 180초, 킬 스위치 ([ADR 0005](docs/adr/0005-llm-provider-abstraction.md)), 요청 전에 최악 비용을 원장에 예약해 런·일·전체 상한에서 멈추는 지출 가드와 런 서킷브레이커 ([ADR 0035](docs/adr/0035-llm-spend-cap-in-client-ledger.md), 페이크 전송 계층 테스트로만 확인) | 원장 금액과 실제 청구액의 대조(실제 호출 전), 모델 선정 결과(평가 프로토콜과 선정 규칙만 사전 등록, [ADR 0009](docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md)), `main`에서 실데이터로 끝까지 돈 생성 기록 |
-| 생성 품질 | LangGraph 안의 결정론적 사실성 게이트·문체 드리프트 게이트와 judge v2 (`ai_workspace/core/faithfulness.py`, [ADR 0010](docs/adr/0010-faithfulness-gate-and-judge-v2.md), 차단 유형·임계값은 잠정값), 클러스터링 지표 함수(`evaluation/clustering/metrics.py`) | 사람 라벨로 보정한 품질·사실성 수치, 실제 생성물로 잰 게이트 차단율 |
+| 수집 | RSS UPSERT, 재시도, 언론사별 본문 정제, docker compose + supercronic 잡 런타임과 실행 기록(`job_runs`), 본문 해시 중복 제거 ([ADR 0006](docs/adr/0006-runtime-compose-and-scheduler.md)), 정책브리핑 Open API 수집기 ([ADR 0023](docs/adr/0023-data-sources-copyright-retention.md)). Tier 0 VM 단독 수집(2026-09-26부터, 10-17 `news_raw` 31,097행), 호스트 밖 백업(VM 호스트 cron이 매일 18:10 UTC에 본문 없는 사본, 설정으로 켠 기계에서는 최근 27일 본문 사본도 올린다. 첫 스케줄 실행은 10-17이고 손으로 한 백업 1회·복원 검증 2회가 있다. "매일" 성공률과 28일마다의 자동 복원 검증은 아직 판단하지 않았다), 일일 리포트의 정시 회차·백업 경과·유휴 회수 위험 줄 ([ADR 0026](docs/adr/0026-hosting-tiers-and-contingency.md) 결정 6) | 정시 회차 기준 95% 수집(09-26~10-06에 233회 중 198회 성공 85.0%, 27회는 앞 회차가 1시간을 넘겨 시작되지 않았다 - ADR 0026 증거 8), 정책브리핑 실제 수집(인증키 발급 전이라 0건) |
+| LLM | OpenAI 호환 어댑터 하나로 Gemini·Upstage·OpenAI 호출, 요청 타임아웃 60초·호출당 deadline 180초, 킬 스위치 ([ADR 0005](docs/adr/0005-llm-provider-abstraction.md)), 요청 전에 최악 비용을 원장에 예약해 런·일·전체 상한에서 멈추는 지출 가드와 런 서킷브레이커 ([ADR 0035](docs/adr/0035-llm-spend-cap-in-client-ledger.md)). **E0 기준선(2026-10-17)**: main 생성 파이프라인을 코드 그대로 실제 수집 기사 15클러스터에 돌려 14 생성, 첫 시도 스키마 72/72, 클러스터당 중앙값 9.3초, 비용 $0.155614로 원장 합과 응답 usage 합이 같았다 ([e0_baseline_v1](reports/llm/e0_baseline_v1.md)). 사람 라벨 자리는 자동 라벨러(gemini-3-flash-preview)가 채웠다 ([e0_auto_labels_v1](reports/llm/e0_auto_labels_v1.md), [ADR 0009](docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md) A8.12–A8.14) | 사람 라벨(없음), 원장 금액과 청구액의 대조(E0는 "대조 불가"), 모델 선정 결과(bake-off 결과 없음, 평가 프로토콜과 선정 규칙만 사전 등록), 운영에서 도는 생성(`generate` 잡은 꺼져 있다) |
+| 생성 품질 | LangGraph 안의 결정론적 사실성 게이트(수치·인용 한정)·문체 드리프트 게이트와 judge v2(기록만 하는 shadow) (`ai_workspace/core/faithfulness.py`, [ADR 0010](docs/adr/0010-faithfulness-gate-and-judge-v2.md), 차단 유형·임계값은 잠정값). 실제 생성물 기록(E0 첫 초안 14편): 미지원 수치·인용 ≥1은 0/14, 문체 드리프트 차단 0/14, 분량 규칙 위반 11/14, judge v2 shadow 기본 임계값 PASS 4/14(생성기와 같은 Gemini 계열). 자동 라벨러 기준 발행 가능률 11/15 = 0.733 [0.480, 0.891], 사실 오류 ≥1 3/14([e0_auto_labels_v1](reports/llm/e0_auto_labels_v1.md)). 클러스터링 지표 함수(`evaluation/clustering/metrics.py`) | 사람 라벨로 보정한 품질·사실성 수치(라벨러 정확도도 미측정), 게이트의 정밀도·재현율(실제 초안 대상), judge 보정, 클러스터링 품질 |
 | 추천(배치) | 팀 시절 LightGBM + MMR에 7월 셀프 리뷰 수정 반영 (시점 누출·그룹 정의·시드 등, [ADR 0003](docs/adr/0003-lightgbm-mmr-for-recommendation.md)·[0004](docs/adr/0004-continue-in-fork-and-port-july-fixes.md)) | 이 서비스의 사람 클릭으로 잰 추천 성능(실사용자가 없다) |
-| 추천(요청 시점) | `GET /newsletters/today`를 API 프로세스 안에서 요청마다 계산한다. 후보 합집합 → 휴리스틱 스코어 → MMR, 시간 예산 300ms, 폴백(인기 → 최신. `RECSYS_MODE=batch`에서는 배치 행부터), 노출 로그 ([ADR 0015](docs/adr/0015-request-time-recommendation.md)). 단기 사용자 상태는 클릭 로그에서 요청마다 계산한다 ([ADR 0017](docs/adr/0017-short-term-state-store.md)). 랭커의 피처는 오프라인 하네스와 같은 코드(`recsys_core`)로 요청 시점에 만들고, 레지스트리에 등록된 모델은 요청 경로 밖에서 점수만 남긴다(shadow). 서빙이 남긴 피처가 같은 로그의 오프라인 재계산과 같은지는 CI가 요청 200건의 재생으로 본다 ([ADR 0033](docs/adr/0033-train-serve-feature-parity.md), [리포트](reports/recsys/parity_v1.md)) | 추천 품질, 배포 대상 장비와 HTTP 수준의 지연, 실제 임베딩으로 정한 휴리스틱 가중치. 등록된 랭커 모델이 아직 없다(목록은 휴리스틱이 만든다). parity 게이트가 쓰는 모델은 무작위 데이터로 만든 22열 모델이다 |
-| 추천 평가 | 팀 베이스라인 재현 하네스와 오프라인 평가 프로토콜(point-in-time, 고정 정답 창, 베이스라인, 시드와 부트스트랩 신뢰구간, [ADR 0007](docs/adr/0007-recsys-offline-evaluation-protocol.md)). EB-NeRD 공개 벤치마크 하네스, point-in-time 피처 코어 `recsys_core`, ranker v2 설계와 사전 등록한 승격 규칙 ([ADR 0013](docs/adr/0013-ranker-v2-design.md)) | 한국어 데이터에서의 ranker v2 검증(서빙은 shadow부터), 팀 재현 리포트의 전체 재실행(재실행 대기) |
+| 추천(요청 시점) | `GET /newsletters/today`를 API 프로세스 안에서 요청마다 계산한다. 후보 합집합 → 휴리스틱 스코어 → MMR, 시간 예산 300ms, 폴백(인기 → 최신. `RECSYS_MODE=batch`에서는 배치 행부터), 노출 로그 ([ADR 0015](docs/adr/0015-request-time-recommendation.md)). 활성 스코어러는 휴리스틱 v2다: [EB-NeRD]에서 적합한 가중치 (b) 세트와 6시간 클릭 인기도 항 ([ADR 0014](docs/adr/0014-active-heuristic-scorer-v2.md), 추천 품질 판정은 없다). 단기 사용자 상태는 클릭 로그에서 요청마다 계산한다 ([ADR 0017](docs/adr/0017-short-term-state-store.md)). 랭커의 피처는 오프라인 하네스와 같은 코드(`recsys_core`)로 만들고, 레지스트리에 등록된 모델은 요청 경로 밖에서 점수만 남긴다(shadow). 서빙이 남긴 피처가 같은 로그의 오프라인 재계산과 같은지는 CI가 요청 200건의 재생으로 본다 ([ADR 0033](docs/adr/0033-train-serve-feature-parity.md), [리포트](reports/recsys/parity_v1.md), 휴리스틱 v2 뒤 재실행 [parity_v1_m5](reports/recsys/parity_v1_m5.json)) | 추천 품질, 배포 대상 장비와 HTTP 수준의 지연, 한국어 데이터로 정한 가중치. **등록된 랭커 모델은 0개다**: EB-NeRD 랭커의 shadow 등록은 도구와 테스트까지이고([ADR 0037](docs/adr/0037-ebnerd-shadow-model-registration.md)) 서빙 API 배포가 없어 shadow 점수도 없다. parity 게이트가 쓰는 모델은 무작위 데이터로 만든 22열 모델이다 |
+| 추천 평가 | 팀 베이스라인 재현 하네스와 오프라인 평가 프로토콜(point-in-time, 고정 정답 창, 베이스라인, 시드와 부트스트랩 신뢰구간, [ADR 0007](docs/adr/0007-recsys-offline-evaluation-protocol.md)). EB-NeRD 공개 벤치마크 하네스, point-in-time 피처 코어 `recsys_core`, ranker v2 설계와 사전 등록한 승격 규칙 R1–R4(통과. R1·R2는 ranker_v2, R3·R4는 풀 네거티브 변형으로 판정해 한 모델이 두 과제를 모두 넘은 것은 아니다, [ADR 0013](docs/adr/0013-ranker-v2-design.md)). 콜드 regime(A2, [ebnerd_v1_2_cold](reports/recsys/ebnerd_v1_2_cold.md)): shadow 주모델 `poolneg_mask0`, k\* = 0, 랭크 정규화는 **불충족**. E15 신경망 비교(A3, [ebnerd_v1_3_neural](reports/recsys/ebnerd_v1_3_neural.md)): 판정 4개 모두 `seed_rule_failed`, LightGBM 유지, 후속 없음([EB-NeRD]·NRMS-lite 한정). 한국어 임베딩 kNN 점검([embedding_check_v1](reports/kr/embedding_check_v1.md), 주제 구조일 뿐 클릭 예측력이 아니다) | 한국어 클릭 데이터로 한 ranker v2 검증(서빙은 shadow부터, 한국어 클릭은 0건), 팀 재현 리포트의 전체 재실행(재실행 대기) |
 | 시뮬레이터·부하 | 합성 사용자 시뮬레이터, Locust 부하 하네스, 사전 등록한 지표 타당성 격자 ([ADR 0019](docs/adr/0019-user-simulator-design-and-claim-scope.md)). 시스템 반응 지표만 보고 추천 정확도는 주장하지 않는다 | 부하 수치(재실행 대기), drift 적응 지표의 타당성 |
 | DB | pgvector 어댑터 등록, `news_raw` URL UNIQUE·timestamptz ([ADR 0008](docs/adr/0008-db-layer-pgvector-schema-and-upsert.md)), 노출 로그·모델 레지스트리 테이블과 요청 경로 인덱스 (ADR 0015) | — |
 | 데이터 정책 | 출처별 라이선스 표와 본문 보존 원칙, 수집 후 30일이 지난 상업 언론사 본문을 매일 비우는 `retention` 잡(2026-10-17 Tier 0 배포, 첫 비움 10-26) ([ADR 0023](docs/adr/0023-data-sources-copyright-retention.md)) | 실제로 비운 기록(첫 만료 전) |
@@ -48,18 +86,22 @@ LLM 호출은 HyperCLOVA X가 아니라 위 어댑터를 거친다. 팀 시절�
 - LLM 호출 프로브(2026-09-25, 각 1회): 생성 기본 모델은 정상 응답 1.8초, 판정 기본 모델은 8.1초. 한 후보는 30초 타임아웃과 연속 503이 나서 판정 기본값에서 뺐다 — [ADR 0005 부록](docs/adr/0005-llm-provider-abstraction.md). 표본이 1회씩이라 지연 분포로 읽으면 안 된다.
 - 추론 시 사용자 히스토리 임베딩 메모이즈: 합성 데이터(사용자 300 × 뉴스 200)에서 수정 전 14.5~15.1초 → 수정 후 0.044~0.053초 — [ADR 0004](docs/adr/0004-continue-in-fork-and-port-july-fixes.md).
 - 항상 0이던 사용자 속성 피처 2개 제거 전후 LightGBM 예측이 합성 데이터에서 비트 단위로 같음. 3시드 × 열 위치 3가지 × 학습 방식 2가지(early stopping, 트리 300개 고정) — [reports/recsys/constant_feature_ablation_v1](reports/recsys/constant_feature_ablation_v1.md), [ADR 0003](docs/adr/0003-lightgbm-mmr-for-recommendation.md).
-- 팀 베이스라인 재현(팀이 남긴 합성 클릭 아카이브, 평가 유저 31명, 시드 5개): 같은 모델을 팀 방식 추론 시점과 point-in-time으로 추론하면 팀 최종 코드의 MRR이 0.8485 → 0.5636이 된다(차이 +0.2849, 95% CI [+0.1581, +0.4177]). point-in-time에서 인기도·온보딩 코사인·히스토리 코사인 베이스라인에 대한 모델 우위 신뢰구간은 없다. 절대 수치는 성능이 아니라 코드 결함이 지표를 움직이는 방향을 보는 진단이다 — [reports/recsys/team_repro_v2](reports/recsys/team_repro_v2.md), [ADR 0007](docs/adr/0007-recsys-offline-evaluation-protocol.md).
+- [team-synth] 팀 베이스라인 재현(팀이 남긴 합성 클릭 아카이브, 평가 유저 31명, 시드 5개): 같은 모델을 팀 방식 추론 시점과 point-in-time으로 추론하면 팀 최종 코드의 MRR이 0.8485 → 0.5636이 된다(차이 +0.2849, 95% CI [+0.1581, +0.4177]). point-in-time에서 인기도·온보딩 코사인·히스토리 코사인 베이스라인에 대한 모델 우위 신뢰구간은 없다. 절대 수치는 성능이 아니라 코드 결함이 지표를 움직이는 방향을 보는 진단이다 — [reports/recsys/team_repro_v2](reports/recsys/team_repro_v2.md), [ADR 0007](docs/adr/0007-recsys-offline-evaluation-protocol.md).
 - [EB-NeRD] 덴마크어 공개 뉴스 클릭 로그(`ebnerd_small`) 오프라인 평가: 노출 재정렬 nDCG@10이 ranker v2 0.6551 [0.6533, 0.6569], 가장 강한 베이스라인 popularity_24h 0.5992, 팀 방식 재현 0.3952다. 이 서비스의 성능이 아니다 — [reports/recsys/ebnerd_v1](reports/recsys/ebnerd_v1.md), [ADR 0013](docs/adr/0013-ranker-v2-design.md).
-- 한국어 수집 기사의 임베딩 점검(E0 동결 반출본, 2026-10-10~15 수집): 언론사가 URL에 붙인 섹션을 서비스 7개 범주로 옮긴 1,890건에서 BGE-M3 코사인 kNN(k=10) leave-one-out 정확도 0.7519 [0.7328, 0.7725], 다수 클래스 0.4640, macro-F1 0.6641. 임베딩이 한국어 기사의 주제 구조를 담는지 본 것이고 추천 정확도나 클릭 예측력이 아니다 — [reports/kr/embedding_check_v1](reports/kr/embedding_check_v1.md), [ADR 0031](docs/adr/0031-cold-start-and-language-transfer-contract.md) 결정 5.
+- [EB-NeRD] 신경망 사용자 모델 비교(E15, 사전 등록·기계 판정): NRMS-lite − 튜닝한 LightGBM(신경망 family당 12 trial 대 24 trial)의 nDCG@10 차이가 노출 재정렬 −0.0215 [−0.0224, −0.0206], 전체 풀 −0.0531 [−0.0562, −0.0498]이고 판정 4개 모두 `seed_rule_failed`다. 범위는 [EB-NeRD]와 NRMS-lite(고정 BGE-M3 투영) 한정이고, "GBDT가 신경망보다 낫다"는 일반 결론이 아니다 — [reports/recsys/ebnerd_v1_3_neural](reports/recsys/ebnerd_v1_3_neural.md), [ADR 0013](docs/adr/0013-ranker-v2-design.md) A3 결과.
+- [CI-synth] train/serve parity 게이트: 서빙이 남긴 22열 피처와 같은 로그의 오프라인 재계산이 max\|Δ\| 1.19e-7, 요청 198건 모두 Kendall τ = 1이다. 게이트의 모델은 무작위 데이터로 만든 것이라 추천 품질이 아니다 — [reports/recsys/parity_v1](reports/recsys/parity_v1.md), [ADR 0033](docs/adr/0033-train-serve-feature-parity.md).
+- [KR-E0] LLM 생성 E0 기준선(2026-10-17, 실제 수집 기사 15클러스터): 14 생성(완주율 0.933 [0.702, 0.988]), 첫 시도 스키마 통과 72/72, 클러스터당 벽시계 중앙값 9.3초, 비용 $0.155614, 첫 초안의 미지원 수치·인용 ≥1은 0/14 [0.000, 0.215], 분량 규칙 위반 11/14 — [reports/llm/e0_baseline_v1](reports/llm/e0_baseline_v1.md). 가설·결정 규칙이 없는 기술 통계이고 모델 선정이 아니다.
+- [KR-E0] E0 자동 라벨(사람 라벨 없음, 자동 라벨러 gemini-3-flash-preview): 발행 가능률 11/15 = 0.733 [0.480, 0.891], 사실 오류 ≥1 3/14, 핵심 사실 커버리지 58/74, 라벨러 대 judge v2 κ(참고) 0.20. 라벨러·생성기·judge가 같은 Gemini 계열이고 라벨러의 정확도는 재지 않았다 — [reports/llm/e0_auto_labels_v1](reports/llm/e0_auto_labels_v1.md), [ADR 0009](docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md) A8.13·A8.14.
+- [KR-embed] 한국어 수집 기사의 임베딩 점검(E0 동결 반출본, 2026-10-10~15 수집): 언론사가 URL에 붙인 섹션을 서비스 7개 범주로 옮긴 1,890건에서 BGE-M3 코사인 kNN(k=10) leave-one-out 정확도 0.7519 [0.7328, 0.7725], 다수 클래스 0.4640, macro-F1 0.6641. 임베딩이 한국어 기사의 주제 구조를 담는지 본 것이고 추천 정확도나 클릭 예측력이 아니다 — [reports/kr/embedding_check_v1](reports/kr/embedding_check_v1.md), [ADR 0031](docs/adr/0031-cold-start-and-language-transfer-contract.md) 결정 5.
 - 요청 시점 추천의 요청 경로 지연: 합성 데이터를 GitHub 호스티드 러너에서 쟀고 HTTP 처리는 들어 있지 않다. 조건과 결과 JSON은 [reports/serving](reports/serving/README.md), 해석은 ADR 0015·0017에 있다.
 - [SIM] 시뮬레이터 지표 타당성 격자 v1: 사전 등록한 판정 50건 중 위반 2건(둘 다 drift 적응 지표), 보고만 하는 항목 8건. 추천 정확도 수치가 아니다 — [reports/sim/grid_v1](reports/sim/grid_v1.md), [ADR 0019](docs/adr/0019-user-simulator-design-and-claim-scope.md).
 - 단위 테스트와 pgvector 통합 테스트는 CI에서 매 푸시마다 돈다.
 
 아직 측정하지 않은 것:
 
-- 뉴스레터 품질·사실성, 클러스터링 품질(사람 라벨 필요), 이 서비스의 사람 클릭으로 잰 추천 성능, 배포 대상 장비와 HTTP 수준의 API 응답 지연, 부하 테스트 수치, 운영 비용.
+- 사람 라벨 기준의 뉴스레터 품질·사실성(E0의 자동 라벨은 라벨러의 판단이고 정확도를 재지 않았다), 사실성 게이트의 정밀도·재현율, judge 보정, 클러스터링 품질(사람 라벨 필요), 이 서비스의 사람 클릭으로 잰 추천 성능(한국어 클릭은 0건), 배포 대상 장비와 HTTP 수준의 API 응답 지연, 부하 테스트 수치. 운영 비용은 측정하지 않았다(`generate` 잡이 꺼져 있다). 실험 호출 비용은 E0·자동 라벨의 원장 합 $0.483842뿐이고 청구액과 대조하지 못했다.
 - 노트북에서 돌리지 않고 미뤄 둔 재실행은 각 ADR의 한계 절에 "재실행 대기"로 명령과 함께 적혀 있다(ADR 0007, 0013, 0015, 0019).
-- 평가 설계와 결과는 확정되는 대로 [`docs/adr/`](docs/adr/README.md)와 [`reports/`](reports/README.md)에 추가한다. README의 수치는 `reports/`의 파일에서만 옮긴다. 위 목록의 처음 두 항목(LLM 호출 프로브, 메모이즈)만 리포트 파일 없이 ADR을 근거로 둔 예외다.
+- 평가 설계와 결과는 확정되는 대로 [`docs/adr/`](docs/adr/README.md)와 [`reports/`](reports/README.md)에 추가한다. 위 '측정한 것' 목록의 수치는 `reports/`의 파일에서 옮겼다. 처음 두 항목(LLM 호출 프로브, 메모이즈)만 리포트 파일 없이 ADR을 근거로 둔 예외다. 현재 상태 표의 운영 수치(수집 회차 등)는 ADR 0026의 증거에서 옮겼다.
 
 철회한 것:
 
@@ -128,6 +170,8 @@ cd frontend && npm install && npm run dev
 
 ## 문서
 
+- [케이스 스터디 3편](docs/case-studies/README.md) — 팀 지표 누출 규명, 네거티브 분포와 서빙 경로, LLM 생성 첫 실측. 각 2쪽.
+- [증거 요약표](docs/evidence-summary.md) — 주장 8개의 데이터 출처·증거 등급·수치와 CI·한계, 음성 결과와 철회.
 - [설계 결정 기록(ADR)](docs/adr/README.md) — 컨텍스트, 검토한 대안, 결정, 증거, 한계.
 - [설계 문서](docs/design/README.md) — ADR로 옮기기 전 단계의 아키텍처 리뷰와 추천·LLM 생성 v2 설계 사양(2026-09-26). 문서마다 지금 상태를 적어 두었고, 효력이 있는 것은 ADR이다.
 - [2026-07 셀프 리뷰 수정 로그](docs/fix-log-2026-07.md)
@@ -135,6 +179,7 @@ cd frontend && npm install && npm run dev
 - [평가 리포트](reports/README.md)
 - [평가 모듈](evaluation/README.md)
 - [사용자 시뮬레이터와 부하 하네스](sim/README.md)
+- [차트(SVG)와 다시 만드는 법](docs/assets/README.md) — `python scripts/portfolio_charts.py`가 커밋된 리포트 JSON에서 만든다.
 
 ---
 

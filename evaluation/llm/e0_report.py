@@ -250,11 +250,16 @@ def balance_reconciliation(ledger_usd: float, balance: Optional[Dict[str, Any]])
         status = "대조 불가"
     else:
         status = "원장 불일치" if abs(delta_usd - ledger_usd) > threshold else "일치(허용 범위 안)"
-    return {**base, "status": status, "balance_before_krw": balance["before"], "balance_before_at": balance.get("before_at"),
-            "balance_after_krw": balance["after"], "balance_after_at": balance.get("after_at"),
-            "billing_fx_krw_per_usd": balance["fx"], "delta_krw": delta_krw, "delta_usd": round(delta_usd, 6),
-            "abs_diff_usd": round(abs(delta_usd - ledger_usd), 6), "threshold_usd": round(threshold, 6),
-            "other_gemini_calls": bool(balance.get("other_gemini_calls"))}
+    row = {**base, "status": status, "balance_before_krw": balance["before"], "balance_before_at": balance.get("before_at"),
+           "balance_after_krw": balance["after"], "balance_after_at": balance.get("after_at"),
+           "billing_fx_krw_per_usd": balance["fx"], "delta_krw": delta_krw, "delta_usd": round(delta_usd, 6),
+           "abs_diff_usd": round(abs(delta_usd - ledger_usd), 6), "threshold_usd": round(threshold, 6),
+           "other_gemini_calls": bool(balance.get("other_gemini_calls"))}
+    if status == "대조 불가":
+        row["note"] = ("같은 기간 다른 Gemini 호출이 있어 delta_usd·abs_diff_usd는 판정에 쓰지 않는다(ADR 0009 A8.7). "
+                       "delta_usd = (balance_before − balance_after) / billing_fx라서 음수는 잔액이 늘었다는 뜻이다. "
+                       "두 잔액이 같은 칸인지는 ADR 0009 A8.12의 기록을 본다")
+    return row
 
 
 def build_report(run_dir: Path, *, prereg: Dict[str, Any], manifest_path: Path, export_dir: Optional[Path] = None,
@@ -809,9 +814,11 @@ def render_md(report: Dict[str, Any]) -> str:
     bal = report["balance_reconciliation"]
     lines += ["", "## 잔액 대조", "", f"- 상태: {bal['status']}", f"- 원장 합 USD: {bal['ledger_sum_usd']}"]
     for k in ("balance_before_krw", "balance_before_at", "balance_after_krw", "balance_after_at", "billing_fx_krw_per_usd",
-              "delta_usd", "abs_diff_usd", "threshold_usd"):
+              "delta_usd", "abs_diff_usd", "threshold_usd", "other_gemini_calls"):
         if k in bal:
             lines.append(f"- {k}: {bal[k]}")
+    if bal.get("note"):
+        lines.append(f"- 비고: {bal['note']}")
     lines += [f"- 확인하지 못한 것: {', '.join(bal['unknowns'])}", "", "## pre-flight", ""]
     for c in (report.get("preflight") or {}).get("calls", []):
         lines.append(f"- {c['purpose']}: parsed={c['parsed']}, error={c['error']}, 지연 {c['latency_s']}s, "
