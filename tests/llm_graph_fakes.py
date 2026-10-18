@@ -3,6 +3,7 @@
 #
 # 쓰는 곳: tests/test_llm_failure_injection.py, tests/test_save_links_only_used_articles.py,
 # tests/test_tone_drift_covers_stored_fields.py (docs/adr/0010 Addendum 2026-10-18).
+# 아래 기사·초안 문장은 전부 이 테스트를 위해 지어낸 것이다(실제 기사 텍스트가 아니다 - ADR 0023).
 import os
 import sys
 
