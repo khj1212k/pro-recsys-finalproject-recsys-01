@@ -201,8 +201,16 @@
 
 ## 잔액 대조
 
-- 상태: 미기록
+- 상태: 대조 불가
 - 원장 합 USD: 0.155614
+- balance_before_krw: 8000.0
+- balance_before_at: 2026-10-17T14:33:08+09:00
+- balance_after_krw: 12500.0
+- balance_after_at: 2026-10-18T14:48:00+09:00
+- billing_fx_krw_per_usd: 1400.0
+- delta_usd: -3.214286
+- abs_diff_usd: 3.3699
+- threshold_usd: 0.1
 - 확인하지 못한 것: 잔액 표시 단위, 반영 지연, VAT 포함 여부
 
 ## pre-flight
