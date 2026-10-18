@@ -15,6 +15,7 @@ from workflow.helpers import initialize_generation_history, log_generation_attem
 from workflow.evaluators import ClusterEvaluator, NewsletterEvaluator
 from workflow.gates import check_newsletter_faithfulness, check_tone_drift
 from config.settings import Settings
+from core.llm.client import NO_RETRY_REASONS
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,20 @@ def handle_cluster_eval_failure(state: AgentState) -> Dict[str, Any]:
     
     retry_count = state.get("cluster_retry_count", 0)
 
+    # 0. 평가 호출 자체가 막혔다(킬 스위치, HTTP 401/402/403/404, length, content_filter). 군집의 품질에 대한
+    #    판정이 아니므로 skipped에 넣지 않고 그 사유의 실패로 기록하고, 이 클러스터는 더 호출하지 않는다.
+    #    (skipped로 두면 인프라 장애가 "군집이 나쁨"으로 평가셋·통계에 섞인다.)
+    blocked = eval_result.get("llm_failure")
+    if blocked:
+        failed = list(state.get("failed_clusters", []))
+        failed.append(cluster_id)
+        logger.info(f"⛔ [Cluster {cluster_id}] 클러스터 평가 호출이 막혀 중단 ({blocked}) - skipped 아님")
+        return {
+            "failed_clusters": failed,
+            "failure_reason": blocked,
+            "error_message": f"Cluster evaluation call blocked ({blocked}); no regeneration",
+        }
+
     # 1. Constraint: limit retries first — 서브그룹 분할 경로도 이 가드를 반드시
     #    거치도록 분기 순서를 조정함(기존에는 이 체크가 서브그룹 분기 아래에 있어
     #    서브그룹 경로에서는 도달 불가능했고, MAX_RETRIES 가드가 무력화되어 있었음).
@@ -193,6 +208,9 @@ def route_after_cluster_fail(state: AgentState) -> str:
     skipped = state.get("skipped_clusters", [])
     if state["current_cluster_id"] in skipped:
         return "end"
+
+    if state.get("failure_reason") in NO_RETRY_REASONS:
+        return "end"
     
     return "retry"
 
@@ -239,6 +257,13 @@ def check_faithfulness(state: AgentState) -> Dict[str, Any]:
         if history.get("attempts"):
             history["attempts"][-1]["faithfulness"] = {"passed": False, "reason": "generator_fallback",
                                                        "fallback_parts": list(fallback)}
+        # 폴백이 재시도해도 소용없는 호출 실패(킬 스위치, HTTP 401~404, length, content_filter) 때문이면
+        # 라우터가 다시 생성하러 돌아가지 않게 사유를 싣는다.
+        blocked = draft.get("_no_retry_reason")
+        if blocked:
+            report["llm_failure"] = blocked
+            if history.get("attempts"):
+                history["attempts"][-1]["faithfulness"]["llm_failure"] = blocked
         return {"faithfulness_report": report, "generation_history": history}
     if mode == "off" or not draft:
         return {"faithfulness_report": None}
@@ -274,6 +299,8 @@ def route_after_faithfulness(state: AgentState) -> str:
     report = state.get("faithfulness_report")
     if not report or report.get("gate_passed"):
         return "pass"
+    if report.get("llm_failure"):
+        return "max_retries"  # 생성 호출이 막혔다 - 다시 생성해도 같은 이유로 또 막힌다
     if state.get("newsletter_retry_count", 0) >= Settings.MAX_RETRY_NEWSLETTER_EVAL:
         return "max_retries"
     return "retry"
@@ -472,6 +499,19 @@ def route_after_tone_drift(state: AgentState) -> str:
     return "save"
 
 
+def _used_article_ids(state: AgentState) -> list:
+    """뉴스레터 생성에 실제로 쓴 기사의 id(중복 없이, current_articles 순서대로).
+
+    current_articles가 비어 있는 입력(그래프 밖에서 만든 state)만 current_article_ids로 폴백한다.
+    """
+    used = []
+    for art in state.get("current_articles") or []:
+        aid = art.get("id")
+        if aid is not None and aid not in used:
+            used.append(aid)
+    return used or list(state["current_article_ids"])
+
+
 def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
     """
     뉴스레터 DB 저장 노드
@@ -499,19 +539,6 @@ def save_newsletter_to_db(state: AgentState) -> Dict[str, Any]:
     if not newsletter_to_save.get("content"):
         newsletter_to_save["content"] = draft.get("content") or ""
     embedding = state.get("newsletter_embedding")  # 원본 기반 임베딩
-def _used_article_ids(state: AgentState) -> list:
-    """뉴스레터 생성에 실제로 쓴 기사의 id(중복 없이, current_articles 순서대로).
-
-    current_articles가 비어 있는 입력(그래프 밖에서 만든 state)만 current_article_ids로 폴백한다.
-    """
-    used = []
-    for art in state.get("current_articles") or []:
-        aid = art.get("id")
-        if aid is not None and aid not in used:
-            used.append(aid)
-    return used or list(state["current_article_ids"])
-
-
     # 클러스터 평가가 아웃라이어를 빼거나 서브그룹 하나만 남기면 current_articles만 줄어든다.
     # current_article_ids(원래 클러스터 전체)로 저장하면 생성에 쓰이지 않은 기사까지 news_letter_id가
     # 채워져 다음 클러스터링의 `news_letter_id IS NULL` 필터에서 영구 제외되고 raw_news_count도
@@ -585,6 +612,15 @@ def handle_newsletter_max_retries(state: AgentState) -> Dict[str, Any]:
     
     last_feedback = state.get("newsletter_feedback", "No feedback")
     report = state.get("faithfulness_report")
+    # 생성 또는 judge 호출이 재시도해도 소용없는 이유로 막혔다: 재시도를 다 쓴 것이 아니라 시도 자체를 멈춘 것이다.
+    blocked = report.get("llm_failure") if report and not report.get("gate_passed") else None
+    blocked = blocked or (state.get("newsletter_eval") or {}).get("llm_failure")
+    if blocked:
+        return {
+            "failed_clusters": failed,
+            "failure_reason": blocked,
+            "error_message": f"LLM call blocked ({blocked}); regeneration skipped",
+        }
     if report and not report.get("gate_passed"):
         reason = report.get("reason") or "faithfulness"
     elif not (state.get("newsletter_eval") or {}).get("criteria"):
@@ -615,6 +651,11 @@ def route_after_newsletter_eval(state: AgentState) -> str:
     
     if eval_result.get("decision") == "PASS":
         return "pass"
+
+    # judge 호출이 막혔다(킬 스위치, HTTP 401~404, length, content_filter). shadow든 enforce든 다시
+    # 생성해서 얻을 것이 없다 - 같은 호출이 같은 이유로 또 막힌다.
+    if eval_result.get("llm_failure"):
+        return "max_retries"
 
     # shadow(ADR 0009/0010): judge가 사람 라벨과 충분히 맞는다고 확인되기 전(OOF kappa < 0.40)에는
     # "실제로 채점한" FAIL을 기록만 하고 발행을 막지 않는다 - 사실성은 결정론적 게이트가 맡는다.

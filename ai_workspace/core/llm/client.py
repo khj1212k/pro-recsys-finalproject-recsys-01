@@ -48,6 +48,16 @@ class LLMUsage:
         )
 
 
+# 재호출해도 소용없는 HTTP 상태: 키·권한·모델 이름·결제 문제(401/403/404)와 선불 잔액 소진(402).
+# 그래프가 같은 클러스터를 다시 생성하러 돌아가지 않는 근거다(docs/adr/0010 Addendum 2026-10-18).
+INFRA_HTTP_STATUSES = frozenset({401, 402, 403, 404})
+
+# LLMResult.error의 안정적인 코드 -> 실패 사유(클러스터 failure_reason에 그대로 쓴다).
+# "kill_switch"는 재시도할 호출이 아예 없었다는 뜻이라 인프라 사유로 묶는다.
+_NO_RETRY_BY_ERROR = {"kill_switch": "infra", "length": "length", "content_filter": "content_filter"}
+NO_RETRY_REASONS = frozenset({"infra", "length", "content_filter"})
+
+
 @dataclass
 class LLMResult:
     text: Optional[str]
@@ -69,6 +79,21 @@ class LLMResult:
     def ok(self) -> bool:
         """text/parsed 중 하나라도 얻었고 error가 없으면 성공으로 취급한다."""
         return self.error is None and (self.text is not None or self.parsed is not None)
+
+    @property
+    def no_retry_reason(self) -> Optional[str]:
+        """같은 요청을 다시 보내거나 같은 입력으로 다시 생성해도 소용없는 실패면 그 사유, 아니면 None.
+
+        "infra"(킬 스위치, HTTP 401/402/403/404), "length", "content_filter" 셋 중 하나다.
+        스키마 검증 실패, 전송 계층 재시도 소진(429/5xx/타임아웃) 같은 나머지 실패는 None이다 -
+        모델이나 서버가 다음 시도에서 달라질 수 있는 실패라서 기존 재시도 정책을 그대로 따른다.
+        성공한 결과(parsed 또는 text가 있고 error 없음)는 항상 None이다.
+        """
+        if self.error is None:
+            return None
+        if self.http_status in INFRA_HTTP_STATUSES:
+            return "infra"
+        return _NO_RETRY_BY_ERROR.get(self.error)
 
 
 class LLMClient(ABC):

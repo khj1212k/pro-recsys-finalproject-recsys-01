@@ -189,6 +189,10 @@ class BaseSettings:
     # LLM 채팅 API(HyperCLOVA/OpenAI) 호출 재시도 최대 횟수 (감사에서 발견: HyperCLOVA
     # 클라이언트의 `while True` 루프가 이 상한 없이 무제한 재시도했음)
     MAX_LLM_CALL_RETRIES: int = 10
+    # 모델 응답이 스키마 검증을 통과하지 못했을 때 같은 요청을 다시 보내는 최대 횟수. 응답마다 과금되고
+    # 같은 프롬프트에서 같은 위반이 반복되기 쉬워 전송 계층 상한(위)과 따로 둔다. 2면 한 호출이 응답을
+    # 최대 3개(최초 1 + 재시도 2)까지 받는다 (docs/adr/0010 Addendum 2026-10-18).
+    MAX_LLM_SCHEMA_RETRIES: int = int(os.getenv("MAX_LLM_SCHEMA_RETRIES", "2"))
     # SDK 기본 타임아웃(600초)과 SDK 자체 재시도(2회)가 우리 재시도와 겹쳐 한 호출이 수 분씩
     # 멈추는 것을 2026-09-25 실제 Gemini 503/timeout 상황에서 확인했다.
     LLM_REQUEST_TIMEOUT_S: float = float(os.getenv("LLM_REQUEST_TIMEOUT_S", "60"))

@@ -41,6 +41,9 @@ class NewsReconstructor:
         # role="generator" - GEN_PROVIDER/GEN_MODEL로 프로바이더를 정한다 (docs/adr/0005)
         self.client: LLMClient = llm_client or get_client("generator")
         self._fallback_parts: List[str] = []
+        # 호출이 "다시 해도 소용없는" 이유로 실패했다면 그 사유("infra"/"length"/"content_filter" -
+        # core/llm/client.py::LLMResult.no_retry_reason). 워크플로우가 같은 클러스터를 재생성하지 않게 한다.
+        self._no_retry_reason: Optional[str] = None
 
     def reconstruct(self, articles: List[Dict], feedback: Optional[str] = None) -> Optional[Dict]:
         """
@@ -51,6 +54,7 @@ class NewsReconstructor:
         # LLM 호출이 실패해 로컬 휴리스틱으로 채운 부분("content"/"meta"). 워크플로우는
         # 이 표시가 있는 초안을 발행하지 않는다(workflow/nodes.py::check_faithfulness).
         self._fallback_parts = []
+        self._no_retry_reason = None
 
         # 기사 개수 제한 (컨텍스트 길이 초과 방지)
         articles = select_prompt_articles(articles)
@@ -67,6 +71,8 @@ class NewsReconstructor:
 
         # -------------------------
         # Call #2: title, category, keyword, sentence
+        # (Call #1이 재시도해도 소용없는 이유로 실패했으면 같은 이유로 또 실패할 호출을 보내지 않고
+        #  로컬 휴리스틱으로 채운다 - 어차피 이 초안은 발행되지 않는다)
         # -------------------------
         meta = self._generate_meta(content_text)
         if not meta:
@@ -87,6 +93,8 @@ class NewsReconstructor:
             return None
         if self._fallback_parts:
             result["_fallback"] = list(self._fallback_parts)
+        if self._no_retry_reason:
+            result["_no_retry_reason"] = self._no_retry_reason
 
         return result
 
@@ -153,6 +161,7 @@ class NewsReconstructor:
             return cleanup_content_text(result.parsed.content)
 
         self._fallback_parts.append("content")
+        self._note_failure(result)
         return fallback_content()
 
     def _generate_meta(self, content_text: str) -> Optional[Dict]:
@@ -197,6 +206,10 @@ class NewsReconstructor:
             {"role": "user", "content": prompt},
         ]
 
+        if self._no_retry_reason:
+            self._fallback_parts.append("meta")
+            return fallback_meta()
+
         result = self.client.complete(
             messages=messages,
             schema=NewsletterMeta,
@@ -208,4 +221,10 @@ class NewsReconstructor:
             return result.parsed.model_dump()
 
         self._fallback_parts.append("meta")
+        self._note_failure(result)
         return fallback_meta()
+
+    def _note_failure(self, result) -> None:
+        reason = getattr(result, "no_retry_reason", None)
+        if isinstance(reason, str) and reason and not self._no_retry_reason:
+            self._no_retry_reason = reason

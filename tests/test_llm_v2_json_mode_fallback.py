@@ -76,7 +76,9 @@ def test_json_mode_fallback_gives_up_when_json_cannot_be_extracted(monkeypatch):
 
     from config.settings import Settings
 
-    # 매번 파싱 불가능한 응답만 오는 경우, 상한(MAX_LLM_CALL_RETRIES)만큼만 재시도해야 한다
+    # 매번 파싱 불가능한 응답만 오는 경우, 스키마 재시도 상한(MAX_LLM_SCHEMA_RETRIES)만큼만 재시도한다.
+    # 전송 계층 상한(MAX_LLM_CALL_RETRIES=10)까지 가지 않는다 - 응답마다 과금되기 때문이다
+    # (docs/adr/0010 Addendum 2026-10-18, tests/test_llm_schema_retry_cap.py).
     responses = [make_response("이것은 JSON이 아닙니다") for _ in range(Settings.MAX_LLM_CALL_RETRIES)]
     fake = FakeOpenAIClient(responses=responses)
     client = OpenAICompatLLMClient(
@@ -87,4 +89,5 @@ def test_json_mode_fallback_gives_up_when_json_cannot_be_extracted(monkeypatch):
 
     assert result.parsed is None
     assert result.error is not None
-    assert fake.chat.completions.create_calls.__len__() == Settings.MAX_LLM_CALL_RETRIES
+    assert fake.chat.completions.create_calls.__len__() == 1 + Settings.MAX_LLM_SCHEMA_RETRIES
+    assert result.schema_failures == 1 + Settings.MAX_LLM_SCHEMA_RETRIES

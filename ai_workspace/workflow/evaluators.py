@@ -120,28 +120,28 @@ Content Preview: {content_preview}...
                 "feedback": parsed.feedback,
                 "outlier_indices": parsed.outlier_indices,
                 "sub_groups": parsed.sub_groups,
+                "parsed": True,
             }
 
-        if result.text:
-            upper = result.text.upper()
-            decision = "FAIL" if "FAIL" in upper and "PASS" not in upper else "PASS" if "PASS" in upper else "FAIL"
-            return {
-                "decision": decision,
-                "confidence": 0.1,
-                "summary": "",
-                "feedback": "JSON parsing failed",
-                "outlier_indices": [],
-                "sub_groups": []
-            }
-
-        return {
+        # 스키마로 해석된 응답이 없다. 원문 텍스트에서 "PASS"/"FAIL" 문자열을 찾아 판정하던 휴리스틱은
+        # 없앴다: 기본 레지스트리 어댑터는 parsed가 없으면 text도 없어 죽은 분기였고, text만 오는 건
+        # 레거시 어댑터뿐인데 형식을 못 지킨 응답의 낱말로 클러스터를 통과시킬 근거가 없다.
+        # 그래서 파싱 실패 = FAIL, parsed=False다(docs/adr/0010 Addendum 2026-10-18).
+        failure = {
             "decision": "FAIL",
             "confidence": 0.0,
             "summary": "",
-            "feedback": "LLM response empty",
+            "feedback": "JSON parsing failed" if result.text else "LLM response empty",
             "outlier_indices": [],
-            "sub_groups": []
+            "sub_groups": [],
+            "parsed": False,
         }
+        # 호출 자체가 막힌 경우(킬 스위치, HTTP 401/402/403/404, length, content_filter)는 군집의 품질 판정이
+        # 아니다. 그래프가 이 클러스터를 skipped가 아니라 이 사유의 실패로 기록한다.
+        reason = result.no_retry_reason
+        if reason:
+            failure["llm_failure"] = reason
+        return failure
 
 
 class NewsletterEvaluatorV1:
@@ -347,7 +347,7 @@ class NewsletterEvaluator:
             # v1은 원문 텍스트에서 PASS/FAIL 문자열을 찾는 휴리스틱으로 통과시키기도 했지만,
             # 기준별 점수가 없는 응답으로 발행을 허용할 근거가 없다 - 실패로 닫는다.
             reason = "judge 응답을 스키마로 해석하지 못함" if result.text else "LLM response empty"
-            return self._fail(reason, [result.error or reason])
+            return self._fail(reason, [result.error or reason], llm_failure=result.no_retry_reason)
 
         parsed: NewsletterEvalV2 = result.parsed
         criteria = parsed.scores.model_dump()
@@ -375,8 +375,8 @@ class NewsletterEvaluator:
             "judge_version": self.VERSION,
         }
 
-    def _fail(self, feedback: str, issues: List[str]) -> Dict:
-        return {
+    def _fail(self, feedback: str, issues: List[str], llm_failure: Optional[str] = None) -> Dict:
+        out = {
             "decision": "FAIL",
             "score": 0,
             "feedback": feedback,
@@ -386,3 +386,8 @@ class NewsletterEvaluator:
             "thresholds": self.thresholds(),
             "judge_version": self.VERSION,
         }
+        if llm_failure:
+            # 호출이 재시도해도 소용없는 이유로 막혔다(킬 스위치, HTTP 401~404, length, content_filter).
+            # 라우터가 이 클러스터를 다시 생성하지 않고 이 사유로 닫는다.
+            out["llm_failure"] = llm_failure
+        return out

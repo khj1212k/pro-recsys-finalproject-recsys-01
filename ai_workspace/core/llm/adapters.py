@@ -173,6 +173,15 @@ class OpenAICompatLLMClient(LLMClient):
 
             except openai.APIStatusError as e:
                 last_error = str(e)
+                # 스키마 실패는 응답마다 과금된다. 같은 요청의 재시도는 MAX_LLM_SCHEMA_RETRIES회까지만 -
+                # 전송 계층 재시도(429/5xx/타임아웃, 과금되지 않거나 짧게 끝남)의 상한 MAX_RETRIES와 따로 센다.
+                if schema_failures > Settings.MAX_LLM_SCHEMA_RETRIES:
+                    return LLMResult(
+                        text=None, parsed=None, usage=LLMUsage(), latency_s=time.time() - call_start,
+                        attempts=attempt, provider=self.provider, model=self.model,
+                        error=f"max retries (schema {Settings.MAX_LLM_SCHEMA_RETRIES}) exhausted: {last_error}",
+                        schema_failures=schema_failures,
+                    )
                 last_status = e.status_code
                 latency = time.time() - attempt_start
                 get_metrics_collector().record_call(
