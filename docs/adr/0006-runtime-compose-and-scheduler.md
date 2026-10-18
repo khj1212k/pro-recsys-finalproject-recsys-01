@@ -273,7 +273,7 @@ anon 3.9MiB / file 9.1MiB, 2026-09-26 00:16 UTC)였다. 그래서 범위는 11~4
 4. **gitleaks는 새 커밋만 본다.** `secret-scan` 잡이 PR은 base..HEAD, push는 이전 head..HEAD만 검사한다. 이력의 평문 DB 비밀번호
    유출 전력(`tests/test_no_plaintext_db_password_in_env_example.py`)은 이력을 다시 쓰지 않고 그대로 둔다. 바이너리는 릴리스 체크섬으로
    고정하고, 설정(`.gitleaks.toml`)은 기본 규칙에 자리표시자 값만 허용한다.
-5. **Makefile**은 CI와 같은 명령만 둔다: `help`·`venv`·`ci-lock`·`test`·`itest`·`lint`.
+5. **Makefile**은 CI와 같은 명령만 둔다: `help`·`venv`·`ci-lock`·`test`·`itest`·`lint`. (2026-10-18 예외: `report-charts`·`report-charts-check` - 커밋된 리포트 JSON에서 `docs/assets/*.svg`를 만들고 대조하는 문서용 타깃이다. CI 명령이 아니고 표준 라이브러리만 쓴다 - PR #50.)
 
 ### 검토했으나 하지 않은 것
 - **`-c backend/requirements.txt -c docker/requirements-worker.txt`로 거는 방식.** 해 봤고 해석이 실패한다: 두 파일이 uvicorn(0.54.0 대
