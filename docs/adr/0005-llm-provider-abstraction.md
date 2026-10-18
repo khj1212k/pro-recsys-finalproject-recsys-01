@@ -216,6 +216,16 @@ hidden = `total − prompt − completion`. 참고로 E0 pre-flight(미설정, 2
 `OpenAIClient`는 호출하는 운영 코드가 없지만 이번에 건드리지 않았다(지출 상한 테스트가 걸려 있다). `core/llm/budget.py`의 결과 이름 `body_5xx`(HTTP 200 본문의 서버 오류 코드)는 HyperCLOVA 클라이언트만 냈고
 지금은 내는 클라이언트가 없다 - 어휘만 남기고 주석을 고쳤으며 동작은 그대로다.
 
+**이 제거로 낡은 다른 ADR의 자리(이 PR이 고치지 않았다 - 해당 ADR은 이 변경의 소유가 아니다).** 아래는 쓴 시점의 기록으로는 맞았고 지금은 실제와 다르다.
+- [ADR 0006](0006-runtime-compose-and-scheduler.md) "레거시 정리" 절의 "지우지 않은 것" 표, `core/llm_client.py`(HyperCLOVA 클라이언트 + 공용 헬퍼) 행: HyperCLOVA 클라이언트, `HyperCLOVALLMClient` 임포트, 레지스트리의 naver 항목은
+  "별도 변경으로 둔다"고 적혀 있고 이 부록의 변경이 그 별도 변경이다. 공용 헬퍼 둘(`SimpleRateLimiter`, `extract_json_from_response`)을 `core/llm/`로 옮기는 일은 아직 남았다.
+- [ADR 0035](0035-llm-spend-cap-in-client-ledger.md) "결정" 8항 "적용 범위": 시도마다 예약·정산하는 "세 경로"에 레거시 `NaverHyperCLOVAClient`(HyperCLOVA 어댑터 경유 포함)가 들어 있다. 지금은 `OpenAICompatLLMClient`와 레거시 `OpenAIClient` 두 경로다.
+  같은 ADR "결정" 5항의 시도 결과 표("HTTP 200 본문의 서버 오류 코드(HyperCLOVA)")와 "증거" 절의 "HyperCLOVA의 본문 5xx는 5번째에서 서킷이 열린다"도 같은 이유로 낡았다 - 가드의 결과 이름 `body_5xx`는 남았고 내는 클라이언트가 없다.
+- ADR 0035 "증거" 절 7항의 변이 결과("`LLMRunStop`을 `Exception`으로 바꾸면 지출 관련 일곱 파일 265건 중 3건이 실패한다"): 셋째인 HyperCLOVA 본문 5xx 테스트가 이 PR에서 빠졌다.
+  변이를 다시 돌려 확인했다 - `LLMRunStop`을 `Exception`으로 바꾼 채 `tests/test_llm_budget_{clients,guard,pipeline}.py`·`test_llm_circuit_breaker.py`·`test_llm_kill_switch{,_legacy,_workflow}.py` 168건을 돌리면
+  `test_stop_exceptions_are_not_ordinary_exceptions`와 `test_cap_reached_at_the_tone_step_stops_the_graph_instead_of_saving_a_fallback` 2건이 실패하고 나머지는 통과한다. 성질(`BaseException`이어야 한다)은 여전히 잡힌다.
+  ADR 0035의 "일곱 파일 265건"과 파일 구성은 다시 맞추지 않았다.
+
 **운영·재현성 확인.**
 - 운영 경로: 세 역할의 기본 프로바이더는 `gemini`(위 "결정")이고 `naver`는 명시해야만 닿았다. `get_llm_client()`를 부르는 코드는 저장소에 없었다(문체 변환기는 역할 레지스트리를 쓴다 -
   `tests/test_tone_converter_provider.py`). compose·CI·스크립트에 `naver`/`LLM_PROVIDER`/`NCP_*` 값은 없다(`git grep`). 배포된 Tier 0 VM의 `.env`는 이 세션에서 읽지 않았다 -
