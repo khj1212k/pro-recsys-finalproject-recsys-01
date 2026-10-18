@@ -135,6 +135,25 @@ def test_candidates_from_cluster_log_parse_meta_outcomes_and_skip_non_cluster_ke
     assert by_id[1].category == "경제" and by_id[0].category == es.UNCATEGORIZED
 
 
+def test_fail_without_a_verdict_is_not_a_hard_case():
+    """평가 호출이 막혔거나(llm_failure) 응답이 해석되지 않은(parsed=False) FAIL은 ClusterEvaluator의 판정이 아니다.
+    두 키가 없는 이전 행은 예전대로 decision만으로 읽는다."""
+    fail = {"decision": "FAIL", "confidence": 0.8}
+    log = {
+        "0": [1, 2, 3], "1": [4, 5, 6], "2": [7, 8, 9], "3": [10, 11, 12],
+        "cluster_outcomes": {
+            "0": {"status": "skipped", "cluster_eval": dict(fail)},
+            "1": {"status": "failed", "cluster_eval": {**fail, "llm_failure": "infra"}},
+            "2": {"status": "skipped", "cluster_eval": {**fail, "parsed": False}},
+            "3": {"status": "completed", "cluster_eval": {"decision": "PASS", "confidence": 0.9}},
+        },
+    }
+
+    hard = {c.cluster_id: c.hard_case for c in es.candidates_from_cluster_log(run_id=5, cluster_log=log)}
+
+    assert hard == {0: True, 1: False, 2: False, 3: False}
+
+
 def test_old_cluster_logs_without_meta_are_unknown_not_guessed():
     cands = es.candidates_from_cluster_log(run_id=1, cluster_log=json.dumps({"3": [1, 2, 3]}))
     assert cands[0].split_v2 == "unknown"

@@ -147,3 +147,51 @@
    폴백 dict를 돌려주는 것을 확인). 일 상한에 닿을 때마다 킬 스위치가 켜지므로 그 경로가 자주 실행될 뻔했다.
    환경변수 `LLM_KILL_SWITCH`와 다른 주체가 만든 파일(내용 없음 포함)은 이 ADR의 동작 그대로이고, 위의 한계도
    그대로 남아 있다.
+
+## 부록: 2026-10-18 reasoning_effort 역할별 전달, usage 기록, 재시도 금지 목록, pre-flight 실측
+
+정합 패치 M1 축소판(실행 계획 WP3)이다. 재시도·기록 정책의 전/후 표와 E0 숫자에 준 영향은 [ADR 0010 Addendum 2026-10-18](0010-faithfulness-gate-and-judge-v2.md)에 있고, 여기서는 이 ADR의 어댑터 계층이 바뀐 곳만 적는다.
+
+1. **`reasoning_effort`를 역할별 env로 전달한다.** `GEN_REASONING_EFFORT` / `JUDGE_REASONING_EFFORT` / `TONE_REASONING_EFFORT`(허용: `none`, `minimal`, `low`, `medium`, `high`; 비우거나 `unset`·`default`면 미설정).
+   미설정이면 요청 본문에 이 키가 **없다** — E0까지의 요청과 같다(`tests/test_reasoning_effort_env.py`). 알 수 없는 값은 조용히 무시하지 않고 `ValueError`로 거부한다(비용 가정이 바뀌므로). 전달을 문서로 확인한 프로바이더(`gemini`, OpenAI 호환 계층 문서
+   https://ai.google.dev/gemini-api/docs/openai, 갱신 2026-09-02, 접근 2026-10-06)에만 허용하고, 다른 프로바이더에 값을 설정하면 거부한다. 레지스트리의 인스턴스 캐시 키는 effort를 설정했을 때만 `(provider, model, effort)`이고 미설정은 예전과 같은 `(provider, model)`이다
+   (generator와 tone은 기본 모델이 같아 effort가 다르면 인스턴스를 나눠야 하고, E0 합성 실행이 `(provider, model)` 키로 페이크를 끼운다).
+2. **usage 기록.** `LLMUsage`의 `total_tokens`·`thinking_tokens`·`cached_tokens`(nullable)는 ADR 0035가 이미 넣었고(실행 계획의 `thought_tokens`는 코드의 `thinking_tokens`다), 이번에 `llm_metrics`의 호출 기록과 요약(`usage_reported`)에 같은 값과 요청에 실은 `reasoning_effort`를 싣는다(성공한 시도뿐 아니라 HTTP 400·스키마 실패·`length`·`content_filter`·타임아웃 등 실패한 시도도 같다 -
+   `tests/test_reasoning_effort_env.py`; 킬 스위치·지출 가드로 요청이 나가지 않은 호출은 `unset`으로 센다).
+   프로바이더가 보고하지 않은 값은 0이 아니라 `None`이고, 요약은 합과 함께 "보고한 호출 수"를 적는다.
+3. **재시도 금지 목록.** `LLMResult.no_retry_reason`이 킬 스위치·HTTP 401/402/403/404·`length`·`content_filter`를 `infra`/`length`/`content_filter`로 분류하고, 그래프와 생성기·문체 변환기가 그 사유가 있으면 같은 호출을 되풀이하지 않는다.
+   "닫은 갭 1"이 적은 "기존 실패 처리 경로를 그대로 타서 뉴스레터를 저장하지 않고 끝난다"는 서술은 이 부록 이후 클러스터 단위로도 맞다 — 클러스터 평가·생성·judge 호출이 막히면 클러스터는 `skipped`가 아니라 `failure_reason="infra"`로 닫힌다.
+   문체 변환 호출이 막히면 검증 재시도만 멈추고 결정론적 폴백 문장으로 저장하며 `failure_reason`은 없다(저장 동작 불변).
+4. **스키마 검증 실패 재시도는 2회까지**(`MAX_LLM_SCHEMA_RETRIES`, 기본 2). 전송 계층 재시도(`MAX_LLM_CALL_RETRIES`=10)와 따로 센다.
+
+### reasoning pre-flight (실측, 합성 입력, 2026-10-18 06:09 UTC)
+
+E0 pre-flight와 같은 합성 3기사(실제 기사 아님)·같은 호출 순서(클러스터 평가 → 본문 → 메타 → 뉴스레터 평가 → 문체 변환)를 effort마다 1회씩 돌렸다.
+지출 가드(ADR 0035)를 거쳤고 런 상한은 $0.10으로 걸었다. **원장 기준 실제 지출 $0.006154**(요청 10건 중 HTTP 400 3건은 비과금, 과금 7건). n=1이고 효과 크기를 가를 수 없는 표다.
+모델은 E0과 같다: generator·tone `gemini-3.5-flash-lite`, judge `gemini-3.1-flash-lite`. 입력이 앞 호출의 출력에 이어지므로 `none` 팔은 본문 생성이 실패한 뒤 로컬 폴백 초안으로 이어져 뉴스레터 평가 입력이 `minimal` 팔과 다르다(짝지은 비교가 아니다).
+
+| 스키마(purpose) | 모델 | effort | parsed | 지연(s) | prompt / completion / total | hidden | 보고된 reasoning 토큰 |
+|---|---|---|---|---|---|---|---|
+| cluster_eval | 3.1-flash-lite | `none` | 예 | 1.66 | 604 / 131 / 735 | 0 | 없음(null) |
+| newsletter_content_gen | 3.5-flash-lite | `none` | **아니오: HTTP 400 INVALID_ARGUMENT** | 0.37 | — | — | — |
+| newsletter_meta_gen | 3.5-flash-lite | `none` | **아니오: HTTP 400** | 0.27 | — | — | — |
+| newsletter_eval | 3.1-flash-lite | `none` | 예 | 1.42 | 925 / 176 / 1101 | 0 | 없음(null) |
+| tone_convert | 3.5-flash-lite | `none` | **아니오: HTTP 400** | 0.34 | — | — | — |
+| cluster_eval | 3.1-flash-lite | `minimal` | 예 | 1.23 | 604 / 135 / 739 | 0 | 없음(null) |
+| newsletter_content_gen | 3.5-flash-lite | `minimal` | 예 | 3.22 | 1209 / 470 / 1679 | 0 | 없음(null) |
+| newsletter_meta_gen | 3.5-flash-lite | `minimal` | 예 | 1.18 | 1362 / 113 / 1475 | 0 | 없음(null) |
+| newsletter_eval | 3.1-flash-lite | `minimal` | 예 | 1.85 | 1341 / 391 / 1732 | 0 | 없음(null) |
+| tone_convert | 3.5-flash-lite | `minimal` | 예 | 2.37 | 1156 / 584 / 1740 | 0 | 없음(null) |
+
+hidden = `total − prompt − completion`. 참고로 E0 pre-flight(미설정, 2026-10-17)의 지연은 2.22 / 2.45 / 1.00 / 2.48 / 2.09초, hidden은 전부 0이다(`reports/llm/e0_baseline_v1.md` "pre-flight").
+
+읽은 것과 결정:
+- **`none`은 `gemini-3.5-flash-lite`(generator·tone)가 받지 않는다**(HTTP 400, 요청 3건 모두). `gemini-3.1-flash-lite`(judge)는 받는다. 설계 문서가 미확인으로 남긴 "3.5-flash-lite가 `none`을 받는가"의 답은 **아니오**다.
+- `minimal`은 세 역할 모델이 모두 받았고 다섯 스키마가 모두 파싱됐다.
+- OpenAI 호환 계층의 usage에서 **reasoning 토큰(`completion_tokens_details.reasoning_tokens`)과 cached 토큰(`prompt_tokens_details.cached_tokens`)이 오지 않았다**(필드 없음 또는 null — 어느 쪽인지는 구별하지 않았다). `total`이 `prompt + completion`과 같아 숨은 토큰은 0이다. 그래서 thinking 토큰이 `completion_tokens`에 이미 들어 있는지,
+  아예 쓰이지 않았는지는 이 표로 **구별할 수 없다**. 비용 추정이 하한인지는 여전히 **측정하지 않음**(ADR 0035의 보수적 청구 규칙이 그대로 필요하다).
+- 지연·토큰의 `none`/`minimal`/미설정 차이는 n=1이라 주장하지 않는다.
+- **기본값은 미설정으로 둔다.** `none`은 generator·tone에 쓸 수 없고, `minimal`은 비용·지연·품질에서 이점이 측정되지 않았으며, 기본값을 바꾸면 E0 기준선(미설정으로 사전 등록)과 요청이 달라진다.
+  `minimal`은 세 역할이 모두 받는 유일한 값이라 후속 비교(생성 비용·지연·규칙 위반률을 같은 입력에서 짝지어)를 하게 되면 그 후보다.
+- 잘못된 값은 서버가 HTTP 400으로 돌려주고 400은 재시도 금지 목록에 없다 — 그래서 `GEN_REASONING_EFFORT=none`을 설정하면 요청마다 400을 받고(과금되지 않는다) 클러스터가 `generator_fallback`으로 실패한다. 설정 전에 이 표를 볼 것.
+- 이 표를 만든 임시 스크립트는 저장소에 넣지 않았다(범위 동결: 새 실험 하네스 금지). 합성 입력은 `evaluation/llm/e0_baseline.py`의 `PREFLIGHT_ARTICLES`다.

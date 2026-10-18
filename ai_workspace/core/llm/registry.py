@@ -6,7 +6,7 @@
 import logging
 import os
 import threading
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 from core.llm.adapters import HyperCLOVALLMClient, OpenAICompatLLMClient
 from core.llm.client import LLMClient
@@ -22,6 +22,13 @@ _ROLE_ENV_PREFIX = {
     "tone": "TONE",
 }
 
+# 역할별 reasoning_effort(thinking 강도) env: <PREFIX>_REASONING_EFFORT (GEN_/JUDGE_/TONE_).
+# 값이 없으면 요청에 싣지 않는다 = 프로바이더 기본값(이 저장소가 E0까지 쓴 동작). 값은 OpenAI 호환 API의
+# reasoning_effort 허용값이다(Gemini: https://ai.google.dev/gemini-api/docs/openai, 갱신 2026-09-02,
+# 접근 2026-10-06). 오타를 조용히 무시하면 비용 가정이 바뀌므로 알 수 없는 값은 거부한다.
+REASONING_EFFORTS = ("none", "minimal", "low", "medium", "high")
+_EFFORT_UNSET = {"", "unset", "default"}
+
 # provider별 기본 모델은 "동작은 하는" 안전한 폴백일 뿐, 최종 모델 선정은
 # bake-off ADR(추후)로 미룬다. 운영에서는 GEN_MODEL/JUDGE_MODEL/TONE_MODEL을
 # 명시적으로 설정하는 것을 권장한다.
@@ -36,6 +43,9 @@ PROVIDER_CONFIG = {
         "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
         "api_key_env": "GEMINI_API_KEY",
         "supports_json_schema": True,
+        # OpenAI 호환 계층 문서가 reasoning_effort를 명시한다. 다른 프로바이더는 문서로 확인하기 전까지
+        # 지원으로 치지 않는다(모르는 인자를 보내면 400이 날 수 있다).
+        "supports_reasoning_effort": True,
         # role별 기본값(ROLE_DEFAULT_MODEL)이 없는 경우의 범용 폴백. role별 기본값이
         # 실제로는 항상 우선 적용되므로(GEN/JUDGE/TONE 전부 gemini가 기본 프로바이더),
         # 이 값은 "GEN_PROVIDER=gemini인데 GEN_MODEL만 없는" 것처럼 role 기본
@@ -84,7 +94,9 @@ ROLE_DEFAULT_MODEL = {
     "tone": "gemini-3.5-flash-lite",  # 문체 변환 - 생성과 비슷한 비용 프로필의 가벼운 재작성 작업
 }
 
-_instances: Dict[Tuple[str, str], LLMClient] = {}
+# 키는 (provider, model), reasoning_effort를 설정한 클라이언트만 (provider, model, effort).
+# 같은 모델을 쓰는 역할(generator와 tone)이 서로 다른 effort를 가질 수 있어서 effort까지 구분한다.
+_instances: Dict[Tuple[str, ...], LLMClient] = {}
 _instances_lock = threading.Lock()
 
 _rate_limiters: Dict[str, SimpleRateLimiter] = {}
@@ -129,6 +141,24 @@ def resolve_role_config(role: str) -> Tuple[str, str]:
     return provider, model
 
 
+def resolve_reasoning_effort(role: str) -> Optional[str]:
+    """role -> reasoning_effort 또는 None(요청에 싣지 않음). env <PREFIX>_REASONING_EFFORT를 읽는다."""
+    role = role.lower()
+    if role not in ROLES:
+        raise ValueError(f"알 수 없는 LLM 역할: {role!r} (허용: {sorted(ROLES)})")
+    name = f"{_ROLE_ENV_PREFIX[role]}_REASONING_EFFORT"
+    return _validated_effort(os.getenv(name, ""), name)
+
+
+def _validated_effort(raw: Optional[str], source: str) -> Optional[str]:
+    value = (raw or "").strip().lower()
+    if value in _EFFORT_UNSET:
+        return None
+    if value not in REASONING_EFFORTS:
+        raise ValueError(f"{source}={raw!r}는 허용하지 않는 값입니다 (허용: {', '.join(REASONING_EFFORTS)}, 비우면 미설정)")
+    return value
+
+
 def _model_family(provider: str) -> str:
     """provider를 '모델 계열'로 정규화한다.
 
@@ -139,8 +169,14 @@ def _model_family(provider: str) -> str:
     return provider
 
 
-def _build_client(provider: str, model: str) -> LLMClient:
+def _build_client(provider: str, model: str, reasoning_effort: Optional[str] = None) -> LLMClient:
     cfg = PROVIDER_CONFIG[provider]
+
+    if reasoning_effort is not None and not cfg.get("supports_reasoning_effort"):
+        raise ValueError(
+            f"{provider} 프로바이더는 reasoning_effort 전달을 지원하지 않습니다 (설정값: {reasoning_effort!r}). "
+            "문서로 확인된 프로바이더에만 허용합니다 - 해당 역할의 *_REASONING_EFFORT를 비우세요"
+        )
 
     if cfg.get("legacy"):
         return HyperCLOVALLMClient(model=model)
@@ -156,6 +192,7 @@ def _build_client(provider: str, model: str) -> LLMClient:
         api_key=api_key,
         supports_json_schema=cfg["supports_json_schema"],
         rate_limiter=get_provider_rate_limiter(provider),
+        reasoning_effort=reasoning_effort,
     )
 
 
@@ -178,23 +215,25 @@ def get_client(role: str) -> LLMClient:
                 provider, model, gen_provider, gen_model, _model_family(provider),
             )
 
-    return client_for(provider, model)
+    return client_for(provider, model, reasoning_effort=resolve_reasoning_effort(role))
 
 
-def client_for(provider: str, model: str) -> LLMClient:
+def client_for(provider: str, model: str, *, reasoning_effort: Optional[str] = None) -> LLMClient:
     """role 환경변수와 무관하게 (provider, model)을 직접 지정해 클라이언트를 얻는다.
 
     bake-off처럼 실행마다 후보 모델을 바꿔 끼우는 경우용이다. role 클라이언트와 같은
     인스턴스 캐시·프로바이더 레이트리미터를 공유하므로 병렬 실행에서도 호출 간격 제한이
-    프로바이더 단위로 지켜진다.
+    프로바이더 단위로 지켜진다. reasoning_effort는 role env와 무관하게 호출자가 정한다
+    (None이면 요청에 싣지 않는다).
     """
     provider = provider.lower()
     if provider not in PROVIDER_CONFIG:
         raise ValueError(f"알 수 없는 프로바이더: {provider!r} (허용: {sorted(PROVIDER_CONFIG)})")
-    key = (provider, model)
+    effort = _validated_effort(reasoning_effort, "reasoning_effort")
+    key = (provider, model) if effort is None else (provider, model, effort)
     with _instances_lock:
         if key not in _instances:
-            _instances[key] = _build_client(provider, model)
+            _instances[key] = _build_client(provider, model, effort)
         return _instances[key]
 
 

@@ -133,6 +133,11 @@ class ToneConverter:
 
             last_converted = converted or last_converted
 
+            # 호출이 재시도해도 소용없는 이유로 막혔다(킬 스위치, HTTP 401/402/403/404, length,
+            # content_filter): 검증 재시도를 더 보내지 않고 바로 결정론적 폴백으로 간다.
+            if isinstance(result.no_retry_reason, str):
+                break
+
         return self._fallback_convert(newsletter, last_converted)
 
     def _normalize_parsed(self, result: Dict, original: Dict) -> Dict:

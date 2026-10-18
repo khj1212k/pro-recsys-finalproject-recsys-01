@@ -51,6 +51,13 @@ def create_newsletter_workflow() -> StateGraph:
     8. 문체 드리프트 게이트 (check_tone_drift): 수치/날짜/고유명사가 바뀌면 재변환,
        그래도 바뀌면 형식체 초안을 저장
     9. 저장 (save_newsletter): 변환된 텍스트 + 원본 임베딩 저장 -> 종료
+       (클러스터 평가를 거쳐 남은 기사(current_articles)의 id만 뉴스레터에 연결한다)
+
+    재시도 금지: 클러스터 평가·본문/메타 생성·judge 호출이 재시도해도 소용없는 이유(킬 스위치, HTTP
+    401/402/403/404, length, content_filter - core/llm/client.py의 LLMResult.no_retry_reason)로 막히면 그
+    클러스터를 다시 생성하지 않고 failure_reason="infra"/"length"/"content_filter"로 닫는다. 클러스터 평가
+    호출이 막힌 경우도 skipped가 아니라 같은 사유의 실패다. 문체 변환 호출이 막히면 검증 재시도만 멈추고
+    결정론적 폴백 문장으로 저장한다(failure_reason 없음). (docs/adr/0010 Addendum 2026-10-18)
     """
     
     # 그래프 생성
