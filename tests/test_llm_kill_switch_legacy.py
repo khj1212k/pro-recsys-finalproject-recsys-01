@@ -1,6 +1,6 @@
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -9,7 +9,7 @@ sys.path.insert(
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "ai_workspace"),
 )
 
-from core.llm_client import NaverHyperCLOVAClient, OpenAIClient  # noqa: E402
+from core.llm_client import OpenAIClient  # noqa: E402
 from core.llm.kill_switch import LLMKillSwitchEngaged  # noqa: E402
 
 MESSAGES = [{"role": "user", "content": "hi"}]
@@ -18,15 +18,6 @@ MESSAGES = [{"role": "user", "content": "hi"}]
 @pytest.fixture
 def switch_on(monkeypatch):
     monkeypatch.setenv("LLM_KILL_SWITCH", "1")
-
-
-def test_legacy_hyperclova_refuses_network_call_when_switch_on(switch_on, monkeypatch):
-    monkeypatch.setenv("NCP_CLOVASTUDIO_API_KEY", "nv-dummy")
-    client = NaverHyperCLOVAClient()
-    with patch("core.llm_client.requests.post") as post:
-        with pytest.raises(LLMKillSwitchEngaged):
-            client.chat_completion(MESSAGES)
-    post.assert_not_called()
 
 
 def test_legacy_openai_refuses_network_call_when_switch_on(switch_on, monkeypatch):

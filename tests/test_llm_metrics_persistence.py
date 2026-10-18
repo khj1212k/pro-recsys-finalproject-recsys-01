@@ -1,7 +1,6 @@
 import sys
 import os
 import json
-from unittest.mock import MagicMock
 
 sys.path.insert(
     0,
@@ -147,44 +146,3 @@ def test_get_summary_empty_batch_has_attempt_level_keys():
     assert summary["total_attempts"] == 0
     assert summary["failed_attempts"] == 0
     assert summary["retry_rate"] == 0
-
-
-def test_hyperclova_retry_records_failed_attempts_before_success(monkeypatch):
-    """FIX_LOG #20 확장 (엔드투엔드): NaverHyperCLOVAClient가 429로 두 번 재시도한
-    뒤 성공하면, 메트릭 컬렉터에 실패 2건 + 성공 1건, 총 3건이 기록돼야 한다."""
-    import core.llm_client as llm_client_module
-    from core.llm_client import NaverHyperCLOVAClient
-
-    collector = _fresh_collector()
-    collector.start_batch()
-    monkeypatch.setattr(llm_client_module, "get_metrics_collector", lambda: collector)
-    monkeypatch.setattr(llm_client_module.time, "sleep", lambda *_a, **_k: None)
-
-    client = NaverHyperCLOVAClient(api_key="nv-test-key", model="HCX-003")
-
-    rate_limited = MagicMock()
-    rate_limited.status_code = 429
-    rate_limited.headers = {}
-
-    success_response = MagicMock()
-    success_response.status_code = 200
-    success_response.raise_for_status = lambda: None
-    success_response.json = lambda: {
-        "status": {"code": "20000"},
-        "result": {
-            "message": {"content": "ok"},
-            "usage": {"promptTokens": 10, "completionTokens": 5},
-        },
-    }
-
-    responses = [rate_limited, rate_limited, success_response]
-    monkeypatch.setattr(llm_client_module.requests, "post", lambda *a, **k: responses.pop(0))
-
-    result = client.chat_completion([{"role": "user", "content": "hi"}])
-    collector.end_batch()
-
-    assert result == "ok"
-    summary = collector.get_summary()
-    assert summary["total_calls"] == 3
-    assert summary["failed_calls"] == 2
-    assert summary["successful_calls"] == 1

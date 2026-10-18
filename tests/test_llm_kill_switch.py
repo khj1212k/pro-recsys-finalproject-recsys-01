@@ -16,7 +16,7 @@ import pytest
 
 from tests.llm_fakes import FakeOpenAIClient, make_response
 
-from core.llm.adapters import OpenAICompatLLMClient, HyperCLOVALLMClient
+from core.llm.adapters import OpenAICompatLLMClient
 from core.llm.kill_switch import check_kill_switch
 from core.llm.schemas import ClusterEval
 from core.llm_metrics import LLMMetricsCollector
@@ -27,15 +27,6 @@ def _fresh_collector():
     collector = LLMMetricsCollector()
     collector.reset()
     return collector
-
-
-class _ExplodingLegacyClient:
-    """kill switch가 제대로 동작하지 않으면 곧바로 실패해 드러나게 만드는 더미."""
-
-    model = "HCX-003"
-
-    def chat_completion(self, **kwargs):
-        raise AssertionError("kill switch가 켜져 있는데 레거시 클라이언트가 호출됐다")
 
 
 @pytest.fixture(autouse=True)
@@ -103,16 +94,6 @@ def test_missing_kill_switch_file_does_not_block(tmp_path, monkeypatch):
     result = client.complete([{"role": "user", "content": "x"}], schema=ClusterEval, purpose="cluster_eval")
 
     assert result.error is None
-
-
-def test_env_kill_switch_blocks_legacy_hyperclova_client_before_any_network_call(monkeypatch):
-    monkeypatch.setenv("LLM_KILL_SWITCH", "1")
-    client = HyperCLOVALLMClient(legacy_client=_ExplodingLegacyClient())
-
-    result = client.complete([{"role": "user", "content": "x"}], purpose="cluster_eval")
-
-    assert result.error == "kill_switch"
-    assert result.attempts == 0
 
 
 def test_kill_switch_records_failure_in_metrics_collector(monkeypatch):
