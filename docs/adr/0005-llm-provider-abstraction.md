@@ -70,7 +70,7 @@
 - 임베딩(`NewsEmbedder`)은 torch가 없는 이 로컬 환경에서 import가 실패하지만 `embed_newsletter_node`가 이를 잡아 `newsletter_embedding=None`으로 넘어가므로 e2e 테스트가 끊기지 않는다 - 실제 임베딩 동작은 torch가 있는 CI에서 검증된다(기존 동작, 이 PR에서 바꾸지 않음).
 
 ## 결과와 한계
-- **모델 선정은 후속 bake-off ADR로 미룬다.** 이 ADR은 "어떻게 여러 프로바이더를 한 어댑터로 통합하고 구조화 출력을 강제하는가"만 다룬다. `gemini-2.5-flash`/`gpt-4o-mini`/`solar-pro3` 기본값은 잠정치다.
+- **모델 선정은 후속 bake-off ADR로 미룬다.** 이 ADR은 "어떻게 여러 프로바이더를 한 어댑터로 통합하고 구조화 출력을 강제하는가"만 다룬다. `gemini-2.5-flash`/`gpt-4o-mini`/`solar-pro3` 기본값은 잠정치다. 범위 종결 C-10 (2026-10-18): 유보 - bake-off v1은 유보이고 모델 선정은 하지 않는다. 현행 기본값은 선정이 아니다([ADR 0009 A9](0009-llm-eval-protocol-and-preregistered-decision-rule.md), [목록](../design/2026-10-18-scope-closure.md)).
 - **Claude Haiku 4.5는 이 PR에 포함되지 않았다.** OpenAI 호환 Chat Completions 지원 여부를 검증하지 않았기 때문이다(위 "검증한 사실" 참고). 후속 bake-off에서 candidate로 넣으려면 호환성 확인이나 별도 어댑터가 선행돼야 한다.
 - **Gemini의 OpenAI 호환 레이어는 구글 공식 문서가 "아직 베타"라고 명시한다.** 프로덕션에서 예외 처리 경로(특히 구조화 출력 실패 시 `parsed=None`이 아니라 다른 형태로 실패하는 경우)가 OpenAI 네이티브와 다를 가능성이 있다 - 실제 API 키로 통합 테스트를 돌리기 전까지는 열린 위험으로 남는다(이 PR은 페이크로만 검증했다).
 - **Upstage 구조화 출력은 OpenAI 스펙의 부분집합만 지원**한다(`allOf`/`oneOf`/재귀 `$ref`/`patternProperties` 등 미지원, `additionalProperties: false` 필수, 중첩 10단계 제한). 이 PR의 5개 스키마(`schemas.py`)는 전부 평범한 flat/list 구조라 문제 없지만, 앞으로 스키마가 복잡해지면 이 제약을 다시 확인해야 한다.
