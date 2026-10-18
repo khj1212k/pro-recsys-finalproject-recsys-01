@@ -364,6 +364,13 @@ uv pip compile docker/requirements-worker.in --universal --python-version 3.11 -
 
 API 이미지는 `backend/requirements.txt`만 설치한다. `backend/requirements-airflow.txt`는 보관된 DAG을 직접 띄워 볼 때만 쓴다(어떤 이미지에도 들어가지 않는다).
 
+CI는 파이썬 패키지를 `requirements-ci.txt`(잠금 파일) 하나로 설치한다(`.github/workflows/ci.yml`의 단위·통합 잡). 최상위 목록은
+`requirements-ci.in`이고 `make ci-lock`으로 다시 만든다 - 기존 잠금 파일의 버전은 유지되고, 올릴 때만 `make ci-lock UPGRADE=1`이다.
+추천 평가 리포트를 만든 버전(`evaluation/requirements.txt`)이나 API 이미지 버전(`backend/requirements.txt`)을 바꾸면 `.in`의 같은 줄도
+고치고 다시 잠가야 한다. 빠뜨리면 `tests/test_ci_requirements_lock.py`가 실패한다. 같은 환경을 로컬에 만들려면 `make venv`.
+`docker/requirements-*.txt`(worker·ingest 이미지)와 `requirements-colab*.txt`(원격 런타임)는 이미지·런타임에 맞춘 별도 잠금이라 합치지
+않았다(`docs/adr/0006` 개정 2026-10-18).
+
 ## 12. 서버(Oracle Always Free A1) 배포 메모
 
 - arm64 이미지는 서버에서 직접 `docker compose build`로 만든다(CI는 amd64만 빌드 검증).

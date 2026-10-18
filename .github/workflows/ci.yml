@@ -4,7 +4,68 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
+  # 코드가 돌지 못하거나 항상 틀리게 도는 오류만 본다(구문 오류, 정의 안 된 이름, 잘못된 포맷 문자열 등). 규칙과 이유는
+  # pyproject.toml에 있고, 스타일 규칙은 일부러 켜지 않았다. 로컬에서는 `make lint`.
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: ruff check
+        run: uvx --from "ruff==0.16.9" ruff check --output-format=github .
+
+  # 이 push·PR이 새로 들이는 커밋만 비밀 값을 검사한다. git 이력에는 평문 DB 비밀번호 유출 전력이 있지만
+  # (tests/test_no_plaintext_db_password_in_env_example.py) 이력은 다시 쓰지 않으므로 옛 커밋은 보지 않는다.
+  # 바이너리는 릴리스 체크섬으로 고정해 내려받는다. 설정: .gitleaks.toml
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks (pinned, checksum verified)
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks version
+
+      - name: Scan the commits this push or pull request adds
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          ZERO=0000000000000000000000000000000000000000
+          if [ "$EVENT" = "pull_request" ]; then
+            RANGE="${PR_BASE}..HEAD"
+          elif [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$ZERO" ] && git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null; then
+            RANGE="${PUSH_BEFORE}..HEAD"
+          else
+            # 새 브랜치이거나 강제 푸시로 이전 커밋이 없다: main에 없는 커밋만 본다.
+            RANGE="origin/main..HEAD"
+          fi
+          echo "scanning commits in ${RANGE} ($(git rev-list --count "${RANGE}") commits)"
+          ./gitleaks git --config .gitleaks.toml --redact --no-banner --verbose --log-opts="${RANGE}" .
+
   test:
     runs-on: ubuntu-latest
 
@@ -21,72 +82,18 @@ jobs:
       - name: Create virtualenv
         run: uv venv --python 3.11 .venv
 
-      # evaluation/requirements.txt의 고정 버전(pandas·lightgbm·numpy·pyarrow 등)을 함께 넣어, 추천 평가 테스트가
-      # 리포트를 만든 버전과 같은 버전에서 돈다(고정이 없으면 새 릴리스가 조용히 섞인다).
-      # kiwipiepy is pinned in this job: the simulator's click-model calibration and feature
-      # tests depend on its tokenization (same version as sim/requirements.txt).
-      - name: Install test dependencies
-        run: |
-          uv pip install --python .venv/bin/python \
-            -r evaluation/requirements.txt \
-            pytest \
-            langgraph \
-            langchain-openai \
-            openai \
-            tiktoken \
-            numpy \
-            pandas \
-            scikit-learn \
-            lightgbm \
-            optuna \
-            pgvector \
-            psycopg2-binary \
-            python-dotenv \
-            "sqlalchemy==2.0.46" \
-            "sqlmodel==0.0.31" \
-            alembic \
-            feedparser \
-            requests \
-            python-dateutil \
-            trafilatura \
-            tqdm \
-            pyyaml \
-            lxml_html_clean \
-            pydantic \
-            "kiwipiepy==0.23.2" \
-            hdbscan \
-            rapidfuzz
-
-      # 라우터 테스트(tests/recsys/test_api_today.py 등)는 API 이미지와 같은 백엔드 고정 버전
-      # (backend/requirements.txt)에서 돈다. evaluation/requirements.txt는 라벨링 UI용으로
-      # fastapi==0.141.1을 고정하므로 위 명령에 fastapi==0.117.1을 같이 넣으면 해석이 실패한다
-      # (같은 패키지에 서로 다른 == 고정 두 개). 그래서 두 번째 명령으로 나눠 fastapi만 백엔드 값으로
-      # 내린다. 추천 평가 수치에 쓰이는 고정(pandas·lightgbm·numpy·pyarrow 등)은 그대로 남는다.
-      - name: Install backend-pinned API test dependencies
-        run: |
-          uv pip install --python .venv/bin/python \
-            "fastapi==0.117.1" \
-            httpx \
-            "python-jose==3.5.0" \
-            "passlib==1.7.4" \
-            "bcrypt==3.2.2"
+      # 파이썬 패키지 버전은 잠금 파일 하나(requirements-ci.txt)가 정한다. 최상위 목록은 requirements-ci.in이고
+      # 갱신은 `make ci-lock`이다. 추천 평가 리포트를 만든 버전(evaluation/requirements.txt)과 API 이미지 버전
+      # (backend/requirements.txt: fastapi·sqlalchemy·sqlmodel 등)을 그 안에서 함께 고정하며, 원본과의 일치는
+      # tests/test_ci_requirements_lock.py가 대조한다(docs/adr/0006 개정 2026-10-18).
+      - name: Install locked test dependencies
+        run: uv pip install --python .venv/bin/python -r requirements-ci.txt
 
       - name: Install ai_workspace package (no deps, editable)
         run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace
 
       - name: Install recommend_engine package (no deps, editable)
         run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace/recommend_engine
-
-      # sim/: the contract test runs the driver against the real backend routers. Its API and auth
-      # dependencies (fastapi, httpx, python-jose, passlib, and bcrypt pinned because passlib 1.7.4
-      # raises ValueError on bcrypt 5) are installed by the backend-pinned step above. This step
-      # adds what the headless Locust smoke test needs: locust + uvicorn (uvicorn is already
-      # pinned through evaluation/requirements.txt, so only locust is new here).
-      - name: Install simulator test dependencies
-        run: |
-          uv pip install --python .venv/bin/python \
-            locust \
-            uvicorn
 
       - name: Run tests (excluding integration)
         run: .venv/bin/python -m pytest -q -m "not integration and not benchmark" tests/
@@ -131,41 +138,9 @@ jobs:
       - name: Create virtualenv
         run: uv venv --python 3.11 .venv
 
-      - name: Install test dependencies
-        run: |
-          uv pip install --python .venv/bin/python \
-            pytest \
-            langgraph \
-            langchain-openai \
-            openai \
-            tiktoken \
-            numpy \
-            pandas \
-            scikit-learn \
-            lightgbm \
-            optuna \
-            pgvector \
-            psycopg2-binary \
-            python-dotenv \
-            "sqlalchemy==2.0.46" \
-            "sqlmodel==0.0.31" \
-            alembic \
-            feedparser \
-            requests \
-            python-dateutil \
-            trafilatura \
-            tqdm \
-            pyyaml \
-            lxml_html_clean \
-            pydantic \
-            kiwipiepy \
-            hdbscan \
-            rapidfuzz \
-            "fastapi==0.117.1" \
-            httpx \
-            "python-jose==3.5.0" \
-            "passlib==1.7.4" \
-            "bcrypt==3.2.2"
+      # 단위 테스트 잡과 같은 잠금 파일(requirements-ci.txt)을 쓴다.
+      - name: Install locked test dependencies
+        run: uv pip install --python .venv/bin/python -r requirements-ci.txt
 
       - name: Install ai_workspace package (no deps, editable)
         run: uv pip install --python .venv/bin/python --no-deps -e ai_workspace

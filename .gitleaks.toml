@@ -1,0 +1,20 @@
+# gitleaks 설정 (.github/workflows/ci.yml의 secret-scan 잡). 기본 규칙에 저장소가 일부러 두는 자리표시자만 더 허용한다.
+# 이 파일은 새 커밋만 검사하는 잡이 읽는다 - 이력의 옛 유출(평문 DB 비밀번호)은 다시 쓰지 않고 그대로 둔다.
+title = "newsletter-recsys"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "예제 설정·CI 전용 값의 자리표시자 (실제 값이 아니다)"
+regexes = [
+    '''your-[a-z0-9-]+-here''',
+    '''ci-only-not-a-secret''',
+    '''nv-(your-api-key-here|dummy|test-key)''',
+]
+
+[[allowlists]]
+description = "이 설정 파일은 허용할 자리표시자의 정규식을 담고 있어 검사에서 뺀다"
+paths = [
+    '''^\.gitleaks\.toml$''',
+]

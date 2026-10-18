@@ -78,6 +78,8 @@ ai_workspace/recommend_engine/results
 ai_workspace/data/
 ai_workspace/output/
 ai_workspace/logs/
+# 추천 엔진의 실행 로그(매칭 리포트에 뉴스레터 제목이 들어가므로 추적하지 않는다 - docs/adr/0023)
+ai_workspace/recommend_engine/logs/
 
 # ==========================
 # 5. Frontend (React/Node)
