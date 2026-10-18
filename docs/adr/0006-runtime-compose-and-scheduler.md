@@ -293,7 +293,7 @@ anon 3.9MiB / file 9.1MiB, 2026-09-26 00:16 UTC)였다. 그래서 범위는 11~4
 
 | 대상 | 참조 | 판단 |
 |---|---|---|
-| `core/llm_client.py`(HyperCLOVA 클라이언트 + 공용 헬퍼) | `core/llm/adapters.py`(HyperCLOVALLMClient)·`core/llm/registry.py`(`SimpleRateLimiter`)·`core/tone_converter.py`(`extract_json_from_response`)·`evaluation/llm/e0_registered.py`가 임포트, `core.llm_client`를 직접 쓰는 테스트 5개 파일과 어댑터·레지스트리 경로를 쓰는 2개 | 살아 있는 헬퍼 둘을 `core/llm/`로 옮기고 레지스트리의 naver 항목·어댑터·테스트를 함께 걷어내는 리팩터링이다. LLM 생성 코드를 건드리는 별도 변경으로 둔다. 2026-10-18 갱신: HyperCLOVA 클라이언트·`HyperCLOVALLMClient`·레지스트리의 naver 항목은 PR #51로 지웠다(ADR 0005 부록). 공용 헬퍼 둘(`SimpleRateLimiter`, `extract_json_from_response`)을 `core/llm/`로 옮기는 일은 남았다 |
+| `core/llm_client.py`(HyperCLOVA 클라이언트 + 공용 헬퍼) | `core/llm/adapters.py`(HyperCLOVALLMClient)·`core/llm/registry.py`(`SimpleRateLimiter`)·`core/tone_converter.py`(`extract_json_from_response`)·`evaluation/llm/e0_registered.py`가 임포트, `core.llm_client`를 직접 쓰는 테스트 5개 파일과 어댑터·레지스트리 경로를 쓰는 2개 | 살아 있는 헬퍼 둘을 `core/llm/`로 옮기고 레지스트리의 naver 항목·어댑터·테스트를 함께 걷어내는 리팩터링이다. LLM 생성 코드를 건드리는 별도 변경으로 둔다. 2026-10-18 갱신: HyperCLOVA 클라이언트·`HyperCLOVALLMClient`·레지스트리의 naver 항목은 PR #51로 지웠다(ADR 0005 부록). 공용 헬퍼 둘(`SimpleRateLimiter`, `extract_json_from_response`)을 `core/llm/`로 옮기는 일은 남았다(범위 종결 목록 밖 - 열지 않는다). |
 | `jobs/tasks/train.py` 스텁 | `jobs/run.py` 등록, ADR 0033·README가 "은퇴, 불려도 아무것도 실행하지 않는다"고 서술, 옛 crontab 명령줄(`--no-inference`) 호환 | 은퇴 표시가 이미 코드와 문서에 있고 일부러 둔 호환 장치다. |
 | `jobs/tasks/batch_fallback.py` | `jobs/run.py` 등록, `docker/crontab`(주석)·runbook 표·README·ADR 0006·0015 | `RECSYS_MODE=batch` 경로의 폴백이라 서빙 모드 결정(ADR 0015)을 건드린다. 꺼져 있다. |
 | `core/user_embedder.py` | `pipeline/stages.py`가 임포트, 단위·통합 테스트가 참조 | 살아 있다. |
