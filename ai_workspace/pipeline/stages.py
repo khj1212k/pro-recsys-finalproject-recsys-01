@@ -271,10 +271,18 @@ def summarize_cluster_outcome(final_state: Dict[str, Any], cid) -> Dict[str, Any
     else:
         status = "unknown"
     ce = final_state.get("cluster_eval") or {}
+    cluster_eval = {"decision": ce.get("decision"), "confidence": ce.get("confidence")}
+    # 평가 호출이 막혀서(llm_failure) 또는 응답이 해석되지 않아서(parsed=False) 생긴 FAIL은 군집에 대한 판정이
+    # 아니다. decision만으로는 구분되지 않으므로 평가셋 추출기가 어려운 사례에서 뺄 수 있게 이 둘을 남긴다.
+    # 해당할 때만 넣어서, 정상 판정과 이전에 쌓인 cluster_history 행의 모양은 그대로다.
+    if ce.get("llm_failure"):
+        cluster_eval["llm_failure"] = ce["llm_failure"]
+    if ce.get("parsed") is False:
+        cluster_eval["parsed"] = False
     return {
         "status": status,
         "newsletter_id": completed[0] if completed else None,
-        "cluster_eval": {"decision": ce.get("decision"), "confidence": ce.get("confidence")},
+        "cluster_eval": cluster_eval,
         "failure_reason": final_state.get("failure_reason"),
         "faithfulness_passed": (final_state.get("faithfulness_report") or {}).get("passed"),
         "tone_fallback": final_state.get("tone_fallback"),

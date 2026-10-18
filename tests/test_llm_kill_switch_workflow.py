@@ -117,7 +117,10 @@ def test_subgraph_ends_cleanly_without_saving_when_kill_switch_active(monkeypatc
     final_state = app.invoke(initial_state)  # 예외 없이 끝나야 함
 
     assert final_state.get("completed_newsletters") == []
-    # 클러스터 평가(judge)가 kill switch로 즉시 FAIL 처리되고, outlier/sub_groups가
-    # 없으므로 재시도 없이 곧바로 스킵된다 (workflow/nodes.py::handle_cluster_eval_failure)
-    assert final_state.get("skipped_clusters") == [1]
+    # 클러스터 평가(judge) 호출이 kill switch로 막히면 군집의 품질 판정이 아니므로 skipped가 아니라
+    # failure_reason="infra"인 실패로 기록하고 곧바로 끝낸다 (workflow/nodes.py::handle_cluster_eval_failure,
+    # docs/adr/0010 Addendum 2026-10-18; 이전에는 skipped_clusters == [1]이었다)
+    assert final_state.get("skipped_clusters") == []
+    assert final_state.get("failed_clusters") == [1]
+    assert final_state.get("failure_reason") == "infra"
     assert final_state.get("cluster_eval", {}).get("decision") == "FAIL"

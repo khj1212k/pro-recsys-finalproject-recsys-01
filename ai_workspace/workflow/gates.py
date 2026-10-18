@@ -17,9 +17,10 @@ logger = logging.getLogger(__name__)
 ENTITY_PRESENT_THRESHOLD = 85.0
 
 FAITHFULNESS_FIELDS: Tuple[str, ...] = ("title", "sentence", "content")
-# 한줄소개(sentence)는 문체 변환 결과가 저장되지 않으므로(save_newsletter_to_db는 초안의
-# sentence를 쓴다) 드리프트 비교에서 뺀다.
-TONE_FIELDS: Tuple[str, ...] = ("title", "content")
+# 한줄소개(sentence)도 비교한다: save_newsletter_to_db는 변환본의 요약(converted의 sentence 또는
+# summary)을 sentence로 저장하므로, 변환 LLM이 한줄소개의 수치·날짜를 바꾸면 그대로 발행된다.
+# 이 튜플을 바꾸면 tests/test_tone_drift_covers_stored_fields.py가 저장 필드와의 불일치를 잡는다.
+TONE_FIELDS: Tuple[str, ...] = ("title", "sentence", "content")
 _FIELD_SEP = "\n\n"
 
 _TYPE_LABEL = {"numbers": "수치", "quotes": "인용문", "entities": "고유명사"}
@@ -129,6 +130,16 @@ class ToneDriftResult:
         return asdict(self)
 
 
+def _tone_view(doc: Dict) -> Dict:
+    """비교에 쓰는 필드만 같은 이름으로 모은다. 변환 출력은 요약을 "summary"에 담고 초안은 "sentence"에
+    담는다(변환기가 "sentence" 별칭도 싣지만, 별칭이 없는 입력도 save_newsletter_to_db와 같은 규칙으로 읽는다)."""
+    return {
+        "title": doc.get("title"),
+        "sentence": doc.get("sentence") or doc.get("summary"),
+        "content": doc.get("content"),
+    }
+
+
 def check_tone_drift(
     original: Dict,
     converted: Dict,
@@ -143,8 +154,8 @@ def check_tone_drift(
     표현이 흔해 참고용으로만 남긴다.
     """
     blocking_types = set(parse_types(blocking_types))
-    orig_text, _ = _join_fields(original, TONE_FIELDS)
-    conv_text, _ = _join_fields(converted, TONE_FIELDS)
+    orig_text, _ = _join_fields(_tone_view(original), TONE_FIELDS)
+    conv_text, _ = _join_fields(_tone_view(converted), TONE_FIELDS)
     try:
         drift = compare_rewrite(orig_text, conv_text, multiset=False)
     except ImportError:

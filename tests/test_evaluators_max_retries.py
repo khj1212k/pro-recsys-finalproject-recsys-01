@@ -44,14 +44,31 @@ def test_cluster_evaluator_falls_back_to_fail_when_llm_client_exhausts_retries()
     assert result["feedback"] == "LLM response empty"
 
 
-def test_cluster_evaluator_uses_raw_text_heuristic_when_only_text_is_available():
-    fake = FakeLLMClient(results=[{"parsed": None, "text": "결과: FAIL 입니다"}])
-    evaluator = ClusterEvaluator(llm_client=fake)
+def test_cluster_evaluator_never_derives_a_decision_from_raw_text():
+    # 레거시 어댑터는 파싱에 실패해도 text를 돌려줄 수 있다. 그 text의 "PASS"/"FAIL" 낱말로
+    # 클러스터를 통과시키던 휴리스틱은 없앴다 - 파싱 실패는 FAIL이고 parsed=False다.
+    # (docs/adr/0010 Addendum 2026-10-18)
+    for text in ("결과: FAIL 입니다", "결과: PASS 입니다", "PASS and FAIL"):
+        fake = FakeLLMClient(results=[{"parsed": None, "text": text}])
 
-    result = evaluator.evaluate([{"title": "a"}, {"title": "b"}])
+        result = ClusterEvaluator(llm_client=fake).evaluate([{"title": "a"}, {"title": "b"}])
 
-    assert result["decision"] == "FAIL"
-    assert result["feedback"] == "JSON parsing failed"
+        assert fake.call_count == 1
+        assert result["decision"] == "FAIL"
+        assert result["parsed"] is False
+        assert result["confidence"] == 0.0
+        assert result["feedback"] == "JSON parsing failed"
+        assert "llm_failure" not in result  # 형식 위반은 모델 쪽 실패이고 호출이 막힌 것이 아니다
+
+
+def test_cluster_evaluator_marks_parsed_true_for_a_schema_valid_answer():
+    parsed = ClusterEval(decision="PASS", confidence=0.8)
+    fake = FakeLLMClient(results=[{"parsed": parsed}])
+
+    result = ClusterEvaluator(llm_client=fake).evaluate([{"title": "a"}, {"title": "b"}])
+
+    assert result["parsed"] is True
+    assert "llm_failure" not in result
 
 
 def test_cluster_evaluator_passes_schema_and_purpose_to_llm_client():

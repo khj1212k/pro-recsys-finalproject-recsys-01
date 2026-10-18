@@ -58,11 +58,14 @@ class OpenAICompatLLMClient(LLMClient):
         supports_json_schema: bool = True,
         rate_limiter: Optional[SimpleRateLimiter] = None,
         client: Optional[Any] = None,
+        reasoning_effort: Optional[str] = None,
     ):
         self.provider = provider
         self.model = model
         self.supports_json_schema = supports_json_schema
         self._rate_limiter = rate_limiter or SimpleRateLimiter(0.0)
+        # None이면 요청에 싣지 않는다(프로바이더 기본값). 값 검증과 역할별 env 해석은 registry가 한다.
+        self.reasoning_effort = reasoning_effort
 
         if client is not None:
             self._client = client
@@ -135,6 +138,10 @@ class OpenAICompatLLMClient(LLMClient):
                     success=True,
                     provider=self.provider,
                     model=self.model,
+                    total_tokens=usage.total_tokens,
+                    thinking_tokens=usage.thinking_tokens,
+                    cached_tokens=usage.cached_tokens,
+                    reasoning_effort=self.reasoning_effort,
                 )
 
                 return LLMResult(
@@ -158,7 +165,7 @@ class OpenAICompatLLMClient(LLMClient):
                 get_metrics_collector().record_call(
                     purpose=purpose, input_tokens=0, output_tokens=0,
                     latency_seconds=latency, success=False,
-                    provider=self.provider, model=self.model,
+                    provider=self.provider, model=self.model, reasoning_effort=self.reasoning_effort,
                 )
                 logger.warning(
                     "%s/%s: 구조화 출력 검증 실패 (attempt %s/%s): %s",
@@ -166,6 +173,15 @@ class OpenAICompatLLMClient(LLMClient):
                 )
                 # 응답은 왔다(과금됨). usage를 알면 실제 값으로, 모르면(SDK 안에서 난 검증 오류) 예약액으로.
                 spend.settle("schema_invalid", LLMUsage.from_openai(getattr(e, "usage", None)))
+                # 스키마 실패는 응답마다 과금된다. 같은 요청의 재시도는 MAX_LLM_SCHEMA_RETRIES회까지만 -
+                # 전송 계층 재시도(429/5xx/타임아웃, 과금되지 않거나 짧게 끝남)의 상한 MAX_RETRIES와 따로 센다.
+                if schema_failures > Settings.MAX_LLM_SCHEMA_RETRIES:
+                    return LLMResult(
+                        text=None, parsed=None, usage=LLMUsage(), latency_s=time.time() - call_start,
+                        attempts=attempt, provider=self.provider, model=self.model,
+                        error=f"max retries (schema {Settings.MAX_LLM_SCHEMA_RETRIES}) exhausted: {last_error}",
+                        schema_failures=schema_failures,
+                    )
                 if not self._wait_before_retry(backoff, call_start):
                     break
                 backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
@@ -178,7 +194,7 @@ class OpenAICompatLLMClient(LLMClient):
                 get_metrics_collector().record_call(
                     purpose=purpose, input_tokens=0, output_tokens=0,
                     latency_seconds=latency, success=False,
-                    provider=self.provider, model=self.model,
+                    provider=self.provider, model=self.model, reasoning_effort=self.reasoning_effort,
                 )
                 # 5xx가 연속 실패 임계에 닿거나 402(선불 잔액 소진)면 여기서 LLMCircuitOpen이 난다 -
                 # 백오프를 기다리며 재시도를 태우지 않는다.
@@ -208,6 +224,7 @@ class OpenAICompatLLMClient(LLMClient):
                     purpose=purpose, input_tokens=0, output_tokens=0,
                     latency_seconds=latency, success=False,
                     provider=self.provider, model=self.model, error_type="length",
+                    reasoning_effort=self.reasoning_effort,
                 )
                 logger.error(
                     "%s/%s: 길이 제한으로 구조화 출력 실패 (재시도 불가): %s",
@@ -228,6 +245,7 @@ class OpenAICompatLLMClient(LLMClient):
                     purpose=purpose, input_tokens=0, output_tokens=0,
                     latency_seconds=latency, success=False,
                     provider=self.provider, model=self.model, error_type="content_filter",
+                    reasoning_effort=self.reasoning_effort,
                 )
                 logger.error(
                     "%s/%s: 콘텐츠 필터에 의해 응답 거부됨 (재시도 불가): %s",
@@ -248,7 +266,7 @@ class OpenAICompatLLMClient(LLMClient):
                 get_metrics_collector().record_call(
                     purpose=purpose, input_tokens=0, output_tokens=0,
                     latency_seconds=latency, success=False,
-                    provider=self.provider, model=self.model,
+                    provider=self.provider, model=self.model, reasoning_effort=self.reasoning_effort,
                 )
                 logger.warning(
                     "%s/%s: 연결/타임아웃 오류 (attempt %s/%s), 재시도: %s",
@@ -267,7 +285,7 @@ class OpenAICompatLLMClient(LLMClient):
                 get_metrics_collector().record_call(
                     purpose=purpose, input_tokens=0, output_tokens=0,
                     latency_seconds=latency, success=False,
-                    provider=self.provider, model=self.model,
+                    provider=self.provider, model=self.model, reasoning_effort=self.reasoning_effort,
                 )
                 logger.error("%s/%s: 예상치 못한 오류: %s", self.provider, self.model, e)
                 spend.settle("error")
@@ -301,6 +319,10 @@ class OpenAICompatLLMClient(LLMClient):
         time.sleep(backoff)
         return True
 
+    def _request_options(self) -> Dict[str, Any]:
+        """요청 본문에 덧붙이는 선택 인자. 지금은 reasoning_effort뿐이고, 설정하지 않았으면 비어 있다."""
+        return {"reasoning_effort": self.reasoning_effort} if self.reasoning_effort else {}
+
     def _call_structured(self, messages, schema, temperature, max_tokens):
         response = self._client.chat.completions.parse(
             model=self.model,
@@ -308,6 +330,7 @@ class OpenAICompatLLMClient(LLMClient):
             response_format=schema,
             temperature=temperature,
             max_tokens=max_tokens,
+            **self._request_options(),
         )
         message = response.choices[0].message
         parsed = message.parsed
@@ -324,6 +347,7 @@ class OpenAICompatLLMClient(LLMClient):
             messages=messages,
             temperature=temperature,
             max_tokens=max_tokens,
+            **self._request_options(),
         )
         if schema is not None:
             kwargs["response_format"] = {"type": "json_object"}

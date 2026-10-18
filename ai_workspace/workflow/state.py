@@ -10,6 +10,11 @@ class ClusterEvaluation(TypedDict):
     summary: str
     feedback: str
     outlier_indices: List[int]
+    sub_groups: List[List[int]]
+    parsed: bool  # 응답이 스키마로 해석됐는가. False면 decision은 항상 "FAIL"이다 (docs/adr/0010 Addendum 2026-10-18)
+    # 평가 호출이 재시도해도 소용없는 이유로 막혔을 때만 있다: "infra" / "length" / "content_filter".
+    # 군집의 품질 판정이 아니므로 그래프는 이 클러스터를 skipped가 아니라 이 사유의 실패로 기록한다.
+    llm_failure: str
 
 
 class NewsletterEvaluation(TypedDict):
@@ -65,7 +70,9 @@ class AgentState(TypedDict):
     tone_retry_count: int  # 드리프트로 인한 문체 재변환 횟수
     tone_feedback: Optional[str]  # 재변환 프롬프트에 넣을 드리프트 피드백
     tone_fallback: Optional[str]  # "formal"이면 캐주얼본 대신 형식체 초안을 저장
-    failure_reason: Optional[str]  # 최대 재시도 도달 사유: "faithfulness" / "judge"
+    # 클러스터 실패 사유: "faithfulness" / "generator_fallback" / "judge" / "judge_unavailable" (최대 재시도 도달),
+    # "infra" / "length" / "content_filter" (호출이 재시도해도 소용없는 이유로 막혀 재시도 없이 종료)
+    failure_reason: Optional[str]
     
     # 워크플로우 제어용
     should_continue: bool  # 다음 클러스터로 진행할지 여부
