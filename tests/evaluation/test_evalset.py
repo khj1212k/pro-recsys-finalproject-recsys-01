@@ -154,6 +154,28 @@ def test_fail_without_a_verdict_is_not_a_hard_case():
     assert hard == {0: True, 1: False, 2: False, 3: False}
 
 
+def test_old_rows_without_the_verdict_keys_are_still_read_by_decision_only():
+    """bakeoff-v1.yaml amendments A9.1 (b)의 한계: 판정 없는 FAIL의 구분은 llm_failure·parsed 키가 있는 행(PR #48 이후)에 한한다.
+
+    그 전 행은 호출 실패 표식(A3: FAIL/0.0, 휴리스틱 FAIL/0.1)이 판정 FAIL과 같은 모양이라 구분하지 못하고 예전대로 어려운 사례로 읽힌다.
+    이 테스트는 그 한계를 고정한다 - 옛 표식으로 가르면 evalset 표본(E0 표본의 재계산 경로)이 바뀌므로 코드는 두었다.
+    """
+    log = {
+        "0": [1, 2, 3], "1": [4, 5, 6], "2": [7, 8, 9], "3": [10, 11, 12],
+        "cluster_outcomes": {
+            "0": {"status": "failed", "cluster_eval": {"decision": "FAIL", "confidence": 0.0}},
+            "1": {"status": "skipped", "cluster_eval": {"decision": "FAIL", "confidence": 0.1}},
+            # 같은 모양에 새 키가 붙으면 구분된다 - 한계는 키가 없는 행에만 있다.
+            "2": {"status": "failed", "cluster_eval": {"decision": "FAIL", "confidence": 0.0, "llm_failure": "infra"}},
+            "3": {"status": "skipped", "cluster_eval": {"decision": "FAIL", "confidence": 0.1, "parsed": False}},
+        },
+    }
+
+    hard = {c.cluster_id: c.hard_case for c in es.candidates_from_cluster_log(run_id=5, cluster_log=log)}
+
+    assert hard == {0: True, 1: True, 2: False, 3: False}
+
+
 def test_old_cluster_logs_without_meta_are_unknown_not_guessed():
     cands = es.candidates_from_cluster_log(run_id=1, cluster_log=json.dumps({"3": [1, 2, 3]}))
     assert cands[0].split_v2 == "unknown"

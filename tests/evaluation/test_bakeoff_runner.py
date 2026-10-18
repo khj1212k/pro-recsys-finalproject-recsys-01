@@ -139,7 +139,7 @@ def test_g2_compares_the_one_line_summary_too_per_amendment_a9_1(tmp_path):
     """bakeoff-v1.yaml amendments A9.1 (a): 문체 드리프트(G2, 비용식의 q)는 title·sentence·content를 비교한다.
 
     본문과 제목은 그대로 두고 변환본의 요약(저장 노드가 sentence로 저장하는 값)에만 초안에 없는 수치를 넣는다.
-    등록 당시 구현(title+content)이면 통과했을 입력이다 - 대조군은 요약이 수치 없이 같은 입력이다.
+    등록 뒤 첫 구현(e4f47f6, title+content만 비교)이면 통과했을 입력이다 - 대조군은 요약이 수치 없이 같은 입력이다.
     """
     log = []
     factory = _factory(log, **{"gen-b": {"tone_summary": "투자 규모는 5조 원으로 늘어요"}})
