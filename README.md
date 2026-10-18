@@ -10,7 +10,7 @@
 
 ---
 
-## 현재 상태 (2026-10-06 기준)
+## 현재 상태 (2026-10-06 기준, 아래 첫 문단과 수집·데이터 정책 행은 2026-10-17 기준)
 
 ```mermaid
 flowchart LR
@@ -25,11 +25,11 @@ flowchart LR
     R --> H[FastAPI] --> I[React]
 ```
 
-그림은 코드에 있는 경로다. compose 스케줄러가 지금 돌리는 잡은 수집, 임베딩, 인기도, 클러스터 통계, 일일 리포트다. `generate`, `batch_fallback` 잡은 `docker/crontab`에서 꺼져 있다. 팀 시절의 학습 잡 `train`은 은퇴했고(불려도 아무것도 실행하지 않는다) `user_embed` 잡은 없앴다 - 장기 프로필은 클릭마다 갱신되는 상태다 ([ADR 0033](docs/adr/0033-train-serve-feature-parity.md)).
+그림은 코드에 있는 경로다. 실제로 상시 도는 곳은 수집기 하나다(2026-10-17 기준): OCI Always Free VM(1 GB, [ADR 0026](docs/adr/0026-hosting-tiers-and-contingency.md))의 스케줄러가 `docker/crontab.micro`의 수집(RSS → 본문 추출, 매시)·인기도·일일 리포트·본문 보존(매일) 네 잡을 돌리고, VM 호스트의 cron이 매일 DB를 OCI Object Storage로 백업한다. 임베딩·클러스터링·생성은 어디에서도 상시 돌지 않는다 — 이 VM에서는 메모리가 모자라고, 전체 compose용 `docker/crontab`(임베딩·클러스터 통계 포함)을 띄운 호스트는 지금 없다. `generate`, `batch_fallback` 잡은 `docker/crontab`에서 꺼져 있다. 팀 시절의 학습 잡 `train`은 은퇴했고(불려도 아무것도 실행하지 않는다) `user_embed` 잡은 없앴다 - 장기 프로필은 클릭마다 갱신되는 상태다 ([ADR 0033](docs/adr/0033-train-serve-feature-parity.md)).
 
 | 영역 | 지금 있는 것 | 아직 없는 것 |
 |---|---|---|
-| 수집 | RSS UPSERT, 재시도, 언론사별 본문 정제, docker compose + supercronic 잡 런타임과 실행 기록(`job_runs`), 본문 해시 중복 제거 ([ADR 0006](docs/adr/0006-runtime-compose-and-scheduler.md)), 정책브리핑 Open API 수집기 ([ADR 0023](docs/adr/0023-data-sources-copyright-retention.md)) | 7일 연속 수집 성공률(ADR 0006에서 재확인 예정), 정책브리핑 실제 수집(인증키 발급 전이라 0건) |
+| 수집 | RSS UPSERT, 재시도, 언론사별 본문 정제, docker compose + supercronic 잡 런타임과 실행 기록(`job_runs`), 본문 해시 중복 제거 ([ADR 0006](docs/adr/0006-runtime-compose-and-scheduler.md)), 정책브리핑 Open API 수집기 ([ADR 0023](docs/adr/0023-data-sources-copyright-retention.md)). Tier 0 VM 단독 수집(2026-09-26부터, 10-17 `news_raw` 31,097행), 매일 호스트 밖 백업(본문 없는 사본, 설정으로 켠 기계에서는 최근 27일 본문 사본도)과 28일마다 복원 검증, 일일 리포트의 정시 회차·백업 경과·유휴 회수 위험 줄 ([ADR 0026](docs/adr/0026-hosting-tiers-and-contingency.md) 결정 6) | 정시 회차 기준 95% 수집(09-26~10-06에 233회 중 198회 성공 85.0%, 27회는 앞 회차가 1시간을 넘겨 시작되지 않았다 - ADR 0026 증거 8), 정책브리핑 실제 수집(인증키 발급 전이라 0건) |
 | LLM | OpenAI 호환 어댑터 하나로 Gemini·Upstage·OpenAI 호출, 요청 타임아웃 60초·호출당 deadline 180초, 킬 스위치 ([ADR 0005](docs/adr/0005-llm-provider-abstraction.md)), 요청 전에 최악 비용을 원장에 예약해 런·일·전체 상한에서 멈추는 지출 가드와 런 서킷브레이커 ([ADR 0035](docs/adr/0035-llm-spend-cap-in-client-ledger.md), 페이크 전송 계층 테스트로만 확인) | 원장 금액과 실제 청구액의 대조(실제 호출 전), 모델 선정 결과(평가 프로토콜과 선정 규칙만 사전 등록, [ADR 0009](docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md)), `main`에서 실데이터로 끝까지 돈 생성 기록 |
 | 생성 품질 | LangGraph 안의 결정론적 사실성 게이트·문체 드리프트 게이트와 judge v2 (`ai_workspace/core/faithfulness.py`, [ADR 0010](docs/adr/0010-faithfulness-gate-and-judge-v2.md), 차단 유형·임계값은 잠정값), 클러스터링 지표 함수(`evaluation/clustering/metrics.py`) | 사람 라벨로 보정한 품질·사실성 수치, 실제 생성물로 잰 게이트 차단율 |
 | 추천(배치) | 팀 시절 LightGBM + MMR에 7월 셀프 리뷰 수정 반영 (시점 누출·그룹 정의·시드 등, [ADR 0003](docs/adr/0003-lightgbm-mmr-for-recommendation.md)·[0004](docs/adr/0004-continue-in-fork-and-port-july-fixes.md)) | 이 서비스의 사람 클릭으로 잰 추천 성능(실사용자가 없다) |
@@ -37,7 +37,7 @@ flowchart LR
 | 추천 평가 | 팀 베이스라인 재현 하네스와 오프라인 평가 프로토콜(point-in-time, 고정 정답 창, 베이스라인, 시드와 부트스트랩 신뢰구간, [ADR 0007](docs/adr/0007-recsys-offline-evaluation-protocol.md)). EB-NeRD 공개 벤치마크 하네스, point-in-time 피처 코어 `recsys_core`, ranker v2 설계와 사전 등록한 승격 규칙 ([ADR 0013](docs/adr/0013-ranker-v2-design.md)) | 한국어 데이터에서의 ranker v2 검증(서빙은 shadow부터), 팀 재현 리포트의 전체 재실행(재실행 대기) |
 | 시뮬레이터·부하 | 합성 사용자 시뮬레이터, Locust 부하 하네스, 사전 등록한 지표 타당성 격자 ([ADR 0019](docs/adr/0019-user-simulator-design-and-claim-scope.md)). 시스템 반응 지표만 보고 추천 정확도는 주장하지 않는다 | 부하 수치(재실행 대기), drift 적응 지표의 타당성 |
 | DB | pgvector 어댑터 등록, `news_raw` URL UNIQUE·timestamptz ([ADR 0008](docs/adr/0008-db-layer-pgvector-schema-and-upsert.md)), 노출 로그·모델 레지스트리 테이블과 요청 경로 인덱스 (ADR 0015) | — |
-| 데이터 정책 | 출처별 라이선스 표와 본문 보존 원칙 ([ADR 0023](docs/adr/0023-data-sources-copyright-retention.md)) | 본문 보존 기한 잡(설계만, 미구현) |
+| 데이터 정책 | 출처별 라이선스 표와 본문 보존 원칙, 수집 후 30일이 지난 상업 언론사 본문을 매일 비우는 `retention` 잡(2026-10-17 Tier 0 배포, 첫 비움 10-26) ([ADR 0023](docs/adr/0023-data-sources-copyright-retention.md)) | 실제로 비운 기록(첫 만료 전) |
 
 LLM 호출은 HyperCLOVA X가 아니라 위 어댑터를 거친다. 팀 시절에 쓰던 HyperCLOVA X는 더 이상 쓸 수 없어서 교체했다([ADR 0005](docs/adr/0005-llm-provider-abstraction.md)).
 

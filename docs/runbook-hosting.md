@@ -36,6 +36,10 @@ VM의 코드는 09-26 스냅숏이다. 정시 ingest의 85%만 성공하고 있�
 **2026-10-17 04:34 KST 갱신**: VM의 코드를 4.1의 절차로 `13801fc`(본문 보존 잡·발행 시각 KST 수정 포함)로 바꿨다.
 직전 호스트 밖 백업은 같은 날 04:27 KST(`news_raw` 30,754행). 실측은 4.1 끝의 "2026-10-17 배포 기록"이다.
 
+**2026-10-17 15:35 KST 갱신**: 호스트 밖 백업이 자동이다 — VM 호스트의 cron이 매일 18:10 UTC(03:10 KST)에 OCI Object Storage로
+올리고 28일마다 복원해 본다(6.5, ADR 0026 증거 11). 최대 손실은 하루치 수집분이다. 유휴 지표도 같은 cron이 매일 잰다(5절).
+AI타임스 기존 605행의 발행 시각을 보정했다(6.7).
+
 ## 2. Tier 0 인스턴스 만들기
 
 ### 2.1 사전 확인 — 하나라도 어긋나면 만들지 않는다
@@ -367,9 +371,13 @@ python3 scripts/oci/idle_check.py --instance-id $A1_INSTANCE --compartment-id $T
 종료 코드 0 안전 / 2 기준+5%p 안쪽(위험) / 3 기준상 유휴 / 1 조회 실패. 출력의
 `cpu_minutes_at_or_above_threshold_pct`가 5%를 넘어야 CPU p95가 20%를 넘는다(1분 해상도 가정).
 
+2026-10-17부터 Tier 0는 같은 계산을 VM이 매일 스스로 한다(6.5의 cron, `tier0_backup.py idle-check`, 인스턴스 주체에 지표 읽기 권한만).
+결과는 `job_runs`의 `idle_check` 행이고 `daily_report`의 "유휴 회수 위험" 줄이 판정과 마지막 백업 경과를 함께 적는다. 위 명령은 Mac에서
+따로 볼 때 쓴다.
+
 대응(ADR 0026 결정 6):
 1. Tier 0는 2026-09-26 17:00 KST부터 유일한 수집기다. 회수(삭제일 수도 있음)되면 마지막 호스트 밖 백업 이후를
-   잃는다 - 종료 코드가 2나 3이면 먼저 백업을 당겨 온다(6.5). 2026-09-26 22:14 실측으로 이미 3(기준상 유휴)이다.
+   잃는다 - 2026-10-17부터는 매일 자동 백업(6.5)이 그 범위를 하루치로 묶는다. 백업이 밀렸는데 종료 코드가 2나 3이면 6.5의 수동 실행을 한다. 2026-09-26 22:14 실측으로 이미 3(기준상 유휴)이다.
    2026-10-06 04:43의 7일 창도 3이다(CPU p95 7.89%, 네트워크 p95 0.076%). 그때까지 회수는 없었다 - 한 번의
    관측일 뿐 회수되지 않는다는 보장이 아니다.
 2. 재생성은 6.2, 데이터는 마지막 백업에서 되살린다.
@@ -397,15 +405,30 @@ STOPPED에서 START로 되살리는 경로는 아직 겪어 보지 않았다. �
 
 2~4절을 다시 한다. 2026-09-26 실측: 생성→RUNNING 약 30초, 초기 설정 290초, 이미지 빌드 121초,
 빈 DB 첫 ingest 155초 — 합계 약 10분. 지금은 Tier 0가 유일한 수집기이므로, 4절에서 스택을 올릴 때
-스케줄러보다 먼저 마지막 백업(6.5)을 되살린다:
+스케줄러보다 먼저 마지막 백업(6.5, OCI Object Storage)을 되살린다. 순서:
+
+1. 6.5 "설치·갱신"의 1~3을 새 VM에 한다. 동적 그룹의 일치 규칙은 새 VM의 OCID로 바꾼다
+   (`oci iam dynamic-group update --dynamic-group-id <id> --matching-rule "instance.id = '<새 OCID>'"`).
+2. `db`만 올린다(빈 DB). `migrate`·`scheduler`는 아직 올리지 않는다 — 스키마는 사본이 만든다.
+3. 최신 `full/` 객체를 Mac의 디스크에 쓰지 않고 VM으로 흘려 보내 복원한다(본문이 있다 — ADR 0023 개정 2026-10-17 2). `full/`이 없으면
+   (만든 지 하루 남짓에 지워진다, `full_enabled`를 켜지 않았으면 처음부터 없다) `nobody/daily/`의 최신을 쓰고 `--with-bodies`를 뺀다 —
+   본문 없이 되살아나고 본문이 있던 행은 "비운 행"으로 표시된다. 받은 아카이브는 `drill/`에 둔다(ADR 0023 개정 2의 위치 표, 같은 명령
+   끝에서 지운다) - 스크립트가 시작할 때 비우는 `work/`에 두면 복원 전에 지워진다.
 
 ```bash
 ssh -F .ops/micro/ssh_config micro 'cd ~/newsletter-recsys && sudo docker compose up -d db'
-scp -F .ops/micro/ssh_config data/backups/<마지막 tier0 덤프> micro:tier0.dump
-ssh -F .ops/micro/ssh_config micro 'cd ~/newsletter-recsys && sudo docker compose cp ~/tier0.dump db:/tmp/tier0.dump \
-  && sudo docker compose exec -T db pg_restore -U newsletter -d newsletter --clean --if-exists --no-owner \
-     --exit-on-error /tmp/tier0.dump && sudo docker compose up -d'
+NAME=$(oci os object list -ns $NS -bn newsletter-tier0-backups --prefix full/ --fields name,timeCreated \
+  --query 'max_by(data, &"time-created").name' --raw-output)
+oci os object get -ns $NS -bn newsletter-tier0-backups --name "$NAME" --file - | ssh -F .ops/micro/ssh_config micro \
+  'sudo install -d -m 0700 /var/lib/newsletter-backup/drill && sudo tee /var/lib/newsletter-backup/drill/restore.tar > /dev/null'
+ssh -F .ops/micro/ssh_config micro 'sudo env PATH=/opt/oci-cli/bin:$PATH python3 /opt/newsletter-backup/tier0_backup.py \
+  --config /etc/newsletter-backup.conf restore --archive /var/lib/newsletter-backup/drill/restore.tar --target-db newsletter --with-bodies; \
+  sudo rm -rf /var/lib/newsletter-backup/drill'
+ssh -F .ops/micro/ssh_config micro 'cd ~/newsletter-recsys && sudo docker compose run --rm worker retention && sudo docker compose up -d'
 ```
+
+`restore`는 대상 DB에 테이블이 하나라도 있으면 거절한다. 사본의 Alembic 리비전이 코드의 head보다 뒤면 `up -d`의 `migrate`가 올린다.
+복원한 뒤에는 보존 잡을 다른 잡보다 먼저 돌린다(위 마지막 줄). 사본이 2026-10-17 06:33 UTC 앞의 것이면 AI타임스 보정(6.7)을 다시 한다.
 
 백업 이후 공백은 RSS 창에 남아 있는 만큼만 첫 ingest가 되찾는다(6.3).
 
@@ -489,63 +512,128 @@ Tier 0는 고친 코드로 재배포돼 있어야 한다(아니면 A1과 Tier 0�
    소크를 통과하면 A1을 기록 시스템으로 선언하고 ADR 0026을 갱신한다. 블록 볼륨 합계(A1 100 GB + Micro 50 GB
    = 150 GB)는 200 GB 안이다.
 
-### 6.5 Tier 0 호스트 밖 백업 (Mac이 당겨 옴)
+### 6.5 Tier 0 호스트 밖 백업 (VM cron → OCI Object Storage, 2026-10-17부터)
 
-Tier 0가 유일한 수집기인 동안의 유일한 호스트 밖 사본이다. **덤프에는 본문이 들어 있어 본문 30일 규칙을 따른다**
-(ADR 0023): 덤프 안에서 가장 오래된 상업 언론사 본문의 수집일 + 30일을 파일 이름(`.expires-YYYY-MM-DD`)에 적고 그날
-통째로 지운다. 보존 잡(4.1)이 날마다 돌면 전체 덤프는 뜬 지 하루 안팎에 만료된다. 만료일을 읽는 조회와 이름은 4.1의
-2단계와 같다. Mac에는 상주 작업을 두지 않으므로 지우는 것은 사람이다 - 확인은 [runbook.md](runbook.md) 8절의 한 줄.
-자동화는 Mac에서 상주 작업을 돌리지 않기로 한 동안 보류이므로 사람이 돌린다(가벼운 작업: 2026-09-26 22:18 기준 1.1 MB, 몇 초. 2026-10-06에는 DB가 49 MB라
-덤프도 그만큼 커진다). **2026-10-06 현재 마지막 백업은 09-26 22:18이다** - 주기를 정하지 않은 채 10일이 지났다
-(ADR 0026 결정 6의 재검토 항목). 2026-10-17 04:27 KST에 4.1의 2단계로 다시 떴다(43 MB, `news_raw` 30,754행). 주기는
-여전히 정하지 않았다.
+결정과 실측은 [ADR 0026](adr/0026-hosting-tiers-and-contingency.md) 결정 6의 2026-10-17 결정과 증거 11, 본문 규칙은
+[ADR 0023](adr/0023-data-sources-copyright-retention.md) 개정 2026-10-17 2. 아래 `$NS`는 Object Storage 네임스페이스
+(`oci os ns get`), 버킷은 `newsletter-tier0-backups`다.
+
+**구성.** VM 호스트(컨테이너 밖)의 cron이 매일 18:10 UTC에 root로 `scripts/oci/tier0_backup.py daily`를 부른다.
+
+| 단계 | 하는 일 | `job_runs` |
+|---|---|---|
+| backup | 같은 스냅숏에서 본문 없는 사본(`nobody/daily/`, 35일 뒤 삭제 · 그달 첫 사본은 `nobody/monthly/`에도)과 최근 27일 본문 사본(`full/`, 1일 뒤 삭제 - 설정 `full_enabled`를 켰을 때만)을 만들어 인스턴스 주체로 올리고, 버킷 목록의 크기·MD5로 확인한다 | `backup` |
+| idle-check | `idle_check.py`의 7일 계산(5절)을 VM에서 인스턴스 주체로 | `idle_check` |
+| restore-check | 마지막 성공이 28일 넘었으면 방금 올린 본문 없는 사본을 일회용 DB `restore_check`에 복원해 대조하고 지운다 | `restore_check` |
+
+VM의 자격은 이 버킷에 객체 만들기·목록 보기와 compute agent 지표 읽기뿐이다(내려받기·지우기·덮어쓰기 없음, 백업용 API 키·사전 인증 URL
+없음 - 수집 스택의 `.env`는 따로 있다). 일하는 디렉터리
+`/var/lib/newsletter-backup/work`는 실행이 끝나면 비고, 다음 실행도 시작할 때 비운다. 한 번에 약 2~3분, 최대 RSS 약 80 MB(증거 11).
+
+**매일 확인.** `daily_report`(00:10 UTC)의 "호스트 밖 백업"·"유휴 회수 위험" 줄(마지막 성공 경과, 그 뒤 수집량, 실패 수, 복원 검증 경과,
+회수 위험 수준). 경고 조건: 백업이 26시간 넘게 없다(리포트는 백업 약 6시간 뒤라 한 번 거르면 다음 리포트에서 약 30시간), 최근 24시간에
+백업·복원 검증이 실패했다(1시간 넘게 `running`으로 남은 행 포함 - cron이 띄운 프로세스가 죽은 경우), 복원 검증이 35일 넘게 없다, `full/`
+객체가 60시간 넘게 남아 있다(정상 수명은 최대 약 54시간 - 수명 주기 규칙이 돌지 않음. 지우기는 "내리기"의 bulk-delete를 Mac에서). 직접 볼 때:
 
 ```bash
+ssh -F .ops/micro/ssh_config micro 'sudo tail -n 3 /var/log/newsletter-backup.log | cut -c1-400'
+ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -U newsletter -d newsletter -c \
+  \"SELECT id, job, status, started_at AT TIME ZONE 'UTC' AS started_utc, stats->>'duration_s' AS s, left(error, 120) AS error \
+  FROM job_runs WHERE job IN ('backup','idle_check','restore_check') ORDER BY id DESC LIMIT 9\""
+oci os object list -ns $NS -bn newsletter-tier0-backups --fields name,size,timeCreated \
+  --query 'data[].{n:name,mb:size,t:"time-created"}' --output table     # Mac(관리자 자격)에서
+```
+
+**설치·갱신** (처음 한 번, 그리고 스크립트가 바뀐 커밋이 main에 들어갈 때마다. 2026-10-17 설치는 브랜치 커밋 `19cf228`(리베이스 전 `0efc2f5`) - 병합 뒤 main의 판으로 다시 깐다.
+`19cf228`은 `full_enabled` 설정이 생기기 전 판이라 설정과 무관하게 매일 `full/`을 올린다)
+
+1. OCI 쪽(Mac, 관리자 자격 — 한 번만): 버킷(Standard, `--public-access-type NoPublicAccess`, 버전 관리 끔), 동적 그룹
+   `newsletter-micro-backup`(`instance.id = '<VM OCID>'`), 정책 `newsletter-tier0-backup`(ADR 0026 증거 11의 3문장), 수명 주기 규칙
+   3개(`full/` 1일, `nobody/daily/` 35일, 멀티파트 중단 1일), 할당량 정책 `newsletter-object-storage-cap`(5 GiB). 정책은 Always Free 한도를
+   다시 확인한 뒤에만 바꾼다.
+2. VM: OCI CLI는 시스템 파이썬을 건드리지 않게 가상환경에 판을 고정해 둔다.
+
+   ```bash
+   ssh -F .ops/micro/ssh_config micro 'sudo apt-get install -y python3.12-venv && sudo python3 -m venv /opt/oci-cli \
+     && sudo /opt/oci-cli/bin/pip install -q "oci-cli==3.94.0" && /opt/oci-cli/bin/oci --version'
+   ```
+3. 스크립트·설정·cron (메인 체크아웃에서, `<sha>`는 설치하는 커밋):
+
+   ```bash
+   scp -F .ops/micro/ssh_config scripts/oci/tier0_backup.py scripts/oci/idle_check.py micro:/tmp/
+   sed "s/__GIT_SHA__/<sha>/" scripts/oci/tier0-backup.cron > /tmp/newsletter-tier0-backup
+   scp -F .ops/micro/ssh_config /tmp/newsletter-tier0-backup micro:/tmp/ && rm /tmp/newsletter-tier0-backup
+   ssh -F .ops/micro/ssh_config micro 'sudo install -d -m 0755 /opt/newsletter-backup && sudo install -d -m 0700 /var/lib/newsletter-backup \
+     && sudo install -m 0644 /tmp/tier0_backup.py /tmp/idle_check.py /opt/newsletter-backup/ \
+     && sudo install -m 0644 /tmp/newsletter-tier0-backup /etc/cron.d/newsletter-tier0-backup \
+     && rm /tmp/tier0_backup.py /tmp/idle_check.py /tmp/newsletter-tier0-backup'
+   ```
+
+   `/etc/newsletter-backup.conf`(0600 root, 기계별 값 — 저장소에 넣지 않는다):
+   `{"namespace": "<$NS>", "bucket": "newsletter-tier0-backups", "compose_dir": "/home/ubuntu/newsletter-recsys", "db_user": "newsletter", "db_name": "newsletter", "work_dir": "/var/lib/newsletter-backup"}`
+   본문 사본(`full/`)은 여기에 `"full_enabled": true`(JSON 참)를 넣어야 만든다. [ADR 0023](adr/0023-data-sources-copyright-retention.md) 개정
+   2026-10-17 2가 main에 병합(승인)된 뒤에만 넣는다 — 그 전에는 넣지 않고 본문 없는 사본만 올린다. `daily_report` 줄에는 "본문 사본 꺼짐"으로 나온다.
+4. 확인: `sudo env PATH=/opt/oci-cli/bin:$PATH python3 /opt/newsletter-backup/tier0_backup.py --config /etc/newsletter-backup.conf backup --dry-run`
+   (올리지 않고 크기·건수만) → 같은 명령의 `daily`를 한 번 손으로 → 위 "매일 확인"의 두 조회.
+
+로그는 하루 몇 KB라 돌리지 않는다. 스크립트가 cron 로그·표준출력에 싣는 것은 객체 이름·건수·크기·해시·시각뿐이다.
+
+**복원 검증.** 28일마다 `daily`가 스스로 한다(방금 올린 것과 MD5가 같은 로컬 사본으로). 버킷에서 내려받은 사본으로 하는 검증은 이렇게 한다
+(2026-10-17에 한 번, 증거 11). 본문 없는 사본만 쓴다 — `full/`은 Mac에 받지 않는다:
+
+```bash
+D=$(mktemp -d); NAME=$(oci os object list -ns $NS -bn newsletter-tier0-backups --prefix nobody/daily/ --fields name,timeCreated \
+  --query 'max_by(data, &"time-created").name' --raw-output)
+oci os object get -ns $NS -bn newsletter-tier0-backups --name "$NAME" --file $D/drill.tar
+WANT=$(oci os object head -ns $NS -bn newsletter-tier0-backups --name "$NAME" --query '"opc-meta-sha256"' --raw-output)
+if [ -n "$WANT" ] && [ "$(shasum -a 256 $D/drill.tar | cut -d' ' -f1)" = "$WANT" ]; then
+  echo sha256 일치
+  scp -F .ops/micro/ssh_config $D/drill.tar micro:/tmp/ \
+  && ssh -F .ops/micro/ssh_config micro 'sudo install -d -m 0700 /var/lib/newsletter-backup/drill && sudo mv /tmp/drill.tar /var/lib/newsletter-backup/drill/ \
+    && sudo python3 /opt/newsletter-backup/tier0_backup.py --config /etc/newsletter-backup.conf restore-check \
+         --archive /var/lib/newsletter-backup/drill/drill.tar --target-db restore_check_drill; sudo rm -rf /var/lib/newsletter-backup/drill /tmp/drill.tar'
+else
+  echo "sha256이 객체 메타데이터와 다르다 - 복원하지 않는다"
+fi
+rm -rf $D
+```
+
+받은 아카이브는 `work/`가 아니라 `drill/`에 둔다 - 스크립트는 시작할 때 `work/`를 비운다. `drill/`은 ADR 0023 개정 2026-10-17 2의 위치
+표에 있는 자리이고, 같은 명령 줄 끝에서 지운다.
+
+대조 항목: 테이블마다 행 수, Alembic 리비전, 제약·인덱스 수(NOT VALID 0), 본문 0행, `news_raw` 최근 수집 시각. 하나라도 다르면
+종료 코드 1이고 `job_runs`의 `restore_check` 행에 이유가 남는다. 일회용 DB는 성공·실패와 무관하게 지운다.
+
+**복구**(VM을 다시 만들었을 때)는 6.2를 본다. 2026-10-17 06:33 UTC 앞의 사본(2026-10 월별 사본 포함)은 AI타임스 발행 시각이 보정 전
+값이다 — 복원한 뒤 6.7을 같은 경계로 다시 돌린다.
+
+**내리기**(ADR 0023 개정 2026-10-17 2가 병합되지 않을 때, 또는 백업을 멈출 때): `sudo rm /etc/cron.d/newsletter-tier0-backup`, Mac에서
+`oci os object bulk-delete -ns $NS -bn newsletter-tier0-backups --prefix full/ --force`(본문 사본부터). 본문 없는 사본과 버킷은 남겨도 된다.
+
+**비용.** 사용량은 사본 하루 약 46 MB, 버킷 전체 약 0.3 GB(2026-10-17 크기 기준), API 요청 하루 약 7건 — Always Free(체험 중 Standard
+10 GB, 그 뒤 세 계층 합 20 GB, 월 50,000건) 안이다. 할당량 5 GiB가 넘지 못하게 막는다(넘으면 올리기가 실패하고 daily_report가 경고한다).
+`nobody/monthly/`는 지우지 않으므로 해마다 12개씩 는다 — `news_raw`가 커지는 만큼 함께 커진다(2026-10 3.8 MB). 1 GB에 가까워지면 다시 본다.
+
+#### 옛 절차: Mac이 당겨 오는 전체 덤프 (2026-10-17 전, 수동)
+
+2026-10-17 전에는 이것이 유일한 호스트 밖 사본이었다(09-26 22:18 · 10-17 04:27 두 번). 자동 백업이 실패하는데 급히 사본이 필요할 때만 쓴다.
+**전체 덤프에는 본문이 있어** ADR 0023 개정 2026-10-06의 규칙(덤프 안 가장 오래된 상업 본문의 수집 + 30일에 파일을 통째로 지운다, 최신
+1개만, 0600, 이름에 만료일)을 따른다. 보존 잡이 매일 도는 DB의 전체 덤프는 뜬 지 하루 안에 만료된다.
+
+```bash
+ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -At -U newsletter -d newsletter \
+  -c \"SELECT (min(n.raw_news_crawled_at) + interval '30 days')::date FROM news_raw n JOIN press p USING (press_id) \
+  WHERE n.raw_news_content <> '' AND p.press_name <> '정책브리핑'\""          # 만료일
 ( umask 077; ssh -F .ops/micro/ssh_config micro \
     'cd ~/newsletter-recsys && sudo docker compose exec -T db pg_dump -U newsletter -d newsletter -Fc' \
-    > data/backups/tier0-micro-$(date +%Y-%m-%dT%H%M).expires-<만료일>.dump )   # 만료일: 4.1의 2단계 조회
-# 서버 없이 확인: 목차가 읽히고 news_raw 행 수가 VM의 count(*)와 같은지
-pg_restore -l data/backups/tier0-micro-<시각>.dump | grep -c "TABLE DATA"
-pg_restore -a -t news_raw -f - data/backups/tier0-micro-<시각>.dump | awk '/^COPY/{f=1;next} /^\\\./{f=0} f{n++} END{print n}'
+    > data/backups/tier0-micro-$(date +%Y-%m-%dT%H%M).expires-<만료일>.dump )
+pg_restore -l data/backups/tier0-micro-<시각>.dump | grep -c "TABLE DATA"     # 목차가 읽히는지
 ```
 
-`data/`는 gitignore다. 이 확인은 "덤프가 온전히 읽힌다"까지이고, 실제 복원 검증(일회용 DB에 `pg_restore`)은
-승격 조건 (b)에 따라 따로 한다 — 같은 형식의 Mac 덤프는 6.4 리허설에서 복원됐다.
-
-**Mac 덤프의 두 번째 사본.** `data/backups/mac-compose-2026-09-26.dump`(899행·임베딩 845개, 5.9 MB)는 기록
-시스템의 절반인데 Mac 디스크에 한 부뿐이다. 한 부를 Mac 밖에 더 둔다(2026-10-06 현재 하지 않았다):
-
-```bash
-shasum -a 256 data/backups/mac-compose-2026-09-26.dump          # 해시를 .ops/micro/README.txt에 적어 둔다
-ssh -F .ops/micro/ssh_config micro 'umask 077; mkdir -p ~/backups'
-scp -F .ops/micro/ssh_config data/backups/mac-compose-2026-09-26.dump micro:backups/
-ssh -F .ops/micro/ssh_config micro 'chmod 600 ~/backups/*.dump; sha256sum ~/backups/mac-compose-2026-09-26.dump'  # 같은 해시인지
-```
-
-Tier 0 자체가 회수될 수 있으므로 이것만으로 충분하지는 않다 - 외장 디스크 등 세 번째 위치가 있으면 거기에도 둔다.
-6.4의 리허설처럼 VM에 올린 덤프를 지우는 절차를 돌릴 때는 `~/backups/`는 남긴다.
-
-**덤프에도 본문 30일이 걸린다**([ADR 0023](adr/0023-data-sources-copyright-retention.md) 개정 2026-10-06). 덤프는 DB 전체의 본문을
-담고 행 단위로 지울 수 없으므로, **덤프 안에서 가장 오래된 본문의 수집 시각 + 30일**에 파일을 통째로 지운다.
-
-- 만료일을 파일 이름에 적는다. 덤프를 뜨기 직전에 가장 오래된 본문의 수집 시각을 읽는다(건수·시각만 읽는 조회다):
-
-  ```bash
-  ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -At -U newsletter -d newsletter \
-    -c \"SELECT (min(n.raw_news_crawled_at) + interval '30 days')::date FROM news_raw n JOIN press p USING (press_id) \
-    WHERE n.raw_news_content <> '' AND p.press_name <> '정책브리핑'\""
-  # 그 날짜를 넣어: data/backups/tier0-micro-<시각>.expires-<YYYY-MM-DD>.dump
-  ```
-- 최신 1개만 둔다. 새 덤프가 위의 확인(목차, 행 수)을 통과하면 앞의 덤프를 지운다. 권한은 0600(`umask 077`).
-- 두 번째 사본(위의 VM `~/backups/`, 외장 디스크)도 같은 만료일에 지운다. 사본을 만들 때 만료일을 `.ops/micro/README.txt`에 해시와 함께 적는다.
-- 지금 있는 두 개: `mac-compose-2026-09-26.dump`는 **2026-10-25**, `tier0-micro-2026-09-26T2218.dump`는 **2026-10-26**이 만료일이다.
-  2026-10-17 배포 때 뜬 `tier0-micro-2026-10-16T1927Z.expires-2026-10-26.dump`가 셋째다(**2026-10-26**). 앞의 둘은 지우는 날이
-  이미 정해져 있어 "최신 1개만" 규칙대로 바로 지우지 않고 그날 함께 지운다.
-  2026-10-06 현재 둘 다 그대로 있고 `mac-compose-…dump`의 권한은 0644다(`chmod 600`). Mac 덤프의 임베딩 845개는 본문 없이 따로
-  남길 수 있다(임베딩은 보존 대상이 아니다) - 남길지와 지우는 날은 사용자 결정이다.
-- VM의 본문 보존 잡은 2026-10-17에 배포됐지만 첫 실제 비움이 10-26 17:50 UTC라, 그 전에 VM에서 뜨는 덤프는 언제 떠도 2026-10-26에 만료된다. 보존 잡이 날마다 돌기 시작하면
-  전체 덤프는 뜬 지 하루 안에 만료된다 - 그때의 백업 주기와 방식은 정해지지 않았다(ADR 0023 개정의 "남는 위험", ADR 0026 결정 6).
-- 덤프를 복원한 DB에는 만료된 본문이 되살아날 수 있다. 복원한 뒤에는 보존 잡을 먼저 돌린다(잡이 생긴 뒤).
+Mac에 남아 있는 옛 덤프 세 개의 만료일: `mac-compose-2026-09-26.dump` **2026-10-25**, `tier0-micro-2026-09-26T2218.dump` **2026-10-26**,
+`tier0-micro-2026-10-16T1927Z.expires-2026-10-26.dump` **2026-10-26** — 그날 지운다(확인은 [runbook.md](runbook.md) 8절의 한 줄).
+`mac-compose-…dump`(899행·임베딩 845개)는 기록 시스템의 절반인데 Mac에 한 부뿐이다. 본문 없는 부분(행·임베딩)을 남길지는 사용자 결정이고,
+남기려면 그 덤프를 일회용 DB에 복원한 뒤 `restore-check`와 같은 방식의 본문 없는 사본으로 바꿔 둔다(아직 하지 않았다).
 
 ### 6.6 ingest가 1시간을 넘겨 다음 회차가 건너뛰어질 때
 
@@ -660,11 +748,12 @@ VM 쪽이 `Empty reply from server`(약 4초) 또는 0바이트 시간 초과이
 User-Agent도 똑같이 막혔다. 동아일보를 어디서 얼마나 수집할지(지금처럼 VM에서 받을 수 있는 만큼 / 클라우드가 아닌 곳에서 동아일보만 /
 Tier 0 피드에서 빼기)는 정하지 않았다(사용자 결정 대기).
 
-### 6.7 AI타임스 기존 행의 발행 시각 보정 (제안 — 실행하지 않았다)
+### 6.7 AI타임스 기존 행의 발행 시각 보정 (Tier 0는 2026-10-17에 했다)
 
-**이 절의 SQL은 어느 DB에서도 실행하지 않았다.** 구문만 PostgreSQL 파서로 확인했다. 실행할지, 어느 범위로
-언제 할지는 소유자가 정한다. 실행하기로 하면 6.4의 병합 스크립트처럼 `scripts/`에 파일로 두고 CI의 Postgres에서
-integration 테스트로 먼저 돌려 본다.
+**Tier 0 DB는 2026-10-17 06:33 UTC에 보정했다**(605행, [ADR 0008](adr/0008-db-layer-pgvector-schema-and-upsert.md) "2026-10-17 갱신").
+SQL은 파일이다 — `scripts/oci/fix_aitimes_created_at_kst.sql`(보정)과 `scripts/oci/fix_aitimes_created_at_kst_revert.sql`(되돌리기),
+CI의 PostgreSQL에서 `tests/integration/test_fix_aitimes_created_at_kst_sql.py`가 먼저 돌린다. 이 절은 그 기록이자, 보정 전 사본을 복원한
+DB(6.2·6.4)에서 다시 할 때의 절차다.
 
 배경: 2026-10-06 이전 수집기는 시간대 없는 발행 시각에 UTC를 붙였다. AI타임스 피드는 KST 벽시계 시각을
 시간대 없이 내보내므로 `raw_news_created_at`이 9시간 뒤로 저장돼 있다(ADR 0008 "2026-10-06 갱신", ADR 0026
@@ -715,76 +804,45 @@ Tier 0에서의 순서:
    기대: AI타임스의 `max_lead`만 9시간 안팎이다(2026-10-06 04:41 KST 조회에서 320행 중 268행, 최대 9.0시간).
    다른 언론사는 0 이하이거나 분 단위다(언론사 시계 오차·예약 발행). 다른 언론사의 `max_lead`가 1시간을
    넘으면 원인이 다르니 여기서 멈춘다.
-4. 보정. 아래 블록은 끝이 `ROLLBACK`이라 **그대로 실행하면 아무것도 바뀌지 않는다**(리허설). 출력이 아래 기준을
-   모두 만족할 때만 마지막 줄을 `COMMIT`으로 바꿔 한 번 더 실행한다. 트랜잭션을 연 채로 수치를 읽으며 기다리지
-   않는다 — 열려 있는 동안 ingest가 같은 행에서 멈춰 선다.
+4. 보정. 기본 실행은 리허설이다(한 트랜잭션, 끝이 `ROLLBACK`). 출력을 보고 기준을 만족하면 `-v apply=1`을 더해 한 번 더 돈다.
+   스크립트가 기준을 스스로 확인하고 하나라도 어기면 예외로 멈춘다(psql 종료 코드 3, 아무것도 커밋되지 않음) — 보관 표
+   `news_raw_created_at_fix_kst`가 이미 있음(이미 보정한 DB), 대상 0행(경계가 틀림), 보정 뒤에도 수집보다 10분 넘게 앞선 AI타임스 행,
+   보정한 행의 최소 수집 지연 8시간 초과(두 번 뺀 흔적). 트랜잭션은 스크립트 안에서 끝나므로 열어 둔 채 기다리는 일이 없다.
 
-   ```sql
-   BEGIN;
-
-   -- 되돌리기용 원래 값. 이 표가 이미 있으면 여기서 실패한다 = 이 DB는 이미 보정됐다.
-   CREATE TABLE news_raw_created_at_fix_kst AS
-   SELECT n.raw_news_id, n.raw_news_created_at AS created_at_before
-   FROM news_raw n
-   JOIN press p ON p.press_id = n.press_id
-   WHERE p.press_name = 'AI타임스'
-     AND n.raw_news_created_at IS NOT NULL
-     AND n.raw_news_crawled_at < TIMESTAMP '<2단계의 경계 시각(UTC)>';
-
-   UPDATE news_raw n
-   SET raw_news_created_at = b.created_at_before - INTERVAL '9 hours'
-   FROM news_raw_created_at_fix_kst b
-   WHERE n.raw_news_id = b.raw_news_id;
-
-   -- 보정 뒤의 수집 지연(수집 시각 - 발행 시각)
-   SELECT count(*) AS fixed_rows,
-          min((n.raw_news_crawled_at AT TIME ZONE 'UTC') - n.raw_news_created_at) AS min_lag,
-          max((n.raw_news_crawled_at AT TIME ZONE 'UTC') - n.raw_news_created_at) AS max_lag
-   FROM news_raw n
-   JOIN news_raw_created_at_fix_kst b ON b.raw_news_id = n.raw_news_id;
-
-   ROLLBACK;   -- 기준을 만족하면 이 줄만 COMMIT으로 바꿔 다시 실행한다
+   ```bash
+   B='2026-10-16 20:05:01.826735'   # 2단계의 경계(UTC)
+   ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 \
+     -v boundary='$B' -U newsletter -d newsletter -f -" < scripts/oci/fix_aitimes_created_at_kst.sql          # 리허설
+   ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 \
+     -v boundary='$B' -v apply=1 -U newsletter -d newsletter -f -" < scripts/oci/fix_aitimes_created_at_kst.sql  # 적용
    ```
 
-   기준:
-   - `CREATE TABLE`이 "already exists"로 실패하지 않는다. 실패하면 이미 보정한 DB다 — 멈춘다.
-   - `fixed_rows`가 0보다 크고, `UPDATE`가 알려 준 행 수와 같다. 0이면 경계 시각이 틀렸다.
-   - `min_lag`가 0 근처다(분 단위, 약간 음수일 수 있다). **-9시간 근처면 보정이 안 된 것이고, +9시간 근처면
-     이미 보정된 행을 한 번 더 뺀 것이다** — 둘 다 `COMMIT`하지 않는다.
-   - `max_lag`는 며칠 안이다(첫 ingest가 받은 피드 백로그).
+   읽을 것: `NOTICE: fix_kst fixed=<행 수> min_lag=<분 단위> max_lag=<며칠 안> ahead_after_fix=0`, 끝 줄 `ROLLBACK`/`COMMIT`.
+   2026-10-17 Tier 0: `fixed=605 min_lag=00:01:08 max_lag=2 days 22:21:59 ahead_after_fix=0`(리허설과 적용이 같은 수치).
 
-   `COMMIT` 뒤에 되돌리려면(보관 표까지 지워야 범위를 바꿔 다시 보정할 수 있다):
+   되돌리기(보관 표까지 지운다 - 그래야 범위를 바꿔 다시 보정할 수 있다. 보정 뒤 발행 시각이 다른 이유로 바뀐 행이 있으면 멈춘다):
 
-   ```sql
-   BEGIN;
-   UPDATE news_raw n
-   SET raw_news_created_at = b.created_at_before
-   FROM news_raw_created_at_fix_kst b
-   WHERE n.raw_news_id = b.raw_news_id;
-   DROP TABLE news_raw_created_at_fix_kst;
-   COMMIT;
+   ```bash
+   ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 \
+     [-v apply=1] -U newsletter -d newsletter -f -" < scripts/oci/fix_aitimes_created_at_kst_revert.sql
    ```
 
-   되돌리지 않는 한 보관 표(`news_raw_created_at_fix_kst`)는 "이 DB는 보정했다"는 표시이므로 지우지 않는다.
+   되돌리지 않는 한 보관 표는 "이 DB는 보정했다"는 표시이므로 지우지 않는다.
+5. 확인(읽기 전용): 3단계 조회를 다시 돌려 AI타임스의 `published_after_crawled`가 0인지 본다. 2026-10-17: AI타임스 621행 중 0행,
+   최대 앞섬 −1분 8초, 다른 언론사도 0행.
 
 Mac 덤프(`data/backups/mac-compose-2026-09-26.dump`)의 AI타임스 행도 같은 상태다(5.0~8.9시간 앞섬). 덤프 파일은
 고치지 않는다. 6.4에서 덤프를 복원하면 **Tier 0 행을 병합하기 전에** 복원한 DB에서 4단계를 실행한다 — 덤프의
-행은 모두 고치기 전 코드로 수집했으므로 수집 시각 조건(`AND n.raw_news_crawled_at < ...`) 줄은 뺀다. 그때
+행은 모두 고치기 전 코드로 수집했으므로 경계를 모든 행보다 뒤(`-v boundary='2100-01-01'`)로 둔다. 그때
 병합에 넣는 Tier 0 쪽도 이미 보정돼 있어야 한다(위 "지켜야 할 것"). 보정 전에 받아 둔 백업을 복원하면 그 행은
 다시 보정 전 값이다.
 
-소유자가 정할 것:
+정한 것(2026-10-17, ADR 0008 "2026-10-17 갱신"):
 
-- **범위.** 위 SQL은 고치기 전 코드로 수집한 AI타임스 행 **전부**에서 9시간을 뺀다. 발행 시각이 수집 시각보다
-  뒤인 행(268행)만 고치는 좁은 안도 있다 — 4단계의 `CREATE TABLE ... WHERE`에
-  `AND n.raw_news_created_at > (n.raw_news_crawled_at AT TIME ZONE 'UTC')`를 더하면 된다. 좁은 안은 틀렸다고
-  드러난 행만 건드리지만, 같은 경로로 들어온 나머지 행(52행)이 9시간 밀린 채 남아 한 언론사 안에서 기준이
-  갈린다. 나머지 행도 밀려 있다는 것은 코드 경로에서 나온 추정이고 DB에서 확인하지는 않았다(ADR 0008).
-- **시점.** Tier 0 재배포 자체가 아직 돌려 보지 않은 절차다(4절). 재배포를 미루는 동안에는 보정도 미룬다 —
-  그동안 AI타임스의 새 행은 계속 9시간 뒤로 저장된다.
-  **2026-10-17: 1단계(재배포)는 끝났다**(4.1, ADR 0026 증거 9). 2단계 조회는 두 줄이고 경계는 `2026-10-16 20:05:01.826735`
-  UTC다. 3단계 조회(읽기 전용)에서 AI타임스 606행 중 552행이 발행 > 수집(최대 8시간 59분)이고 다른 언론사의 `max_lead`는
-  모두 0 이하다. 경계 앞 AI타임스 행은 605행이다. 4단계는 실행하지 않았다(범위·시점은 소유자 결정 대기).
+- **범위: 넓은 안** — 경계 앞 AI타임스 행 전부(605행). 좁은 안(발행 > 수집으로 드러난 552행만)은 나머지 53행을 9시간 밀린 채 남겨
+  한 언론사 안에서 기준이 갈린다. 사후 확인: 그 53행 중 47행이 09-26 첫 ingest의 피드 백로그이고 보정 뒤 수집 지연이 9.5시간 ~ 2.9일 —
+  9시간 밀려도 수집 시각을 넘지 않던 행이라는 추정과 맞는다.
+- **시점: 재배포(1단계) 약 11시간 뒤, 호스트 밖 백업 직후.** 보정 전 값은 보관 표와 06:29 UTC의 백업 사본에 남아 있다.
 
 ## 7. Tier 0 내리기
 
