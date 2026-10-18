@@ -71,7 +71,7 @@ NRMS-lite는 P1에서 −0.0215 [−0.0224, −0.0206], P2에서 −0.0531 [−0
 - ranker v2의 인기도 베이스라인 대비 우위는 +0.0559로 작고 gain 상위가 인기도 피처(`pop_clicks_6h` 26%, `pop_ctr_24h` 22%)라서, 인기도 신호가 약한 초기 서비스에는 그대로 옮겨지지 않는다.
 - E15는 신경망 family당 12 trial 대 A\* 24 trial의 예산 비대칭이 있고, 스태킹의 손실이 학습 행 수 감소 탓인지 정보 부족 탓인지는 이 실험에서 가려지지 않는다. test 창이 앞선 실험에서 여러 번 보고되어 A·A\*·A+의 피처 구성에 유리한 방향이다. "GBDT가 신경망보다 낫다"는 [EB-NeRD]·NRMS-lite 한정으로만 쓴다.
 - parity 게이트가 쓰는 모델은 무작위 데이터의 22열 모델이다. 서빙 정의와 EB-NeRD 학습 정의의 차이는 측정하지 않았다.
-- **서빙에 닿은 범위.** 활성 휴리스틱 스코어러 v2([ADR 0014](../adr/0014-active-heuristic-scorer-v2.md))가 목록을 만들고, 랭커는 요청 경로 밖에서 점수만 남기는 shadow 경로까지 코드가 있다. shadow 등록 도구와 테스트까지만 있고([ADR 0037](../adr/0037-ebnerd-shadow-model-registration.md)), 서빙 API가 배포되어 있지 않아 등록된 랭커와 shadow 점수는 아직 없다.
+- **서빙 경로에 연결된 범위.** 활성 휴리스틱 스코어러 v2([ADR 0014](../adr/0014-active-heuristic-scorer-v2.md))가 목록을 만들고, 랭커는 요청 경로 밖에서 점수만 남기는 shadow 경로까지 코드가 있다. shadow 등록 도구와 테스트까지만 있고([ADR 0037](../adr/0037-ebnerd-shadow-model-registration.md)), 서빙 API가 배포되어 있지 않아 등록된 랭커와 shadow 점수는 아직 없다.
 
 ## 링크
 
