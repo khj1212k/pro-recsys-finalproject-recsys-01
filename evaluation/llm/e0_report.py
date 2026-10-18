@@ -102,6 +102,17 @@ def call_failure_type(call: Optional[Dict[str, Any]]) -> Optional[str]:
     return CALL_ERROR_TYPE.get(error, "transport")
 
 
+# 재시도 금지 목록으로 닫은 클러스터의 `failure_reason`(ADR 0010 Addendum 2026-10-18, core.llm.client.NO_RETRY_REASONS)과
+# 그 root_cause. 등록한 15개 값(e0_registered.ROOT_CAUSES)만 쓴다 - 새 값을 더하지 않고 정의된 자리에 놓는다:
+#   infra          -> aborted_infra: 정의 ①이 말하는 "401/402/403/404·킬 스위치를 받았다"와 같은 조건이다
+#                     (core.llm.client._NO_RETRY_BY_ERROR: kill_switch -> infra, INFRA_HTTP_STATUSES -> infra)
+#   length         -> length, content_filter -> content_filter: 정의 ⑥의 그 유형이다. 사유가 그 호출의 오류 코드에서
+#                     나오므로 호출 행 없이도 같은 값이다(그래프를 끝낸 단계는 클러스터 평가·본문/메타·judge 중 어디든 될 수 있다)
+# 이 값은 #48 이후 코드가 낸다. 이미 커밋된 E0 리포트(옛 코드의 실행)에는 이런 outcome이 없고, 그 입력(반출본·라벨 패키지의 본문)은
+# 지워서 리포트를 다시 만들 수 없다 - 그래서 이 분류는 리포트 JSON을 바꾸지 않는다(ADR 0009 A9.1 2항).
+NO_RETRY_ROOT_CAUSE = {"infra": "aborted_infra", "length": "length", "content_filter": "content_filter"}
+
+
 def _last(calls: Sequence[Dict[str, Any]], purpose: str, attempt: Optional[int] = None) -> Optional[Dict[str, Any]]:
     picked = [c for c in calls if c.get("purpose") == purpose and (attempt is None or c.get("graph_attempt") == attempt)]
     return max(picked, key=lambda c: c.get("call_seq") or 0) if picked else None
@@ -123,6 +134,8 @@ def root_cause(end: Dict[str, Any], calls: Sequence[Dict[str, Any]]) -> Optional
     if outcome == "failed:save_error":
         return "save_error"
     reason = outcome.split(":", 1)[1] if outcome.startswith("failed:") else None
+    if reason in NO_RETRY_ROOT_CAUSE:
+        return NO_RETRY_ROOT_CAUSE[reason]
     stage_calls: List[Optional[Dict[str, Any]]] = []
     if outcome == "skipped":
         stage_calls = [_last(calls, "cluster_eval")]

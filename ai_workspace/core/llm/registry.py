@@ -8,7 +8,7 @@ import os
 import threading
 from typing import Dict, Optional, Tuple
 
-from core.llm.adapters import HyperCLOVALLMClient, OpenAICompatLLMClient
+from core.llm.adapters import OpenAICompatLLMClient
 from core.llm.client import LLMClient
 from core.llm_client import SimpleRateLimiter
 
@@ -68,10 +68,6 @@ PROVIDER_CONFIG = {
         "supports_json_schema": False,
         "default_model": "claude-haiku-4-5",
     },
-    "naver": {
-        "legacy": True,
-        "default_model": "HCX-003",
-    },
 }
 
 # 역할별 기본 프로바이더. 사용자가 지금 보유한 키는 Gemini(Google Cloud 크레딧)뿐이라
@@ -125,9 +121,10 @@ def resolve_role_config(role: str) -> Tuple[str, str]:
     provider = os.getenv(f"{prefix}_PROVIDER", default_provider).lower()
 
     if provider not in PROVIDER_CONFIG:
+        removed = " - naver(HyperCLOVA)는 2026-10-18에 제거했다(ADR 0005 부록)" if provider == "naver" else ""
         raise ValueError(
             f"{prefix}_PROVIDER={provider!r}는 알 수 없는 프로바이더입니다 "
-            f"(허용: {sorted(PROVIDER_CONFIG)})"
+            f"(허용: {sorted(PROVIDER_CONFIG)}){removed}"
         )
 
     # role이 자기 기본 프로바이더를 그대로 쓰면 role별 기본 모델(ROLE_DEFAULT_MODEL)을
@@ -177,9 +174,6 @@ def _build_client(provider: str, model: str, reasoning_effort: Optional[str] = N
             f"{provider} 프로바이더는 reasoning_effort 전달을 지원하지 않습니다 (설정값: {reasoning_effort!r}). "
             "문서로 확인된 프로바이더에만 허용합니다 - 해당 역할의 *_REASONING_EFFORT를 비우세요"
         )
-
-    if cfg.get("legacy"):
-        return HyperCLOVALLMClient(model=model)
 
     api_key = os.getenv(cfg["api_key_env"], "")
     if not api_key:

@@ -342,7 +342,9 @@ def breaker_effect(outcome: str) -> str:
         return "fatal"  # 선불 잔액 소진 - 같은 런 안에서는 회복되지 않는다
     if status is not None and status >= 500:
         return "failure"
-    if outcome in ("timeout", "connection", "body_5xx"):  # body_5xx: HTTP 200 본문의 서버 오류 코드(HyperCLOVA)
+    # body_5xx: HTTP 200 본문의 서버 오류 코드. 이 결과를 내던 HyperCLOVA 클라이언트는 2026-10-18에 제거했다 - 지금 내는 클라이언트는
+    # 없고, 어휘만 남겼다(동작 불변).
+    if outcome in ("timeout", "connection", "body_5xx"):
         return "failure"
     return "neutral"  # 429, 그 밖의 4xx, 분류 못 한 오류
 

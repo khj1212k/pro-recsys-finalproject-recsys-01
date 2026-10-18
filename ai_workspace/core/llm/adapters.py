@@ -1,7 +1,6 @@
 # LLM 프로바이더 어댑터
 # - OpenAICompatLLMClient: OpenAI Chat Completions 호환 엔드포인트(OpenAI/Gemini/Upstage)용 단일 어댑터
-# - HyperCLOVALLMClient: 레거시 NaverHyperCLOVAClient를 LLMClient 계약으로 감싼 어댑터
-#   (기본 프로바이더는 아니지만, GEN_PROVIDER=naver 등으로 명시하면 계속 쓸 수 있다 - ADR 0005 참고)
+#   (레거시 HyperCLOVA 어댑터는 2026-10-18에 제거했다 - ADR 0005 부록 2026-10-18)
 
 import logging
 import time
@@ -19,7 +18,6 @@ from core.llm_client import (
     INITIAL_BACKOFF,
     MAX_BACKOFF,
     MAX_RETRIES,
-    NaverHyperCLOVAClient,
     SimpleRateLimiter,
     extract_json_from_response,
 )
@@ -367,71 +365,3 @@ class OpenAICompatLLMClient(LLMClient):
                 raise _ResponseRejected(str(e), usage=usage) from e
 
         return text, parsed, usage
-
-
-class HyperCLOVALLMClient(LLMClient):
-    """레거시 HyperCLOVA X 어댑터.
-
-    HyperCLOVA API는 OpenAI 호환이 아니고 response_format(json_schema)을 지원하지
-    않으므로, 프롬프트에 의존하는 JSON 모드 + extract_json_from_response 복구 +
-    pydantic 검증으로만 동작한다. 재시도/백오프/메트릭 기록은 기존
-    NaverHyperCLOVAClient.chat_completion 내부에서 이미 처리하므로 여기서는
-    한 번만 호출하고 결과를 LLMResult로 감싼다.
-    """
-
-    def __init__(self, model: Optional[str] = None, *, legacy_client: Optional[Any] = None):
-        self.provider = "naver"
-        self._legacy_client = legacy_client or NaverHyperCLOVAClient(model=model)
-        self.model = getattr(self._legacy_client, "model", model or "HCX-003")
-
-    def complete(
-        self,
-        messages: List[Dict[str, str]],
-        *,
-        schema: Optional[Type[BaseModel]] = None,
-        purpose: str = "unknown",
-        temperature: float = 0.2,
-        max_tokens: int = 4096,
-    ) -> LLMResult:
-        # 지출 예약·정산은 요청을 실제로 보내는 NaverHyperCLOVAClient.chat_completion 안에서 한다
-        # (core/llm_client.py). 여기서는 이미 멈춘 런인지만 본다.
-        get_budget_guard().ensure_run_active(self.provider, self.model, purpose)
-
-        killed = check_kill_switch(self.provider, self.model, purpose)
-        if killed is not None:
-            return killed
-
-        start = time.time()
-        response_format = {"type": "json_object"} if schema is not None else None
-        text = self._legacy_client.chat_completion(
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            response_format=response_format,
-            purpose=purpose,
-        )
-        latency = time.time() - start
-
-        if text is None:
-            return LLMResult(
-                text=None, parsed=None, usage=LLMUsage(), latency_s=latency,
-                attempts=1, provider=self.provider, model=self.model,
-                error="HyperCLOVA 응답 없음 (내부 재시도 소진)",
-            )
-
-        parsed = None
-        error = None
-        if schema is not None:
-            raw = extract_json_from_response(text)
-            if raw is None:
-                error = "JSON 추출 실패"
-            else:
-                try:
-                    parsed = schema.model_validate(raw)
-                except ValidationError as e:
-                    error = f"스키마 검증 실패: {e}"
-
-        return LLMResult(
-            text=text, parsed=parsed, usage=LLMUsage(), latency_s=latency,
-            attempts=1, provider=self.provider, model=self.model, error=error,
-        )

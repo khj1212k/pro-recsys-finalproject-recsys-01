@@ -84,6 +84,19 @@ def test_fifth_consecutive_infra_failure_opens_the_circuit():
     assert isinstance(exc.value, LLMRunStop)
 
 
+def test_a_server_error_code_in_an_http_200_body_counts_toward_the_circuit():
+    """결과 이름 body_5xx(HTTP 200 본문의 서버 오류 코드). 이 결과를 내던 HyperCLOVA 클라이언트는 2026-10-18에 제거했다 -
+    지금 내는 클라이언트는 없지만 어휘는 남겼으므로 가드 수준에서 동작이 그대로인지만 묶어 둔다."""
+    for _ in range(4):
+        _fail("body_5xx")
+
+    with pytest.raises(LLMCircuitOpen) as exc:
+        _fail("body_5xx")
+
+    assert exc.value.details["last_outcome"] == "body_5xx"
+    assert budget.billing_basis("body_5xx", "gemini", None) == "reserved"
+
+
 def test_default_threshold_exceeds_the_worker_pool_so_one_blip_cannot_trip_it():
     """워커 4개가 같은 순간에 한 번씩 실패해도(일시 장애) 열리지 않는다 - 누군가는 백오프 뒤 다시 실패해야 한다."""
     from pipeline.stages import MAX_NEWSLETTER_WORKERS

@@ -1,7 +1,7 @@
 # 지출 상한이 실제 클라이언트 경로 전부에 걸려 있는지 확인한다 - docs/adr/0035.
 #
-# 경로 셋: (1) 역할(generator/judge/tone)이 모두 쓰는 OpenAICompatLLMClient, (2) HyperCLOVA 어댑터가
-# 감싸는 레거시 NaverHyperCLOVAClient, (3) 레거시 OpenAIClient. 전송 계층은 전부 페이크다 - 거부된
+# 경로 둘: (1) 역할(generator/judge/tone)이 모두 쓰는 OpenAICompatLLMClient, (2) 레거시 OpenAIClient.
+# (HyperCLOVA 어댑터·클라이언트는 2026-10-18에 제거했다 - ADR 0005 부록.) 전송 계층은 전부 페이크다 - 거부된
 # 뒤에 호출되면 페이크가 바로 실패한다. 실제 API 호출은 없다.
 import json
 import os
@@ -11,12 +11,11 @@ import threading
 import time
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import httpx2
 import openai
 import pytest
-import requests
 
 sys.path.insert(
     0,
@@ -35,10 +34,10 @@ import core.llm.registry as registry  # noqa: E402
 import core.llm_client as legacy_module  # noqa: E402
 from config.settings import Settings  # noqa: E402
 from core.llm import budget  # noqa: E402
-from core.llm.adapters import HyperCLOVALLMClient, OpenAICompatLLMClient  # noqa: E402
+from core.llm.adapters import OpenAICompatLLMClient  # noqa: E402
 from core.llm.budget import LLMBudgetExceeded, LLMCircuitOpen, LLMUnpricedModel  # noqa: E402
 from core.llm.schemas import ClusterEval  # noqa: E402
-from core.llm_client import NaverHyperCLOVAClient, OpenAIClient  # noqa: E402
+from core.llm_client import OpenAIClient  # noqa: E402
 from core.llm_metrics import LLMMetricsCollector  # noqa: E402
 
 MESSAGES = [{"role": "user", "content": "x" * 936}]
@@ -486,106 +485,6 @@ def test_worker_threads_sharing_a_run_never_spend_past_the_cap(monkeypatch, tmp_
 # ---------------------------------------------------------------------------
 # 레거시 클라이언트
 # ---------------------------------------------------------------------------
-
-def _naver_ok(prompt=400, completion=120):
-    response = MagicMock(status_code=200, headers={})
-    response.json.return_value = {
-        "status": {"code": "20000"},
-        "result": {"message": {"content": "ok"}, "usage": {"promptTokens": prompt, "completionTokens": completion}},
-    }
-    return response
-
-
-@pytest.fixture
-def naver(monkeypatch):
-    monkeypatch.setenv("NCP_CLOVASTUDIO_API_KEY", "nv-dummy")
-    monkeypatch.setenv("NAVER_LLM_MIN_INTERVAL", "0")
-    return NaverHyperCLOVAClient(model="HCX-005")
-
-
-def test_legacy_hyperclova_has_no_price_so_it_is_refused_before_the_request(naver):
-    with patch("core.llm_client.requests.post") as post:
-        with pytest.raises(LLMUnpricedModel):
-            naver.chat_completion(MESSAGES, purpose="cluster_eval")
-
-    post.assert_not_called()
-
-
-def test_legacy_hyperclova_reserves_and_commits_with_an_explicit_price(naver, monkeypatch, tmp_path):
-    monkeypatch.setenv("LLM_BUDGET_FALLBACK_INPUT_PER_1M", "5")
-    monkeypatch.setenv("LLM_BUDGET_FALLBACK_OUTPUT_PER_1M", "20")
-
-    with patch("core.llm_client.requests.post", return_value=_naver_ok()) as post:
-        assert naver.chat_completion(MESSAGES, max_tokens=1000, purpose="newsletter_content_gen") == "ok"
-
-    reserve, commit = _events(tmp_path)
-    assert post.call_count == 1
-    assert (reserve["provider"], reserve["model"], reserve["price_source"]) == ("naver", "HCX-005", "fallback_override")
-    assert reserve["nusd"] == _worst_case_nusd(1000, price_in=5_000, price_out=20_000, schema=False)
-    assert (commit["basis"], commit["nusd"]) == ("actual", 400 * 5_000 + 120 * 20_000)
-
-
-def test_legacy_hyperclova_stops_before_the_request_when_the_cap_is_spent(naver, monkeypatch):
-    monkeypatch.setenv("LLM_BUDGET_FALLBACK_INPUT_PER_1M", "5")
-    monkeypatch.setenv("LLM_BUDGET_FALLBACK_OUTPUT_PER_1M", "20")
-    _caps(monkeypatch, total="0")
-
-    with patch("core.llm_client.requests.post") as post:
-        with pytest.raises(LLMBudgetExceeded) as exc:
-            naver.chat_completion(MESSAGES, purpose="cluster_eval")
-
-    post.assert_not_called()
-    assert exc.value.details["scope"] == "total"
-
-
-def test_legacy_hyperclova_failed_attempts_are_charged_at_the_worst_case(naver, monkeypatch, tmp_path):
-    """이 프로바이더의 오류 응답 과금 여부는 확인한 적이 없다 - 429도 타임아웃도 예약액 그대로 잡는다."""
-    monkeypatch.setenv("LLM_BUDGET_FALLBACK_INPUT_PER_1M", "5")
-    monkeypatch.setenv("LLM_BUDGET_FALLBACK_OUTPUT_PER_1M", "20")
-    rate_limited = MagicMock(status_code=429, headers={})
-
-    with patch("core.llm_client.requests.post",
-               side_effect=[rate_limited, requests.exceptions.Timeout(), _naver_ok()]):
-        assert naver.chat_completion(MESSAGES, max_tokens=1000, purpose="cluster_eval") == "ok"
-
-    commits = [e for e in _events(tmp_path) if e["ev"] == "commit"]
-    assert [(c["outcome"], c["basis"]) for c in commits] == [
-        ("http_429", "reserved"), ("timeout", "reserved"), ("ok", "actual"),
-    ]
-
-
-def test_legacy_hyperclova_server_error_in_the_response_body_counts_toward_the_breaker(naver, monkeypatch, tmp_path):
-    """HTTP 200 본문의 5xx 코드: 정산 없이 재시도하면 브레이커가 보지 못해 재시도 상한(10)까지 돈다."""
-    monkeypatch.setenv("LLM_BUDGET_FALLBACK_INPUT_PER_1M", "5")
-    monkeypatch.setenv("LLM_BUDGET_FALLBACK_OUTPUT_PER_1M", "20")
-    overloaded = MagicMock(status_code=200, headers={})
-    overloaded.json.return_value = {"status": {"code": "50000", "message": "internal error"}}
-
-    with patch("core.llm_client.requests.post", return_value=overloaded) as post:
-        with pytest.raises(LLMCircuitOpen) as exc:
-            naver.chat_completion(MESSAGES, max_tokens=1000, purpose="cluster_eval")
-
-    commits = [e for e in _events(tmp_path) if e["ev"] == "commit"]
-    assert post.call_count == len(commits) == 5  # 기본 임계
-    assert {(c["outcome"], c["basis"]) for c in commits} == {("body_5xx", "reserved")}
-    assert exc.value.details["last_outcome"] == "body_5xx"
-
-
-def test_hyperclova_adapter_path_is_covered_by_the_same_guard(naver, monkeypatch):
-    """role을 naver로 돌렸을 때의 경로: 어댑터 -> 레거시 클라이언트. 상한이 차면 요청이 나가지 않는다."""
-    monkeypatch.setenv("LLM_BUDGET_FALLBACK_INPUT_PER_1M", "5")
-    monkeypatch.setenv("LLM_BUDGET_FALLBACK_OUTPUT_PER_1M", "20")
-    _caps(monkeypatch, run="0")
-    adapter = HyperCLOVALLMClient(legacy_client=naver)
-
-    with patch("core.llm_client.requests.post") as post:
-        with pytest.raises(LLMBudgetExceeded):
-            adapter.complete(MESSAGES, schema=ClusterEval, purpose="cluster_eval")
-        with pytest.raises(LLMBudgetExceeded):  # 멈춘 런: 어댑터 입구에서 바로 같은 중단
-            adapter.complete(MESSAGES, schema=ClusterEval, purpose="cluster_eval")
-
-    post.assert_not_called()
-
 
 @pytest.fixture
 def legacy_openai(monkeypatch):
