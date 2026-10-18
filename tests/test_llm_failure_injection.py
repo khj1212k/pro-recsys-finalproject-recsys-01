@@ -18,7 +18,9 @@ sys.path.insert(
 )
 
 from tests import llm_graph_fakes as fx  # noqa: E402
-from tests.llm_fakes import FakeLLMClient, make_status_error  # noqa: E402
+from tests.llm_fakes import FakeLLMClient, make_response, make_status_error  # noqa: E402
+
+from evaluation.llm.evalset import candidates_from_cluster_log  # noqa: E402
 
 from core.llm.budget import LLMCircuitOpen  # noqa: E402
 from core.llm.client import LLMResult, LLMUsage  # noqa: E402
@@ -167,6 +169,49 @@ def test_a_genuine_fail_verdict_is_still_skipped():
     assert final["skipped_clusters"] == [1] and final["failed_clusters"] == []
     assert final.get("failure_reason") is None
     assert _calls(judge) == 1 and _calls(gen) == 0
+
+
+def _hard_case_flags(final):
+    """cluster_history에 남는 요약을 평가셋 추출기(evaluation/llm/evalset.py)에 그대로 넣어 hard_case를 읽는다."""
+    outcome = summarize_cluster_outcome(final, 1)
+    cands = candidates_from_cluster_log(7, {"1": fx.IDS, "cluster_outcomes": {"1": outcome}})
+    return outcome, [c.hard_case for c in cands]
+
+
+def test_a_blocked_cluster_evaluation_is_not_picked_as_a_hard_case(saved):
+    """평가 호출이 막혀 생긴 FAIL은 군집 판정이 아니다: 요약이 사유를 남기고 평가셋 추출기가 어려운 사례로 뽑지 않는다."""
+    gen, judge = fx.role_transports([], [make_status_error(401, "denied")])
+
+    final = compile_workflow().invoke(fx.initial_state())
+    outcome, hard = _hard_case_flags(final)
+
+    assert outcome["status"] == "failed" and outcome["failure_reason"] == "infra"
+    assert outcome["cluster_eval"] == {"decision": "FAIL", "confidence": 0.0, "parsed": False, "llm_failure": "infra"}
+    assert hard == [False]  # 수정 전: decision == FAIL만 봐서 [True]
+
+
+def test_an_unparsed_cluster_evaluation_is_skipped_but_not_a_hard_case(saved):
+    """모델이 스키마를 못 지켜(재시도 2회 소진) 판정이 없는 FAIL: 예전처럼 skipped지만 어려운 사례는 아니다."""
+    gen, judge = fx.role_transports([], [make_response("not json", parsed=None)] * 3)
+
+    final = compile_workflow().invoke(fx.initial_state())
+    outcome, hard = _hard_case_flags(final)
+
+    assert final["skipped_clusters"] == [1] and final["failed_clusters"] == []
+    assert outcome["status"] == "skipped"
+    assert outcome["cluster_eval"] == {"decision": "FAIL", "confidence": 0.0, "parsed": False}
+    assert hard == [False]
+
+
+def test_a_genuine_fail_verdict_is_still_a_hard_case(saved):
+    """대조군: 모델이 스키마를 지켜 FAIL을 답한 군집은 어려운 사례다(요약의 모양도 그대로)."""
+    gen, judge = fx.role_transports([], [fx.cluster_fail()])
+
+    final = compile_workflow().invoke(fx.initial_state())
+    outcome, hard = _hard_case_flags(final)
+
+    assert outcome["cluster_eval"] == {"decision": "FAIL", "confidence": 0.4}
+    assert hard == [True]
 
 
 # ---------------------------------------------------------------------------

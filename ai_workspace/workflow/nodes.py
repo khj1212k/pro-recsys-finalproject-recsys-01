@@ -132,7 +132,9 @@ def handle_cluster_eval_failure(state: AgentState) -> Dict[str, Any]:
 
     # 0. 평가 호출 자체가 막혔다(킬 스위치, HTTP 401/402/403/404, length, content_filter). 군집의 품질에 대한
     #    판정이 아니므로 skipped에 넣지 않고 그 사유의 실패로 기록하고, 이 클러스터는 더 호출하지 않는다.
-    #    (skipped로 두면 인프라 장애가 "군집이 나쁨"으로 평가셋·통계에 섞인다.)
+    #    (skipped로 두면 인프라 장애가 "군집이 나쁨"으로 통계에 섞인다. 평가셋 추출기는 status가 아니라
+    #    cluster_eval을 보므로, pipeline/stages.py::summarize_cluster_outcome이 llm_failure를 요약에 남기고
+    #    evaluation/llm/evalset.py가 그런 FAIL을 어려운 사례에서 뺀다.)
     blocked = eval_result.get("llm_failure")
     if blocked:
         failed = list(state.get("failed_clusters", []))

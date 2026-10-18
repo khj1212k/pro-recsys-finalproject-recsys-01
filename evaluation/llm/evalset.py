@@ -123,7 +123,11 @@ def candidates_from_cluster_log(
         m = meta.get(str(cid)) or meta.get(cid)
         split_v2 = "unknown" if m is None else ("yes" if m.get("split_v2") else "no")
         o = outcomes.get(str(cid)) or outcomes.get(cid) or {}
-        hard = (o.get("cluster_eval") or {}).get("decision") == "FAIL"
+        ce = o.get("cluster_eval") or {}
+        # 어려운 사례 = ClusterEvaluator가 군집을 FAIL로 판정한 것. 평가 호출이 막혔거나(llm_failure) 응답이
+        # 해석되지 않아(parsed=False) 생긴 FAIL은 판정이 아니므로 뺀다(ADR 0009 A3와 같은 기준 - ROC에서도
+        # 파싱되지 않은 행은 뺀다). 이 두 키는 WP3 이후 행에만 있고, 이전 행은 키가 없어 예전대로 읽힌다.
+        hard = ce.get("decision") == "FAIL" and not ce.get("llm_failure") and ce.get("parsed") is not False
         out.append(ClusterCandidate(
             run_id=int(run_id),
             cluster_id=cid,
