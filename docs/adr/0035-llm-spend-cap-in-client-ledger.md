@@ -152,6 +152,7 @@ A·B·C는 전부 "나간 뒤에 안다". 스레드 4개가 동시에 호출하�
    bake-off의 `client_for`), 레거시 `NaverHyperCLOVAClient`(HyperCLOVA 어댑터 경유 포함), 레거시 `OpenAIClient`.
    "시도 1회 = 예약 1건 = HTTP 요청 1건"이 되도록 SDK는 어느 경로에서든 `max_retries=0`,
    `timeout=LLM_REQUEST_TIMEOUT_S`로 만든다(SDK 기본값은 재시도 2회라 예약 1건에 요청이 3건까지 나간다).
+   2026-10-18 갱신: HyperCLOVA 경로는 PR #51로 지웠다 - 지금 시도마다 예약·정산하는 경로는 `OpenAICompatLLMClient`와 레거시 `OpenAIClient` 둘이다. 아래 5항 표의 "HTTP 200 본문의 서버 오류 코드(HyperCLOVA)" 행과 증거 절의 HyperCLOVA 본문 5xx 서술도 그때의 기록이다 - 가드의 결과 이름 `body_5xx`는 남았고 내는 클라이언트가 없다(ADR 0005 부록).
 9. **파이프라인은 깨끗한 중단으로 드러낸다.** `run_clusters_bounded`는 중단을 받으면 그 클러스터를 `stopped`, 시작하지 않은
    것을 `not_started`로 남기고 더 시작하지 않는다. Stage5는 `cluster_outcomes`·`llm_stop`을 `cluster_history`에, 사유와 지출
    스냅숏을 메트릭 요약의 `notes`에 남긴 뒤 `PipelineStopped`를 낸다. `jobs.run generate`와 `ai_workspace/main.py`는 **종료
@@ -223,7 +224,7 @@ A·B·C는 전부 "나간 뒤에 안다". 스레드 4개가 동시에 호출하�
 7. **`BaseException`이어야 하는 이유** (`tests/test_llm_budget_pipeline.py`, 22건). 실제 그래프 + 레지스트리의 실제 어댑터 +
    페이크 전송으로 상한이 생성·판정·문체 변환 직전에 닿는 세 경우와 402 한 경우: 저장 0건, 그 뒤 요청 0건. 같은 페이크로
    상한이 넉넉하면 저장까지 가는 대조군이 있다. `LLMRunStop`을 `Exception`으로 바꾸면 문체 단계 테스트가 실패한다 — 형식체
-   초안이 저장된다. 리뷰 뒤의 코드에서 이 변이를 다시 돌리면 지출 관련 일곱 파일 265건 중 3건이 실패한다: 예외 계층을
+   초안이 저장된다. 리뷰 뒤의 코드에서 이 변이를 다시 돌리면 지출 관련 일곱 파일 265건 중 3건이 실패한다(2026-10-18 갱신: PR #51이 셋째인 HyperCLOVA 본문 5xx 테스트를 지운 뒤 다시 돌리면 168건 중 2건이 실패하고 성질은 여전히 잡힌다 - ADR 0005 부록): 예외 계층을
    직접 보는 테스트, 문체 단계 테스트, 그리고 HyperCLOVA 본문 5xx 테스트(레거시 클라이언트의 `except Exception`이 서킷
    개방을 삼키고 `None`을 돌려준다). generate 잡은 단가 없는 `GEN_MODEL`에서 Stage5에 들어가지 않고
    `llm_unpriced_model`로 멈춘다.
