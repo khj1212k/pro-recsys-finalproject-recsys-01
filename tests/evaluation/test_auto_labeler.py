@@ -549,7 +549,24 @@ def test_report_counts_ids_and_labels_only_and_passes_the_leak_guard(proto, pkg,
     assert jt == {"judge_pass_pub_Y": 0, "judge_pass_pub_N": 0, "judge_fail_pub_Y": 0, "judge_fail_pub_N": 1}
     assert report["labeler_vs_cluster_evaluator"]["first_cluster_eval_vs_single_event"]["table"]["fail_single_Y"] == 1
     assert "checker_vs_auto_labeler_first_draft" in a["a8_8_uses"] and "relabel" not in a["a8_8_uses"]
+    chk = a["a8_8_uses"]["checker_vs_auto_labeler_first_draft"]
+    assert {"checker_block_overlaps_labeler_span", "labeler_number_span_overlaps_checker",
+            "labeler_quote_span_overlaps_checker"} <= set(chk)
+    assert not {"precision", "recall_number", "recall_quote"} & set(chk)                # 사람 정답 대비가 아니므로 이름도 겹침이다
+    assert "advisory_entity_flag_overlaps_labeler_span" in a["a8_8_uses"]["saved"]
+    assert "advisory_entity_precision" not in a["a8_8_uses"]["saved"] and "정답 대비가 아니다" in a["a8_8_uses"]["saved"]["note"]
+    ag = report["run_a_vs_run_b"]
+    assert ag["tone_drift"]["one_category_only"] is True                                # 양성이 없는 일치
+    assert ag["style_within_1"]["always_true_by_range"] is True and ag["style_within_1"]["styles_seen"] == [4]
+    assert ag["cluster_ids_only_in_run_a"] == [] and "대표 표본이 아니다" in ag["run_b_selection"]
+    assert report["labeler_vs_cluster_evaluator"]["exploratory_not_preregistered"] is True
+    assert report["labeler_vs_judge_v2"]["judge_unsupported_vs_fact_error"]["exploratory_not_preregistered"] is True
+    assert "exploratory_not_preregistered" not in report["labeler_vs_judge_v2"]["judge_decision_vs_publishable"]
+    caveats = " ".join(report["caveats"])
+    assert "정할 수 없다" in caveats and "낮춘다'는 방향 서술은 A8.14에서 정정" in caveats
+    assert "judge FAIL·라벨러 publishable 0건" in caveats and "modelVersion" in caveats       # fake 응답의 modelVersion은 등록 버전이 아니다
     md = rep.render_md(report)
+    assert md.count("[탐색 - 사전 등록 아님]") == 2 and "한 범주만 냄(일치가 정보 없음)" in md and "항상 참" in md
     out = tmp_path / "r.md"
     guard.write_text(out, md)
     guard.write_text(tmp_path / "r.json", json.dumps(report, ensure_ascii=False))

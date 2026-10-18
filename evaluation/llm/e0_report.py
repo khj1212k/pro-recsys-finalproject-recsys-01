@@ -827,8 +827,10 @@ def render_md(report: Dict[str, Any]) -> str:
                 if not x or not x.get("n"):
                     return "0/0"
                 return f"{x['k']}/{x['n']} = {x['rate']:.3f} [{x['wilson95'][0]:.3f}, {x['wilson95'][1]:.3f}]"
-            lines += [f"- 정의·주의·행별 값은 [{al['report']}](e0_auto_labels_v1.md). 라벨러 {al['labeler_model']} "
-                      f"({', '.join(al['labeler_model_versions_seen'])}), 비용 ${al['cost_usd']:.6f}. {al['note']}",
+            seen = list(al["labeler_model_versions_seen"])
+            version_note = "" if seen == [al["labeler_model"]] else f" (응답 modelVersion: {', '.join(seen) or '없음'})"
+            lines += [f"- 정의·주의·행별 값은 [{al['report']}](e0_auto_labels_v1.md). 라벨러 {al['labeler_model']}"
+                      f"{version_note}, 비용 ${al['cost_usd']:.6f}. {al['note']}",
                       f"- 발행 가능률(자동 라벨, 주 지표 저장본 Y / n_p): {r(al['publishable_primary'])}; 첫 초안만 {r(al['publishable_first_draft'])}",
                       f"- 사실 오류 ≥1(출력): {r(al['fact_error_ge1'])}; 핵심 사실 커버리지(사실 단위): {r(al['key_fact_coverage'])}; "
                       f"single_event: {r(al['single_event'])}",

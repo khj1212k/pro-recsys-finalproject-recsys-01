@@ -21,6 +21,12 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 from evaluation.llm import auto_labeler as al
 
 REPORT_REL = "reports/llm/e0_auto_labels_v1"
+OVERLAP_NAMES = {      # e0_labels.label_metrics의 사람 라벨용 키 -> 자동 라벨용 이름
+    "precision": "checker_block_overlaps_labeler_span",
+    "recall_number": "labeler_number_span_overlaps_checker",
+    "recall_quote": "labeler_quote_span_overlaps_checker",
+    "advisory_entity_precision": "advisory_entity_flag_overlaps_labeler_span",
+}
 SIZE_BUCKETS = (("3-4", 3, 4), ("5-9", 5, 9), ("10+", 10, None))
 
 NOT_COMPUTABLE = [
@@ -35,11 +41,30 @@ CAVEATS = [
     "라벨러(gemini-3-flash-preview)·generator(gemini-3.5-flash-lite)·judge v2(gemini-3.1-flash-lite)가 모두 Gemini다(같은 계열). "
     "라벨러 대 judge 일치는 독립 검증이 아니다.",
     "라벨러는 요청받은 '가장 강한 모델'이 아니다 - 비용 상한 $0.50 때문에 선정 규칙(A8.13 (b)1)이 고른 preview 모델이다.",
-    "기사당 앞 1500자만 보여 줬다(가이드는 전체 본문). 1500자 뒤에만 있는 사실을 초안이 맞게 썼다면 오류로 세므로 "
-    "사실 오류율은 높게, 발행 가능률은 낮게 치우칠 수 있다.",
+    "기사당 앞 1500자만 보여 줬다(가이드는 전체 본문). 생성기가 보는 것(긴 순 기사 10건 × 앞 1500자)은 라벨러가 보는 것(모든 기사의 "
+    "앞 1500자) 안에 있으므로, 이 창이 사실 오류율과 발행 가능률을 어느 쪽으로 치우치게 하는지는 이 자료로 정할 수 없다 "
+    "(A8.13 (b)3의 '사실 오류를 늘리고 발행 가능률을 낮춘다'는 방향 서술은 A8.14에서 정정했다).",
     "thinking은 최소(minimal), temperature 1.0(기본값). 런 b는 재라벨 대상 + 예산 안의 나머지라 전 항목이 아니다.",
     "n이 작다(클러스터 15, 출력 14). 비율의 Wilson 95% CI가 넓다. 가설 검정은 없다.",
 ]
+
+
+def dynamic_caveats(proto: "al.Protocol", judge: Dict[str, Any], versions: Sequence[str]) -> List[str]:
+    """데이터에서 읽은 값이 들어가는 주의(정적 CAVEATS 뒤에 붙는다)."""
+    t = judge["judge_decision_vs_publishable"]["table"]
+    n = sum(t.values())
+    out = []
+    if n:
+        disagree = t["judge_fail_pub_Y"] + t["judge_pass_pub_N"]
+        out.append(f"라벨러와 judge v2의 불일치 {disagree}건은 judge FAIL·라벨러 publishable {t['judge_fail_pub_Y']}건, judge PASS·라벨러 "
+                   f"not publishable {t['judge_pass_pub_N']}건이다(첫 초안 {n}건). 한쪽으로 쏠려 있다는 사실만 있고 어느 쪽이 맞는지는 모른다 - "
+                   "라벨러가 judge보다 관대하거나 같은 계열 생성물에 호의적이어서 발행 가능률이 높게 나왔을 가능성도, judge가 엄격할 가능성도 "
+                   "배제하지 못한다.")
+    listed = proto.labeler.get("model_version_listed")
+    if listed and list(versions) != [listed]:
+        out.append(f"응답의 modelVersion은 {', '.join(versions) or '없음'}뿐이라 프로토콜에 적은 models.list 버전({listed})으로 고정됐는지는 "
+                   "확인하지 못했다(preview 모델은 제공사가 동작을 바꿀 수 있다).")
+    return out
 
 
 def ratio(k: int, n: int) -> Dict[str, Any]:
@@ -63,7 +88,10 @@ def kappa(pairs: Sequence[Tuple[Any, Any]]) -> Optional[float]:
 
 def agreement(pairs: Sequence[Tuple[Any, Any]], ids: Sequence[str]) -> Dict[str, Any]:
     k = sum(1 for a, b in pairs if a == b)
+    categories = {x for pair in pairs for x in pair}
     return {**ratio(k, len(pairs)), "kappa_reference_only": kappa(pairs),
+            # 두 런이 한 범주만 냈다면 일치가 자명하다(양성이 없는 일치는 정보가 없다)
+            "one_category_only": bool(pairs) and len(categories) == 1,
             "disagreement_ids": sorted(i for i, (a, b) in zip(ids, pairs) if a != b)}
 
 
@@ -142,7 +170,11 @@ def run_agreement(a_cl, b_cl, a_out, b_out) -> Dict[str, Any]:
     c_ids = sorted(set(a_cl) & set(b_cl))
     o_ids = sorted(set(a_out) & set(b_out))
     res: Dict[str, Any] = {"n_clusters_both": len(c_ids), "n_outputs_both": len(o_ids), "cluster_ids_both": c_ids,
-                           "output_ids_both": o_ids}
+                           "output_ids_both": o_ids,
+                           "cluster_ids_only_in_run_a": sorted(set(a_cl) - set(b_cl)),
+                           "output_ids_only_in_run_a": sorted(set(a_out) - set(b_out)),
+                           "run_b_selection": "재라벨 대상 + item_id 순서로 예산이 허락한 만큼이다. 멈춘 지점은 비용으로만 정해졌고 라벨 값과 "
+                                              "무관하다. 그 뒤의 항목은 크기와 관계없이 모두 빠졌으므로 대표 표본이 아니다."}
     res["single_event"] = agreement([(a_cl[i]["label"]["single_event"], b_cl[i]["label"]["single_event"]) for i in c_ids], c_ids)
     res["outlier_set_exact"] = agreement([(tuple(sorted(a_cl[i]["label"]["outlier_ids"])), tuple(sorted(b_cl[i]["label"]["outlier_ids"])))
                                           for i in c_ids], c_ids)
@@ -154,7 +186,10 @@ def run_agreement(a_cl, b_cl, a_out, b_out) -> Dict[str, Any]:
     res["fact_error_count_equal"] = agreement([(_n_errors(a_out[i]), _n_errors(b_out[i])) for i in o_ids], o_ids)
     res["style_exact"] = agreement([(a_out[i]["label"]["style"], b_out[i]["label"]["style"]) for i in o_ids], o_ids)
     within = sum(1 for i in o_ids if abs(a_out[i]["label"]["style"] - b_out[i]["label"]["style"]) <= 1)
-    res["style_within_1"] = ratio(within, len(o_ids))
+    seen = sorted({x[i]["label"]["style"] for x in (a_out, b_out) for i in o_ids})
+    # 관측된 style 값이 한 칸 안에 다 들어 있으면 ±1 일치는 항상 참이다
+    res["style_within_1"] = {**ratio(within, len(o_ids)), "styles_seen": seen,
+                             "always_true_by_range": bool(seen) and max(seen) - min(seen) <= 1}
     res["headline_mismatch"] = agreement([(a_out[i]["auto"]["headline_mismatch"], b_out[i]["auto"]["headline_mismatch"]) for i in o_ids], o_ids)
     tone_ids = [i for i in o_ids if a_out[i]["auto"].get("tone_drift_applicable") and b_out[i]["auto"].get("tone_drift_applicable")]
     res["tone_drift"] = agreement([(a_out[i]["label"]["tone_drift"], b_out[i]["label"]["tone_drift"]) for i in tone_ids], tone_ids)
@@ -197,8 +232,9 @@ def judge_comparison(a_out, key: Dict[str, Dict[str, Any]], nodes: List[Dict[str
         pairs_err.append((ju, le))
         ids.append(oid)
     return {"judge_decision_vs_publishable": {"table": table, **agreement(pairs_pub, ids)},
-            "judge_unsupported_vs_fact_error": {"table": err_table, **agreement(pairs_err, ids)},
-            "note": "judge v2 shadow(첫 초안, 기본 임계값)와 자동 라벨러(런 a). 둘 다 Gemini - 같은 계열이고 어느 쪽도 정답이 아니다."}
+            "judge_unsupported_vs_fact_error": {"table": err_table, **agreement(pairs_err, ids), "exploratory_not_preregistered": True},
+            "note": "judge v2 shadow(첫 초안, 기본 임계값)와 자동 라벨러(런 a). 둘 다 Gemini - 같은 계열이고 어느 쪽도 정답이 아니다. "
+                    "judge 판정 × publishable은 A8.13 (c)5(A8.8 쓰임 4)의 계산이고, '근거 없는 주장 × 사실 오류'는 탐색(사전 등록 아님)이다."}
 
 
 def cluster_evaluator_comparison(a_cl, nodes) -> Dict[str, Any]:
@@ -218,7 +254,8 @@ def cluster_evaluator_comparison(a_cl, nodes) -> Dict[str, Any]:
         pairs.append((p, s))
         ids.append(i)
     return {"first_cluster_eval_vs_single_event": {"table": table, **agreement(pairs, ids)},
-            "note": "ClusterEvaluator(judge 모델, 첫 판정)와 자동 라벨러(런 a). 같은 계열."}
+            "exploratory_not_preregistered": True,
+            "note": "탐색(A8.13 (c)에 없는 비교): ClusterEvaluator(judge 모델, 첫 판정)와 자동 라벨러(런 a). 같은 계열."}
 
 
 def by_bucket(a_cl, a_out, pkg: al.Package, ends) -> Dict[str, Any]:
@@ -288,13 +325,21 @@ def build(proto: al.Protocol, pkg: al.Package, *, items: List[Dict[str, Any]], e
     calls, units = read("calls.jsonl"), read("units.jsonl")
     manifest = json.loads((store_root / "manifest.json").read_text(encoding="utf-8")) if (store_root / "manifest.json").exists() else {}
     key = json.loads((pkg.run_dir / "blind_key.json").read_text(encoding="utf-8"))["outputs"]
+    judge = judge_comparison(a_out, key, nodes)
     metrics_a = e0_labels.label_metrics(pkg.labels_dir, pkg.run_dir, items, ends, {}, label_files_dir=store_root / "run-a")
     if "checker_vs_human_first_draft" in metrics_a:
         chk = metrics_a.pop("checker_vs_human_first_draft")
+        # 사람 정답이 아니므로 키 이름도 '정밀도·재현율'이 아니라 겹침으로 낸다(A8.13 (c)6). 분모가 0이면 n=0이다.
+        chk = {OVERLAP_NAMES.get(k, k): v for k, v in chk.items()}
         chk["note"] = ("A8.8 쓰임 3의 계산을 자동 라벨(런 a)에 그대로 한 값이다. 사람 정답이 아니므로 '정밀도·재현율'이 아니라 "
-                       "검사기 차단 구간 중 라벨러 구간과 겹친 비율(precision 칸), 라벨러 number·quote 구간 중 검사기와 겹친 비율"
-                       "(recall_* 칸)로 읽는다.")
+                       "검사기 차단 구간 중 라벨러 구간과 겹친 비율(checker_block_overlaps_labeler_span), 라벨러 number·quote 구간 중 "
+                       "검사기와 겹친 비율(labeler_*_span_overlaps_checker)로 읽는다.")
         metrics_a["checker_vs_auto_labeler_first_draft"] = chk
+    if "saved" in metrics_a:
+        sv = {OVERLAP_NAMES.get(k, k): v for k, v in metrics_a["saved"].items()}
+        sv["note"] = ("정답 대비가 아니다 - 참고 개체명 항목 중 라벨러 구간과 겹친 비율이다. 게이트 누락 건수는 라벨러가 센 number·quote 오류"
+                      "(저장본)다.")
+        metrics_a["saved"] = sv
     metrics_a.pop("relabel", None)  # 사람 재라벨 칸 - 자동 라벨에서는 run_agreement가 대신한다
     runs = manifest.get("runs") or []
     report = {
@@ -327,7 +372,7 @@ def build(proto: al.Protocol, pkg: al.Package, *, items: List[Dict[str, Any]], e
         "run_a": {"clusters": cluster_stats(a_cl), "outputs": output_stats(a_out), "a8_8_uses": metrics_a},
         "run_b": {"clusters": cluster_stats(b_cl), "outputs": output_stats(b_out)},
         "run_a_vs_run_b": run_agreement(a_cl, b_cl, a_out, b_out),
-        "labeler_vs_judge_v2": judge_comparison(a_out, key, nodes),
+        "labeler_vs_judge_v2": judge,
         "labeler_vs_cluster_evaluator": cluster_evaluator_comparison(a_cl, nodes),
         "by_size_bucket_run_a": by_bucket(a_cl, a_out, pkg, ends),
         "rows": {
@@ -352,7 +397,7 @@ def build(proto: al.Protocol, pkg: al.Package, *, items: List[Dict[str, Any]], e
                         for o in sorted(pkg.outputs, key=lambda o: o["output_id"])],
         },
         "not_computable": NOT_COMPUTABLE,
-        "caveats": CAVEATS,
+        "caveats": CAVEATS + dynamic_caveats(proto, judge, sorted({c.get("model_version") for c in calls if c.get("model_version")})),
     }
     guard = al.LeakGuard().add_package(pkg).add_responses(read("rationales.jsonl"))
     for rows in (a_cl, b_cl, a_out, b_out):
@@ -369,6 +414,10 @@ def _r(x: Dict[str, Any]) -> str:
     s = f"{x['k']}/{x['n']} = {x['rate']:.3f} [{ci[0]:.3f}, {ci[1]:.3f}]"
     if "kappa_reference_only" in x:
         s += f", κ(참고) {x['kappa_reference_only']}" if x["kappa_reference_only"] is not None else ", κ 정의 안 됨"
+    if x.get("one_category_only"):
+        s += ", 두 런 모두 한 범주만 냄(일치가 정보 없음)"
+    if x.get("always_true_by_range"):
+        s += f", 관측된 값 {x['styles_seen']}이 한 칸 안이라 항상 참"
     if x.get("disagreement_ids"):
         s += f", 불일치 {', '.join(x['disagreement_ids'])}"
     return s
@@ -418,7 +467,8 @@ def render_md(rep: Dict[str, Any]) -> str:
               f"{_r(a['clusters']['with_outliers'])}, 주된 사건 없음 {a['clusters']['no_main_event']}",
               f"- 핵심 사실 수 {json.dumps(a['clusters']['key_facts_per_cluster'])}, 이상치 수 {json.dumps(a['clusters']['outliers_per_cluster'])}",
               f"- 파이프라인 결과 × single_event(A8.8 쓰임 2): {json.dumps(u.get('outcome_by_single_event'), ensure_ascii=False)}",
-              f"- ClusterEvaluator 첫 판정 × single_event: {_r(rep['labeler_vs_cluster_evaluator']['first_cluster_eval_vs_single_event'])}, "
+              f"- [탐색 - 사전 등록 아님] ClusterEvaluator 첫 판정 × single_event: "
+              f"{_r(rep['labeler_vs_cluster_evaluator']['first_cluster_eval_vs_single_event'])}, "
               f"표 {json.dumps(rep['labeler_vs_cluster_evaluator']['first_cluster_eval_vs_single_event']['table'])}", "",
               "## 4. 런 a - 출력 라벨", "",
               f"- 발행 가능률(A8.8 쓰임 1, 자동 라벨): 주 지표(저장본 Y / n_p) {_r(u.get('publishable_primary'))}; 저장본만 "
@@ -433,9 +483,11 @@ def render_md(rep: Dict[str, Any]) -> str:
               f"- tone_drift(의미 기준, 저장 변환본) {_r(a['outputs']['tone_drift'])}, 대상 아님 {a['outputs']['tone_drift_not_applicable']}",
               f"- 결정론 검사기 대 자동 라벨(첫 초안, A8.8 쓰임 3의 계산 - 정답 대비가 아니다): "
               f"{json.dumps(u.get('checker_vs_auto_labeler_first_draft'), ensure_ascii=False)}",
-              f"- 저장본: {json.dumps(u.get('saved'), ensure_ascii=False)}", "",
+              f"- 저장본(정답 대비가 아니다): {json.dumps(u.get('saved'), ensure_ascii=False)}", "",
               "## 5. 런 a 대 런 b (자기 일관성 - A8.8 재라벨 자리)", "",
-              f"- 둘 다 있는 것: 클러스터 {ag['n_clusters_both']}, 출력 {ag['n_outputs_both']}",
+              f"- 둘 다 있는 것: 클러스터 {ag['n_clusters_both']}, 출력 {ag['n_outputs_both']}; 런 b에 없는 것: 클러스터 "
+              f"{', '.join(ag['cluster_ids_only_in_run_a']) or '없음'}, 출력 {', '.join(ag['output_ids_only_in_run_a']) or '없음'}",
+              f"- 런 b 선정: {ag['run_b_selection']}",
               f"- single_event {_r(ag['single_event'])}",
               f"- 이상치 집합 완전 일치 {_r(ag['outlier_set_exact'])}; 주된 사건 유무 {_r(ag['main_event_present'])}",
               f"- publishable {_r(ag['publishable'])}; 라벨러 자신의 publishable {_r(ag['publishable_labeler_raw'])}",
@@ -447,7 +499,8 @@ def render_md(rep: Dict[str, Any]) -> str:
               "## 6. 라벨러 대 judge v2 shadow", "",
               f"- judge 판정 × publishable: {_r(rep['labeler_vs_judge_v2']['judge_decision_vs_publishable'])}, 표 "
               f"{json.dumps(rep['labeler_vs_judge_v2']['judge_decision_vs_publishable']['table'])}",
-              f"- judge 근거 없는 주장 ≥1 × 라벨러 사실 오류 ≥1: {_r(rep['labeler_vs_judge_v2']['judge_unsupported_vs_fact_error'])}, 표 "
+              f"- [탐색 - 사전 등록 아님] judge 근거 없는 주장 ≥1 × 라벨러 사실 오류 ≥1: "
+              f"{_r(rep['labeler_vs_judge_v2']['judge_unsupported_vs_fact_error'])}, 표 "
               f"{json.dumps(rep['labeler_vs_judge_v2']['judge_unsupported_vs_fact_error']['table'])}",
               f"- {rep['labeler_vs_judge_v2']['note']}", "",
               "## 7. 크기 버킷별(런 a)", ""]
