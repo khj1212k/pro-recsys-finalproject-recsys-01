@@ -264,6 +264,8 @@ CI가 겹친다는 것은 차이가 없다는 증거가 아니므로, "후보 �
 > --only-models ranker_v2_poolneg --skip replay --out-json reports/recsys/ebnerd_v1_2_two_stage.json`
 > (확인할 것: union@50 nDCG@10이 0.2700으로 재현되는지, 그다음 쌍체 ΔnDCG@10의 CI.)
 
+> 범위 종결 C-02 (2026-10-18): **완료(대체)** - 위 명령은 돌리지 않는다. ADR 0013 "A2 결과"의 E8(2단계 − 전체 풀 +0.0002 [+0.0001, +0.0003])과 서술 4(+0.0014 [+0.0012, +0.0016])가 같은 질문을 사전 등록된 실행으로 쟀다. 이 리포트의 수치는 고치지 않았다([목록](../../docs/design/2026-10-18-scope-closure.md)).
+
 ## 6. MMR λ 스윕 (ranker_v2_poolneg seed 0, P2 3,000 요청)
 
 `ai_workspace/recommend_engine/src/core/reranker.py`의 `MMRReranker`(팀원 성승우 작성)를 수정 없이 사용했다(pool_multiplier 4 = 상위 40개 안에서 재정렬).

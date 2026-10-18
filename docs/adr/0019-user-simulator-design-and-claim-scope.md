@@ -8,7 +8,7 @@
 돌리기 **전에** 커밋했고(어느 커밋인지는 "증거"의 "커밋 찾기"), 격자 v1 결과를 "증거"에 채웠다: 사전 등록
 판정 50건(P 20, H 30) 중 위반 2건(둘 다 H5)이고, X 8건은 판정 없이 보고만 한다. 그에 따라 **drift 적응
 지표(`adapted_rate`, `requests_to_adapt_median`)는 "타당성 미확인"**이고, 나머지 지표는 장난감 정책 수준에서
-검증됐다. 부하 [LOAD] 수치는 아직 없다 — "재실행 대기(클라우드)".
+검증됐다. 부하 [LOAD] 수치는 아직 없다 — "재실행 대기(클라우드)". 범위 종결 C-04 (2026-10-18): 유보 - 조건은 A1 확보다.
 
 요청 시점 추천 브랜치 위에 다시 쌓으면서(2026-10-06) 결정과 수치는 바꾸지 않았다. 그때 달라진 커밋 해시,
 대상 API, 테스트 수는 맨 아래 "통합 기록"에 있다.
@@ -402,6 +402,8 @@ drift 사용자 수 확대(예: 1,000명 또는 drift 30%).
 > `python -m sim.loadtest --host http://127.0.0.1:8100 --rps 5 20 50 --duration 120s --out-dir out/load_v1` →
 > `docker compose -p newsletter-load --env-file .env.load.local down -v`. 결과는 `reports/serving/load_v1.md`에
 > VM 셰이프·부하 생성기 위치·대상 커밋과 함께 싣는다.
+>
+> 범위 종결 C-04 (2026-10-18): **유보** - A1이 확보되기 전에는 이 절차를 돌리지 않고 [LOAD] 수치를 쓰지 않는다([목록](../design/2026-10-18-scope-closure.md)).
 
 ### 테스트
 `tests/simulator/`(클릭 모델 수식, 시드 결정성, 페르소나 생성, 가짜 앱 대상 드라이버·지표, 실제 backend 라우터
@@ -414,7 +416,7 @@ drift 사용자 수 확대(예: 1,000명 또는 drift 30%).
 - 요청 시점 API 위에 올렸을 때: `feat/realtime-recommendation`의 트리를 임시 디렉터리에 풀고 `sim/`·
   `tests/simulator/`를 덮어 돌려 74 passed, 2 skipped(배치 전용 계약 테스트 1건과 Locust 스모크).
 - 재실행 대기(CI): 통합 테스트(`pytest -q -m integration tests/`)와 Locust 스모크는 GitHub Actions에서만 돈다.
-  이 브랜치를 다시 쌓은 뒤의 HEAD는 아직 push하지 않아 CI를 거치지 않았다.
+  이 브랜치를 다시 쌓은 뒤의 HEAD는 아직 push하지 않아 CI를 거치지 않았다. 범위 종결 C-05 (2026-10-18): 완료 - 아래 2026-10-06 항목의 CI 실행 37400779792(통합 잡 포함)와 병합된 main의 CI가 성공이다.
 - 2026-10-06, 실제 서빙 경로를 붙인 뒤(브랜치 `eval/sim-ope-validation`): `tests/simulator` 로컬 116 passed,
   2 skipped(`nice -n 19`, 스레드 2). 새 테스트는 `test_sim_serving_app.py` 20건, `test_sim_ope_experiments.py` 20건이다.
   CI(실행 37400779792, 커밋 `cb6339a`)의 unit 잡 1381 passed, 58 skipped, integration 잡 65 passed, 1 skipped.
@@ -527,7 +529,7 @@ drift 사용자 수 확대(예: 1,000명 또는 drift 30%).
    Linux 전용 1, 앞의 2건)다.
    - 재실행 대기(CI): `pytest -q -m integration tests/`(새 리비전 `8b7f830013b7`까지 올린 스키마에서 도는
      `test_sim_seed_alembic_schema.py` 포함)와 Locust 헤드리스 스모크. 로컬에서는 돌리지 않았고, 이 기록을 쓰는
-     시점에는 push 전이라 CI 결과가 없다.
+     시점에는 push 전이라 CI 결과가 없다. 범위 종결 C-05 (2026-10-18): 완료 - CI 실행 37400779792와 병합된 main의 CI가 성공이다.
 4. **ADR 색인과 CI 설치 목록.** `docs/adr/README.md`는 앞 브랜치의 행(0013, 0015, 0017)과 이 ADR의 행을 번호순으로
    합쳤다. unit 잡은 앞 브랜치의 두 단계 설치(평가 고정 버전, backend 고정 버전)를 그대로 두고 kiwipiepy 고정과
    시뮬레이터 설치 단계를 더했다. backend 고정 단계가 이미 넣는 python-jose·passlib·bcrypt는 시뮬레이터 단계에서
