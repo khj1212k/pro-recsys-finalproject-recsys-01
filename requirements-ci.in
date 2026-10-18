@@ -1,0 +1,59 @@
+# CI의 파이썬 설치 전부(.github/workflows/ci.yml의 test·integration-test)가 읽는 최상위 의존성.
+# 설치는 잠금 파일(requirements-ci.txt) 하나로 하고, 갱신은 `make ci-lock`이다:
+#   uv pip compile requirements-ci.in --universal --python-version 3.11 -o requirements-ci.txt
+#
+# 직접 의존성에 `==`를 거는 것은 아래 (1)(2) 두 경우뿐이고, 둘 다 원본과 tests/test_ci_requirements_lock.py가 대조한다.
+#
+# 기존 잠금 파일을 `-c`(제약)로 거는 방식은 쓰지 않는다. 2026-10-18에 해 본 결과:
+# - backend/requirements.txt + docker/requirements-worker.txt 둘을 함께 걸면 해석이 실패한다. 두 파일이 numpy·pydantic·
+#   scipy·uvicorn 등을 서로 다른 버전으로 `==` 고정한다(예: uvicorn==0.54.0 대 0.40.0).
+# - worker 잠금만 걸어도 PR #26의 sqlalchemy==2.0.46·sqlmodel==0.0.31 고정(worker는 2.0.54·0.0.47)과 부딪히고,
+#   numpy·scipy가 파이썬 3.12 기준으로 갈라진다(--universal).
+# 대신 CI가 지켜야 하는 값만 (1)(2)에 직접 적는다. 나머지는 잠금 파일이 정하며, worker 이미지와 다른 버전이 남아 있다
+# (langgraph·openai·trafilatura 등 - docs/adr/0006 개정 2026-10-18의 한계).
+
+# (1) 추천 평가 리포트를 만든 버전 - evaluation/requirements.txt와 같은 값(fastapi만 (2)가 이긴다).
+# kiwipiepy는 시뮬레이터의 클릭 모델 보정·피처 테스트가 토큰화에 기대는 버전이기도 하다(sim/requirements.txt와 같다).
+numpy==2.4.6
+pandas==3.0.6
+scikit-learn==1.9.1
+scipy==1.17.1
+lightgbm==4.7.0
+pyarrow==25.0.1
+hdbscan==0.8.44
+kiwipiepy==0.23.2
+rapidfuzz==3.14.6
+pydantic==2.13.5
+pyyaml==6.0.3
+uvicorn==0.54.0
+
+# (2) API 이미지(backend/requirements.txt)와 같은 버전 - 라우터 테스트가 이미지가 싣는 FastAPI에서 돈다.
+# sqlalchemy·sqlmodel: 고정하지 않은 설치가 SQLAlchemy 2.1.4를 받아 postgresql:// 기본 드라이버가 psycopg2에서
+# psycopg(v3)로 바뀌며 main의 CI가 깨졌다(PR #26). bcrypt는 passlib 1.7.4가 bcrypt 5에서 ValueError를 내서 묶는다.
+fastapi==0.117.1
+python-jose==3.5.0
+passlib==1.7.4
+bcrypt==3.2.2
+sqlalchemy==2.0.46
+sqlmodel==0.0.31
+
+# 그 밖의 최상위 의존성 - 버전은 잠금 파일이 정한다.
+pytest
+langgraph
+langchain-openai
+openai
+tiktoken
+optuna
+pgvector
+psycopg2-binary
+python-dotenv
+alembic
+feedparser
+requests
+python-dateutil
+trafilatura
+tqdm
+lxml_html_clean
+httpx
+# sim/ 계약 테스트의 headless Locust 스모크
+locust

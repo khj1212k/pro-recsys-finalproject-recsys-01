@@ -249,3 +249,63 @@ anon 3.9MiB / file 9.1MiB, 2026-09-26 00:16 UTC)였다. 그래서 범위는 11~4
   남는다 - 근접 중복은 임베딩 코사인으로 따로 재야 한다(측정하지 않음).
 - 알림은 `SLACK_WEBHOOK_URL`이 있을 때만 사람에게 닿는다. 지금 Mac 환경에는 설정돼 있지 않아 로그와 `job_runs`,
   `daily_report`로만 확인한다.
+
+## 개정 (2026-10-18) - CI 설치 잠금·린트·비밀 검사·레거시 정리 (엔지니어링 위생, 새 ADR 없이 이 문서에 더한다)
+
+런타임 결정(위)은 그대로다. 이 개정은 같은 "의존성 잠금" 관행을 CI까지 넓히고 저장소 위생 도구를 더한 것이다.
+
+### 결정
+1. **CI의 파이썬 설치는 `requirements-ci.txt`(잠금 파일) 하나다.** 최상위 목록은 `requirements-ci.in`이고 `make ci-lock`으로
+   만든다(`uv pip compile --universal --python-version 3.11`). `.github/workflows/ci.yml`의 단위·통합 잡이 이 파일만 읽는다.
+   `.in`이 직접 `==`로 거는 것은 두 묶음뿐이다: 추천 평가 리포트를 만든 버전(`evaluation/requirements.txt`)과 API 이미지 버전
+   (`backend/requirements.txt`의 fastapi·python-jose·passlib·bcrypt, PR #26의 sqlalchemy 2.0.46·sqlmodel 0.0.31).
+   두 묶음이 겹치는 fastapi는 API 이미지 값이 이긴다(라우터 테스트가 이미지가 싣는 FastAPI에서 돈다).
+   `tests/test_ci_requirements_lock.py`가 원본과의 일치를 대조하고, `ci.yml`에 잠금 파일 밖에서 패키지를 설치하는 스텝(이름을 받는 `pip install`, `uv add|sync`, 다른 requirements 파일)이 없는지, pytest를 돌리는 잡마다 잠금 파일 설치가 pytest 앞에 정확히 한 번인지도 본다.
+2. **별도 잠금은 합치지 않는다.** `docker/requirements-worker.txt`·`requirements-ingest.txt`(이미지), `backend/requirements.txt`(API
+   이미지), `requirements-colab*.txt`(원격 런타임: `ebnerd-neural.yml`이 같은 핀과 파이썬 3.13으로 돈다)는 배포 대상에 맞춘
+   파일이다. `recsys-bench.yml`·`sim-ope-validation.yml`은 측정 환경 자체가 기록된 워크플로라 이 개정에서 건드리지 않았다
+   (recsys-bench는 ADR 0014 3절이 "워크플로 파일이 같다"를 비교 조건으로 쓰고 `reports/serving/`의 JSON 3개가 이 워크플로의
+   출력이다. sim-ope-validation은 판정용 실행이 받은 버전을 적어 둔 것이다).
+3. **ruff는 돌지 못하는 코드만 잡는다.** 규칙은 E9·F50·F52·F6·F7·F82(구문 오류, 잘못된 포맷 문자열, 항상 참인 비교·assert,
+   중복 사전 키, 정의되지 않은 이름), 버전은 0.16.9 고정, `pyproject.toml`(도구 설정만)과 CI `lint` 잡, `make lint`.
+   스타일(E501)·미사용 임포트(F401)는 켜지 않았다. 이 개정 시점의 트리(main `dede670` 위)에서 켠 규칙의 위반은 0건이고, 꺼 둔 규칙의 기존 위반은
+   E501 14,738건(기본 줄 길이 88), F401 103건이다(`ruff check --isolated --select ... --statistics`, git이 무시하는 경로는 제외).
+4. **gitleaks는 새 커밋만 본다.** `secret-scan` 잡이 PR은 base..HEAD, push는 이전 head..HEAD만 검사한다. 이력의 평문 DB 비밀번호
+   유출 전력(`tests/test_no_plaintext_db_password_in_env_example.py`)은 이력을 다시 쓰지 않고 그대로 둔다. 바이너리는 릴리스 체크섬으로
+   고정하고, 설정(`.gitleaks.toml`)은 기본 규칙에 자리표시자 값만 허용한다.
+5. **Makefile**은 CI와 같은 명령만 둔다: `help`·`venv`·`ci-lock`·`test`·`itest`·`lint`.
+
+### 검토했으나 하지 않은 것
+- **`-c backend/requirements.txt -c docker/requirements-worker.txt`로 거는 방식.** 해 봤고 해석이 실패한다: 두 파일이 uvicorn(0.54.0 대
+  0.40.0)·numpy·pydantic·scipy를 서로 다르게 `==` 고정한다. worker 잠금만 걸면 `sqlmodel==0.0.31`과 `0.0.47`이 부딪히고(#26 고정을
+  유지하는 한), 그 두 줄을 걸러 낸 사본을 걸어도 worker 잠금의 numpy가 파이썬 3.12 기준으로 갈라져(`numpy==2.4.6`은 3.12 미만,
+  `2.5.3`은 3.12 이상) `--universal` 해석이 실패한다.
+- **LICENSE 추가.** 저장소 커밋 작성자가 여럿이고(`git shortlog -sn --all`: khj1212k, seonjin, sojeong0202, seungwoo 계정) 공개 포크의 원본
+  (boostcampaitech8 조직 저장소)에 라이선스가 없다(`gh repo view --json licenseInfo`가 null). 팀 공동 저작 코드에 라이선스를 붙이는 것은 공동 저작자 합의가 필요한 일이라 이 개정에서 하지 않았다.
+
+### 레거시 정리: 지운 것과 지우지 않은 것 (2026-10-18, `git grep -w`로 참조 확인)
+지운 것(코드·테스트·Dockerfile 참조 없음; 옛 ADR 0008과 `docs/fix-log-2026-07.md`의 서술은 당시 상태 기록이라 그대로 둔다):
+`ai_workspace/recommend_engine/logs/match_report.txt`(뉴스레터 제목 목록 - ADR 0023의 "제목 목록을 싣지 않는다"를 어긴 로그. 지우고 `logs/`를
+무시한다. git 이력에는 남아 있다), `ai_workspace/crawler/embedding_generator.py`, `ai_workspace/db/user_log_queries.py`.
+`ai_workspace/.env.example`은 활성이던 `LLM_PROVIDER=naver`·HyperCLOVA 키와 쓰지 않는 Upstage·OpenAI 키를 주석으로 바꿨다.
+
+지우지 않은 것과 이유:
+
+| 대상 | 참조 | 판단 |
+|---|---|---|
+| `core/llm_client.py`(HyperCLOVA 클라이언트 + 공용 헬퍼) | `core/llm/adapters.py`(HyperCLOVALLMClient)·`core/llm/registry.py`(`SimpleRateLimiter`)·`core/tone_converter.py`(`extract_json_from_response`)·`evaluation/llm/e0_registered.py`가 임포트, `core.llm_client`를 직접 쓰는 테스트 5개 파일과 어댑터·레지스트리 경로를 쓰는 2개 | 살아 있는 헬퍼 둘을 `core/llm/`로 옮기고 레지스트리의 naver 항목·어댑터·테스트를 함께 걷어내는 리팩터링이다. LLM 생성 코드를 건드리는 별도 변경으로 둔다. |
+| `jobs/tasks/train.py` 스텁 | `jobs/run.py` 등록, ADR 0033·README가 "은퇴, 불려도 아무것도 실행하지 않는다"고 서술, 옛 crontab 명령줄(`--no-inference`) 호환 | 은퇴 표시가 이미 코드와 문서에 있고 일부러 둔 호환 장치다. |
+| `jobs/tasks/batch_fallback.py` | `jobs/run.py` 등록, `docker/crontab`(주석)·runbook 표·README·ADR 0006·0015 | `RECSYS_MODE=batch` 경로의 폴백이라 서빙 모드 결정(ADR 0015)을 건드린다. 꺼져 있다. |
+| `core/user_embedder.py` | `pipeline/stages.py`가 임포트, 단위·통합 테스트가 참조 | 살아 있다. |
+| `backend/airflow/dags/`, `requirements-airflow.txt` | 결정 4가 "실행하지 않음" README와 함께 보관하기로 했고 `tests/test_airflow_dag_fixes.py`가 구문·경로를 검사, README 팀 소개가 Airflow 담당을 적고 있다 | 팀원이 함께 만든 기록이고 이미 은퇴 표시가 붙어 있다. 지우면 기여 기록이 사라지므로 은퇴 표시만 두는 쪽이 맞다고 판단했다(삭제하려면 팀 합의). |
+| `docs/design/e15_colab_smoke.py`, `scripts/bench_embedding_throughput.py`, `scripts/measure_embedding_truncation.py`, `recommend_engine/scripts/constant_feature_ablation.py` | 설계 사양·ADR 0006 증거·리포트가 실행 스크립트로 인용 | 증거 재현 경로다. |
+| `recsys-bench.yml`의 Redis | 위 결정 2의 이유 | 지연 비교 쌍이 진행 중이지 않을 때 ADR 0014 3절의 조건과 함께 바꾼다. |
+
+### 한계와 측정하지 않은 것
+- CI 잠금 파일은 worker 이미지 잠금과 완전히 같지 않다. 2026-10-18에 두 파일의 `이름==버전` 줄을 비교하면 공통 88개 패키지 중
+  28개의 버전이 다르다(langgraph·langchain-openai·openai·trafilatura 등. numpy·scipy 2개는 worker 잠금이 파이썬 3.12 이상용 줄을 더
+  가져서 센 것이라 3.11에서는 같다). worker 이미지 안에서 LLM 경로를 돌리는 테스트는 여전히 없다.
+- 새 잠금 파일로 임시 venv를 만들어 `pytest --collect-only`가 오류 없이 2,606건을 모으고 일부 테스트(라우터·시뮬레이터 계약·잠금 대조)가
+  통과하는 것까지만 확인했다. 전체 스위트와 통합 테스트는 로컬에서 돌리지 않았고 CI가 처음 돌린다.
+- gitleaks 바이너리와 `.gitleaks.toml`은 로컬에서 돌려 보지 않았다(바이너리를 내려받지 않음). 범위 계산 셸만 가짜 실행 파일로 확인했다.
+- mypy·dependabot·로컬 워크트리 정리는 이 개정에 없다.
