@@ -8,7 +8,7 @@ PYTEST ?= $(PY) -m pytest -q
 TESTS ?= tests/
 
 .DEFAULT_GOAL := help
-.PHONY: help venv ci-lock test itest
+.PHONY: help venv ci-lock test itest lint
 
 help: ## 이 목록
 	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -28,3 +28,6 @@ test: ## 단위 테스트 - DB 없이 도는 것만, CI의 test 잡과 같다
 itest: ## 통합 테스트 - 전용 테스트 DB의 TEST_DATABASE_URL이 필요하다 (docs/runbook.md 13절)
 	@test -n "$$TEST_DATABASE_URL" || { echo "TEST_DATABASE_URL이 없다. 운영 DB 말고 일회용 테스트 DB를 줘야 한다 (docs/runbook.md 13절)"; exit 2; }
 	DATABASE_URL="$$TEST_DATABASE_URL" $(PYTEST) -m integration $(TESTS)
+
+lint: ## ruff - 돌지 못하는 코드만 잡는 보수적 규칙 (pyproject.toml), uv 필요
+	uvx --from "ruff==0.16.9" ruff check .

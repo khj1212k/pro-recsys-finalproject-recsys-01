@@ -1,0 +1,20 @@
+# 저장소 루트의 도구 설정. 패키지 정의가 아니다 - 설치 단위는 ai_workspace/pyproject.toml과
+# ai_workspace/recommend_engine/pyproject.toml이 따로 가진다.
+
+[tool.ruff]
+target-version = "py311"
+# 다른 버전의 ruff가 같은 규칙 이름을 다르게 풀어 CI와 로컬 결과가 갈리는 것을 막는다. 올릴 때는 이 줄,
+# .github/workflows/ci.yml의 lint 잡, Makefile의 lint를 함께 고친다.
+required-version = "==0.16.9"
+
+[tool.ruff.lint]
+# 코드가 돌지 못하거나 항상 틀리게 도는 오류만 본다. 스타일(E501·I)과 미사용 임포트(F401)·미사용 변수(F841)는
+# 일부러 켜지 않았다: 켜면 기존 위반 수천 건이 한꺼번에 생기고, 린트를 끄는 쪽으로 무너진다.
+select = [
+    "E9",   # 구문 오류·파일을 읽지 못함
+    "F50",  # % 포맷 문자열 오류(자리 수·키가 안 맞음)
+    "F52",  # str.format 오류
+    "F6",   # 항상 참/거짓인 비교, 중복 사전 키, 잘못된 별표 대입
+    "F7",   # 문법 위치 오류(함수 밖 return·yield 등)
+    "F82",  # 정의되지 않은 이름(F821)·__all__의 없는 이름(F822)·지역 변수 선참조(F823)
+]

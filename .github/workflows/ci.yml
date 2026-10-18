@@ -4,7 +4,26 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
+  # 코드가 돌지 못하거나 항상 틀리게 도는 오류만 본다(구문 오류, 정의 안 된 이름, 잘못된 포맷 문자열 등). 규칙과 이유는
+  # pyproject.toml에 있고, 스타일 규칙은 일부러 켜지 않았다. 로컬에서는 `make lint`.
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: ruff check
+        run: uvx --from "ruff==0.16.9" ruff check --output-format=github .
+
   test:
     runs-on: ubuntu-latest
 
