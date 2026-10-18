@@ -1652,8 +1652,10 @@ python -m evaluation.recsys.ebnerd.run_neural --stage assemble --out-dir <풀어
      `assemble`했다. 재학습은 없고 요청별 지표 배열의 집계(부트스트랩)만 돌았으며 벽시계 11분 39초(user 457초)였다. 이 저장소의
      `reports/recsys/ebnerd_v1_3_neural.{json,md}`가 그 출력이다. VM의 S4b가 끝에서 만든 같은 리포트와 대조했다 — 문자열·판정은 모두 같고
      수치 6,363개(`meta.compute`·`assembled_on` 제외)의 최대 차이는 2.2e-16이다. `meta.compute`의 S4 항목에는 VM의 `assemble` 435초가 더 들어
-     있고 `assembled_on`은 Mac이다. E15 경로의 코드는 `381f61d`와 이 변경의 기반(origin/main `ec79e2a`) 사이에서 바뀐 곳이 없다(`git diff --stat 381f61d
-     HEAD -- evaluation/recsys recsys_core scripts/e15_colab_driver.py scripts/m4_colab_driver.py`는 `heuristic_fit.py`와 한국어 임베딩 점검 파일뿐).
+     있고 `assembled_on`은 Mac이다. E15 경로의 실행 코드는 `381f61d`와 이 변경의 기반(origin/main `ec79e2a`) 사이에서 바뀌지 않았다.
+     `git diff --stat 381f61d HEAD -- evaluation/recsys recsys_core scripts/e15_colab_driver.py scripts/m4_colab_driver.py`에 나오는 파일은 둘뿐이다.
+     `evaluation/recsys/ebnerd/heuristic_fit.py`는 독스트링만 바뀌었고(독스트링을 뺀 AST가 같다. `run_neural`이 `run_cold`를 거쳐 가져오는 모듈이지만 동작은 같다),
+     `evaluation/recsys/kr_embedding_check.py`는 새 파일이며 `run_neural`·`run_cold` 어느 쪽도 가져오지 않는다.
   6. *정리.* 버킷의 E15용 메타 기사 객체는 마지막 세션 뒤 지킴이가 지웠고(`bucket_object_deleted: true`), 같은 날 14:10 점검에서 Colab 세션은 0개였다.
      로컬 `data/benchmarks/ebnerd/derived/e15_ckpt/`(대체된 사슬, 드라이 런 포함)는 A3.9대로 이 변경이 병합된 뒤에 지운다 — 지금은 지우지 않았다.
 - **2026-10-18 — 후속 없음 (범위 동결) (프로젝트 책임자 결정. 결정은 판정용 결과가 나오기 전인 2026-10-17 15:30 KST 프로젝트 점검에서 내렸고
