@@ -15,7 +15,7 @@
 
 ## 안전 점검
 - [ ] 키·토큰·서명 URL·`.env` 값이 없다 (CI의 `secret-scan`이 새 커밋을 본다)
-- [ ] 한국어 기사 본문·생성 초안·EB-NeRD 기사 텍스트를 넣지 않았다 ([ADR 0023](../docs/adr/0023-data-sources-copyright-retention.md)). 예시는 지어낸 텍스트이고 그렇게 표시했다
+- [ ] 한국어 기사 본문·생성 초안·EB-NeRD 기사 텍스트를 넣지 않았다 ([ADR 0023](https://github.com/khj1212k/pro-recsys-finalproject-recsys-01/blob/main/docs/adr/0023-data-sources-copyright-retention.md)). 예시는 지어낸 텍스트이고 그렇게 표시했다
 - [ ] 의존성을 바꿨다면 `requirements-ci.in`을 고치고 `make ci-lock`까지 했다 (`tests/test_ci_requirements_lock.py`가 어긋남을 잡는다)
 - [ ] 설계·기술 선택이 바뀌었으면 관련 `docs/adr/`에 절이나 개정을 더하고 `docs/adr/README.md` 색인을 맞췄다
 
