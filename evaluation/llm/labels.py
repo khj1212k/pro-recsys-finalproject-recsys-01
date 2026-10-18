@@ -94,11 +94,32 @@ def is_expired(labels_dir: Path, now: datetime) -> bool:
     return now >= expires
 
 
-def purge_expired_bodies(labels_dir: Path, now: datetime) -> int:
-    """마감이 지났으면 clusters.jsonl의 본문을 지우고 지운 건수를 돌려준다(여러 번 불러도 같다)."""
+AUTO_DIR = "auto"                              # <labels_dir>/auto/<프로토콜 id>/ - E0 자동 라벨러(ADR 0009 A8.13)
+AUTO_FREE_TEXT_FILE = "rationales.jsonl"       # 라벨러가 쓴 근거 텍스트(응답 전체). 패키지 마감에 지운다
+
+
+def purge_auto_free_text(labels_dir: Path, now: datetime) -> int:
+    """마감이 지났으면 자동 라벨러의 자유 텍스트 파일(`auto/*/rationales.jsonl`)을 지우고 지운 파일 수를 돌려준다.
+
+    라벨 값 파일(run-a|run-b/*_labels.jsonl)과 호출 기록은 남긴다(id·값·수치뿐이다). 여러 번 불러도 같다.
+    """
     labels_dir = Path(labels_dir)
     if not is_expired(labels_dir, now):
         return 0
+    removed = 0
+    for path in sorted((labels_dir / AUTO_DIR).glob(f"*/{AUTO_FREE_TEXT_FILE}")):
+        path.unlink()
+        removed += 1
+    return removed
+
+
+def purge_expired_bodies(labels_dir: Path, now: datetime) -> int:
+    """마감이 지났으면 clusters.jsonl의 본문과 자동 라벨러의 자유 텍스트를 지우고 지운 건수(본문을 비운 기사 + 지운 파일)를
+    돌려준다(여러 번 불러도 같다)."""
+    labels_dir = Path(labels_dir)
+    if not is_expired(labels_dir, now):
+        return 0
+    removed_files = purge_auto_free_text(labels_dir, now)
     rows = _read_jsonl(labels_dir / "clusters.jsonl")
     blanked = 0
     for row in rows:
@@ -111,7 +132,7 @@ def purge_expired_bodies(labels_dir: Path, now: datetime) -> int:
         tmp.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
         os.chmod(tmp, 0o600)
         os.replace(tmp, labels_dir / "clusters.jsonl")
-    return blanked
+    return blanked + removed_files
 
 
 class LabelStore:

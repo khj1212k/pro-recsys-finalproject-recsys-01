@@ -3,6 +3,7 @@
 전부 페이크 전송과 지어낸 기사·초안(실제 기사 아님)으로 돈다. 지출 가드(ADR 0035)는 tests/conftest.py가 준 임시 원장을 쓴다.
 """
 import json
+import logging
 import os
 import re
 import shutil
@@ -556,3 +557,285 @@ def test_report_counts_ids_and_labels_only_and_passes_the_leak_guard(proto, pkg,
         assert text not in md and text not in json.dumps(report, ensure_ascii=False)
     with pytest.raises(al.LeakRefused):
         guard.write_text(tmp_path / "bad.md", md + "\n" + pkg.clusters["r2-c3"]["articles"][2]["body"])
+
+
+# ---------------------------------------------------------------- main() - 종료 코드, 멈춤 기록, pre-flight 게이트 (리뷰 반영)
+
+
+class Cli:
+    """`auto_labeler.main`을 페이크 전송과 임시 패키지로 돌린다(실제 네트워크·메인 체크아웃 data/ 없음)."""
+
+    def __init__(self, tmp_path, monkeypatch, proto):
+        self.proto = proto
+        self.labels, self.run = make_package(tmp_path, expires="2099-01-01T00:00:00Z")
+        monkeypatch.setattr(al, "_paths", lambda p: (self.labels, self.run))
+        monkeypatch.setattr(al, "_check_package", lambda p, k: None)
+        monkeypatch.setattr(al, "api_key", lambda: "test-key")
+        monkeypatch.setenv("LLM_RUN_ID", "placeholder")      # configure_budget가 바꾸는 값을 테스트가 끝나면 되돌리려고
+        self.monkeypatch = monkeypatch
+        self.fake = None
+
+    def use(self, fake):
+        self.fake = fake
+        post = fake
+
+        class Injected(al.GeminiTransport):
+            def __init__(self, *a, **k):
+                k.setdefault("post", post)
+                k.setdefault("sleep", lambda s: None)
+                super().__init__(*a, **k)
+
+        self.monkeypatch.setattr(al, "GeminiTransport", Injected)
+        return fake
+
+    def store_root(self):
+        return self.labels / "auto" / self.proto.id
+
+    def manifest(self):
+        return json.loads((self.store_root() / "manifest.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture
+def cli(tmp_path, monkeypatch, proto):
+    yield Cli(tmp_path, monkeypatch, proto)
+    logging.disable(logging.NOTSET)       # main()이 _quiet()로 끈 로깅을 되돌린다
+
+
+def test_main_runs_to_the_end_and_records_the_invocation(cli, proto, capsys):
+    fake = cli.use(FakeGemini(proto))
+    assert al.main(["run"]) == 0
+    m = cli.manifest()
+    assert m["preflight_ok"] is True and m["runs"][-1]["stop"] is None
+    assert set(m["preflight"]["results"]) == set(al.KINDS)
+    rows = [json.loads(l) for l in (cli.store_root() / "run-a" / "output_labels.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert {r["target_id"] for r in rows} == {"o1", "o2"}
+    pre = [c["contents"][0]["parts"][0]["text"] for c in fake.calls[:4]]
+    assert all("가상시" in u and "지어낸 본문" not in u for u in pre)       # 앞의 4건은 pre-flight(지어낸 문장)
+    n = len(fake.calls)
+    assert al.main(["run"]) == 0                                            # 끝난 런을 다시 돌려도 pre-flight·라벨링 호출이 없다
+    assert len(fake.calls) == n
+    capsys.readouterr()
+
+
+def test_failed_preflight_is_not_skipped_by_the_next_run(cli, proto):
+    """A8.13 (b)7 (iii): 실패한 pre-flight 뒤에는 라벨링을 시작하지 않는다 - 다음 `run`이 기록만 보고 건너뛰면 안 된다."""
+    fake = cli.use(FakeGemini(proto, overrides={"tone": lambda user, n: "not json"}))
+    assert al.main(["preflight"]) == 3
+    m = cli.manifest()
+    assert m["preflight_ok"] is False and m["preflight"]["results"]["tone"]["status"] == "schema_invalid"
+    before = len(fake.calls)
+    assert al.main(["run"]) == 3                                  # pre-flight를 다시 하고, 또 실패해서 시작하지 않는다
+    after = fake.calls[before:]
+    assert len(after) == 4 and all("지어낸 본문" not in c["contents"][0]["parts"][0]["text"] for c in after)
+    assert not (cli.store_root() / "run-a" / "cluster_labels.jsonl").exists()
+    assert "runs" not in cli.manifest()
+
+
+def test_run_repeats_a_failed_preflight_and_starts_once_it_passes(cli, proto):
+    state = {"broken": True}
+
+    def tone(user, n):
+        return "not json" if state["broken"] else default_response("tone", user)
+
+    cli.use(FakeGemini(proto, overrides={"tone": tone}))
+    assert al.main(["preflight"]) == 3
+    state["broken"] = False
+    assert al.main(["run"]) == 0
+    m = cli.manifest()
+    assert m["preflight_ok"] is True and m["runs"][-1]["stop"] is None
+
+
+@pytest.mark.parametrize("status", [400, 401, 403, 404])
+def test_non_transient_http_errors_stop_without_retry(proto, pkg, status):
+    fake = FakeGemini(proto, statuses=[status])
+    lab = make_labeler(proto, pkg, fake)
+    with pytest.raises(al.InfraStop) as e:
+        lab.transport.generate("tone", al.system_prompt(proto, "tone", "json_schema"), "u", 1, meta={})
+    assert e.value.code == f"http_{status}" and e.value.status == status and len(fake.calls) == 1
+
+
+def test_payment_required_stops_through_the_circuit_breaker_and_the_attempt_is_logged(cli, proto):
+    from core.llm import budget
+
+    fake = cli.use(FakeGemini(proto, statuses=[200, 200, 200, 200, 402]))
+    assert al.main(["run"]) == 4
+    last = cli.manifest()["runs"][-1]
+    assert last["stop"] == {"kind": "infra", "code": budget.LLMCircuitOpen.code}
+    calls = [json.loads(l) for l in (cli.store_root() / "calls.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [c["status"] for c in calls if c["run"] != "preflight"] == [402]       # 런을 멈춘 시도도 기록에 있다
+    assert len(fake.calls) == 5
+
+
+@pytest.mark.parametrize("status", [429, 503])
+def test_transient_http_errors_retry_to_the_registered_limit_then_stop(proto, pkg, status):
+    fake = FakeGemini(proto, statuses=[status] * 6)
+    sleeps = []
+    lab = make_labeler(proto, pkg, fake)
+    lab.transport.sleep = sleeps.append
+    with pytest.raises(al.InfraStop) as e:
+        lab.transport.generate("tone", al.system_prompt(proto, "tone", "json_schema"), "u", 1, meta={})
+    assert e.value.code == f"http_{status}" and len(fake.calls) == 4 and sleeps == [2.0, 4.0, 8.0]
+
+
+def test_main_records_an_infra_stop_and_returns_4(cli, proto):
+    cli.use(FakeGemini(proto, statuses=[200, 200, 200, 200, 404]))     # pre-flight 4건 뒤 첫 라벨링 호출이 404
+    assert al.main(["run"]) == 4
+    last = cli.manifest()["runs"][-1]
+    assert last["stop"] == {"kind": "infra", "code": "http_404"} and last["result"] == {}
+    calls = [json.loads(l) for l in (cli.store_root() / "calls.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [c.get("status") for c in calls if c["run"] != "preflight"] == [404]
+
+
+def test_main_records_retry_exhaustion_as_an_infra_stop(cli, proto):
+    cli.use(FakeGemini(proto, statuses=[200, 200, 200, 200, 429, 429, 429, 429]))
+    assert al.main(["run"]) == 4
+    assert cli.manifest()["runs"][-1]["stop"] == {"kind": "infra", "code": "http_429"}
+
+
+def test_main_does_not_start_when_the_operators_day_cap_leaves_less_than_the_registered_headroom(cli, proto, monkeypatch, capsys):
+    monkeypatch.setenv("LLM_BUDGET_DAY_USD", "0.30")
+    fake = cli.use(FakeGemini(proto))
+    assert al.main(["run"]) == 2
+    out = capsys.readouterr().out
+    assert fake.calls == [] and "day 상한 여유" in out
+    assert "더 낮은 상한을 따른다" in out and "LLM_BUDGET_DAY_USD=0.30" in out
+
+
+def test_configure_budget_never_raises_a_cap_the_operator_set_lower(proto, monkeypatch):
+    monkeypatch.setenv("LLM_RUN_ID", "placeholder")
+    monkeypatch.setenv("LLM_BUDGET_RUN_USD", "0.10")
+    monkeypatch.setenv("LLM_BUDGET_DAY_USD", "5")
+    env = al.configure_budget(proto)
+    assert env["LLM_BUDGET_RUN_USD"] == "0.10"            # 더 낮은 값을 따른다
+    assert env["LLM_BUDGET_DAY_USD"] == "1.00"            # 더 높은 값은 등록값으로 내린다
+    assert os.environ["LLM_BUDGET_RUN_USD"] == "0.10" and os.environ["LLM_BUDGET_DAY_USD"] == "1.00"
+    assert env["LLM_RUN_ID"] == "e0-auto-labels-v1"
+    monkeypatch.delenv("LLM_BUDGET_RUN_USD")
+    monkeypatch.setenv("LLM_BUDGET_DAY_USD", "not a number")
+    env = al.configure_budget(proto)
+    assert env["LLM_BUDGET_RUN_USD"] == "0.50" and env["LLM_BUDGET_DAY_USD"] == "1.00"    # 없거나 읽을 수 없으면 등록값
+
+
+def test_preflight_switches_thinking_spelling_after_the_schema_mode_and_then_gives_up(proto, pkg):
+    class LowerCaseRefused(FakeGemini):
+        def __call__(self, url, headers, body, timeout):
+            if body["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "minimal":
+                self.calls.append(body)
+                return 400, {"error": {"status": "INVALID_ARGUMENT"}}
+            return super().__call__(url, headers, body, timeout)
+
+    lab = make_labeler(proto, pkg, LowerCaseRefused(proto))
+    pf = al.preflight(proto, lab.transport)
+    assert pf["changes"] == ["schema_mode", "thinking_spelling"]
+    assert pf["schema_mode"] == "json_mode" and pf["thinking_spelling"] == "upper"
+    assert {k: v["status"] for k, v in pf["results"].items()} == {k: "ok" for k in al.KINDS}
+
+    class AlwaysRefused(FakeGemini):
+        def __call__(self, url, headers, body, timeout):
+            self.calls.append(body)
+            return 400, {"error": {"status": "INVALID_ARGUMENT"}}
+
+    refused = AlwaysRefused(proto)
+    lab = make_labeler(proto, pkg, refused)
+    with pytest.raises(al.InfraStop) as e:
+        al.preflight(proto, lab.transport)
+    assert e.value.status == 400 and lab.transport.schema_mode == "json_mode" and lab.transport.thinking_spelling == "upper"
+    assert len(refused.calls) == 3          # 처음 + 바꾼 것 둘, 그 뒤에는 더 바꾸지 않는다
+
+
+# ---------------------------------------------------------------- 재개와 기록의 빈틈 (리뷰 반영)
+
+
+def test_resume_assembles_a_complete_group_whose_output_label_was_never_written(proto, pkg):
+    """묶음의 마지막 단위를 끝낸 뒤 조립 전에 죽었다면, 재개가 그 묶음을 건너뛰어 출력 라벨 행이 영영 없으면 안 된다."""
+    fake = FakeGemini(proto)
+    lab = make_labeler(proto, pkg, fake)
+    for g in lab.plan_a():
+        lab._run_group(g)
+    first, rest = lab.plan_b()
+    for g in first:
+        lab._run_group(g)
+    group = rest[0]
+    assert any(u.kind == "output" for u in group)
+    for u in group:
+        lab.run_unit(u)                                  # 단위만 끝내고 조립은 하지 않는다(여기서 프로세스가 죽었다고 본다)
+    out_unit = next(u for u in group if u.kind == "output")
+    assert out_unit.target not in lab.output_labels("b")
+    lab2 = make_labeler(proto, pkg, fake)
+    lab2.run(spent_usd=lambda: 0.0)
+    assert out_unit.target in lab2.output_labels("b")
+    keys = [(r["run"], r["kind"], r["target"]) for r in lab2.store.read("units.jsonl") if r["event"] == "end"]
+    assert len(keys) == len(set(keys))                   # 끝난 단위를 다시 묻지 않았다
+    rows = lab2.store.read("run-b/output_labels.jsonl")
+    assert len({r["target_id"] for r in rows}) == len(rows)
+
+
+def test_the_attempt_that_opens_the_circuit_breaker_is_still_logged(proto, pkg, monkeypatch):
+    from core.llm import budget
+
+    monkeypatch.setenv("LLM_CIRCUIT_BREAKER_THRESHOLD", "3")
+    fake = FakeGemini(proto, statuses=[503, 503, 503])
+    lab = make_labeler(proto, pkg, fake)
+    with pytest.raises(budget.LLMCircuitOpen):
+        lab.transport.generate("tone", al.system_prompt(proto, "tone", "json_schema"), "u", 1, meta={"run": "a", "target": "o1"})
+    assert len(fake.calls) == 3
+    calls = lab.store.read("calls.jsonl")
+    assert [c["status"] for c in calls] == [503, 503, 503] and [c["attempt"] for c in calls] == [1, 2, 3]
+    commits = [r for r in _ledger_rows() if r.get("ev") == "commit"]
+    assert len(commits) == len(calls) == len(fake.calls)         # 원장·호출 기록·전송 수가 어긋나지 않는다
+
+
+def test_resent_after_crash_counts_only_calls_that_may_have_gone_out(proto, pkg, monkeypatch):
+    from core.llm import budget
+
+    monkeypatch.setenv("LLM_BUDGET_RUN_USD", "0.000001")
+    fake = FakeGemini(proto)
+    lab = make_labeler(proto, pkg, fake)
+    with pytest.raises(budget.LLMBudgetExceeded):
+        lab.run(spent_usd=lambda: 0.0)
+    assert fake.calls == []                                       # 가드가 요청 전에 거절했다
+    monkeypatch.setenv("LLM_BUDGET_RUN_USD", "1000000")
+    budget.reset_run_state()                                      # 새 프로세스로 재개한다(중단 래치는 프로세스 안에만 있다)
+    lab2 = make_labeler(proto, pkg, fake)
+    out = lab2.run(spent_usd=lambda: 0.0)
+    assert out["resent_after_crash"] == 0                        # 보낸 적 없는 호출을 '다시 보낸 호출'로 세지 않는다
+
+
+# ---------------------------------------------------------------- 마감과 자유 텍스트 (리뷰 반영)
+
+
+def test_opening_the_label_tools_after_the_deadline_also_deletes_the_labelers_free_text(proto, pkg):
+    """ADR 0023 개정의 '열 때마다 정리' - 라벨 도구·load_labels·label_metrics가 패키지를 열 때도 rationales.jsonl이 지워져야 한다."""
+    fake = FakeGemini(proto)
+    lab = make_labeler(proto, pkg, fake)
+    lab.run(spent_usd=lambda: 0.0)
+    rationales = lab.store.root / "rationales.jsonl"
+    assert rationales.exists()
+    before = datetime(2026, 11, 11, tzinfo=timezone.utc)
+    after = datetime(2026, 11, 13, tzinfo=timezone.utc)
+    label_store.LabelStore(pkg.labels_dir, now=lambda: before, label_files_dir=lab.store.root / "run-a")
+    assert rationales.exists()                                    # 마감 전에는 그대로
+    store = label_store.LabelStore(pkg.labels_dir, now=lambda: after, label_files_dir=lab.store.root / "run-a")
+    assert store.expired and not rationales.exists()
+    assert (lab.store.root / "run-a" / "output_labels.jsonl").exists() and (lab.store.root / "run-b" / "cluster_labels.jsonl").exists()
+    assert set(store.latest("output", 1)) == {"o1", "o2"}          # 라벨 값은 남는다
+    assert label_store.purge_expired_bodies(pkg.labels_dir, after) == 0      # 여러 번 불러도 같다
+
+
+def test_a_quote_the_labeler_could_not_place_in_the_draft_is_not_kept_in_the_label_file(proto, pkg):
+    quoted = "초안에 없는 라벨러의 인용 문장"
+
+    def output(user, n):
+        return {"analysis": "지어낸 근거", "fact_errors": [{"field": "content", "text": quoted, "type": "quote", "reason": "다르다"}],
+                "style": 4, "headline_mismatch": False, "publishable": True}
+
+    fake = FakeGemini(proto, overrides={"output": output})
+    lab = make_labeler(proto, pkg, fake)
+    lab._run_group([al.Unit("a", "cluster", "r1-c1")])
+    lab._run_group([al.Unit("a", k, "o1") for k in ("output", "coverage", "tone")])
+    row = lab.output_labels("a")["o1"]
+    un = row["auto"]["unlocated_fact_errors"]
+    assert len(un) == 1 and un[0]["field"] == "content" and un[0]["type"] == "quote" and un[0]["n_chars"] == len(quoted)
+    assert quoted not in json.dumps(row, ensure_ascii=False)
+    assert quoted in (lab.store.root / "rationales.jsonl").read_text(encoding="utf-8")      # 근거 파일에만 있고 마감에 지운다
+    assert row["label"]["publishable"] is False and row["auto"]["rules"]["no_fact_errors"] is False    # 오류 수에는 센다

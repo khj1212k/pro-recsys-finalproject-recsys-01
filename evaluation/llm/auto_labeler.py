@@ -541,7 +541,9 @@ class GeminiTransport:
         return {"systemInstruction": {"parts": [{"text": system}]},
                 "contents": [{"role": "user", "parts": [{"text": user}]}], "generationConfig": gen}
 
-    def generate(self, kind: str, system: str, user: str, seed: int, *, meta: Dict[str, Any]) -> CallResult:
+    def generate(self, kind: str, system: str, user: str, seed: int, *, meta: Dict[str, Any],
+                 before_send: Optional[Callable[[], None]] = None) -> CallResult:
+        """`before_send`는 시도마다 가드가 예약을 허락한 뒤, 요청을 내보내기 직전에 불린다(가드가 거절한 시도에는 불리지 않는다)."""
         from core.llm import budget
 
         guard = budget.get_budget_guard()
@@ -558,46 +560,50 @@ class GeminiTransport:
             t0 = time.time()
             row = {**meta, "kind": kind, "attempt": attempt, "seed": seed, "started_at": _now().isoformat()}
             try:
+                if before_send is not None:
+                    before_send()
                 try:
                     status, data = self.post(url, headers, body, self.timeout)
-                except TransportTimeout:
-                    spend.settle("timeout")
-                    self.on_attempt({**row, "status": None, "transport_error": "timeout", "latency_s": round(time.time() - t0, 3)})
-                    if attempt < self.max_attempts:
-                        self.sleep(self.backoff[min(attempt - 1, len(self.backoff) - 1)])
-                        continue
-                    raise InfraStop("transport_exhausted")
-                except TransportConnection:
-                    spend.settle("connection")
-                    self.on_attempt({**row, "status": None, "transport_error": "connection", "latency_s": round(time.time() - t0, 3)})
+                except (TransportTimeout, TransportConnection) as e:
+                    code = "timeout" if isinstance(e, TransportTimeout) else "connection"
+                    self._settle_and_log(spend, code, None, {**row, "status": None, "transport_error": code,
+                                                             "latency_s": round(time.time() - t0, 3)})
                     if attempt < self.max_attempts:
                         self.sleep(self.backoff[min(attempt - 1, len(self.backoff) - 1)])
                         continue
                     raise InfraStop("transport_exhausted")
                 if status != 200:
-                    spend.settle(f"http_{status}")
-                    self.on_attempt({**row, "status": status, "transport_error": None, "latency_s": round(time.time() - t0, 3),
-                                     "error_status": ((data or {}).get("error") or {}).get("status")})
+                    self._settle_and_log(spend, f"http_{status}", None,
+                                         {**row, "status": status, "transport_error": None, "latency_s": round(time.time() - t0, 3),
+                                          "error_status": ((data or {}).get("error") or {}).get("status")})
                     if (status == 429 or status >= 500) and attempt < self.max_attempts:
                         self.sleep(self.backoff[min(attempt - 1, len(self.backoff) - 1)])
                         continue
                     raise InfraStop(f"http_{status}", status)
                 result = self._parse(kind, data or {})
-                spend.settle(result["status"], _to_llm_usage(result["usage"]))
                 p_in, p_out = self.price()
                 u = result["usage"]
                 billable_out = max((u["candidates"] or 0) + (u["thoughts"] or 0), (u["total"] or 0) - (u["prompt"] or 0))
                 cost = ((u["prompt"] or 0) * p_in + billable_out * p_out) / 1e6
                 latency = time.time() - t0
-                self.on_attempt({**row, "status": 200, "transport_error": None, "latency_s": round(latency, 3),
-                                 "outcome": result["status"], "finish_reason": result["finish_reason"],
-                                 "model_version": result["model_version"], "usage": u, "cost_usd": round(cost, 8)})
+                self._settle_and_log(spend, result["status"], _to_llm_usage(u),
+                                     {**row, "status": 200, "transport_error": None, "latency_s": round(latency, 3),
+                                      "outcome": result["status"], "finish_reason": result["finish_reason"],
+                                      "model_version": result["model_version"], "usage": u, "cost_usd": round(cost, 8)})
                 return CallResult(status=result["status"], parsed=result["parsed"], finish_reason=result["finish_reason"],
                                   model_version=result["model_version"], usage=u, http_attempts=attempt,
                                   latency_s=round(time.time() - started, 3), cost_usd=cost)
             finally:
                 spend.ensure_settled()
         raise InfraStop("transport_exhausted")
+
+    def _settle_and_log(self, spend, outcome: str, usage, row: Dict[str, Any]) -> None:
+        """시도를 원장에 정산하고 호출 기록에 한 줄을 남긴다. 정산이 서킷브레이커를 열어 예외를 내도 기록은 남는다 -
+        런을 멈추게 한 바로 그 시도가 호출 기록(과 리포트의 시도 수)에서 빠지면 원장·전송 수와 어긋난다."""
+        try:
+            spend.settle(outcome, usage)
+        finally:
+            self.on_attempt(row)
 
     @staticmethod
     def _parse(kind: str, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -673,14 +679,16 @@ class Store:
 
 
 def purge_expired(pkg_labels_dir: Path, proto_id: str, now: Optional[datetime] = None) -> bool:
-    """패키지 마감이 지났으면 라벨러의 자유 텍스트(rationales.jsonl)를 지운다. 지웠으면 True."""
+    """패키지 마감이 지났으면 라벨러의 자유 텍스트(rationales.jsonl)를 지운다. 지웠으면 True.
+
+    같은 정리가 라벨 도구가 패키지를 열 때마다(`labels.purge_expired_bodies`) 돈다 - 이 함수는 이 CLI와 리포트가 먼저 부르는 자리다.
+    """
     from evaluation.llm import labels as label_store
 
-    p = Path(pkg_labels_dir) / "auto" / proto_id / "rationales.jsonl"
-    if p.exists() and label_store.is_expired(Path(pkg_labels_dir), now or _now()):
-        p.unlink()
-        return True
-    return False
+    p = Path(pkg_labels_dir) / label_store.AUTO_DIR / proto_id / label_store.AUTO_FREE_TEXT_FILE
+    existed = p.exists()
+    label_store.purge_auto_free_text(Path(pkg_labels_dir), now or _now())
+    return existed and not p.exists()
 
 
 # ---------------------------------------------------------------- 라벨러
@@ -782,10 +790,20 @@ class Labeler:
                    "at": self.now().isoformat()}
             self.store.append("units.jsonl", end)
             return end
-        if u.key in self.started_units():
-            self.resent += 1
-        self.store.append("units.jsonl", {"event": "start", "run": u.run, "kind": u.kind, "target": u.target,
-                                          "at": self.now().isoformat()})
+        # start 행은 첫 요청이 나갈 수 있게 된 뒤(가드 통과 뒤)에 쓴다 - 가드가 요청 전에 거절한 단위는 보낸 적이 없으므로
+        # 재개 때 '응답을 저장하기 전에 죽은 호출을 다시 보냈다'(A8.13 (b)7)로 세지 않는다
+        earlier_start = u.key in self.started_units()
+        started = []
+
+        def mark_started() -> None:
+            if started:
+                return
+            started.append(True)
+            if earlier_start:
+                self.resent += 1
+            self.store.append("units.jsonl", {"event": "start", "run": u.run, "kind": u.kind, "target": u.target,
+                                              "at": self.now().isoformat()})
+
         seed = self.proto.seed(u.run)
         attempts = 1 + int(self.proto.labeler["rule_repair_attempts"])
         violations: List[str] = []
@@ -794,7 +812,8 @@ class Labeler:
         versions = []
         for i in range(attempts):
             system, user = msgs if i == 0 else self._messages(u, violations)
-            res = self.transport.generate(u.kind, system, user, seed, meta={"run": u.run, "target": u.target, "response_no": i + 1})
+            res = self.transport.generate(u.kind, system, user, seed, meta={"run": u.run, "target": u.target, "response_no": i + 1},
+                                          before_send=mark_started)
             versions.append(res.model_version)
             if res.status in ("length", "content_filter"):
                 status, violations = res.status, [f"finish:{res.finish_reason}"]
@@ -846,7 +865,10 @@ class Labeler:
         for e in raw["fact_errors"]:
             start, end, count = locate_span(draft.get(e["field"]) or "", e["text"])
             if start is None:
-                unlocated.append({"field": e["field"], "type": e["type"], "text": e["text"]})
+                # 라벨러가 인용했지만 초안에서 못 찾은 문자열은 라벨 파일에 두지 않는다(마감에 지우는 대상은 rationales.jsonl뿐이다).
+                # 길이와 해시만 남기고, 원문은 rationales.jsonl의 응답에만 있다
+                unlocated.append({"field": e["field"], "type": e["type"], "n_chars": len(e["text"]),
+                                  "sha256_16": hashlib.sha256(e["text"].encode("utf-8")).hexdigest()[:16]})
                 continue
             ambiguous += int(count > 1)
             text = (draft.get(e["field"]) or "")[start:end]
@@ -941,6 +963,11 @@ class Labeler:
         return system_prompt(self.proto, "coverage", self.transport.schema_mode), \
             user_message(self.proto, "coverage", facts=facts, draft=out["draft"])
 
+    def _assemble_group(self, group: Sequence[Unit]) -> None:
+        for u in group:
+            if u.kind == "output":
+                self.assemble_output(u.run, u.target)    # 이미 조립됐으면 아무것도 하지 않는다
+
     def _run_group(self, group: Sequence[Unit]) -> None:
         done = self.done_units()
         for u in group:
@@ -948,9 +975,7 @@ class Labeler:
                 continue
             self.run_unit(u)
             done = self.done_units()
-        for u in group:
-            if u.kind == "output":
-                self.assemble_output(u.run, u.target)
+        self._assemble_group(group)
 
     def run(self, *, spent_usd: Callable[[], float]) -> Dict[str, Any]:
         for g in self.plan_a():
@@ -965,6 +990,7 @@ class Labeler:
         done = self.done_units()
         for g in rest:
             if all(u.key in done for u in g):
+                self._assemble_group(g)      # 마지막 단위를 끝낸 뒤 조립 전에 죽었어도 출력 라벨 행이 빠지지 않게 한다
                 continue
             pending = [u for u in g if u.key not in done]
             if spent_usd() + self.worst_case_usd(pending) > soft:
@@ -1035,8 +1061,25 @@ def preflight(proto: Protocol, transport: GeminiTransport) -> Dict[str, Any]:
 # ---------------------------------------------------------------- 지출 가드 환경
 
 
+def _stricter_cap(registered: str, current: Optional[str]) -> str:
+    """등록한 상한과 운영자가 환경에 이미 걸어 둔 상한 중 낮은 쪽. 환경값이 없거나 읽을 수 없으면 등록값이다."""
+    try:
+        have = float(current) if current is not None and current.strip() else None
+    except ValueError:
+        have = None
+    if have is not None and 0 <= have < float(registered):
+        return current.strip()
+    return registered
+
+
 def configure_budget(proto: Protocol) -> Dict[str, str]:
+    """프로토콜의 런 id·상한을 환경에 건다. 운영자가 환경에 이미 더 낮은 런·일 상한을 걸어 뒀으면 그것을 따른다(올리지 않는다) -
+    등록값은 이 단계가 쓸 수 있는 최대이지 가드의 다른 설정을 덮어쓸 권한이 아니다. 낮은 값이 시작 조건(일 여유)에 걸리면
+    `budget_problems`가 시작을 거절한다."""
     env = {k: str(v) for k, v in proto.doc["budget"]["env"].items()}
+    for key in ("LLM_BUDGET_RUN_USD", "LLM_BUDGET_DAY_USD"):
+        if key in env:
+            env[key] = _stricter_cap(env[key], os.environ.get(key))
     os.environ.update(env)
     from core.llm import budget
 
@@ -1106,6 +1149,12 @@ def _check_package(proto: Protocol, pkg: Package) -> None:
         raise ProtocolError("패키지 마감이 등록값과 다르다")
 
 
+def preflight_ok(pf: Optional[Dict[str, Any]]) -> bool:
+    """네 호출 종류가 모두 응답을 받았고 스키마를 지켰을 때만 참이다(A8.13 (b)7 iii: 실패한 pre-flight는 시작하지 않는다)."""
+    results = (pf or {}).get("results") or {}
+    return set(results) == set(KINDS) and all((v or {}).get("status") == "ok" for v in results.values())
+
+
 def _quiet():
     import logging
 
@@ -1136,6 +1185,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                           "manifest": {k: v for k, v in store.manifest().items() if k != "preflight"}}, ensure_ascii=False, indent=1))
         return 0
     env = configure_budget(proto)
+    registered = proto.doc["budget"]["env"]
+    kept = {k: v for k, v in env.items() if k.startswith("LLM_BUDGET_") and float(v) < float(registered[k])}
+    if kept:
+        print("환경에 걸린 더 낮은 상한을 따른다(등록값을 올리지 않는다): " + ", ".join(f"{k}={v}" for k, v in sorted(kept.items())))
     problems = budget_problems(proto)
     if problems:
         print("시작하지 않는다: " + "; ".join(problems))
@@ -1150,15 +1203,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     from core.llm.budget import LLMBudgetRefusal, LLMRunStop
 
     try:
-        if args.command == "preflight" or not manifest.get("preflight"):
+        # 지난 pre-flight가 네 종류 모두 ok일 때만 건너뛴다 - 실패한 기록이 남아 있으면 run은 다시 한다(지어낸 문장 4건)
+        if args.command == "preflight" or not preflight_ok(manifest.get("preflight")):
             pf = preflight(proto, transport)
             manifest.update({"protocol": proto.id, "model": proto.model, "budget_env": env, "preflight": pf,
+                             "preflight_ok": preflight_ok(pf),
                              "schema_mode": pf["schema_mode"], "thinking_spelling": pf["thinking_spelling"],
                              "preflight_at": _now().isoformat()})
             store.write_json("manifest.json", manifest)
             print(json.dumps({"preflight": {k: v["status"] for k, v in pf["results"].items()}, "changes": pf["changes"],
                               "spent_run_usd": spent_usd()}, ensure_ascii=False))
-            if any(v["status"] != "ok" for v in pf["results"].values()):
+            if not preflight_ok(pf):
                 print("pre-flight 실패 - 라벨을 달지 않는다")
                 return 3
             if args.command == "preflight":
