@@ -97,9 +97,12 @@ SOURCE_PINS: Dict[Tuple[str, str], str] = {
         "ae13dd3f117a20f619aec5c7e1812eb969c3b26569b2d60d954657493b141fdc",
     ("db.batch_manager", "update_cluster_log"):
         "e43e3daf2dab78c22a6c04707a07324788ab637f85854f0bc9e36471420fb53d",
-    # 연결·저장·임베딩 UPDATE를 부르는 쪽
+    # 연결·저장·임베딩 UPDATE를 부르는 쪽.
+    # 2026-10-18 갱신(WP3 C2): 바뀐 것은 저장에 넘기는 article_ids를 current_article_ids(클러스터 전체)에서
+    # 실제로 쓴 기사의 id(current_articles)로 정하는 한 줄뿐이다. 대역의 save_news_letter는 받은 article_ids를
+    # 그대로 남기므로 대역이 하는 일은 달라지지 않는다. 앞 값: 1187eb50c8d4(E0 실행 시점의 main 본문).
     ("workflow.nodes", "save_newsletter_to_db"):
-        "1187eb50c8d4d953ae08f56f9a928da8b8f7c8e3ef9ce10c2258110d4440d4de",
+        "2dfb604811dca8694b1e515565070f90efb77055490cb46a7b73c249bc3e5a03",
     # 임베더를 부르고 빈 결과를 다루는 쪽
     ("workflow.nodes", "embed_newsletter_node"):
         "cb8d70bb5a2c0e59d95eb4036b13eb1aa2ac47962793e091d0eac050d5de8226",
