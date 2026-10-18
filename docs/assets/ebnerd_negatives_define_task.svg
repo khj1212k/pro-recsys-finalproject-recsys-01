@@ -8,7 +8,7 @@
 <text x="42.0" y="77.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="normal">개선(95% CI가 0 위)</text>
 <rect x="188.6" y="67.0" width="12.0" height="12.0" rx="2" fill="#eb6834"/>
 <text x="206.6" y="77.0" font-size="12" fill="#52514e" text-anchor="start" font-weight="normal">악화(95% CI가 0 아래)</text>
-<text x="24.0" y="108.0" font-size="13" fill="#0b0b0b" text-anchor="start" font-weight="bold">P1 노출 재정렬 — 편집자가 보여 준 후보 안의 순위 (24.5만 노출)</text>
+<text x="24.0" y="108.0" font-size="13" fill="#0b0b0b" text-anchor="start" font-weight="bold">P1 노출 재정렬 — 편집자가 보여 준 후보 안의 순위 (244,647 노출)</text>
 <line x1="268.0" y1="120.0" x2="268.0" y2="264.0" stroke="#e6e5e1" stroke-width="1"/>
 <text x="268.0" y="280.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">−0.15</text>
 <line x1="335.4" y1="120.0" x2="335.4" y2="264.0" stroke="#e6e5e1" stroke-width="1"/>
@@ -61,7 +61,7 @@
 <line x1="481.4" y1="249.0" x2="481.4" y2="255.0" stroke="#0b0b0b" stroke-width="1.5"/>
 <line x1="483.1" y1="249.0" x2="483.1" y2="255.0" stroke="#0b0b0b" stroke-width="1.5"/>
 <text x="491.1" y="256.0" font-size="11" fill="#0b0b0b" text-anchor="start" font-weight="bold">+0.0089</text>
-<text x="24.0" y="310.0" font-size="13" fill="#0b0b0b" text-anchor="start" font-weight="bold">P2 전체 풀 랭킹 — 48시간 안 발행 기사 전부 (2만 요청, 서빙과 같은 조건)</text>
+<text x="24.0" y="310.0" font-size="13" fill="#0b0b0b" text-anchor="start" font-weight="bold">P2 전체 풀 랭킹 — 48시간 안 발행 기사 전부 (20,000 요청, 평균 후보 235개, 서빙형 과제)</text>
 <line x1="268.0" y1="322.0" x2="268.0" y2="466.0" stroke="#e6e5e1" stroke-width="1"/>
 <text x="268.0" y="482.0" font-size="11" fill="#52514e" text-anchor="middle" font-weight="normal">−0.15</text>
 <line x1="335.4" y1="322.0" x2="335.4" y2="466.0" stroke="#e6e5e1" stroke-width="1"/>

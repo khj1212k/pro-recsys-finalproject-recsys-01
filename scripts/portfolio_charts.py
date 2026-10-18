@@ -8,7 +8,8 @@
     reports/recsys/ebnerd_v1.json          -> ebnerd_negatives_define_task.svg   [EB-NeRD]
     reports/recsys/ebnerd_v1_3_neural.json -> e15_neural_vs_lightgbm.svg   [EB-NeRD]
 
-출력은 입력 JSON이 같으면 바이트까지 같다(시각·난수 없음). 차트의 수치는 JSON에서만 읽고 손으로 적지 않는다.
+출력은 입력 JSON이 같으면 바이트까지 같다(시각·난수 없음). 막대·점·CI와 캡션의 표본 크기·부트스트랩 횟수·trial 수·seed 수는
+JSON에서 읽는다. 손으로 적은 것은 제목·범례·한계 문구(숫자 없음)뿐이다.
 SVG는 흰 카드 배경을 직접 그려서 밝은 테마와 어두운 테마의 GitHub에서 모두 읽힌다.
 """
 
@@ -130,8 +131,13 @@ def chart_leakage(rep: dict) -> str:
         "같은 모델을 point-in-time과 팀 방식 추론 시점으로 평가한 MRR",
         "코드 버전 세 개 모두 팀 방식 추론 시점(as-written)의 MRR이 point-in-time보다 높고, 쌍 차이의 95% 신뢰구간이 0을 제외한다.",
     )
+    primary = [rep["headline_ci"][key]["primary"]["mrr"] for key, _ in groups]
+    n_users = sorted({m["n_users"] for m in primary})
+    n_boot = sorted({m["n_boot"] for m in primary})
+    if len(n_users) != 1 or len(n_boot) != 1:
+        raise ValueError(f"코드 버전마다 평가 유저 수나 부트스트랩 횟수가 다르다: {n_users}, {n_boot}")
     svg.text(24, 30, "같은 모델, 추론 시점만 다르다: 누출을 걷어내면 MRR이 내려간다", size=16, weight="bold")
-    svg.text(24, 50, "[team-synth] 팀이 남긴 LLM 합성 클릭, 평가 유저 31명. 절대값은 성능이 아니라 진단이다.",
+    svg.text(24, 50, f"[team-synth] 팀이 남긴 LLM 합성 클릭, 평가 유저 {n_users[0]}명. 절대값은 성능이 아니라 진단이다.",
              size=12, fill=INK2)
     x = svg.legend_swatch(24, 76, BLUE, "point-in-time (정답을 못 보는 추론)")
     svg.legend_swatch(x, 76, ORANGE, "as-written (팀 방식: 정답이 피처에 들어감)")
@@ -163,7 +169,8 @@ def chart_leakage(rep: dict) -> str:
         svg.text(x1 + 62, cy - 2, fmt(leak["effect"], 4, True), size=15, weight="bold")
         svg.text(x1 + 62, cy + 16, ci_text(leak["ci_lo"], leak["ci_hi"]), size=11, fill=INK2)
 
-    svg.text(24, height - 28, "점 = 시드 평균, 수염 = 시드×유저 nested bootstrap 95% CI(1,000회). Δ는 시드를 쌍으로 재표본한 쌍 CI.",
+    svg.text(24, height - 28,
+             f"막대 = 시드 평균, 수염 = 시드×유저 nested bootstrap 95% CI({n_boot[0]:,}회). Δ는 시드를 쌍으로 재표본한 쌍 CI.",
              size=11, fill=INK2)
     svg.text(24, height - 12, "출처: reports/recsys/team_repro_v2.json (headline_ci). 다중비교 보정 없음.", size=11, fill=INK2)
     return svg.render()
@@ -203,9 +210,12 @@ def chart_negatives(rep: dict) -> str:
 
     ticks = [-0.15, -0.10, -0.05, 0.0, 0.05, 0.10, 0.15, 0.20]
     row_h = 24.0
+    n_p1 = rep["p1"]["ranker_v2"]["ndcg@10"]["n"]
+    n_p2 = rep["p2"]["ranker_v2"]["ndcg@10"]["n"]
+    pool = round(rep["p2_info"]["pool_size"]["mean"])
     panels = [
-        ("p1_ablation_diffs", "P1 노출 재정렬 — 편집자가 보여 준 후보 안의 순위 (24.5만 노출)"),
-        ("p2_ablation_diffs", "P2 전체 풀 랭킹 — 48시간 안 발행 기사 전부 (2만 요청, 서빙과 같은 조건)"),
+        ("p1_ablation_diffs", f"P1 노출 재정렬 — 편집자가 보여 준 후보 안의 순위 ({n_p1:,} 노출)"),
+        ("p2_ablation_diffs", f"P2 전체 풀 랭킹 — 48시간 안 발행 기사 전부 ({n_p2:,} 요청, 평균 후보 {pool}개, 서빙형 과제)"),
     ]
     y = 108.0
     for key, title in panels:
@@ -252,7 +262,7 @@ def chart_negatives(rep: dict) -> str:
 # 3. E15: 신경망 대 LightGBM  [EB-NeRD]
 # ---------------------------------------------------------------------------------------------
 def chart_e15(rep: dict) -> str:
-    width, height = 800, 340
+    width, height = 800, 352
     svg = Svg(
         width, height,
         "E15 판정: 신경망 arm과 스태킹 arm의 nDCG@10 차이(튜닝한 LightGBM A* 대비)",
@@ -292,11 +302,19 @@ def chart_e15(rep: dict) -> str:
         svg.circle(sx(diff), cy, 5.5, ORANGE)
         svg.text(x1 + 68, cy - 2, v["outcome"], size=11, weight="bold")
         svg.text(x1 + 68, cy + 14, f"{fmt(diff, 4, True)} {ci_text(lo, hi)}", size=10, fill=INK2)
+    meta = rep["meta"]
+    sel = {t: verdicts[t]["sel"]["comparison"] for t in ("p1", "p2")}
+    svg.text(24, height - 60,
+             f"수염은 유저 단위 부트스트랩 95% CI이고 seed 간 변동을 담지 않는다(NRMS-lite의 seed 간 표준편차 "
+             f"P1 {fmt(sel['p1']['sd_seed'])}, P2 {fmt(sel['p2']['sd_seed'])}).",
+             size=11, fill=INK2)
     svg.text(24, height - 44,
-             "수염이 점 가까이에 붙는 것은 표본이 큰 탓이다(P1 24.5만 노출). 0을 넘지 못했다는 사실 하나만 읽는다.",
+             f"판정은 seed 규칙(seed마다 CI 하한 > 0, 결합 하한 > 최소 효과)으로 했다. NRMS-lite의 결합 하한은 "
+             f"P1 {fmt(sel['p1']['combined_lower'])}, P2 {fmt(sel['p2']['combined_lower'])}.",
              size=11, fill=INK2)
     svg.text(24, height - 28,
-             "신경망 family당 12 trial, A* 24 trial, seed 3개. 범위: NRMS-lite(고정 BGE-M3 투영) 한정. 'GBDT가 신경망보다 낫다'로 일반화하지 않는다.",
+             f"신경망 family당 {meta['neural_trials']} trial, A* {meta['gbdt_trials']} trial, seed {len(meta['seeds'])}개. "
+             "범위: NRMS-lite(고정 BGE-M3 투영) 한정. 'GBDT가 신경망보다 낫다'로 일반화하지 않는다.",
              size=11, fill=INK2)
     svg.text(24, height - 12, "출처: reports/recsys/ebnerd_v1_3_neural.json (verdict.by_task). 증거 등급 preregistered-run.",
              size=11, fill=INK2)
