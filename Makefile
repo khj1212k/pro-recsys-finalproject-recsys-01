@@ -1,6 +1,7 @@
 # 저장소 루트에서 쓰는 명령 모음. 인자 없이 `make`를 치면 목록이 나온다.
-# CI(.github/workflows/ci.yml)와 같은 명령만 둔다. 파이썬 환경은 `make venv`가 만드는 .venv다
-# (다른 환경을 쓰려면 PY=경로를 준다).
+# CI(.github/workflows/ci.yml)와 같은 명령을 둔다. 예외는 report-charts·report-charts-check 하나다 - 리포트 JSON에서
+# docs/assets/*.svg를 다시 만드는 명령이고, CI에서는 tests/test_portfolio_charts.py가 같은 대조를 한다.
+# 파이썬 환경은 `make venv`가 만드는 .venv다 (다른 환경을 쓰려면 PY=경로를 준다).
 
 PY ?= .venv/bin/python
 PYTEST ?= $(PY) -m pytest -q
@@ -8,10 +9,10 @@ PYTEST ?= $(PY) -m pytest -q
 TESTS ?= tests/
 
 .DEFAULT_GOAL := help
-.PHONY: help venv ci-lock test itest lint
+.PHONY: help venv ci-lock test itest lint report-charts report-charts-check
 
 help: ## 이 목록
-	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "} /^[a-zA-Z_-]+:.*## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 venv: ## .venv를 만들고 잠금 파일(requirements-ci.txt)로 설치한다 - CI와 같은 버전
 	uv venv --python 3.11 .venv
@@ -31,3 +32,9 @@ itest: ## 통합 테스트 - 전용 테스트 DB의 TEST_DATABASE_URL이 필요�
 
 lint: ## ruff - 돌지 못하는 코드만 잡는 보수적 규칙 (pyproject.toml), uv 필요
 	uvx --from "ruff==0.16.9" ruff check .
+
+report-charts: ## 커밋된 리포트 JSON에서 docs/assets/*.svg를 다시 쓴다 (표준 라이브러리만, 설치할 것 없음)
+	$(PY) scripts/portfolio_charts.py
+
+report-charts-check: ## 쓰지 않고, 커밋된 SVG가 리포트 JSON에서 만든 것과 다르면 실패한다
+	$(PY) scripts/portfolio_charts.py --check
