@@ -211,6 +211,8 @@
 - delta_usd: -3.214286
 - abs_diff_usd: 3.3699
 - threshold_usd: 0.1
+- other_gemini_calls: True
+- 비고: 같은 기간 다른 Gemini 호출이 있어 delta_usd·abs_diff_usd는 판정에 쓰지 않는다(ADR 0009 A8.7). delta_usd = (balance_before − balance_after) / billing_fx라서 음수는 잔액이 늘었다는 뜻이다. 두 잔액이 같은 칸인지는 ADR 0009 A8.12의 기록을 본다
 - 확인하지 못한 것: 잔액 표시 단위, 반영 지연, VAT 포함 여부
 
 ## pre-flight
