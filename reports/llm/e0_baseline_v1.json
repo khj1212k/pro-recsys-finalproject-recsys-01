@@ -59,21 +59,47 @@
     0.891
    ]
   },
+  "relabel_targets_publishable": {
+   "k": 3,
+   "kappa_reference_only": 0.0,
+   "n": 5,
+   "one_category_only": false,
+   "rate": 0.6,
+   "run_a_one_category_only": true,
+   "wilson95": [
+    0.2307,
+    0.8824
+   ]
+  },
+  "relabel_targets_single_event": {
+   "k": 3,
+   "kappa_reference_only": null,
+   "n": 3,
+   "one_category_only": true,
+   "rate": 1.0,
+   "run_a_one_category_only": true,
+   "wilson95": [
+    0.4385,
+    1.0
+   ]
+  },
   "report": "reports/llm/e0_auto_labels_v1.md",
-  "run_a_vs_b_publishable": {
+  "run_a_vs_b_publishable_with_extension": {
    "k": 8,
    "kappa_reference_only": 0.4118,
    "n": 10,
+   "one_category_only": false,
    "rate": 0.8,
    "wilson95": [
     0.4902,
     0.9433
    ]
   },
-  "run_a_vs_b_single_event": {
+  "run_a_vs_b_single_event_with_extension": {
    "k": 11,
    "kappa_reference_only": 1.0,
    "n": 11,
+   "one_category_only": false,
    "rate": 1.0,
    "wilson95": [
     0.7412,
@@ -873,7 +899,7 @@
   "n_p": 15
  },
  "format": "e0-report/1",
- "generated_at": "2026-10-18T05:37:34Z",
+ "generated_at": "2026-10-18T06:56:20Z",
  "guard": {
   "caps_usd": {
    "e0_cumulative": 1.5,
