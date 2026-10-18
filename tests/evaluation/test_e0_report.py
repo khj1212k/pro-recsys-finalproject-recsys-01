@@ -347,7 +347,9 @@ def test_no_human_labels_and_the_automated_label_summary_are_rendered(built, tmp
             "run_a": {"a8_8_uses": {"status": "complete", "publishable_primary": ratio, "publishable_first_draft": ratio},
                       "outputs": {"fact_error_ge1": ratio, "key_fact_coverage_micro": ratio},
                       "clusters": {"single_event": ratio}},
-            "run_a_vs_run_b": {"publishable": ratio, "single_event": ratio},
+            "run_a_vs_run_b": {"publishable": ratio, "single_event": ratio,
+                               "registered_relabel_subset": {"publishable": {**ratio, "k": 3, "n": 5, "run_a_one_category_only": True},
+                                                             "single_event": {**ratio, "k": 3, "n": 3, "one_category_only": True}}},
             "labeler_vs_judge_v2": {"judge_decision_vs_publishable": {"table": {"judge_pass_pub_Y": 1}, **ratio}}}
     (tmp_path / "auto.json").write_text(json.dumps(auto))
     done = rep.build_report(r.dir, prereg=prereg, manifest_path=manifest, human_labels_none="사용자 결정",
@@ -356,6 +358,12 @@ def test_no_human_labels_and_the_automated_label_summary_are_rendered(built, tmp
     assert s["status"] == "complete" and s["cost_usd"] == 0.21 and s["publishable_primary"] == ratio
     md = rep.render_md(done)
     assert "## 자동 라벨(ADR 0009 A8.13)" in md and "1/2 = 0.500 [0.100, 0.900]" in md
+    # 런 사이 일치의 머리 수치는 등록된 보고 단위(재라벨 대상만)이고, 확장분을 합친 값은 참고로만 뒤에 붙는다
+    assert s["relabel_targets_publishable"]["n"] == 5 and s["relabel_targets_single_event"]["n"] == 3
+    assert s["run_a_vs_b_publishable_with_extension"]["n"] == 2 and "run_a_vs_b_publishable" not in s
+    line = next(l for l in md.splitlines() if l.startswith("- 런 a 대 b 일치"))
+    assert "재라벨 대상만" in line and line.index("3/5") < line.index("참고로 확장분") < line.index("1/2")
+    assert "런 a는 한 범주만 냄" in line and "두 런 모두 한 범주만 냄" in line
     assert "automated_labels" not in rep.build_report(r.dir, prereg=prereg, manifest_path=manifest)
 
 

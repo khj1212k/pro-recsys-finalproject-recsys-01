@@ -592,12 +592,20 @@ def build_report(run_dir: Path, *, prereg: Dict[str, Any], manifest_path: Path, 
     return report
 
 
+def _agreement_head(x: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if x is None:
+        return None
+    keys = ("k", "n", "rate", "wilson95", "kappa_reference_only", "one_category_only", "run_a_one_category_only")
+    return {k: x[k] for k in keys if k in x}
+
+
 def auto_label_summary(path: Path) -> Dict[str, Any]:
     """자동 라벨 리포트(ADR 0009 A8.13, evaluation.llm.e0_auto_label_report)의 머리 수치만 옮긴다. 정의와 주의는 그 리포트에 있다."""
     if not Path(path).exists():
         return {"status": "pending", "report": str(path)}
     rep = json.loads(Path(path).read_text(encoding="utf-8"))
     h, a, ag = rep["header"], rep["run_a"], rep["run_a_vs_run_b"]
+    sub = ag.get("registered_relabel_subset")
     uses = a["a8_8_uses"]
     return {
         "status": "complete" if uses.get("status") == "complete" else uses.get("status"),
@@ -607,8 +615,12 @@ def auto_label_summary(path: Path) -> Dict[str, Any]:
         "publishable_primary": uses.get("publishable_primary"), "publishable_first_draft": uses.get("publishable_first_draft"),
         "fact_error_ge1": a["outputs"]["fact_error_ge1"], "key_fact_coverage": a["outputs"]["key_fact_coverage_micro"],
         "single_event": a["clusters"]["single_event"],
-        "run_a_vs_b_publishable": {k: ag["publishable"][k] for k in ("k", "n", "rate", "wilson95", "kappa_reference_only")},
-        "run_a_vs_b_single_event": {k: ag["single_event"][k] for k in ("k", "n", "rate", "wilson95", "kappa_reference_only")},
+        # 런 사이 일치의 등록된 보고 단위는 A8.8 재라벨의 재라벨 대상만이다(출력 5, 클러스터 3). 확장분을 합친 값은 대표 표본이 아니라
+        # 참고로만 옮긴다(ADR 0009 A8.14 사후 검토 정정)
+        "relabel_targets_publishable": _agreement_head(sub.get("publishable")) if sub else None,
+        "relabel_targets_single_event": _agreement_head(sub.get("single_event")) if sub else None,
+        "run_a_vs_b_publishable_with_extension": _agreement_head(ag["publishable"]),
+        "run_a_vs_b_single_event_with_extension": _agreement_head(ag["single_event"]),
         "labeler_vs_judge_v2": {k: rep["labeler_vs_judge_v2"]["judge_decision_vs_publishable"][k]
                                 for k in ("table", "k", "n", "rate", "wilson95", "kappa_reference_only")},
         "note": "자동 라벨러(LLM)의 판단이고 정확도는 재지 않았다. 라벨러·generator·judge v2가 모두 Gemini다.",
@@ -829,13 +841,26 @@ def render_md(report: Dict[str, Any]) -> str:
                 return f"{x['k']}/{x['n']} = {x['rate']:.3f} [{x['wilson95'][0]:.3f}, {x['wilson95'][1]:.3f}]"
             seen = list(al["labeler_model_versions_seen"])
             version_note = "" if seen == [al["labeler_model"]] else f" (응답 modelVersion: {', '.join(seen) or '없음'})"
+
+            def agree(x):
+                if x is None:
+                    return "없음"
+                text = r(x)
+                if x.get("one_category_only"):
+                    text += " (두 런 모두 한 범주만 냄 - 일치가 정보 없음)"
+                elif x.get("run_a_one_category_only"):
+                    text += " (런 a는 한 범주만 냄 - κ는 항상 0)"
+                return text
+
             lines += [f"- 정의·주의·행별 값은 [{al['report']}](e0_auto_labels_v1.md). 라벨러 {al['labeler_model']}"
                       f"{version_note}, 비용 ${al['cost_usd']:.6f}. {al['note']}",
                       f"- 발행 가능률(자동 라벨, 주 지표 저장본 Y / n_p): {r(al['publishable_primary'])}; 첫 초안만 {r(al['publishable_first_draft'])}",
                       f"- 사실 오류 ≥1(출력): {r(al['fact_error_ge1'])}; 핵심 사실 커버리지(사실 단위): {r(al['key_fact_coverage'])}; "
                       f"single_event: {r(al['single_event'])}",
-                      f"- 런 a 대 b 일치: publishable {r(al['run_a_vs_b_publishable'])}, single_event {r(al['run_a_vs_b_single_event'])}"
-                      " (κ는 참고로만)",
+                      f"- 런 a 대 b 일치(등록된 보고 단위, A8.8 재라벨의 재라벨 대상만): publishable {agree(al['relabel_targets_publishable'])}; "
+                      f"single_event {agree(al['relabel_targets_single_event'])} (κ는 참고로만). 참고로 확장분(대표 표본이 아니다)까지 "
+                      f"합친 값은 publishable {r(al['run_a_vs_b_publishable_with_extension'])}, "
+                      f"single_event {r(al['run_a_vs_b_single_event_with_extension'])}",
                       f"- 라벨러 대 judge v2 shadow(첫 초안): {r(al['labeler_vs_judge_v2'])}, 표 {json.dumps(al['labeler_vs_judge_v2']['table'])}",
                       ""]
     lines += ["## 선언된 이탈(A8.2)", ""]
