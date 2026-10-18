@@ -648,7 +648,7 @@ VM에는 읽기 전용으로만 접근했다: `job_runs`·`news_raw` 집계(세�
 |---|---|
 | OCI CLI | 3.94.0(Mac과 같은 판), `/opt/oci-cli` 가상환경(`python3.12-venv` 설치), 디스크 772 MB. 인스턴스 주체로 목록 1회 2.4초, 최대 RSS 75 MB |
 | 최소 권한 확인 | VM 자격으로 내려받기·지우기·덮어쓰기를 시도하면 셋 다 `BucketNotFound`(권한 없는 요청에 대한 OCI의 응답)로 거절. 목록·새 객체 올리기만 된다 |
-| 스크립트 | `/opt/newsletter-backup/tier0_backup.py`·`idle_check.py` — 브랜치 `ops/collector-backups-and-reporting`의 `a327d7b`로 설치해 아래를 돌렸고, 빈 DB 복원(`restore`)의 기록 순서만 고친 `0efc2f5`로 다시 깔았다(`daily` 경로는 같다). sha256은 저장소 파일과 같다 |
+| 스크립트 | `/opt/newsletter-backup/tier0_backup.py`·`idle_check.py` — 브랜치 `ops/collector-backups-and-reporting`의 `5091f7c`(리베이스 전 `a327d7b`)로 설치해 아래를 돌렸고, 빈 DB 복원(`restore`)의 기록 순서만 고친 `19cf228`(리베이스 전 `0efc2f5`)로 다시 깔았다(`daily` 경로는 같다). sha256은 저장소 파일과 같다. 2026-10-18에 main(`ec79e2a`, #38) 위로 다시 쌓으면서 SHA만 바뀌었고 두 스크립트의 내용은 그대로다 - VM에 깔린 `tier0_backup.py`의 sha256은 `499f82969244…`로 시작하고 `idle_check.py`는 `10c2b890a211…`로 시작한다 |
 | cron | `/etc/cron.d/newsletter-tier0-backup` — `10 18 * * * root nice -n 10 … daily`, 로그 `/var/log/newsletter-backup.log` |
 
 **실행 (모두 2026-10-17 UTC)**
@@ -764,7 +764,7 @@ daily_report도 60시간 넘게 남은 `full/` 객체를 경고한다), 첫 스�
 - **유휴 회수 위험은 매일 숫자로 보인다.** 7일 창은 여전히 공식 기준상 유휴다(CPU p95 8.5%). 인위적 부하는 쓰지 않는다 — 회수되면
   6.2로 다시 만들고 버킷의 사본으로 되살린다(런북 6.2·6.5).
 - **아직 운영 중이라고 쓰지 않는다.** 승격 조건 (a)는 정시 회차 기준으로 여전히 95% 아래이고(증거 8), (b)는 스케줄 실행을 며칠 본 뒤
-  판단한다. 백업 스크립트는 브랜치에서 설치했다 — 병합 뒤 런북 6.5의 "설치·갱신"으로 main의 판을 다시 깐다. 깔린 판(`0efc2f5`)은
+  판단한다. 백업 스크립트는 브랜치에서 설치했다 — 병합 뒤 런북 6.5의 "설치·갱신"으로 main의 판을 다시 깐다. 깔린 판(`19cf228`, 리베이스 전 `0efc2f5`)은
   본문 사본을 켜고 끄는 설정 `full_enabled`가 생기기 전 판이라 병합 전에도 매일 `full/`을 올린다. main의 판은 설정이 없으면 본문 사본을
   만들지 않으므로, 다시 깔 때 ADR 0023 개정 2026-10-17 2가 승인됐으면 설정에 `"full_enabled": true`를 넣는다.
 

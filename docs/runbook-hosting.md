@@ -544,8 +544,8 @@ oci os object list -ns $NS -bn newsletter-tier0-backups --fields name,size,timeC
   --query 'data[].{n:name,mb:size,t:"time-created"}' --output table     # Mac(관리자 자격)에서
 ```
 
-**설치·갱신** (처음 한 번, 그리고 스크립트가 바뀐 커밋이 main에 들어갈 때마다. 2026-10-17 설치는 브랜치 커밋 `0efc2f5` - 병합 뒤 main의 판으로 다시 깐다.
-`0efc2f5`는 `full_enabled` 설정이 생기기 전 판이라 설정과 무관하게 매일 `full/`을 올린다)
+**설치·갱신** (처음 한 번, 그리고 스크립트가 바뀐 커밋이 main에 들어갈 때마다. 2026-10-17 설치는 브랜치 커밋 `19cf228`(리베이스 전 `0efc2f5`) - 병합 뒤 main의 판으로 다시 깐다.
+`19cf228`은 `full_enabled` 설정이 생기기 전 판이라 설정과 무관하게 매일 `full/`을 올린다)
 
 1. OCI 쪽(Mac, 관리자 자격 — 한 번만): 버킷(Standard, `--public-access-type NoPublicAccess`, 버전 관리 끔), 동적 그룹
    `newsletter-micro-backup`(`instance.id = '<VM OCID>'`), 정책 `newsletter-tier0-backup`(ADR 0026 증거 11의 3문장), 수명 주기 규칙
