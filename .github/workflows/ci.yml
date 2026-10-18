@@ -24,6 +24,48 @@ jobs:
       - name: ruff check
         run: uvx --from "ruff==0.16.9" ruff check --output-format=github .
 
+  # 이 push·PR이 새로 들이는 커밋만 비밀 값을 검사한다. git 이력에는 평문 DB 비밀번호 유출 전력이 있지만
+  # (tests/test_no_plaintext_db_password_in_env_example.py) 이력은 다시 쓰지 않으므로 옛 커밋은 보지 않는다.
+  # 바이너리는 릴리스 체크섬으로 고정해 내려받는다. 설정: .gitleaks.toml
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks (pinned, checksum verified)
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          ./gitleaks version
+
+      - name: Scan the commits this push or pull request adds
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          ZERO=0000000000000000000000000000000000000000
+          if [ "$EVENT" = "pull_request" ]; then
+            RANGE="${PR_BASE}..HEAD"
+          elif [ -n "$PUSH_BEFORE" ] && [ "$PUSH_BEFORE" != "$ZERO" ] && git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null; then
+            RANGE="${PUSH_BEFORE}..HEAD"
+          else
+            # 새 브랜치이거나 강제 푸시로 이전 커밋이 없다: main에 없는 커밋만 본다.
+            RANGE="origin/main..HEAD"
+          fi
+          echo "scanning commits in ${RANGE} ($(git rev-list --count "${RANGE}") commits)"
+          ./gitleaks git --config .gitleaks.toml --redact --no-banner --verbose --log-opts="${RANGE}" .
+
   test:
     runs-on: ubuntu-latest
 
