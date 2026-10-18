@@ -40,14 +40,14 @@
 
 ### 3. 새 패키지 vs 기존 파일 리팩터링
 - **`core/llm_client.py`를 그대로 고쳐 쓰지 않고 `core/llm/` 패키지를 새로 만들었다 (채택).**
-  - `core/llm_client.py`는 `NaverHyperCLOVAClient`(V1/V3 페이로드 분기, 레거시 재시도 루프)와 `extract_json_from_response`, `SimpleRateLimiter`를 담고 있다. 레거시 프로바이더(`naver`)를 계속 지원해야 하므로 이 파일 자체를 지울 수는 없다.
+  - `core/llm_client.py`는 `NaverHyperCLOVAClient`(V1/V3 페이로드 분기, 레거시 재시도 루프)와 `extract_json_from_response`, `SimpleRateLimiter`를 담고 있다. 레거시 프로바이더(`naver`)를 계속 지원해야 하므로 이 파일 자체를 지울 수는 없다. (2026-10-18: `NaverHyperCLOVAClient`와 `naver` 프로바이더를 제거했다 - 아래 부록. 이 파일은 공용 도구 때문에 남는다.)
   - 새 계약(`LLMClient.complete()`, role 기반 레지스트리)을 기존 파일에 얹으면 "레거시 `BaseLLMClient.chat_completion()` 계약"과 "신규 `LLMClient.complete()` 계약"이 한 파일에 섞여 호출부에서 어느 쪽을 써야 하는지 헷갈리기 쉽다.
   - `core/llm/` 패키지(`client.py`=계약, `adapters.py`=구현, `schemas.py`=pydantic 모델, `registry.py`=role→client 해석)로 분리하고, `adapters.py`가 `core/llm_client.py`의 `SimpleRateLimiter`/`extract_json_from_response`/`NaverHyperCLOVAClient`를 import해 재사용한다. 호출부는 `from core.llm import get_client`만 알면 된다.
 
 ## 결정
 - `ai_workspace/core/llm/` 패키지를 새로 만든다.
   - `client.py`: `LLMClient`(ABC) / `LLMResult` / `LLMUsage`.
-  - `adapters.py`: `OpenAICompatLLMClient`(OpenAI/Gemini/Upstage 공용, `base_url`만 다름) + `HyperCLOVALLMClient`(레거시 `NaverHyperCLOVAClient`를 `LLMClient` 계약으로 감싼 어댑터, 기본 프로바이더 아님).
+  - `adapters.py`: `OpenAICompatLLMClient`(OpenAI/Gemini/Upstage 공용, `base_url`만 다름) + `HyperCLOVALLMClient`(레거시 `NaverHyperCLOVAClient`를 `LLMClient` 계약으로 감싼 어댑터, 기본 프로바이더 아님). (2026-10-18 제거 - 아래 부록)
   - `schemas.py`: `ClusterEval`, `NewsletterContent`, `NewsletterMeta`, `NewsletterEval`, `ToneResult` - 각각 `core/reconstruction/prompts.py`, `workflow/evaluators.py`, `core/tone_converter.py`의 기존 프롬프트가 요구하던 출력 필드를 그대로 옮겼다. 이 PR에서 프롬프트 문구는 바꾸지 않는다.
   - `registry.py`: `get_client(role)`, `role ∈ {generator, judge, tone}`. `<PREFIX>_PROVIDER`/`<PREFIX>_MODEL` 환경변수로 해석하고(`GEN_*`/`JUDGE_*`/`TONE_*`), `(provider, model)` 조합당 인스턴스 1개·프로바이더당 레이트리미터 1개를 전역 캐시로 공유한다. **기본 프로바이더는 세 role 모두 `gemini`다**(사용자가 지금 보유한 키가 Gemini뿐이라 - 위 "role 기본 모델을 Gemini 하나로 좁히며..." 참고). `judge`가 `generator`와 다른 모델을 쓰도록 `ROLE_DEFAULT_MODEL`로 role별 기본 모델을 따로 두었다(`generator`/`tone`=`gemini-3.5-flash-lite`, `judge`=`gemini-3.5-flash`). 다만 모델이 달라도 같은 벤더(계열)를 쓰는 것 자체가 self-preference bias 위험이라, `get_client("judge")`가 `_model_family(provider)`(현재는 provider 문자열 그대로)로 generator와 비교해 같은 계열이면 WARNING을 남긴다 - 기본 설정 그대로 쓰면 이 경고가 항상 뜬다는 뜻이고, 이는 의도된 것이다(경고만 하고 막지는 않음 - 최종 판단은 bake-off ADR로 미룬다).
 - 재시도/백오프(429·5xx·timeout, 지수 백오프, `Settings.MAX_LLM_CALL_RETRIES` 상한)와 실패 시에도 `LLMMetricsCollector.record_call()` 기록을 `OpenAICompatLLMClient.complete()` 내부 한 곳으로 모았다. 호출부(`ClusterEvaluator`/`NewsletterEvaluator`/`NewsReconstructor`/`ToneConverter`)는 이제 재시도 루프를 직접 돌리지 않고 `client.complete()`를 한 번만 호출한다.
@@ -195,3 +195,32 @@ hidden = `total − prompt − completion`. 참고로 E0 pre-flight(미설정, 2
   `minimal`은 세 역할이 모두 받는 유일한 값이라 후속 비교(생성 비용·지연·규칙 위반률을 같은 입력에서 짝지어)를 하게 되면 그 후보다.
 - 잘못된 값은 서버가 HTTP 400으로 돌려주고 400은 재시도 금지 목록에 없다 — 그래서 `GEN_REASONING_EFFORT=none`을 설정하면 요청마다 400을 받고(과금되지 않는다) 클러스터가 `generator_fallback`으로 실패한다. 설정 전에 이 표를 볼 것.
 - 이 표를 만든 임시 스크립트는 저장소에 넣지 않았다(범위 동결: 새 실험 하네스 금지). 합성 입력은 `evaluation/llm/e0_baseline.py`의 `PREFLIGHT_ARTICLES`다.
+
+## 부록: 2026-10-18 HyperCLOVA 레거시 제거
+
+위 "컨텍스트"대로 HyperCLOVA X 계정은 더는 쓸 수 없고, 어댑터·레지스트리·설정에는 `naver` 프로바이더가 "레거시, 기본값 아님"으로 남아 있었다. 범위 종결 뒤 남은 코드 정리로 걷어냈다
+(`docs/design/2026-09-26-architecture-review.md`가 제거 대상으로 이미 적어 둔 항목이다).
+
+**제거한 것.**
+- `core/llm_client.py`: `NaverHyperCLOVAClient`(와 `V3_MODELS`/`V1_MODELS`), 전역 `LLM_PROVIDER` 환경변수(기본값 `naver`)를 읽던 `get_llm_client()`, 그 클라이언트만 쓰던 `requests` 임포트.
+- `core/llm/adapters.py`: `HyperCLOVALLMClient`. `core/llm/registry.py`: `PROVIDER_CONFIG["naver"]`와 `legacy` 분기.
+  이제 `GEN_PROVIDER`/`JUDGE_PROVIDER`/`TONE_PROVIDER=naver`는 다른 프로바이더로 조용히 넘어가지 않고 "알 수 없는 프로바이더 ... naver(HyperCLOVA)는 2026-10-18에 제거했다"로 멈춘다.
+- `config/settings.py`: `LLM_PROVIDER`(기본값 `naver`), `NCP_CLOVASTUDIO_API_KEY`, `NCP_APIGW_API_KEY`, `HYPERCLOVA_MODEL`. `ai_workspace/.env.example`의 HyperCLOVA 절.
+  환경에 이 변수들이 남아 있어도 읽는 곳이 없어 무시된다.
+- 테스트: HyperCLOVA 클라이언트·어댑터를 직접 건드리던 것만 뺐다 - `tests/test_llm_client_hyperclova_retry_bound.py`(파일째), `tests/test_llm_budget_clients.py`의 HyperCLOVA 절(6건),
+  `tests/test_llm_kill_switch.py`·`tests/test_llm_kill_switch_legacy.py`·`tests/test_llm_metrics_persistence.py`의 각 1건, `tests/test_llm_v2_registry.py`의 `naver` 어댑터 생성 1건.
+  같은 성질(미등록 단가 거부, 대체 단가 예약, 실패한 시도의 최악 비용 정산, 서킷브레이커, 킬 스위치가 요청 전에 막음, 실패 시도 메트릭 기록)은 `OpenAICompatLLMClient`와 레거시 `OpenAIClient` 경로의 기존 테스트와
+  `tests/test_llm_budget_guard.py`·`tests/test_llm_circuit_breaker.py`가 계속 본다. 더한 것: `naver`가 거부되고 안내 문구를 싣는지(`tests/test_llm_v2_registry.py`), 남긴 결과 이름 `body_5xx`가 가드에서 브레이커에 세어지는지(`tests/test_llm_circuit_breaker.py`).
+
+**남긴 것.** `core/llm_client.py`의 `SimpleRateLimiter`, `extract_json_from_response`, 재시도 상수(`MAX_RETRIES` 등), `BaseLLMClient`, 레거시 `OpenAIClient` - 어댑터·레지스트리·문체 변환기와 테스트가 쓴다.
+`OpenAIClient`는 호출하는 운영 코드가 없지만 이번에 건드리지 않았다(지출 상한 테스트가 걸려 있다). `core/llm/budget.py`의 결과 이름 `body_5xx`(HTTP 200 본문의 서버 오류 코드)는 HyperCLOVA 클라이언트만 냈고
+지금은 내는 클라이언트가 없다 - 어휘만 남기고 주석을 고쳤으며 동작은 그대로다.
+
+**운영·재현성 확인.**
+- 운영 경로: 세 역할의 기본 프로바이더는 `gemini`(위 "결정")이고 `naver`는 명시해야만 닿았다. `get_llm_client()`를 부르는 코드는 저장소에 없었다(문체 변환기는 역할 레지스트리를 쓴다 -
+  `tests/test_tone_converter_provider.py`). compose·CI·스크립트에 `naver`/`LLM_PROVIDER`/`NCP_*` 값은 없다(`git grep`). 배포된 Tier 0 VM의 `.env`는 이 세션에서 읽지 않았다 -
+  거기에 `GEN_PROVIDER=naver` 같은 값이 있으면 다음 재배포 뒤 시작에서 위 오류로 멈추는데, 그 값이 있었다는 기록은 없다.
+- E0 재현성: E0의 등록 설정(`e0_registered.SETTINGS` 18개 키, 역할 → `gemini`)에 `LLM_PROVIDER`·`naver`는 없다. `e0_registered.live_settings()`가 읽는 `core.llm_client.MAX_RETRIES`는 그대로 있다.
+  파일 대역의 `SOURCE_PINS`(`evaluation/llm/e0_store.py`, 함수 본문 sha256 8개)는 이번에 건드린 함수가 하나도 없어 **갱신하지 않았다** - `tests/evaluation/test_e0_store.py`가 통과한다.
+  E0 리포트의 `code_sha`(35d0a1d)는 git 이력에 그대로 있다. E0을 다시 돌리려면 새 `code_sha`가 필요한데(ADR 0009 A8.2 (c)), 그건 #36 이후 이미 그렇다.
+- 확인: `nice -n 19`로 LLM 경로·E0 하네스·bake-off·평가셋·gate_probe 관련 테스트 870건 통과(전체 스위트·docker는 돌리지 않았다).
