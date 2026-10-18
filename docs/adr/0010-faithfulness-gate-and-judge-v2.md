@@ -303,11 +303,16 @@ E0은 고치기 전 코드로 쟀다(`reports/llm/e0_baseline_v1.{json,md}`, `co
   (킬 스위치를 켠 그래프의 요약을 추출기에 넣으면 `hard_case=[True]`). 이제 `summarize_cluster_outcome`이 `cluster_eval.llm_failure`(막힘)와 `parsed=False`(응답이 해석되지 않음)를 해당할 때만 요약에 남기고,
   추출기는 둘 중 하나라도 있는 FAIL을 판정이 아닌 것으로 보고 어려운 사례에서 뺀다(`tests/test_llm_failure_injection.py`, `tests/evaluation/test_evalset.py`; 정상 FAIL 판정은 그대로 어려운 사례). 두 키가 없는 이전 행은 예전대로 읽힌다.
   ADR 0009 A3가 ROC에서 파싱되지 않은 행을 빼는 것과 같은 기준이지만, A5의 "ClusterEvaluator FAIL" 정의를 판정이 있는 FAIL로 좁힌 것이기도 하다. 이 PR은 사전 등록 파일을 고치지 않는다 — 아래 bake-off 항목과 함께 amendment 후보다.
+  (후속, 2026-10-18: 둘 다 `bakeoff-v1.yaml` amendments `A9.1`과 ADR 0009 A9.1에 기록했다. 결과 열람 표기는 `e0_viewed(bake-off 결과 없음)`이다. 이 구분이 #48 이후의 코드가 쓴 행에 한한다는 한계도 거기에 적었다. 이 PR의 서술은 그대로 둔다.)
 - **bake-off G2와 `q`도 sentence를 포함해 계산된다.** bake-off(`evaluation/llm/bakeoff.py`)의 G2 플래그(문체 드리프트율 ≤ 0.20)와 비용식의 `q`(ADR 0009)는 같은 `check_tone_drift`로 만들어지므로, 비교 필드에 sentence가 더해진 C4가 그대로 반영된다
   (초안 sentence와 변환본 summary/sentence의 수치·날짜·개체명 차이도 G2 차단). ADR 0009의 G2 정의는 비교 필드를 적지 않았고 사전 등록 당시 구현은 title+content였다. bake-off는 실행한 적이 없고(ADR 0009: bake-off 결과 없음, 커밋된 결과 파일 없음)
   결과를 본 적이 없으므로 오염된 결과는 없다. **`evaluation/llm/preregistration/bakeoff-v1.yaml`의 amendments에는 아직 기록하지 않았다** — bake-off 실행 전에 `results_viewed: false`로 기록해야 하고(파일 머리말 규칙),
-  사전 등록 당시 정의를 유지하려면 `bakeoff.py`가 비교 필드를 명시적으로 넘기게 해야 한다(이번에는 하지 않았다). 다른 호출부(`e0_report.offline_sentence_drift`, `gate_probe.py`)는 값이 달라지지 않는다 —
+  사전 등록 당시 정의를 유지하려면 `bakeoff.py`가 비교 필드를 명시적으로 넘기게 해야 한다(이번에는 하지 않았다).
+  다른 호출부(`e0_report.offline_sentence_drift`, `gate_probe.py`)는 값이 달라지지 않는다 —
   앞은 sentence를 title 자리에 넣어 비교하고, 뒤는 sentence가 없는 형식체 입력에 집합 비교를 쓴다.
+  **후속 (2026-10-18):** 위 둘을 `bakeoff-v1.yaml`의 amendments `A9.1`(`results_viewed: "e0_viewed(bake-off 결과 없음)"` - bake-off 결과는 없으나 정의를 고른 것은 E0의 저장 sentence 드리프트 0/14를 본 뒤였다)과 [ADR 0009 A9.1](0009-llm-eval-protocol-and-preregistered-decision-rule.md)에 기록했다. 사전 등록 당시 정의로 되돌리지 않고 새 정의(title·sentence·content)를 등록하는 쪽을 골랐다 —
+  `bakeoff.py`는 운영의 `check_tone_drift`를 그대로 부르고, 고정 테스트는 `tests/evaluation/test_bakeoff_runner.py`에 있다.
+  정정: 위 "사전 등록 당시 구현은 title+content였다"는 정확하지 않다. 등록 커밋(`bfb6102`)은 문서만 추가했고 문체 드리프트 검사 코드는 그 뒤에 들어왔다(게이트 `e4f47f6`, 작성 2026-09-26). title+content는 그 첫 구현이다.
 - **C2의 연결 범위.** 생성기는 클러스터의 기사가 10개를 넘으면 본문이 긴 순 10개만 프롬프트에 넣는다(`MAX_PROMPT_ARTICLES`). 저장 노드는 `current_articles` 전체를 연결하므로 10개를 넘는 클러스터에서는 프롬프트에 없던 기사도
   `news_letter_id`가 채워지고 `raw_news_count`에 센다(지어낸 12기사 클러스터로 재현: 프롬프트의 기사 블록 10개, 저장 호출의 `article_ids` 12개). 실행 계획 WP3의 사양(`current_articles`의 id만 연결)과 코드는 같아서 바꾸지 않았다.
   바꾸려면 생성기가 쓴 기사 목록을 state로 돌려줘야 한다. E0 [KR-ops] 입력의 클러스터당 기사는 중앙값 6, 최댓값 41(15개 클러스터, `reports/llm/e0_baseline_v1.md` 12절)이라 10개를 넘는 입력이 있었다.
@@ -315,4 +320,5 @@ E0은 고치기 전 코드로 쟀다(`reports/llm/e0_baseline_v1.{json,md}`, `co
 - 전송 재시도 소진(429/5xx)과 HTTP 400은 여전히 막힌 실패로 보지 않는다. 스레드 사이 공유 서킷브레이커와 일일 캡(실행 계획 M2)은 없다: 401/403/404 결과는 지출 가드에서 중립이라 남은 클러스터마다 평가 요청이 1회씩 나간다(402만 런을 멈춘다).
 - E0 하네스 쪽 두 가지: (1) 파일 대역의 계약 검사가 `save_newsletter_to_db` 본문 sha256을 고정하고 있어 새 값으로 갱신했다(`evaluation/llm/e0_store.py`; 바뀐 것은 저장에 넘기는 id 목록뿐이고 대역은 받은 id를 그대로 남기므로 대역이 하는 일은 같다).
   (2) `e0_report.py`의 근본 원인 분류는 새 `failure_reason` 값을 모른다(`exception`으로 떨어진다). E0 하네스를 다시 쓸 계획이 없어 고치지 않았다.
+  **후속 (2026-10-18):** 분류를 고쳤다 — `infra` → `aborted_infra`, `length` → `length`, `content_filter` → `content_filter`(등록한 15개 값 안, 정의 문장 불변). 이미 커밋된 E0 리포트는 옛 코드의 실행이고 본문이 지워져 다시 만들 수 없으므로 바꾸지 않았다. ADR 0009 A9.1 2항.
 - 사람 라벨이 없으므로 "고친 뒤 품질이 낫다/같다"는 말하지 않는다. 이 변경은 정합(연결·비교 필드)과 장애 시 낭비 호출의 제거이고, 생성 품질을 건드리지 않는다.

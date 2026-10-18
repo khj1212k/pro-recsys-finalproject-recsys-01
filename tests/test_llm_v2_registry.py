@@ -115,13 +115,20 @@ def test_missing_api_key_raises_clear_error(monkeypatch):
         registry.get_client("judge")
 
 
-def test_naver_provider_builds_legacy_hyperclova_adapter(monkeypatch):
-    from core.llm.adapters import HyperCLOVALLMClient
+def test_removed_naver_provider_is_rejected_with_a_pointer_to_the_adr(monkeypatch):
+    """HyperCLOVA 레거시는 2026-10-18에 제거했다(ADR 0005 부록). 환경변수에 남아 있으면 조용히 다른 프로바이더로 가지 않고 멈춘다."""
+    assert "naver" not in registry.PROVIDER_CONFIG
+    for prefix, role in (("GEN", "generator"), ("JUDGE", "judge"), ("TONE", "tone")):
+        monkeypatch.setenv(f"{prefix}_PROVIDER", "naver")
+        with pytest.raises(ValueError, match="HyperCLOVA.*제거"):
+            registry.resolve_role_config(role)
+        with pytest.raises(ValueError, match="알 수 없는 프로바이더"):
+            registry.get_client(role)
+        monkeypatch.delenv(f"{prefix}_PROVIDER")
 
-    monkeypatch.setenv("GEN_PROVIDER", "naver")
-    monkeypatch.setenv("GEN_MODEL", "HCX-003")
-    monkeypatch.setenv("NCP_CLOVASTUDIO_API_KEY", "nv-test-key")
 
-    client = registry.get_client("generator")
-    assert isinstance(client, HyperCLOVALLMClient)
-    assert client.provider == "naver"
+def test_every_remaining_provider_is_an_openai_compatible_endpoint():
+    """레거시(비 OpenAI 호환) 분기를 없앴으므로 모든 프로바이더 설정이 키 환경변수와 JSON 스키마 지원 여부를 갖는다."""
+    for name, cfg in registry.PROVIDER_CONFIG.items():
+        assert {"api_key_env", "supports_json_schema", "default_model"} <= set(cfg), name
+        assert "legacy" not in cfg, name

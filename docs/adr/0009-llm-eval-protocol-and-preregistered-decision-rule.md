@@ -1008,3 +1008,42 @@ n=40 전체 실행을 취업 전에 하지 않는다.
 | `prereg/e0-auto-labels-v1` | `d6ba6d5` | `evaluation/llm/preregistration/e0-auto-labels-v1.yaml` | 이 ADR의 A8.13 (리베이스 전 SHA `49e07a3`, A8.14의 대응표) |
 
 `bakeoff-v1.yaml`은 태그가 없다 - 결과가 없어 인용할 일이 없다. 먼저 있던 `prereg/adr-0025-a1`은 경량 태그이고 그대로 둔다. 등록 커밋이 들어간 브랜치는 병합 전후에 리베이스하지 않는다(리베이스하면 위 SHA가 원격에서 사라진다). 이 절이 그 규칙의 자리다 - 저장소에 `AGENTS.md`는 없다.
+
+### A9.1 (2026-10-18) — A9 유보 중의 정렬 둘: bake-off v1 등록 개정 2건(실행 전)과 E0 리포트 코드의 근본 원인 분류. 결과 열람: bake-off 결과는 없다(실행 0회, 결과 파일 없음). E0 결과(A8.12·A8.14)는 열람했고 1항 (a)의 정의 선택은 그 뒤에 했다 - `results_viewed`에 그렇게 적었다. 후보·judge·게이트 임계값·표본 크기·승자 규칙·1차 지표는 바꾸지 않았다
+
+번호: A9가 A10을 아키텍처 A/B 사전 등록에 남겨 두었으므로 이 절은 A9의 하위 번호를 쓴다. 새 ADR 번호·새 사전 등록 파일·새 하네스는 없다 - 아래 1은 A9 3항과 `bakeoff-v1.yaml` 머리가 정한
+개정 절차(bake-off를 한 번도 실행하지 않은 동안의 변경은 같은 파일의 `amendments`와 이 ADR의 Addendum에 날짜·사유를 남긴다)를 그대로 따른다.
+
+**1. bake-off v1 등록 개정 2건 (`bakeoff-v1.yaml` `amendments` id `A9.1`, `results_viewed: "e0_viewed(bake-off 결과 없음)"`).** 정합 패치 M1 축소판(PR #48, [ADR 0010 Addendum 2026-10-18](0010-faithfulness-gate-and-judge-v2.md))이
+bake-off의 정의 둘을 바꿨다. 그 Addendum은 이를 "amendment 후보"로 적고 등록하지 않았다. bake-off는 실행한 적이 없으므로 오염된 결과는 없다. 등록 당시 문장(본문 "게이트" 표, A5)은 고치지 않았고
+`bakeoff-v1.yaml`에는 항목 하나를 더했을 뿐이다(`git diff`: 삭제 0줄).
+- (a) **G2와 비용식의 `q`가 비교하는 필드에 `sentence`가 들어간다.** 본문 G2 정의는 "차단 드리프트가 있는 변환본 비율"이라고만 적고 비교 필드를 적지 않았다(같은 표의 G1은 "제목+한줄소개+본문").
+  등록 커밋(`bfb6102`, 작성 2026-09-25)은 문서만 추가한 커밋이라 그때는 문체 드리프트 검사 코드가 없었다. 검사 코드는 등록 뒤에 처음 들어왔고(게이트 `e4f47f6`, 작성 2026-09-26; bake-off 러너 `093e277`)
+  그 첫 구현은 `title`+`content`만 비교했다. 저장 노드는 변환본의 요약을 `sentence`로 저장하므로(ADR 0010 Addendum C4) 지금은 `("title", "sentence", "content")`다. `bakeoff.py`는 운영의 `check_tone_drift`를 그대로 불러 이 정의를 따른다
+  (비교 필드를 따로 고정하지 않는다). 임계값(G2 ≤ 0.20)은 그대로다. 같은 출력이라도 G2 비율과 `q`는 그 첫 구현과 달라질 수 있고, 비교하는 글이 늘었으므로 보통 늘어난다.
+  고정 테스트: `tests/evaluation/test_bakeoff_runner.py::test_g2_compares_the_one_line_summary_too_per_amendment_a9_1`(변환본의 요약에만 새 수치를 넣은 입력이 G2로 잡히고, 제목+본문만 비교하면 통과함을 같은 입력으로 보인다).
+- (b) **어려운 사례(A5)는 ClusterEvaluator가 판정한 FAIL만이다.** 평가 호출이 막혔거나(`llm_failure`: 킬 스위치, HTTP 401/402/403/404, `length`, `content_filter`) 응답이 해석되지 않아(`parsed=false`) 생긴
+  FAIL은 판정이 아니라서 뺀다. A3가 ROC에서 파싱되지 않은 행을 빼는 것과 같은 기준이고, A5의 "ClusterEvaluator FAIL"을 "판정이 있는 FAIL"로 좁힌 것이다. 추출기는 `evaluation/llm/evalset.py`이고 고정 테스트는
+  `tests/evaluation/test_evalset.py`다. 어려운 사례의 개수식(`round(40 × 0.2) = 8`)은 그대로다 - 풀이 좁아졌을 뿐이다.
+  **한계: 이 구분은 PR #48 이후의 코드가 쓴 `cluster_history` 행에 한한다.** 그 전 행에는 `llm_failure`·`parsed` 키가 없고, `summarize_cluster_outcome`은 `decision`·`confidence`만 남겼다.
+  그래서 옛 행의 호출 실패 표식(A3의 FAIL/0.0, 휴리스틱 FAIL/0.1)은 판정 FAIL과 구분되지 않고 `evalset.py`가 예전대로 `decision`만으로 읽어 어려운 사례로 뽑는다
+  (직접 확인: 두 키가 없는 `{decision: FAIL, confidence: 0.0}` 행은 `hard_case=True`, `llm_failure`가 붙은 행은 `False`; 고정 테스트 `test_old_rows_without_the_verdict_keys_are_still_read_by_decision_only`).
+  옛 표식으로 가르려면 evalset 표본, 곧 E0 표본의 재계산 경로를 건드리므로 코드는 두고 등록 문장에 한계를 적었다. bake-off를 다시 열 때 표본 풀이 옛 행을 담으면 이 한계를 먼저 본다.
+- **결과 열람 표기.** `results_viewed`는 `"e0_viewed(bake-off 결과 없음)"`다(`false`가 아니다). bake-off 결과는 없다 - 실행 0회, 결과 파일 없음.
+  그러나 E0 리포트(A8.12·A8.14)는 이미 열람했고, 그 7절은 후보 A(`gemini-3.5-flash-lite`)와 같은 모델의 저장 sentence 드리프트를 0/14로 보였다. (a)가 비교 필드에 `sentence`를 넣는 정의를 등록하는 일은 그 열람 뒤에 했다.
+  (a)가 E0 전에 쓴 실행 계획 WP3(C4)에서 나온 코드 정합이고 (b)가 #48 구현 중에 드러난 정합이라는 것, 곧 E0 값으로 고른 규칙이 아니라는 것은 사실이다. 그러나 정합 패치가 코드를 바꿨다는 것과
+  "옛 필드로 고정할지 새 정의를 등록할지"를 고르는 것은 다른 일이고, 후자는 후보 A의 sentence 드리프트가 0이라는 것을 안 채로 했다. 이 선택이 어느 후보에 유리한지는 모른다(다른 후보의 sentence 드리프트는 잰 적이 없다).
+  방향성 정보가 있을 수 있으므로 표기를 열람 뒤로 둔다. A9 3항이 "결과 열람 후 변경"으로 표기하라고 한 것은 후보·judge·임계값·1차 지표를 바꾸는 경우이고 이 개정은 그중 어느 것도 바꾸지 않지만,
+  표기는 바꾼 항목의 종류가 아니라 열람 상태를 따라야 한다고 판단했다. (b)는 E0 값(예: 문체 드리프트 0/14)과 무관한 정합이다.
+  대안은 `bakeoff.py`가 등록 직후 첫 구현의 비교 필드(`title`, `content`)를 명시해 넘겨 정의 변경 자체를 없애는 것이다. 이 PR은 그렇게 하지 않았다 - 그러면 bake-off의 G2가 운영 게이트와 어긋나고
+  저장되는 sentence의 문체 변환 검사가 bake-off에서 빠진다. 소유자가 대안을 고르면 yaml 항목을 되돌리고 `bakeoff.py` 호출에 필드를 넘기는 코드 변경이 함께 가야 한다.
+- **바이트·sha 대조.** `bakeoff-v1.yaml`에는 sha를 고정한 테스트도 태그도 없다(A9 7항). 갱신할 대조값이 없고, `evaluation/llm/bakeoff.py`·`bakeoff_analysis.py`가 읽는 값(`decision_rule`·`judge_selection` 등)은 한 글자도 바뀌지 않았다.
+  E0의 두 사전 등록 파일(`e0-baseline-v1.yaml`, `e0-auto-labels-v1.yaml`)과 그 태그는 건드리지 않았다.
+
+**2. E0 리포트 코드의 근본 원인 분류 (규칙 변경 없음).** PR #48 이후 코드는 클러스터를 `failed:infra`·`failed:length`·`failed:content_filter`로 닫을 수 있다(ADR 0010 Addendum). `evaluation/llm/e0_report.py::root_cause`는 이 사유를
+모르고 `exception`(그래프 밖으로 예외)으로 분류했다 - 호출이 막혔을 뿐인 클러스터가 예외로 읽혔다. 이제 `infra` → `aborted_infra`, `length` → `length`, `content_filter` → `content_filter`다.
+A8.3 #13의 고정 목록(15개 값)과 ① aborted_infra·⑥ 유형의 정의 문장은 바꾸지 않았다: `infra`는 ①이 말하는 "401/402/403/404·킬 스위치를 받았다"와 같은 조건이고, 나머지 둘은 ⑥의 유형이다.
+`outcome` 칸(`failed:<사유>`)과 n_p의 분모 규칙(자연 종료)도 그대로다. E0 러너는 인프라 사유를 먼저 `aborted_infra`로 덮고 런을 멈추므로(`e0_baseline.py::process`, `e0_instrument.py`의 HTTP 훅·킬 스위치 훅) E0 하네스에서 `failed:infra`가
+실제로 닿는 경로는 없고, `length`·`content_filter`만 새 코드에서 나올 수 있다. 테스트는 `tests/evaluation/test_e0_report.py`(세 사유 × 호출 행 유무, 런타임 `NO_RETRY_REASONS`와 표의 일치, 다른 outcome의 값 불변).
+**이미 커밋된 E0 리포트(`reports/llm/e0_baseline_v1.{json,md}`)는 다시 만들지 않았고 만들 수 없다.** 그 실행은 이 분류가 없던 옛 코드(`code_sha` 35d0a1d)의 것이라 해당 outcome이 한 건도 없고(HTTP 시도 87건이 모두 200, 폴백 초안 0 - ADR 0010 Addendum 3절),
+반출본과 라벨 패키지의 본문은 2026-10-18 07:13 UTC에 지웠다. 리포트의 수치와 근본 원인 표는 그대로다.

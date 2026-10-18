@@ -32,6 +32,19 @@ amendments:
     date: "2026-09-26"
     results_viewed: false
     change: "ADR 본문 수치 정정(짝짓지 않은 MDE 양방향, 라벨링 10~17시간) - 규칙 변경 없음"
+  - id: A9.1
+    date: "2026-10-18"
+    results_viewed: "e0_viewed(bake-off 결과 없음)"  # bake-off 결과는 없다(실행 0회, 결과 파일 없음). E0 리포트(reports/llm/e0_baseline_v1.md 7절: 저장 sentence 드리프트 0/14, 후보 gemini-3.5-flash-lite와 같은 모델)는 본 뒤에 (a)의 정의를 골랐다 - ADR 0009 A9.1 '결과 열람 표기'
+    change: >-
+      코드 정합(ADR 0010 Addendum 2026-10-18)이 바꾼 bake-off의 정의 둘을 실행 전에 등록한다. 후보·judge·게이트 임계값·표본 크기·승자 규칙은 바꾸지 않는다.
+      (a) G2(tone_drift_rate_max)와 비용식의 q가 쓰는 문체 드리프트는 형식체 초안과 변환본의 title, sentence, content를 비교한다
+      (이 등록은 문서만 추가한 커밋이라 문체 드리프트 검사 코드가 없었다. 등록 뒤에 들어온 첫 구현은 title, content만 비교했고(e4f47f6, 2026-09-26),
+      저장 노드가 변환본의 요약을 sentence로 저장하므로 비교에 넣었다). 같은 출력이라도 G2 비율과 q는 그 첫 구현(title, content)과 달라질 수 있다
+      (비교하는 글이 늘었으므로 보통 늘어난다). evaluation/llm/bakeoff.py는 운영의 check_tone_drift를 그대로 불러 이 정의를 따른다.
+      (b) 어려운 사례(A5, round(40 x 0.2) = 8개)는 ClusterEvaluator가 판정한 FAIL만이다. 평가 호출이 막혔거나(llm_failure) 응답이 해석되지 않아
+      (parsed=false) 생긴 FAIL은 판정이 아니라서 뺀다(A3가 ROC에서 파싱되지 않은 행을 빼는 것과 같은 기준이고, evaluation/llm/evalset.py가 적용한다).
+      이 구분은 PR #48 이후의 코드가 쓴 cluster_history 행에 한한다. 그 전 행에는 llm_failure·parsed 키가 없어 호출 실패 표식(FAIL/0.0, A3)과 판정 FAIL을
+      구분할 수 없고, evalset.py는 그런 행을 예전대로 decision만으로 읽어 어려운 사례로 뽑는다.
 
 evalset:
   n_clusters: 40  # 생성·출력 라벨 대상인 일반 클러스터 수 (A5)

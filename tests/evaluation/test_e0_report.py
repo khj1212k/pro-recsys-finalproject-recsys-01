@@ -233,6 +233,39 @@ def test_judge_unavailable_and_parsed_cluster_fail_and_exceptions():
     assert rep.root_cause({"outcome": "aborted_infra"}, []) == "aborted_infra"
 
 
+@pytest.mark.parametrize("reason,expected", [
+    ("infra", "aborted_infra"), ("length", "length"), ("content_filter", "content_filter"),
+])
+@pytest.mark.parametrize("calls", [
+    [],   # 호출 행이 없어도 사유만으로 같은 값이다
+    [{"purpose": "cluster_eval", "graph_attempt": 1, "call_seq": 1, "parsed": False, "error": "length"}],
+    [{"purpose": "newsletter_content_gen", "graph_attempt": 1, "call_seq": 1, "parsed": False, "error": "kill_switch"},
+     {"purpose": "newsletter_eval", "graph_attempt": 1, "call_seq": 2, "parsed": True, "error": None}],
+], ids=["no_calls", "cluster_eval_call", "generation_then_judge"])
+def test_no_retry_failure_reasons_get_their_own_root_cause_not_exception(reason, expected, calls):
+    """#48(ADR 0010 Addendum 2026-10-18)이 더한 failure_reason infra/length/content_filter. 예전 분류는 exception으로 떨어뜨렸다."""
+    cause = rep.root_cause({"outcome": f"failed:{reason}"}, calls)
+    assert cause == expected and cause != "exception"
+    assert cause in reg.ROOT_CAUSES       # 등록한 15개 값 안이다 - 새 값을 더하지 않았다
+
+
+def test_no_retry_root_cause_table_covers_exactly_the_runtime_no_retry_reasons():
+    """런타임의 재시도 금지 사유(core.llm.client.NO_RETRY_REASONS)가 늘면 이 표도 늘어야 한다 - 안 늘면 다시 exception이 된다."""
+    from core.llm.client import NO_RETRY_REASONS
+
+    assert set(rep.NO_RETRY_ROOT_CAUSE) == set(NO_RETRY_REASONS)
+    assert set(rep.NO_RETRY_ROOT_CAUSE.values()) <= set(reg.ROOT_CAUSES)
+
+
+def test_unknown_failure_reasons_and_the_other_outcomes_keep_their_old_root_cause():
+    assert rep.root_cause({"outcome": "failed:something_new"}, []) == "exception"
+    assert rep.root_cause({"outcome": "failed:faithfulness"}, []) == "faithfulness_block"
+    assert rep.root_cause({"outcome": "failed:judge"}, []) == "judge_fail"
+    assert rep.root_cause({"outcome": "failed:save_error"}, []) == "save_error"
+    assert rep.root_cause({"outcome": "completed"}, []) == "none"
+    assert rep.root_cause({"outcome": "not_started"}, []) is None
+
+
 def test_call_and_http_level_metrics(report):
     m = report["metrics"]
     # 처리 완료 eval의 응답 받은 호출: A 7, B 1(둘째는 응답 없음), C 3(메타 length도 응답은 받았다), D 7 → 18

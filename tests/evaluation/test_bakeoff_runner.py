@@ -53,9 +53,11 @@ PREREG = {
 class ScriptedClient(LLMClient):
     """purpose별로 고정 응답을 돌려주는 페이크. content/tone 문구와 실패를 주입할 수 있다."""
 
-    def __init__(self, provider, model, content=CLEAN, tone_content=None, fail=None, log=None, prompts=None):
+    def __init__(self, provider, model, content=CLEAN, tone_content=None, fail=None, log=None, prompts=None,
+                 tone_summary="요약이에요"):
         self.provider, self.model = provider, model
         self.content, self.tone_content, self.fail = content, tone_content, fail
+        self.tone_summary = tone_summary
         self.log = log if log is not None else []
         self.prompts = prompts if prompts is not None else []
 
@@ -71,7 +73,7 @@ class ScriptedClient(LLMClient):
             "newsletter_meta_gen": lambda: NewsletterMeta(title="HBM 투자 확대", sentence="반도체 투자가 늘어난다",
                                                           keywords=["HBM", "삼성전자", "SK하이닉스", "D램", "투자"],
                                                           categories=["IT/과학"]),
-            "tone_convert": lambda: ToneResult(title="📰 HBM 투자 확대", summary="요약이에요",
+            "tone_convert": lambda: ToneResult(title="📰 HBM 투자 확대", summary=self.tone_summary,
                                                content=self.tone_content or self.content.replace("다.", "요."),
                                                keywords=["HBM"]),
             "newsletter_eval": lambda: (
@@ -131,6 +133,33 @@ def test_generation_records_calls_costs_and_gate_flags_per_candidate(tmp_path):
     assert b["flags"]["tone_drift"]
     assert a["fallback"] == {"content": False, "meta": False, "tone": False}
     assert a["timing"]["total_s"] >= a["timing"]["generation_s"]
+
+
+def test_g2_compares_the_one_line_summary_too_per_amendment_a9_1(tmp_path):
+    """bakeoff-v1.yaml amendments A9.1 (a): 문체 드리프트(G2, 비용식의 q)는 title·sentence·content를 비교한다.
+
+    본문과 제목은 그대로 두고 변환본의 요약(저장 노드가 sentence로 저장하는 값)에만 초안에 없는 수치를 넣는다.
+    등록 뒤 첫 구현(e4f47f6, title+content만 비교)이면 통과했을 입력이다 - 대조군은 요약이 수치 없이 같은 입력이다.
+    """
+    log = []
+    factory = _factory(log, **{"gen-b": {"tone_summary": "투자 규모는 5조 원으로 늘어요"}})
+
+    bo.run_generation(_items(1), PREREG, tmp_path, client_factory=factory, pricing=PRICING,
+                      on=date(2026, 9, 26), log=lambda *_: None)
+
+    rows = {r["candidate"]: r for r in _rows(tmp_path / "generations.jsonl")}
+    assert rows["A"]["flags"]["tone_drift"] is False
+    assert rows["B"]["flags"]["tone_drift"] is True
+    added = [n["surface"] for n in rows["B"]["tone_drift"]["blocking"]["numbers"]]
+    assert any("5조" in surface for surface in added)
+    # 제목과 본문만 비교했다면 같은 입력이다
+    from workflow.gates import check_tone_drift
+
+    draft, converted = rows["B"]["draft"], rows["B"]["converted"]
+    narrow = check_tone_drift({"title": draft["title"], "content": draft["content"]},
+                              {"title": converted["title"], "content": converted["content"]},
+                              blocking_types=bo.TONE_DRIFT_BLOCKING)
+    assert narrow.passed
 
 
 def test_schema_failure_is_recorded_as_a_result_not_an_infra_stop(tmp_path):

@@ -1,13 +1,15 @@
-# LLM API 클라이언트
-# - 요청 제한, 재시도 로직 포함
-# - 토큰 사용량, Latency 메트릭 수집
+# 레거시 LLM 클라이언트 모듈
+# - 지금 파이프라인이 쓰는 것은 core/llm/(ADR 0005)이고, 이 모듈에서 가져다 쓰는 것은 공용 도구
+#   (SimpleRateLimiter, extract_json_from_response, 재시도 상수)뿐이다.
+# - 레거시 OpenAIClient(요청 제한, 재시도, 토큰·지연 메트릭, 지출 원장 예약·정산)가 남아 있다.
+# - HyperCLOVA X 클라이언트(NaverHyperCLOVAClient)와 get_llm_client()는 2026-10-18에 제거했다
+#   (ADR 0005 부록 2026-10-18 HyperCLOVA 레거시 제거).
 
 import os
 import json
 import time
 import logging
 import threading
-import requests
 from typing import Dict, List, Optional, Any, Tuple
 from abc import ABC, abstractmethod
 
@@ -52,230 +54,6 @@ class BaseLLMClient(ABC):
         purpose: str = "unknown"  # For metrics: cluster_eval, newsletter_gen, newsletter_eval, tone_convert
     ) -> Optional[str]:
         pass
-
-
-V3_MODELS = {"HCX-005", "HCX-007", "HCX-DASH-002"}
-V1_MODELS = {"HCX-003", "HCX-DASH-001", "HCX-002"}
-
-
-class NaverHyperCLOVAClient(BaseLLMClient):
-    """
-    네이버 하이퍼클로바 X (HyperCLOVA X) API 클라이언트
-    """
-
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        apigw_key: Optional[str] = None,
-        model: Optional[str] = None
-    ):
-        self.api_key = api_key or os.getenv("NCP_CLOVASTUDIO_API_KEY")
-        self.apigw_key = apigw_key or os.getenv("NCP_APIGW_API_KEY")
-        self.model = model or os.getenv("HYPERCLOVA_MODEL", "HCX-003")
-        self.rate_limiter = SimpleRateLimiter(
-            float(os.getenv("NAVER_LLM_MIN_INTERVAL", os.getenv("LLM_MIN_INTERVAL", "1.0")))
-        )
-
-        if not self.api_key:
-            raise ValueError("NCP_CLOVASTUDIO_API_KEY 환경변수를 설정하세요")
-
-        self.use_apps_auth = self.api_key.startswith("nv-")
-
-        if not self.use_apps_auth and not self.apigw_key:
-            raise ValueError("NCP_APIGW_API_KEY 환경변수를 설정하세요 (Legacy 인증 방식)")
-
-        self.api_version = "v3" if self.model in V3_MODELS else "v1"
-
-        self.base_url = f"https://clovastudio.stream.ntruss.com/testapp/{self.api_version}/chat-completions"
-
-    def chat_completion(
-        self,
-        messages: List[Dict[str, str]],
-        temperature: float = 0.2,
-        max_tokens: int = 4096,
-        response_format: Optional[Dict] = None,
-        purpose: str = "unknown"
-    ) -> Optional[str]:
-        # core.llm이 이 모듈을 import하므로 순환 import를 피하려고 지연 import한다.
-        from core.llm.budget import get_budget_guard
-        from core.llm.client import LLMUsage
-        from core.llm.kill_switch import ensure_kill_switch_off
-        # 지출 상한·서킷브레이커로 이미 멈춘 런이면 여기서 LLMRunStop이 난다(docs/adr/0035).
-        guard = get_budget_guard()
-        guard.ensure_run_active("naver", self.model, purpose)
-        ensure_kill_switch_off()
-        if self.use_apps_auth:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-                "Accept": "application/json"
-            }
-        else:
-            headers = {
-                "X-NCP-CLOVASTUDIO-API-KEY": self.api_key,
-                "X-NCP-APIGW-API-KEY": self.apigw_key,
-                "Content-Type": "application/json",
-                "Accept": "application/json"
-            }
-
-        if self.api_version == "v3":
-            payload = {
-                "messages": messages,
-                "topP": 0.8,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "repeatPenalty": 1.2,
-            }
-            if self.model == "HCX-007":
-                payload["thinking"] = {"effort": "none"}
-        else:
-            payload = {
-                "messages": messages,
-                "topP": 0.8,
-                "topK": 0,
-                "maxTokens": max_tokens,
-                "temperature": temperature,
-                "repeatPenalty": 1.2,
-                "stopBefore": [],
-                "includeAiFilters": False,
-                "seed": 0
-            }
-
-        url = f"{self.base_url}/{self.model}"
-
-        backoff = INITIAL_BACKOFF
-
-        # 원래 `while True`로 무제한 재시도했음(감사에서 발견) - 상한 없는 루프는
-        # 서버가 계속 429/5xx를 반환하면 프로세스가 영원히 멈추지 않음.
-        for attempt in range(1, MAX_RETRIES + 1):
-            attempt_start = time.time()  # 실패/재시도 메트릭 기록용 (성공 latency와는 별개)
-            self.rate_limiter.wait()
-            # 이 시도의 최악 비용을 지출 원장에 예약한다 - 상한을 넘으면 requests.post 전에 예외가 난다.
-            # 아래 분기 중 정산하지 않고 빠져나가는 곳은 finally가 예약액 그대로 지출로 닫는다
-            # (이 프로바이더의 오류 응답이 과금되는지 확인한 문서가 없다).
-            spend = guard.begin_attempt(
-                provider="naver", model=self.model, purpose=purpose,
-                messages=messages, schema=None, max_tokens=max_tokens,
-            )
-            try:
-                start_time = time.time()  # Latency measurement
-                response = requests.post(
-                    url,
-                    headers=headers,
-                    json=payload,
-                    timeout=120
-                )
-                latency = time.time() - start_time  # Calculate latency
-
-                if response.status_code == 429:
-                    retry_after = response.headers.get('Retry-After')
-                    wait_time = float(retry_after) if retry_after else backoff
-                    logger.warning("Rate limited (429). Waiting %.1fs before retry #%s", wait_time, attempt)
-                    get_metrics_collector().record_call(
-                        purpose=purpose, input_tokens=0, output_tokens=0,
-                        latency_seconds=latency, success=False
-                    )
-                    spend.settle("http_429")
-                    time.sleep(wait_time)
-                    backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
-                    continue
-
-                response.raise_for_status()
-                result = response.json()
-
-                if result.get("status", {}).get("code") == "20000":
-                    content = result.get("result", {}).get("message", {}).get("content", "")
-                    
-                    # Extract token counts from API response (V3: result.usage.*)
-                    usage = result.get("result", {}).get("usage", {})
-                    input_tokens = usage.get("promptTokens", 0)
-                    output_tokens = usage.get("completionTokens", 0)
-                    
-                    # Record metrics
-                    get_metrics_collector().record_call(
-                        purpose=purpose,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        latency_seconds=latency,
-                        success=True
-                    )
-                    spend.settle("ok", LLMUsage(input_tokens=input_tokens or 0, output_tokens=output_tokens or 0))
-
-                    return content
-                else:
-                    error_msg = result.get("status", {}).get("message", "Unknown error")
-                    error_code = result.get("status", {}).get("code", "")
-
-                    if error_code.startswith("5"):
-                        logger.warning("Server error (%s): %s. Retrying #%s...", error_code, error_msg, attempt)
-                        get_metrics_collector().record_call(
-                            purpose=purpose, input_tokens=0, output_tokens=0,
-                            latency_seconds=latency, success=False
-                        )
-                        # HTTP 200 안의 서버 오류 코드도 프로바이더 장애다 - 브레이커가 세게 한다
-                        # (연속 실패 임계에 닿으면 여기서 LLMCircuitOpen).
-                        spend.settle("body_5xx")
-                        time.sleep(backoff)
-                        backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
-                        continue
-
-                    logger.error("HyperCLOVA API client error (%s): %s", error_code, error_msg)
-                    get_metrics_collector().record_call(
-                        purpose=purpose, input_tokens=0, output_tokens=0,
-                        latency_seconds=latency, success=False
-                    )
-                    return None
-
-            except requests.exceptions.Timeout:
-                logger.warning("Request timeout. Retrying #%s...", attempt)
-                get_metrics_collector().record_call(
-                    purpose=purpose, input_tokens=0, output_tokens=0,
-                    latency_seconds=time.time() - attempt_start, success=False
-                )
-                spend.settle("timeout")  # 연속 실패 임계에 닿으면 LLMCircuitOpen
-                time.sleep(backoff)
-                backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
-                continue
-
-            except requests.exceptions.RequestException as e:
-                get_metrics_collector().record_call(
-                    purpose=purpose, input_tokens=0, output_tokens=0,
-                    latency_seconds=time.time() - attempt_start, success=False
-                )
-                if hasattr(e, 'response') and e.response is not None:
-                    status_code = e.response.status_code
-                    spend.settle(f"http_{status_code}")
-                    if status_code == 429 or status_code >= 500:
-                        logger.warning("HTTP %s. Retrying #%s...", status_code, attempt)
-                        time.sleep(backoff)
-                        backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
-                        continue
-                    logger.error("HTTP %s error. Response body: %s", status_code, e.response.text[:500])
-                    return None
-
-                if isinstance(e, (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError)):
-                    logger.warning("Connection error. Retrying #%s...", attempt)
-                    spend.settle("connection")
-                    time.sleep(backoff)
-                    backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF)
-                    continue
-
-                logger.error("HyperCLOVA API request failed: %s", e)
-                return None
-
-            except Exception as e:
-                logger.error("HyperCLOVA API unexpected error: %s", e)
-                get_metrics_collector().record_call(
-                    purpose=purpose, input_tokens=0, output_tokens=0,
-                    latency_seconds=time.time() - attempt_start, success=False
-                )
-                return None
-
-            finally:
-                spend.ensure_settled()
-
-        logger.error("HyperCLOVA max retries (%s) exhausted.", MAX_RETRIES)
-        return None
 
 
 class OpenAIClient(BaseLLMClient):
@@ -402,18 +180,6 @@ def _classify_openai_error(error: Exception) -> Tuple[str, bool]:
     # SDK 예외가 아닌 경우: 예전처럼 메시지로만 재시도 여부를 정한다(과금 여부는 알 수 없음 = 예약액)
     text = str(error).lower()
     return "error", any(token in text for token in ("rate_limit", "429", "500", "503"))
-
-
-def get_llm_client(provider: Optional[str] = None) -> BaseLLMClient:
-    if provider is None:
-        provider = os.getenv("LLM_PROVIDER", "naver").lower()
-
-    if provider == "naver" or provider == "hyperclova":
-        return NaverHyperCLOVAClient()
-    elif provider == "openai":
-        return OpenAIClient()
-    else:
-        return NaverHyperCLOVAClient()
 
 
 def extract_json_from_response(content: str) -> Optional[Dict]:

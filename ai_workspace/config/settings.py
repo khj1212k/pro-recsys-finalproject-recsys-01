@@ -75,12 +75,8 @@ def get_environment() -> str:
 class BaseSettings:
 
     # ========== LLM Provider ==========
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "naver")  # 'naver' or 'openai'
-
-    # ========== Naver HyperCLOVA X ==========
-    NCP_CLOVASTUDIO_API_KEY: str = os.getenv("NCP_CLOVASTUDIO_API_KEY", "")
-    NCP_APIGW_API_KEY: str = os.getenv("NCP_APIGW_API_KEY", "")
-    HYPERCLOVA_MODEL: str = os.getenv("HYPERCLOVA_MODEL", "HCX-003")
+    # 프로바이더는 역할별 env(GEN_/JUDGE_/TONE_PROVIDER, core/llm/registry.py)로 고른다. 예전 전역 LLM_PROVIDER(기본값 naver)와
+    # HyperCLOVA X 설정(NCP_CLOVASTUDIO_API_KEY·NCP_APIGW_API_KEY·HYPERCLOVA_MODEL)은 2026-10-18에 제거했다 - ADR 0005 부록.
 
     # ========== OpenAI (Fallback) ==========
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
@@ -186,8 +182,8 @@ class BaseSettings:
     # config/retention.py의 configured_retention_days). 본문 추출기와 일일 리포트는 이 값이 아니라 ADR 상수
     # config.retention.BODY_RETENTION_DAYS를 쓴다.
     BODY_RETENTION_DAYS: int = int(os.getenv("BODY_RETENTION_DAYS", "30"))
-    # LLM 채팅 API(HyperCLOVA/OpenAI) 호출 재시도 최대 횟수 (감사에서 발견: HyperCLOVA
-    # 클라이언트의 `while True` 루프가 이 상한 없이 무제한 재시도했음)
+    # LLM 채팅 API 호출 재시도 최대 횟수 (감사에서 발견: 예전 HyperCLOVA 클라이언트(2026-10-18 제거)의
+    # `while True` 루프가 이 상한 없이 무제한 재시도했음)
     MAX_LLM_CALL_RETRIES: int = 10
     # 모델 응답이 스키마 검증을 통과하지 못했을 때 같은 요청을 다시 보내는 최대 횟수. 응답마다 과금되고
     # 같은 프롬프트에서 같은 위반이 반복되기 쉬워 전송 계층 상한(위)과 따로 둔다. 2면 한 호출이 응답을

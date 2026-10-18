@@ -25,7 +25,7 @@ class LLMCallRecord:
     timestamp: float
     success: bool = True
     # core/llm/ 어댑터 도입(ADR 0005)으로 호출마다 어느 프로바이더/모델을 썼는지 기록한다.
-    # 레거시 HyperCLOVA 경로 등 값을 안 넘기는 호출도 있으므로 기본값을 둔다.
+    # 레거시 OpenAIClient 경로 등 값을 안 넘기는 호출도 있으므로 기본값을 둔다.
     provider: str = "unknown"
     model: str = "unknown"
     # 재시도 불가능한 특정 실패 사유를 안정적인 코드로 남긴다("length", "content_filter",
