@@ -1,0 +1,69 @@
+# 증거 요약표
+
+이 저장소가 내세우는 주장 8개를 한 장에 모았다. 각 행은 데이터 출처, 증거 등급, 핵심 수치와 95% 신뢰구간, 근거 파일, 한계를 같이 적는다. 수치는 커밋된 [`reports/`](../reports/README.md)와 [`docs/adr/`](adr/README.md)에 있는 값만 옮겼고, 출처 경로를 달았다. 측정하지 않은 것은 "측정하지 않음"이라고 적는다. 기준일은 2026-10-18이다.
+
+읽는 순서는 [README](../README.md) → [케이스 스터디 3편](case-studies/README.md) → 이 표 → [ADR 색인](adr/README.md)이다.
+
+## 읽는 법
+
+**증거 등급**
+
+| 등급 | 뜻 |
+|---|---|
+| `preregistered-run` | 가설·판정 규칙·실행 명령을 결과 전에 커밋했고, 판정을 코드가 리포트 JSON에서 계산했다. 사람이 표를 읽어 결론을 고르지 않았다. |
+| `descriptive` | 판정 규칙이 없는 측정이다. 진단, 기술 통계, CI 게이트의 값. 방향과 크기를 보여 줄 뿐 "이겼다/졌다"를 선언하지 않는다. |
+| `demo` | 메커니즘이 실제로 돈다는 운영·시연 기록이다. 품질이나 성능 주장이 없다. |
+
+**데이터 라벨.** 서로 다른 주장을 섞지 않으려고 모든 수치에 붙인다.
+
+| 라벨 | 데이터 |
+|---|---|
+| [team-synth] | 팀이 남긴 LLM 페르소나 합성 클릭 아카이브(100명, 로그 19,500건, 저장소 밖) |
+| [EB-NeRD] | 덴마크어 공개 뉴스 클릭 로그 `ebnerd_small`(집계만 커밋, 데이터는 저장소 밖) |
+| [CI-synth] | CI의 테스트 DB에 시드한 합성 뉴스레터·클릭 |
+| [KR-E0] | 한국어 수집 기사 E0 동결 반출본(2026-10-17 반출)에서 크기 버킷별로 층화 추출한 15개 클러스터 |
+| [KR-embed] | 한국어 수집 기사 E0 반출본 6,874건의 임베딩 팩 |
+| [KR-수집] | Tier 0 VM이 수집하는 한국어 RSS 기사 |
+| [SIM] | 합성 사용자 시뮬레이터 안의 값 |
+
+한국어 서비스에서 사람이 누른 클릭은 한 건도 없다. 어떤 [EB-NeRD]·[team-synth]·[SIM] 수치도 이 서비스의 추천 성능이 아니다.
+
+## 주장
+
+| # | 주장 | 데이터 | 등급 | 핵심 수치(95% CI) | 근거 | 한계 |
+|---|---|---|---|---|---|---|
+| 1 | 팀 평가의 지표는 추론 시점 누출로 부풀려진다. 같은 모델의 추론 시점만 바꿔도 MRR이 내려간다. | [team-synth] | `descriptive` | team-final 코드 MRR 0.8485 → 0.5636, 차이 +0.2849 [+0.1581, +0.4177](5 seed, 평가 유저 31명). 살펴본 모델 설정 6개 모두 CI 전체가 0 위(current 코드 예: +0.1855 [+0.0865, +0.2957]). 같은 정의로 무작위 추천은 MRR 0.6523이어서, 팀 평가 스크립트의 정답 창은 어떤 순위든 부풀린다. | [team_repro_v2](../reports/recsys/team_repro_v2.md), [ADR 0007](adr/0007-recsys-offline-evaluation-protocol.md), [케이스 01](case-studies/01-team-metric-leakage.md), [차트](assets/leakage_before_after_mrr.svg) | 합성 클릭, 평가 유저 31명, 다중비교 보정 없음. 절대값은 성능이 아니라 진단이다. 팀 보고값 0.897은 재현도 설명도 하지 못했다(측정 절차 기록 없음, 당시 스냅샷 없음). |
+| 2 | 랭커 개선의 대부분은 모델 교체가 아니라 학습 네거티브 분포에서 온다. 같은 모델이 서빙 조건(전체 풀)에서는 인기도보다 못하다. | [EB-NeRD] | `preregistered-run` | 노출 재정렬 nDCG@10: ranker v2 0.6551 [0.6533, 0.6569], popularity_24h 0.5992, 팀 방식 재현 0.3952. 단계별: 무작위 → 노출 비클릭 네거티브 +0.1868 [+0.1844, +0.1893], binary → LambdaRank +0.0010 [+0.0008, +0.0012]. 전체 풀: 같은 모델 0.0530 [0.0507, 0.0553] 대 popularity_6h 0.1168 [0.1132, 0.1203], 풀 네거티브 모델 0.2686 [0.2640, 0.2728]. 승격 규칙 R1–R4 통과. | [ebnerd_v1](../reports/recsys/ebnerd_v1.md), [ADR 0013](adr/0013-ranker-v2-design.md), [케이스 02](case-studies/02-negatives-define-the-task.md), [차트](assets/ebnerd_negatives_define_task.svg) | 덴마크 타블로이드 한 곳, 1주 평가 창, split 하나. 클릭 시각이 없어 노출 시각으로 근사했다. 한국어 전이는 확인하지 않았다(랭크 정규화 계약은 E3에서 불충족). |
+| 3 | 학습형 신경망 유저 인코더(NRMS-lite)는 같은 예산으로 튠한 LightGBM을 넘지 못했다. | [EB-NeRD] | `preregistered-run` | nDCG@10 차이(신경망 − LightGBM A\*): 노출 재정렬 −0.0215 [−0.0224, −0.0206], 전체 풀 −0.0531 [−0.0562, −0.0498]. 스태킹 D − A\*는 −0.0007·−0.0046. 판정 4개 모두 `seed_rule_failed`, 주장 `none`. | [ebnerd_v1_3_neural](../reports/recsys/ebnerd_v1_3_neural.md), [ADR 0013 A3 결과](adr/0013-ranker-v2-design.md), [차트](assets/e15_neural_vs_lightgbm.svg) | 범위는 [EB-NeRD]와 NRMS-lite(고정 BGE-M3 투영) 한정이다. 신경망 family당 12 trial 대 A\* 24 trial, 3 seed. "GBDT가 신경망보다 낫다"로 일반화하지 않고, 한국어 서비스에서의 우열은 측정하지 않았다. |
+| 4 | 서빙이 남긴 피처가 오프라인 재계산과 같다(train/serve parity). CI가 실제 버그를 잡았다. | [CI-synth] | `descriptive` | 요청 198건, 3,960칸, 22열: max\|Δ\| 1.19e-7(기준 1e-6), 요청별 Kendall τ 최소 1.0, 랭커 상위 20개 겹침 평균 0.9987(최소 0.95), M5 재실행(ADR 0014)에서는 같은 항목이 평균 1.0. 첫 실행은 max\|Δ\| 0.0397로 실패했다(마이크로초 순서 대 정수 초 순서). | [parity_v1](../reports/recsys/parity_v1.md), [parity_v1_m5](../reports/recsys/parity_v1_m5.json), [ADR 0033](adr/0033-train-serve-feature-parity.md), [케이스 02](case-studies/02-negatives-define-the-task.md) | 게이트가 쓰는 모델은 무작위 데이터로 만든 22열 모델이다. 두 계산 경로가 같은 값을 낸다는 것이지 추천 품질이 아니다. 서빙 정의와 EB-NeRD 학습 정의의 차이는 측정하지 않았다. 등록된 랭커는 아직 없다([ADR 0037](adr/0037-ebnerd-shadow-model-registration.md)은 등록 도구와 테스트까지). |
+| 5 | 결정론 사실성 게이트는 표기만 바꾼 동치 재표기를 오탐하지 않고, 수치 변조를 놓치지 않는다. | 팀 아카이브 뉴스레터 401편의 합성 변형 | `descriptive` | 동치 재표기 수치 오탐 0/494(수정 전 14/494), 수치 ×1.1 변조 검출 500/500. E0에서 첫 초안의 미지원 수치 ≥1은 0/14 [0.000, 0.215]. | [ADR 0010 증거 2·4](adr/0010-faithfulness-gate-and-judge-v2.md), [e0_baseline_v1 6절](../reports/llm/e0_baseline_v1.md) | 변형이 합성(표기 바꾸기와 ×1.1)이라 표기 강건성이다. 실제 환각 분포에서의 정밀도·재현율은 사람 정답이 없어 측정하지 않았다. 게이트는 수치·인용 한정이고 날짜·개체명은 참고만 한다. judge v2는 기록만 한다. |
+| 6 | 생성 파이프라인이 2월 이후 처음으로 실제 한국어 기사 위에서 끝까지 돌았고, 비용·지연·실패가 처음 측정됐다. 사람 라벨 없이 자동 라벨러로 품질 신호를 얻었다. | [KR-E0] | `descriptive` | 15클러스터 중 14 생성, 완주율 0.933 [0.702, 0.988], 첫 시도 스키마 통과 72/72 [0.949, 1.000], 클러스터당 벽시계 중앙값 9.3초, 비용 $0.155614(≈₩218), 분량 규칙 위반 11/14 = 0.786 [0.524, 0.924]. 자동 라벨러: 발행 가능률 11/15 = 0.733 [0.480, 0.891], 사실 오류 ≥1 3/14 = 0.214 [0.076, 0.476], 핵심 사실 커버리지 58/74 = 0.784 [0.677, 0.862]. 라벨러 대 judge v2 κ(참고) 0.20. | [e0_baseline_v1](../reports/llm/e0_baseline_v1.md), [e0_auto_labels_v1](../reports/llm/e0_auto_labels_v1.md), [ADR 0009 A8.12·A8.14](adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md), [케이스 03](case-studies/03-first-llm-measurement.md) | 사람 라벨은 없다. 라벨러·생성기·judge가 모두 Gemini 계열이고 라벨러의 정확도는 재지 않았다. n이 15와 14라 구간이 넓다. 가설 검정이 아니고 모델을 선정하지도 않았다(bake-off 결과 없음). 청구 잔액 대조는 하지 못했다(원장 값만). |
+| 7 | BGE-M3 임베딩이 한국어 기사의 주제 구조를 담는다. | [KR-embed] | `descriptive` | 서비스 7개 범주 kNN(k=10) leave-one-out 정확도 0.7519 [0.7328, 0.7725](n = 1,890), 다수 클래스 0.4640, macro-F1 0.6641 [0.6295, 0.6957]. | [embedding_check_v1](../reports/kr/embedding_check_v1.md), [ADR 0031](adr/0031-cold-start-and-language-transfer-contract.md) 결정 5 | 라벨은 사람이 붙인 주제가 아니라 URL의 섹션이고, 두 언론사(매일경제·동아일보)만 라벨이 있다. 기사 단위 대리 점검이다. 클릭 예측력과 추천 정확도는 측정하지 않았다. |
+| 8 | 1 GB 무료 VM 하나에서 수집기를 상시 운영하고, 본문 보존·백업을 코드로 강제한다. | [KR-수집] | `demo` | 2026-09-26부터 수집, 10-17 기준 `news_raw` 31,097행. 정시 수집 회차 233회 중 198회 성공(85.0%, 09-26~10-06), 27회는 앞 회차가 1시간을 넘겨 시작되지 않았다. 매일 호스트 밖 백업(본문 없는 사본 3.8 MB)과 28일마다 복원 검증. | [ADR 0026](adr/0026-hosting-tiers-and-contingency.md), [ADR 0023](adr/0023-data-sources-copyright-retention.md), [runbook-hosting](runbook-hosting.md) | 사용자가 쓰는 서비스가 아니다. 상시 도는 것은 수집기뿐이고 임베딩·클러스터링·생성은 상시 돌지 않는다. 정시 95%에 못 미쳤고 정책브리핑 실제 수집은 0건이다. 본문 보존 잡의 첫 비움은 10-26이라 비운 기록이 아직 없다. |
+
+## 음성 결과와 철회
+
+불리한 결과를 숨기지 않았다는 증거로 같은 문서에 둔다. 음성 결과는 설계를 바꾼 결정에 연결되어 있다.
+
+| 항목 | 데이터 | 결과 | 바뀐 것 | 근거 |
+|---|---|---|---|---|
+| E3 랭크 정규화 불충족 | [EB-NeRD] | 랭크 정규화 − 원값 −0.0144 [−0.0171, −0.0118](한도 −0.01), 기계 판정 불충족 | 원값 모델만 쓴다. 언어 전이 계약의 첫 부분이 성립하지 않았다 | [ADR 0013 A2 결과](adr/0013-ranker-v2-design.md), [ADR 0031](adr/0031-cold-start-and-language-transfer-contract.md) |
+| E6 축소 CTR 미채택 | [EB-NeRD] | 6개 비교 모두 CI 하한 ≤ 0(가장 큰 값 −0.0017) | 피처를 더하지 않았다 | [ebnerd_v1_2_cold](../reports/recsys/ebnerd_v1_2_cold.md) |
+| E15 신경망 비교 | [EB-NeRD] | 판정 4개 모두 `seed_rule_failed`(위 3행) | 학습형 유저 인코더를 NRMS-lite 한정으로 측정 후 기각, 후속 실험 없음 | [ADR 0013 A3 결과](adr/0013-ranker-v2-design.md) |
+| E9 오프폴리시 평가 검증 | [SIM] | 탐색 2칸과 재실험 4칸 모두 사전 등록 기준 미통과(예: random 타깃 상대오차 20.7% > 15%) | 다른 정책을 추정하는 오프폴리시 평가는 '제안됨'에 머문다 | [ope_validation](../reports/sim/ope_validation.md), [ADR 0025](adr/0025-logging-v2-exploration-and-ope.md) |
+| E10 노출 피로 규칙 | [SIM] | 반복 노출은 줄지만 `similar_share_lift`가 나빠져 enforce 조건 미충족 | 기본값을 `log`로 둔다 | [fatigue_v1](../reports/sim/fatigue_v1.md) |
+| H5 drift 적응 지표 | [SIM] | 격자 v1 판정 50건 중 위반 2건, 둘 다 drift 적응 지표 | 그 지표의 타당성은 미확인으로 둔다 | [grid_v1](../reports/sim/grid_v1.md), [ADR 0019](adr/0019-user-simulator-design-and-claim-scope.md) |
+| 철회: 팀 보고 MRR 0.897 | [team-synth] | 측정 절차·시점이 기록에 없고 당시 스냅샷(103명/405건)이 남아 있지 않다. 재현도 설명도 하지 못했다 | 인용할 때는 "팀 보고값"으로만, 출처와 검증 불가를 함께 적는다 | [ADR 0007 결정 9](adr/0007-recsys-offline-evaluation-protocol.md) |
+| 철회: "모델이 베이스라인보다 낫다" | [team-synth] | 누출을 걷어내면 current 모델 − popularity는 P@5 −0.0645 [−0.1729, +0.0465], 우위 CI 없음 | 이 결론을 철회했다 | [team_repro_v2 0절 3번](../reports/recsys/team_repro_v2.md) |
+| 정정: lambdarank가 트리 1개에서 멈추는 원인 | [team-synth] | "퇴화"로 추정했던 것을 정정. NDCG가 동점을 행 순서로 깨고 엔진이 positive를 첫 행에 쌓은 아티팩트(1라운드 inner-valid NDCG@5가 엔진 순서 0.7370, 동점 무작위 0.6790, 역순 0.6225). 검증 행을 섞으면 best_iteration [35, 1, 1, 90, 1] → [35, 72, 49, 90, 28] | 조기 종료용 검증 행을 고정 시드로 섞는다(ADR 0007 결정 4) | [team_repro_v2 0절 4번](../reports/recsys/team_repro_v2.md) |
+| 철회: 팀 시절 README의 응답 시간·소스 다양성 수치 | - | 산출 코드가 저장소에 없다 | 옮기지 않았다 | [fix-log #7](fix-log-2026-07.md) |
+
+## 이 표가 받쳐 주지 않는 말
+
+- 배포·운영 중인 추천 서비스, 실사용자 CTR 개선, 한국어 서비스의 추천 성능. 한국어 클릭은 0건이다.
+- 이 저장소의 어떤 nDCG·MRR을 이 서비스의 성능으로 읽는 것. 전부 [EB-NeRD]나 합성 데이터다.
+- "검증된 랭커가 서빙 중이다". 등록된 랭커 모델은 0개이고 서빙 목록은 휴리스틱(ADR 0014)이 만든다.
+- "GBDT가 신경망보다 낫다". 주장 3의 범위(EB-NeRD, NRMS-lite)를 넘는다.
+- "LLM 평가로 모델을 선정했다", "사실성 게이트가 환각을 막는다", "사람이 검증한 품질". 모델 선정 결과가 없고, 게이트는 수치·인용 한정이며, 사람 라벨이 없다.
+- "한국어 전이를 확인했다". 한국어 kNN은 주제 구조의 점검이고 랭크 정규화 계약은 불충족이다.
+- "시뮬레이터로 추천 품질을 검증했다". [SIM] 수치는 정확도 주장이 아니고 E9는 실패했다.
