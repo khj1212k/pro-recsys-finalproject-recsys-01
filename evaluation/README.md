@@ -162,9 +162,10 @@ python -m evaluation.llm.gate_probe --newsletters 'data/team_archive/newsletters
     `python -m evaluation.recsys.ebnerd.synthetic --out /tmp/synth` 뒤
     `python -m evaluation.recsys.ebnerd.run_cold --dataset ebnerd_synth --root /tmp/synth --out-dir /tmp/cold --seeds 0
     --n-boot 20 --p2-sample 150 --sub-cap 100 --stage all`(약 10초).
-- **신경망 사용자 모델 비교(E15, 결과 대기)**: NRMS-lite·SASRec-lite·GBDT 스태킹을 같은 예산으로 튠한 LightGBM과 같은
+- **신경망 사용자 모델 비교(E15, 판정 끝)**: NRMS-lite·SASRec-lite·GBDT 스태킹을 같은 예산으로 튠한 LightGBM과 같은
   과제·네거티브·스칼라 행렬 위에서 비교하는 실험이다. 규칙은 [ADR 0013 "A3 사전 등록"](../docs/adr/0013-ranker-v2-design.md)과
-  `ebnerd/preregistration/neural-e15.yaml`에 결과 전에 고정했다. 아직 판정용 실행은 한 번도 하지 않았다.
+  `ebnerd/preregistration/neural-e15.yaml`에 결과 전에 고정했다. 판정용 실행은 2026-10-18에 끝났다 — 판정 비교 4개 모두 seed 규칙 불통과, 주장 `none`,
+  shadow 자격 arm 없음(결과는 `reports/recsys/ebnerd_v1_3_neural.{json,md}`, 해석은 ADR 0013 "A3 결과"). 후속 실험은 하지 않는다(A3.12).
   - `ebnerd/neural/`: `sequences.py`(마지막 N 클릭, 시퀀스 스칼라, 스칼라 블록, 콜드 증강), `datasets.py`(길이별 배치·패딩),
     `tune.py`(같은 예산의 무작위 탐색, 튠한 LambdaRank 학습), `stack.py`(시간 전진 OOF 규칙), `report.py`(기계 판정
     `neural_verdict`와 표) — 여기까지는 torch 없이 돈다. `models.py`·`train.py`(두 family, 후기 융합, 결정론적 학습과
