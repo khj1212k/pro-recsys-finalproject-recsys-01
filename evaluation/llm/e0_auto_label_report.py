@@ -441,7 +441,8 @@ def render_md(rep: Dict[str, Any]) -> str:
               "results_viewed"):
         lines.append(f"| {k} | {json.dumps(h.get(k), ensure_ascii=False)} |")
     spend = h.get("in_client_spend") or {}
-    lines.append(f"| in_client_spend(run) | {json.dumps({k: spend.get(k) for k in ('run_id', 'run_usd', 'day_usd', 'total_usd')}, ensure_ascii=False)} |")
+    lines.append(f"| in_client_spend(run·전체; 오늘 합은 다시 만드는 날마다 달라 싣지 않는다) | "
+                 f"{json.dumps({k: spend.get(k) for k in ('run_id', 'run_usd', 'total_usd')}, ensure_ascii=False)} |")
     c = rep["calls"]
     lines += ["", "## 1. 호출과 비용", "",
               f"- 라벨링 HTTP 시도 {c['labeling']['http_attempts']}건, 상태 {json.dumps(c['labeling']['status'])}, "
@@ -549,7 +550,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     snap = budget.spend_snapshot()
     rep, guard = build(proto, pkg, items=items, ends=ends, nodes=nodes,
-                       spend={k: snap.get(k) for k in ("run_id", "run_usd", "day_usd", "total_usd", "caps_usd", "open_reservations")},
+                       spend={k: snap.get(k) for k in ("run_id", "run_usd", "total_usd", "caps_usd", "open_reservations")},
                        command="python -m evaluation.llm.e0_auto_label_report")
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
