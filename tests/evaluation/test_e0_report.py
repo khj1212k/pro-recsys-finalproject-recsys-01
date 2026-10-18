@@ -289,6 +289,21 @@ def test_balance_reconciliation_rows():
     assert rep.balance_reconciliation(0.5, None)["status"] == "미기록"
 
 
+def test_a_not_reconcilable_balance_row_says_why_and_what_the_sign_means(built):
+    """MD 리포트만 읽어도 '대조 불가'의 까닭(다른 Gemini 호출)과 delta의 부호가 보인다(ADR 0009 A8.12)."""
+    r, manifest, prereg = built
+    balance = {"before": 8000, "after": 12500, "fx": 1400, "before_at": "2026-10-17T14:33:08+09:00",
+               "after_at": "2026-10-18T14:48:00+09:00", "other_gemini_calls": True}
+    row = rep.balance_reconciliation(0.155614, balance)
+    assert row["status"] == "대조 불가" and row["delta_usd"] < 0 < row["abs_diff_usd"] and row["other_gemini_calls"] is True
+    assert "판정에 쓰지 않는다" in row["note"] and "음수는 잔액이 늘었다는 뜻" in row["note"]
+    assert "note" not in rep.balance_reconciliation(0.5, {"before": 8000, "after": 7300, "fx": 1400})
+    md = rep.render_md(rep.build_report(r.dir, prereg=prereg, manifest_path=manifest, balance=balance))
+    section = md.split("## 잔액 대조")[1].split("## pre-flight")[0]
+    assert "- 상태: 대조 불가" in section and "- other_gemini_calls: True" in section
+    assert "- 비고: 같은 기간 다른 Gemini 호출이 있어 delta_usd·abs_diff_usd는 판정에 쓰지 않는다" in section
+
+
 def test_no_text_leaks_and_a_planted_fragment_is_refused(built, report, tmp_path):
     r, _, _ = built
     corpus = rep.leak_corpus(r.dir, None)
