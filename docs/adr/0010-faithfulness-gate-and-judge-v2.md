@@ -251,9 +251,9 @@ E0 기준선 리포트([`reports/llm/e0_baseline_v1.md`](../../reports/llm/e0_ba
 
 | 항목 | 전 | 후 | 근거 테스트 |
 |---|---|---|---|
-| C2 저장 연결 | 저장 노드가 `current_article_ids`(클러스터 원본 전체)를 `news_letter_id`로 연결. 클러스터 평가가 뺀 이상치·버린 서브그룹까지 연결돼 다음 클러스터링의 `news_letter_id IS NULL` 필터에서 영구 제외되고 `raw_news_count`도 부풀었다 | 생성에 실제로 쓴 기사(`current_articles`)의 id만 연결(중복 제거, 순서 유지). `current_articles`가 비어 있는 입력만 원래 목록으로 폴백 | `tests/test_save_links_only_used_articles.py` — 고치기 전 코드로 이상치·서브그룹 두 시나리오가 `[10, 11, 12, 13]`으로 실패함을 확인(`exp/generation-warmup` eab2b89의 시나리오를 현재 judge v2 그래프로 이식) |
+| C2 저장 연결 | 저장 노드가 `current_article_ids`(클러스터 원본 전체)를 `news_letter_id`로 연결. 클러스터 평가가 뺀 이상치·버린 서브그룹까지 연결돼 다음 클러스터링의 `news_letter_id IS NULL` 필터에서 영구 제외되고 `raw_news_count`도 부풀었다 | 클러스터 평가를 거쳐 남은 기사(`current_articles`)의 id만 연결(중복 제거, 순서 유지). 생성기가 프롬프트에 실제로 넣은 목록은 아니다 — 아래 4절. `current_articles`가 비어 있는 입력만 원래 목록으로 폴백 | `tests/test_save_links_only_used_articles.py` — 고치기 전 코드로 이상치·서브그룹 두 시나리오가 `[10, 11, 12, 13]`으로 실패함을 확인(`exp/generation-warmup` eab2b89의 시나리오를 현재 judge v2 그래프로 이식) |
 | C4 문체 드리프트 비교 필드 | `TONE_FIELDS = ("title", "content")`, 주석은 "sentence는 저장되지 않는다"(틀림: 저장 노드는 변환본의 요약을 sentence로 저장한다) | `("title", "sentence", "content")`, 주석 정정. 변환 출력의 `summary`만 있는 입력도 `sentence or summary`로 읽어 저장 노드와 같은 규칙을 쓴다 | `tests/test_tone_drift_covers_stored_fields.py` — 저장 필드 ⊆ `TONE_FIELDS` 드리프트 테스트, sentence만 2조 원 → 20조 원으로 바꾼 변환의 차단(단위·그래프 2건), 대조군(옛 필드로는 통과) |
-| C10 축소판: 재시도 금지 목록 | 킬 스위치(env/외부 파일)·HTTP 401/402/403/404·`length`·`content_filter`로 호출이 막혀도 그래프가 같은 클러스터를 다시 생성했다 | `LLMResult.no_retry_reason`(`kill_switch`→`infra`, HTTP 401/402/403/404→`infra`, `length`, `content_filter`)이 있으면 재생성하지 않고 그 사유로 닫는다. 아래 표 | `tests/test_llm_failure_injection.py` (장애 주입 33건) |
+| C10 축소판: 재시도 금지 목록 | 킬 스위치(env/외부 파일)·HTTP 401/402/403/404·`length`·`content_filter`로 호출이 막혀도 그래프가 같은 클러스터를 다시 생성했다 | `LLMResult.no_retry_reason`(`kill_switch`→`infra`, HTTP 401/402/403/404→`infra`, `length`, `content_filter`)이 있으면 재생성하지 않고 그 사유로 닫는다(클러스터 평가·본문/메타 생성·judge 호출. 문체 변환 호출이 막히면 검증 재시도만 멈추고 결정론적 폴백으로 저장되며 `failure_reason`은 없다). 아래 표 | `tests/test_llm_failure_injection.py` (장애 주입 33건) |
 | 스키마 검증 실패 재시도 | 한 `complete()`가 `MAX_LLM_CALL_RETRIES`(10)까지 같은 요청을 다시 보내 응답마다 과금 | 재시도 2회(응답 최대 3개), `MAX_LLM_SCHEMA_RETRIES`(기본 2). 소진 오류는 `max retries (schema 2) exhausted: …`(E0 분류기가 읽는 `max retries` 접두를 유지). 전송 계층 재시도는 따로 센다 | `tests/test_llm_schema_retry_cap.py` |
 | `ClusterEvaluator` 텍스트 휴리스틱 | 스키마로 해석 안 된 응답에 text가 있으면 낱말 "PASS"/"FAIL"로 판정(confidence 0.1) | 파싱 실패 = `FAIL`, `confidence=0.0`, `parsed=False`. 파싱된 판정은 `parsed=True`. 기본 레지스트리 어댑터는 parsed가 없으면 text도 없어 죽은 분기였고, text만 오는 레거시 어댑터에서만 살아 있었다 | `tests/test_evaluators_max_retries.py` |
 
@@ -265,8 +265,8 @@ HTTP 400(잘못된 인자)·422, 429·5xx·타임아웃의 재시도 소진, 스
 | 상황 | 전 | 후 |
 |---|---|---|
 | 클러스터 평가 호출이 처음부터 막힘 (401/403/404, 킬 스위치, `length`, `content_filter`) | FAIL로 읽혀 이상치·서브그룹이 없으면 `skipped`. 인프라 장애가 "군집이 나쁨"으로 기록 | `failed_clusters` + `failure_reason` = `infra`/`length`/`content_filter`, `skipped` 아님. 클러스터당 평가 요청 1회, 생성·문체 변환 요청 0 |
-| 처음부터 402 | 지출 가드가 한 번에 런을 멈춘다(ADR 0035) | 동작 불변. 장애 주입 테스트로 고정: 요청 1회, 같은 런의 다음 클러스터는 `not_started`, `skipped` 없음. 가드를 거치지 않는 클라이언트가 402를 *결과*로 돌려줘도 401/403/404와 같이 `infra`로 닫는다 |
-| 처리 도중 402 | 가드가 런을 멈춘다(동작 불변) | 동작 불변. 메타 생성 요청이 402인 경우 요청은 judge 1 + 생성 2에서 끝나고 다음 클러스터 요청은 0임을 고정. 결과로 오는 402는 본문 생성 1회 뒤 종료(메타 호출 생략, judge·문체 변환 0) |
+| 처음부터 402 | 지출 가드가 한 번에 런을 멈춘다(ADR 0035) | **동작 불변.** 실행 계획 WP3의 수용 기준 "처음부터 402: 클러스터당 호출 1회 뒤 `infra`로 기록"은 ADR 0035의 런 중단으로 대체됐다 — 운영 어댑터에서 402는 *결과*가 아니라 가드의 `LLMCircuitOpen`이라 첫 클러스터는 `stopped`(`llm_circuit_open`), 나머지는 `not_started`이고 요청은 런 전체에서 1회다. 이를 고정한 테스트는 고치기 전 코드(origin/main `dede670`)에서도 통과한다: 이번 변경을 증명하는 것이 아니라 가드 동작이 그대로임을 묶어 두는 회귀 잠금이다. 402를 *결과*로 돌려주는 클라이언트는 가드를 우회한 테스트 대역뿐이다(OpenAI 호환 어댑터는 가드가 먼저 예외를 내고 HyperCLOVA 어댑터는 `http_status`를 채우지 않는다). `no_retry_reason`의 402 분기는 그 대역에서만 실행되며 운영 경로가 없고, 그 대역은 401/403/404와 같이 `infra`로 닫는다 |
+| 처리 도중 402 | 가드가 런을 멈춘다(동작 불변) | 동작 불변(위와 같이 고치기 전 코드에서도 통과하는 회귀 잠금). 메타 생성 요청이 402인 경우 요청은 judge 1 + 생성 2에서 끝나고 다음 클러스터 요청은 0임을 고정. 결과로 오는 402(가드 우회 테스트 대역)는 본문 생성 1회 뒤 종료(메타 호출 생략, judge·문체 변환 0) |
 | 킬 스위치가 처리 도중 켜짐 | 폴백 초안 → 사실성 게이트 차단 → 생성 상한(3)까지 재생성(회당 본문+메타 2호출 시도) | 생성 1회 시도(전송 요청 0, 킬 스위치는 요청 전에 막는다) 뒤 `infra`로 종료 |
 | 본문 생성이 `length` | 같은 `max_tokens`로 최대 3번 다시 생성 | 1번 시도 뒤 `failure_reason="length"`로 종료 |
 | judge 호출이 막힘 (shadow·enforce 모두) | 점수 없는 FAIL → 생성 상한까지 재생성(생성 3회 + judge 3회) | 생성 1회 + judge 1회 뒤 `infra`로 종료 |
@@ -299,6 +299,19 @@ E0은 고치기 전 코드로 쟀다(`reports/llm/e0_baseline_v1.{json,md}`, `co
 
 - 호출 수 절감은 **페이크 전송 계층의 요청 수**로 확인했다. 실제 장애에서 줄어드는 비용·시간은 측정하지 않았다(비과금 HTTP 오류가 많아 금액 효과는 작을 수 있다).
 - `skipped`와 `failed`의 정의가 바뀌었다. 이전 `cluster_history`의 `skipped`에는 인프라 장애가 섞여 있을 수 있고, 과거 행은 고치지 않았다.
+- **평가셋의 어려운 사례(`hard_case`).** 추출기(`evaluation/llm/evalset.py`)는 `status`가 아니라 `cluster_eval.decision == "FAIL"`만 봤으므로, `skipped`를 `failed`로 바꾸는 것만으로는 평가 호출이 막힌 클러스터가 어려운 사례에서 빠지지 않았다
+  (킬 스위치를 켠 그래프의 요약을 추출기에 넣으면 `hard_case=[True]`). 이제 `summarize_cluster_outcome`이 `cluster_eval.llm_failure`(막힘)와 `parsed=False`(응답이 해석되지 않음)를 해당할 때만 요약에 남기고,
+  추출기는 둘 중 하나라도 있는 FAIL을 판정이 아닌 것으로 보고 어려운 사례에서 뺀다(`tests/test_llm_failure_injection.py`, `tests/evaluation/test_evalset.py`; 정상 FAIL 판정은 그대로 어려운 사례). 두 키가 없는 이전 행은 예전대로 읽힌다.
+  ADR 0009 A3가 ROC에서 파싱되지 않은 행을 빼는 것과 같은 기준이지만, A5의 "ClusterEvaluator FAIL" 정의를 판정이 있는 FAIL로 좁힌 것이기도 하다. 이 PR은 사전 등록 파일을 고치지 않는다 — 아래 bake-off 항목과 함께 amendment 후보다.
+- **bake-off G2와 `q`도 sentence를 포함해 계산된다.** bake-off(`evaluation/llm/bakeoff.py`)의 G2 플래그(문체 드리프트율 ≤ 0.20)와 비용식의 `q`(ADR 0009)는 같은 `check_tone_drift`로 만들어지므로, 비교 필드에 sentence가 더해진 C4가 그대로 반영된다
+  (초안 sentence와 변환본 summary/sentence의 수치·날짜·개체명 차이도 G2 차단). ADR 0009의 G2 정의는 비교 필드를 적지 않았고 사전 등록 당시 구현은 title+content였다. bake-off는 실행한 적이 없고(ADR 0009: bake-off 결과 없음, 커밋된 결과 파일 없음)
+  결과를 본 적이 없으므로 오염된 결과는 없다. **`evaluation/llm/preregistration/bakeoff-v1.yaml`의 amendments에는 아직 기록하지 않았다** — bake-off 실행 전에 `results_viewed: false`로 기록해야 하고(파일 머리말 규칙),
+  사전 등록 당시 정의를 유지하려면 `bakeoff.py`가 비교 필드를 명시적으로 넘기게 해야 한다(이번에는 하지 않았다). 다른 호출부(`e0_report.offline_sentence_drift`, `gate_probe.py`)는 값이 달라지지 않는다 —
+  앞은 sentence를 title 자리에 넣어 비교하고, 뒤는 sentence가 없는 형식체 입력에 집합 비교를 쓴다.
+- **C2의 연결 범위.** 생성기는 클러스터의 기사가 10개를 넘으면 본문이 긴 순 10개만 프롬프트에 넣는다(`MAX_PROMPT_ARTICLES`). 저장 노드는 `current_articles` 전체를 연결하므로 10개를 넘는 클러스터에서는 프롬프트에 없던 기사도
+  `news_letter_id`가 채워지고 `raw_news_count`에 센다(지어낸 12기사 클러스터로 재현: 프롬프트의 기사 블록 10개, 저장 호출의 `article_ids` 12개). 실행 계획 WP3의 사양(`current_articles`의 id만 연결)과 코드는 같아서 바꾸지 않았다.
+  바꾸려면 생성기가 쓴 기사 목록을 state로 돌려줘야 한다. E0 [KR-ops] 입력의 클러스터당 기사는 중앙값 6, 최댓값 41(15개 클러스터, `reports/llm/e0_baseline_v1.md` 12절)이라 10개를 넘는 입력이 있었다.
+  저장본 중 몇 개가 그렇게 연결됐는지는 측정하지 않음.
 - 전송 재시도 소진(429/5xx)과 HTTP 400은 여전히 막힌 실패로 보지 않는다. 스레드 사이 공유 서킷브레이커와 일일 캡(실행 계획 M2)은 없다: 401/403/404 결과는 지출 가드에서 중립이라 남은 클러스터마다 평가 요청이 1회씩 나간다(402만 런을 멈춘다).
 - E0 하네스 쪽 두 가지: (1) 파일 대역의 계약 검사가 `save_newsletter_to_db` 본문 sha256을 고정하고 있어 새 값으로 갱신했다(`evaluation/llm/e0_store.py`; 바뀐 것은 저장에 넘기는 id 목록뿐이고 대역은 받은 id를 그대로 남기므로 대역이 하는 일은 같다).
   (2) `e0_report.py`의 근본 원인 분류는 새 `failure_reason` 값을 모른다(`exception`으로 떨어진다). E0 하네스를 다시 쓸 계획이 없어 고치지 않았다.

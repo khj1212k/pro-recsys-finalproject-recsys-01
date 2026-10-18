@@ -2,7 +2,10 @@
 # 클러스터 평가 호출이 그런 실패면 skipped가 아니라 failure_reason=infra/length/content_filter로 기록한다.
 #
 # 대부분은 실제 그래프 + 실제 role 클라이언트(어댑터·지출 가드) + 페이크 전송 계층이다. 전송 계층을 거치지 않고
-# 결과를 직접 주입하는 시나리오(LLMResult 페이크)는 지출 가드가 없는 클라이언트도 같은 정책을 따르는지 본다.
+# 결과를 직접 주입하는 시나리오(LLMResult 페이크)는 같은 정책이 클라이언트 구현에 묶이지 않는지 본다.
+# 402는 운영 어댑터에서 결과가 아니라 지출 가드의 런 중단이다(ADR 0035): 402를 결과로 돌려주는 쪽은 이 페이크뿐이다.
+# 402 시나리오 중 실제 전송 계층을 쓰는 두 건(test_payment_required_*)은 고치기 전 코드에서도 통과한다 -
+# 이번 변경을 증명하는 테스트가 아니라 가드 동작이 그대로임을 묶어 두는 회귀 잠금이다.
 #
 # "추가 호출 0"은 전송 계층의 요청 수(call_count)로 센다.
 import os
@@ -98,7 +101,8 @@ def test_http_error_from_the_start_is_recorded_as_infra_not_skipped(saved, statu
 
 
 def test_payment_required_from_the_start_costs_one_call_for_the_whole_run(saved):
-    """402는 지출 가드가 런 전체를 멈춘다(ADR 0035). 클러스터가 여럿이어도 요청은 한 번이고 skipped는 없다."""
+    """회귀 잠금(고치기 전에도 통과). 402는 지출 가드가 런 전체를 멈춘다(ADR 0035): 클러스터가 여럿이어도 요청은
+    한 번이고 skipped는 없다. 실행 계획의 "402 -> infra로 기록" 기준은 이 런 중단(stopped/not_started)으로 대체됐다."""
     gen, judge = fx.role_transports([], [make_status_error(402, "prepay required")])
 
     def process(cid, idx):
@@ -114,7 +118,8 @@ def test_payment_required_from_the_start_costs_one_call_for_the_whole_run(saved)
 
 @pytest.mark.parametrize("cluster_id", [1, 2, 3])
 def test_blocked_results_without_a_guard_cost_one_call_per_cluster(monkeypatch, saved, cluster_id):
-    """지출 가드를 거치지 않는 클라이언트가 402를 결과로 돌려줘도 클러스터당 호출 1회 뒤 infra로 닫는다."""
+    """지출 가드를 우회한 테스트 대역(운영 경로 없음 - 운영 어댑터는 402를 결과로 돌려주지 않는다)이 402를 결과로
+    돌려줘도 401/403/404와 같이 클러스터당 호출 1회 뒤 infra로 닫는다."""
     judge = FakeLLMClient(results=[fx.blocked_result("Error code: 402", http_status=402)])
     generator, tone = FakeLLMClient(results=[]), FakeLLMClient(results=[])
     fx.wire_clients(monkeypatch, judge, generator, tone)
@@ -219,7 +224,8 @@ def test_a_genuine_fail_verdict_is_still_a_hard_case(saved):
 # ---------------------------------------------------------------------------
 
 def test_payment_required_mid_cluster_stops_with_no_further_calls(saved):
-    """메타 생성 요청이 402: 지출 가드가 런을 멈추고, 그 뒤 judge·문체 변환 요청과 다음 클러스터 요청은 0이다."""
+    """회귀 잠금(고치기 전에도 통과). 메타 생성 요청이 402: 지출 가드가 런을 멈추고, 그 뒤 judge·문체 변환 요청과
+    다음 클러스터 요청은 0이다."""
     gen, judge = fx.role_transports([fx.content(), make_status_error(402, "prepay required")], [fx.cluster_pass()])
 
     with pytest.raises(LLMCircuitOpen):
@@ -232,7 +238,7 @@ def test_payment_required_mid_cluster_stops_with_no_further_calls(saved):
 
 
 def test_blocked_generation_mid_cluster_skips_the_meta_call_and_never_regenerates(monkeypatch, saved):
-    """본문 생성이 402 결과(가드 없는 클라이언트): 메타 호출도, 두 번째 생성도, judge·문체 변환도 없다."""
+    """본문 생성이 402 결과(가드를 우회한 테스트 대역): 메타 호출도, 두 번째 생성도, judge·문체 변환도 없다."""
     judge = FakeLLMClient(results=[fx.cluster_pass_result()])
     generator = FakeLLMClient(results=[fx.blocked_result("Error code: 402", http_status=402)])
     tone = FakeLLMClient(results=[])

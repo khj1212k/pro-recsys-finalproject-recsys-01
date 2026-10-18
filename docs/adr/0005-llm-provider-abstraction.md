@@ -160,7 +160,8 @@
    `tests/test_reasoning_effort_env.py`; 킬 스위치·지출 가드로 요청이 나가지 않은 호출은 `unset`으로 센다).
    프로바이더가 보고하지 않은 값은 0이 아니라 `None`이고, 요약은 합과 함께 "보고한 호출 수"를 적는다.
 3. **재시도 금지 목록.** `LLMResult.no_retry_reason`이 킬 스위치·HTTP 401/402/403/404·`length`·`content_filter`를 `infra`/`length`/`content_filter`로 분류하고, 그래프와 생성기·문체 변환기가 그 사유가 있으면 같은 호출을 되풀이하지 않는다.
-   "닫은 갭 1"이 적은 "기존 실패 처리 경로를 그대로 타서 뉴스레터를 저장하지 않고 끝난다"는 서술은 이 부록 이후 클러스터 단위로도 맞다 — 클러스터는 `skipped`가 아니라 `failure_reason="infra"`로 닫힌다.
+   "닫은 갭 1"이 적은 "기존 실패 처리 경로를 그대로 타서 뉴스레터를 저장하지 않고 끝난다"는 서술은 이 부록 이후 클러스터 단위로도 맞다 — 클러스터 평가·생성·judge 호출이 막히면 클러스터는 `skipped`가 아니라 `failure_reason="infra"`로 닫힌다.
+   문체 변환 호출이 막히면 검증 재시도만 멈추고 결정론적 폴백 문장으로 저장하며 `failure_reason`은 없다(저장 동작 불변).
 4. **스키마 검증 실패 재시도는 2회까지**(`MAX_LLM_SCHEMA_RETRIES`, 기본 2). 전송 계층 재시도(`MAX_LLM_CALL_RETRIES`=10)와 따로 센다.
 
 ### reasoning pre-flight (실측, 합성 입력, 2026-10-18 06:09 UTC)
