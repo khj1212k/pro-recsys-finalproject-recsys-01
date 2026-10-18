@@ -1,10 +1,10 @@
 {
  "kind": "e0_auto_labels",
  "format": 1,
- "generated_at": "2026-10-17T07:43:33.757415+00:00",
+ "generated_at": "2026-10-18T05:36:36.872785+00:00",
  "header": {
   "command": "python -m evaluation.llm.e0_auto_label_report",
-  "head_sha": "51d1425229baebeafd5ebe08ed48f443898eeb48",
+  "head_sha": "ce611a0f84e5fe0f193b09e1a1f6eac043f05b4e",
   "protocol": "e0-auto-labels-v1",
   "protocol_sha256": "b3aa857d6303227f4d4724892eae7b2325552b1fa67dada7421ed6460248a479",
   "adr": "docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md#A8.13",
@@ -41,7 +41,6 @@
   "in_client_spend": {
    "run_id": "e0-auto-labels-v1",
    "run_usd": 0.328228,
-   "day_usd": 0.483842,
    "total_usd": 0.483842,
    "caps_usd": {
     "run": 0.5,
@@ -397,7 +396,7 @@
    },
    "saved": {
     "gate_miss_number_quote_errors": 0,
-    "advisory_entity_precision": {
+    "advisory_entity_flag_overlaps_labeler_span": {
      "k": 0,
      "n": 3,
      "rate": 0.0,
@@ -405,7 +404,8 @@
       0.0,
       0.5615
      ]
-    }
+    },
+    "note": "정답 대비가 아니다 - 참고 개체명 항목 중 라벨러 구간과 겹친 비율이다. 게이트 누락 건수는 라벨러가 센 number·quote 오류(저장본)다."
    },
    "judge_shadow_vs_publishable": {
     "table": {
@@ -439,19 +439,19 @@
     "other": 2
    },
    "checker_vs_auto_labeler_first_draft": {
-    "precision": {
+    "checker_block_overlaps_labeler_span": {
      "k": 0,
      "n": 0,
      "rate": null,
      "wilson95": null
     },
-    "recall_number": {
+    "labeler_number_span_overlaps_checker": {
      "k": 0,
      "n": 0,
      "rate": null,
      "wilson95": null
     },
-    "recall_quote": {
+    "labeler_quote_span_overlaps_checker": {
      "k": 0,
      "n": 0,
      "rate": null,
@@ -464,7 +464,7 @@
      "passed_no_error": 14
     },
     "computed_values_counted_as_fp": null,
-    "note": "A8.8 쓰임 3의 계산을 자동 라벨(런 a)에 그대로 한 값이다. 사람 정답이 아니므로 '정밀도·재현율'이 아니라 검사기 차단 구간 중 라벨러 구간과 겹친 비율(precision 칸), 라벨러 number·quote 구간 중 검사기와 겹친 비율(recall_* 칸)로 읽는다."
+    "note": "A8.8 쓰임 3의 계산을 자동 라벨(런 a)에 그대로 한 값이다. 사람 정답이 아니므로 '정밀도·재현율'이 아니라 검사기 차단 구간 중 라벨러 구간과 겹친 비율(checker_block_overlaps_labeler_span), 라벨러 number·quote 구간 중 검사기와 겹친 비율(labeler_*_span_overlaps_checker)로 읽는다."
    }
   }
  },
@@ -618,6 +618,19 @@
    "oc5801514de",
    "oca51eacbc4"
   ],
+  "cluster_ids_only_in_run_a": [
+   "r2-c8",
+   "r3-c11",
+   "r3-c2",
+   "r3-c52"
+  ],
+  "output_ids_only_in_run_a": [
+   "o208f0f1a4c",
+   "o4c5eb0674a",
+   "oa50cd38cf2",
+   "oe245be876f"
+  ],
+  "run_b_selection": "재라벨 대상 + item_id 순서로 예산이 허락한 만큼이다. 멈춘 지점은 비용으로만 정해졌고 라벨 값과 무관하다. 그 뒤의 항목은 크기와 관계없이 모두 빠졌으므로 대표 표본이 아니다.",
   "single_event": {
    "k": 11,
    "n": 11,
@@ -627,6 +640,7 @@
     1.0
    ],
    "kappa_reference_only": 1.0,
+   "one_category_only": false,
    "disagreement_ids": []
   },
   "outlier_set_exact": {
@@ -638,6 +652,7 @@
     0.9838
    ],
    "kappa_reference_only": 0.7179,
+   "one_category_only": false,
    "disagreement_ids": [
     "r1-c29"
    ]
@@ -651,6 +666,7 @@
     1.0
    ],
    "kappa_reference_only": null,
+   "one_category_only": true,
    "disagreement_ids": []
   },
   "publishable": {
@@ -662,6 +678,7 @@
     0.9433
    ],
    "kappa_reference_only": 0.4118,
+   "one_category_only": false,
    "disagreement_ids": [
     "o1acd87ba0a",
     "o432cfeb6b5"
@@ -676,6 +693,7 @@
     0.9821
    ],
    "kappa_reference_only": 0.6154,
+   "one_category_only": false,
    "disagreement_ids": [
     "o432cfeb6b5"
    ]
@@ -689,6 +707,7 @@
     0.9821
    ],
    "kappa_reference_only": 0.6154,
+   "one_category_only": false,
    "disagreement_ids": [
     "o432cfeb6b5"
    ]
@@ -702,6 +721,7 @@
     0.9821
    ],
    "kappa_reference_only": 0.6154,
+   "one_category_only": false,
    "disagreement_ids": [
     "o432cfeb6b5"
    ]
@@ -715,6 +735,7 @@
     0.9433
    ],
    "kappa_reference_only": 0.375,
+   "one_category_only": false,
    "disagreement_ids": [
     "o1e0fd1317e",
     "o9ad5016cc8"
@@ -727,7 +748,12 @@
    "wilson95": [
     0.7225,
     1.0
-   ]
+   ],
+   "styles_seen": [
+    4,
+    5
+   ],
+   "always_true_by_range": true
   },
   "headline_mismatch": {
    "k": 9,
@@ -738,6 +764,7 @@
     0.9821
    ],
    "kappa_reference_only": 0.0,
+   "one_category_only": false,
    "disagreement_ids": [
     "o432cfeb6b5"
    ]
@@ -751,6 +778,7 @@
     1.0
    ],
    "kappa_reference_only": null,
+   "one_category_only": true,
    "disagreement_ids": []
   },
   "coverage_per_fact_same_facts": {
@@ -762,6 +790,7 @@
     0.9896
    ],
    "kappa_reference_only": 0.8767,
+   "one_category_only": false,
    "disagreement_ids": [
     "o1acd87ba0a#2",
     "o432cfeb6b5#2"
@@ -785,6 +814,7 @@
     0.732
    ],
    "kappa_reference_only": 0.1967,
+   "one_category_only": false,
    "disagreement_ids": [
     "o0d8d6d6ee0",
     "o1acd87ba0a",
@@ -810,6 +840,7 @@
     0.732
    ],
    "kappa_reference_only": 0.1967,
+   "one_category_only": false,
    "disagreement_ids": [
     "o0d8d6d6ee0",
     "o1acd87ba0a",
@@ -818,9 +849,10 @@
     "ob65239c2cc",
     "oc5801514de",
     "oca51eacbc4"
-   ]
+   ],
+   "exploratory_not_preregistered": true
   },
-  "note": "judge v2 shadow(첫 초안, 기본 임계값)와 자동 라벨러(런 a). 둘 다 Gemini - 같은 계열이고 어느 쪽도 정답이 아니다."
+  "note": "judge v2 shadow(첫 초안, 기본 임계값)와 자동 라벨러(런 a). 둘 다 Gemini - 같은 계열이고 어느 쪽도 정답이 아니다. judge 판정 × publishable은 A8.13 (c)5(A8.8 쓰임 4)의 계산이고, '근거 없는 주장 × 사실 오류'는 탐색(사전 등록 아님)이다."
  },
  "labeler_vs_cluster_evaluator": {
   "first_cluster_eval_vs_single_event": {
@@ -838,12 +870,14 @@
     0.9626
    ],
    "kappa_reference_only": 0.5946,
+   "one_category_only": false,
    "disagreement_ids": [
     "r1-c29",
     "r3-c2"
    ]
   },
-  "note": "ClusterEvaluator(judge 모델, 첫 판정)와 자동 라벨러(런 a). 같은 계열."
+  "exploratory_not_preregistered": true,
+  "note": "탐색(A8.13 (c)에 없는 비교): ClusterEvaluator(judge 모델, 첫 판정)와 자동 라벨러(런 a). 같은 계열."
  },
  "by_size_bucket_run_a": {
   "3-4": {
@@ -1355,8 +1389,10 @@
  "caveats": [
   "라벨러(gemini-3-flash-preview)·generator(gemini-3.5-flash-lite)·judge v2(gemini-3.1-flash-lite)가 모두 Gemini다(같은 계열). 라벨러 대 judge 일치는 독립 검증이 아니다.",
   "라벨러는 요청받은 '가장 강한 모델'이 아니다 - 비용 상한 $0.50 때문에 선정 규칙(A8.13 (b)1)이 고른 preview 모델이다.",
-  "기사당 앞 1500자만 보여 줬다(가이드는 전체 본문). 1500자 뒤에만 있는 사실을 초안이 맞게 썼다면 오류로 세므로 사실 오류율은 높게, 발행 가능률은 낮게 치우칠 수 있다.",
+  "기사당 앞 1500자만 보여 줬다(가이드는 전체 본문). 생성기가 보는 것(긴 순 기사 10건 × 앞 1500자)은 라벨러가 보는 것(모든 기사의 앞 1500자) 안에 있으므로, 이 창이 사실 오류율과 발행 가능률을 어느 쪽으로 치우치게 하는지는 이 자료로 정할 수 없다 (A8.13 (b)3의 '사실 오류를 늘리고 발행 가능률을 낮춘다'는 방향 서술은 A8.14에서 정정했다).",
   "thinking은 최소(minimal), temperature 1.0(기본값). 런 b는 재라벨 대상 + 예산 안의 나머지라 전 항목이 아니다.",
-  "n이 작다(클러스터 15, 출력 14). 비율의 Wilson 95% CI가 넓다. 가설 검정은 없다."
+  "n이 작다(클러스터 15, 출력 14). 비율의 Wilson 95% CI가 넓다. 가설 검정은 없다.",
+  "라벨러와 judge v2의 불일치 7건은 judge FAIL·라벨러 publishable 7건, judge PASS·라벨러 not publishable 0건이다(첫 초안 14건). 한쪽으로 쏠려 있다는 사실만 있고 어느 쪽이 맞는지는 모른다 - 라벨러가 judge보다 관대하거나 같은 계열 생성물에 호의적이어서 발행 가능률이 높게 나왔을 가능성도, judge가 엄격할 가능성도 배제하지 못한다.",
+  "응답의 modelVersion은 gemini-3-flash-preview뿐이라 프로토콜에 적은 models.list 버전(3-flash-preview-12-2025)으로 고정됐는지는 확인하지 못했다(preview 모델은 제공사가 동작을 바꿀 수 있다)."
  ]
 }

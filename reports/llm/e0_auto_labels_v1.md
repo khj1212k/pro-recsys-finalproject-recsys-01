@@ -7,7 +7,7 @@ E0 기준선(ADR 0009 A8)의 사람 라벨 자리를 자동 라벨러가 채운 
 | 항목 | 값 |
 |---|---|
 | command | "python -m evaluation.llm.e0_auto_label_report" |
-| head_sha | "51d1425229baebeafd5ebe08ed48f443898eeb48" |
+| head_sha | "ce611a0f84e5fe0f193b09e1a1f6eac043f05b4e" |
 | protocol | "e0-auto-labels-v1" |
 | protocol_sha256 | "b3aa857d6303227f4d4724892eae7b2325552b1fa67dada7421ed6460248a479" |
 | adr | "docs/adr/0009-llm-eval-protocol-and-preregistered-decision-rule.md#A8.13" |
@@ -28,7 +28,7 @@ E0 기준선(ADR 0009 A8)의 사람 라벨 자리를 자동 라벨러가 채운 
 | package_expires_at_utc | "2026-11-12T00:05:07Z" |
 | human_labels | "없음 - 사용자 결정(2026-10-17, ADR 0009 A8.13 (a))" |
 | results_viewed | "A8.13 커밋까지 자동 라벨 0건. 이 리포트가 자동 라벨의 첫 집계다" |
-| in_client_spend(run) | {"run_id": "e0-auto-labels-v1", "run_usd": 0.328228, "day_usd": 0.483842, "total_usd": 0.483842} |
+| in_client_spend(run·전체; 오늘 합은 다시 만드는 날마다 달라 싣지 않는다) | {"run_id": "e0-auto-labels-v1", "run_usd": 0.328228, "total_usd": 0.483842} |
 
 ## 1. 호출과 비용
 
@@ -53,7 +53,7 @@ E0 기준선(ADR 0009 A8)의 사람 라벨 자리를 자동 라벨러가 채운 
 - 라벨 15개, single_event 11/15 = 0.733 [0.480, 0.891], 이상치 있음 4/15 = 0.267 [0.109, 0.519], 주된 사건 없음 0
 - 핵심 사실 수 {"n": 15, "median": 5.0, "min": 4.0, "max": 6.0, "sum": 78.0}, 이상치 수 {"n": 15, "median": 0.0, "min": 0.0, "max": 5.0, "sum": 9.0}
 - 파이프라인 결과 × single_event(A8.8 쓰임 2): {"saved": {"single_event_Y": 11, "single_event_N": 3}, "skipped": {"single_event_Y": 0, "single_event_N": 1}}
-- ClusterEvaluator 첫 판정 × single_event: 13/15 = 0.867 [0.621, 0.963], κ(참고) 0.5946, 불일치 r1-c29, r3-c2, 표 {"pass_single_Y": 11, "pass_single_N": 2, "fail_single_Y": 0, "fail_single_N": 2}
+- [탐색 - 사전 등록 아님] ClusterEvaluator 첫 판정 × single_event: 13/15 = 0.867 [0.621, 0.963], κ(참고) 0.5946, 불일치 r1-c29, r3-c2, 표 {"pass_single_Y": 11, "pass_single_N": 2, "fail_single_Y": 0, "fail_single_N": 2}
 
 ## 4. 런 a - 출력 라벨
 
@@ -63,26 +63,27 @@ E0 기준선(ADR 0009 A8)의 사람 라벨 자리를 자동 라벨러가 채운 
 - style {"4": 4, "5": 10}; 제목·한줄소개 불일치 0/14 = 0.000 [0.000, 0.215]
 - 핵심 사실 커버리지(사실 단위) 58/74 = 0.784 [0.677, 0.862]; 기준 {"a": 14}
 - tone_drift(의미 기준, 저장 변환본) 0/14 = 0.000 [0.000, 0.215], 대상 아님 0
-- 결정론 검사기 대 자동 라벨(첫 초안, A8.8 쓰임 3의 계산 - 정답 대비가 아니다): {"precision": {"k": 0, "n": 0, "rate": null, "wilson95": null}, "recall_number": {"k": 0, "n": 0, "rate": null, "wilson95": null}, "recall_quote": {"k": 0, "n": 0, "rate": null, "wilson95": null}, "draft_level_2x2": {"blocked_and_error": 0, "blocked_no_error": 0, "passed_and_error": 0, "passed_no_error": 14}, "computed_values_counted_as_fp": null, "note": "A8.8 쓰임 3의 계산을 자동 라벨(런 a)에 그대로 한 값이다. 사람 정답이 아니므로 '정밀도·재현율'이 아니라 검사기 차단 구간 중 라벨러 구간과 겹친 비율(precision 칸), 라벨러 number·quote 구간 중 검사기와 겹친 비율(recall_* 칸)로 읽는다."}
-- 저장본: {"gate_miss_number_quote_errors": 0, "advisory_entity_precision": {"k": 0, "n": 3, "rate": 0.0, "wilson95": [0.0, 0.5615]}}
+- 결정론 검사기 대 자동 라벨(첫 초안, A8.8 쓰임 3의 계산 - 정답 대비가 아니다): {"checker_block_overlaps_labeler_span": {"k": 0, "n": 0, "rate": null, "wilson95": null}, "labeler_number_span_overlaps_checker": {"k": 0, "n": 0, "rate": null, "wilson95": null}, "labeler_quote_span_overlaps_checker": {"k": 0, "n": 0, "rate": null, "wilson95": null}, "draft_level_2x2": {"blocked_and_error": 0, "blocked_no_error": 0, "passed_and_error": 0, "passed_no_error": 14}, "computed_values_counted_as_fp": null, "note": "A8.8 쓰임 3의 계산을 자동 라벨(런 a)에 그대로 한 값이다. 사람 정답이 아니므로 '정밀도·재현율'이 아니라 검사기 차단 구간 중 라벨러 구간과 겹친 비율(checker_block_overlaps_labeler_span), 라벨러 number·quote 구간 중 검사기와 겹친 비율(labeler_*_span_overlaps_checker)로 읽는다."}
+- 저장본(정답 대비가 아니다): {"gate_miss_number_quote_errors": 0, "advisory_entity_flag_overlaps_labeler_span": {"k": 0, "n": 3, "rate": 0.0, "wilson95": [0.0, 0.5615]}, "note": "정답 대비가 아니다 - 참고 개체명 항목 중 라벨러 구간과 겹친 비율이다. 게이트 누락 건수는 라벨러가 센 number·quote 오류(저장본)다."}
 
 ## 5. 런 a 대 런 b (자기 일관성 - A8.8 재라벨 자리)
 
-- 둘 다 있는 것: 클러스터 11, 출력 10
+- 둘 다 있는 것: 클러스터 11, 출력 10; 런 b에 없는 것: 클러스터 r2-c8, r3-c11, r3-c2, r3-c52, 출력 o208f0f1a4c, o4c5eb0674a, oa50cd38cf2, oe245be876f
+- 런 b 선정: 재라벨 대상 + item_id 순서로 예산이 허락한 만큼이다. 멈춘 지점은 비용으로만 정해졌고 라벨 값과 무관하다. 그 뒤의 항목은 크기와 관계없이 모두 빠졌으므로 대표 표본이 아니다.
 - single_event 11/11 = 1.000 [0.741, 1.000], κ(참고) 1.0
-- 이상치 집합 완전 일치 10/11 = 0.909 [0.623, 0.984], κ(참고) 0.7179, 불일치 r1-c29; 주된 사건 유무 11/11 = 1.000 [0.741, 1.000], κ 정의 안 됨
+- 이상치 집합 완전 일치 10/11 = 0.909 [0.623, 0.984], κ(참고) 0.7179, 불일치 r1-c29; 주된 사건 유무 11/11 = 1.000 [0.741, 1.000], κ 정의 안 됨, 두 런 모두 한 범주만 냄(일치가 정보 없음)
 - publishable 8/10 = 0.800 [0.490, 0.943], κ(참고) 0.4118, 불일치 o1acd87ba0a, o432cfeb6b5; 라벨러 자신의 publishable 9/10 = 0.900 [0.596, 0.982], κ(참고) 0.6154, 불일치 o432cfeb6b5
 - 사실 오류 유무 9/10 = 0.900 [0.596, 0.982], κ(참고) 0.6154, 불일치 o432cfeb6b5; 오류 수 같음 9/10 = 0.900 [0.596, 0.982], κ(참고) 0.6154, 불일치 o432cfeb6b5
-- style 정확 8/10 = 0.800 [0.490, 0.943], κ(참고) 0.375, 불일치 o1e0fd1317e, o9ad5016cc8; ±1 10/10 = 1.000 [0.723, 1.000]
-- 제목 불일치 9/10 = 0.900 [0.596, 0.982], κ(참고) 0.0, 불일치 o432cfeb6b5; tone_drift 10/10 = 1.000 [0.723, 1.000], κ 정의 안 됨
+- style 정확 8/10 = 0.800 [0.490, 0.943], κ(참고) 0.375, 불일치 o1e0fd1317e, o9ad5016cc8; ±1 10/10 = 1.000 [0.723, 1.000], 관측된 값 [4, 5]이 한 칸 안이라 항상 참
+- 제목 불일치 9/10 = 0.900 [0.596, 0.982], κ(참고) 0.0, 불일치 o432cfeb6b5; tone_drift 10/10 = 1.000 [0.723, 1.000], κ 정의 안 됨, 두 런 모두 한 범주만 냄(일치가 정보 없음)
 - 커버리지(같은 핵심 사실, 사실 단위) 51/53 = 0.962 [0.873, 0.990], κ(참고) 0.8767, 불일치 o1acd87ba0a#2, o432cfeb6b5#2
 - κ는 정의되면 참고로만 적고 해석하지 않는다(A8.8 재라벨의 보고 규칙). 런 b의 coverage는 런 a의 핵심 사실로 물었다.
 
 ## 6. 라벨러 대 judge v2 shadow
 
 - judge 판정 × publishable: 7/14 = 0.500 [0.268, 0.732], κ(참고) 0.1967, 불일치 o0d8d6d6ee0, o1acd87ba0a, o9ad5016cc8, oa50cd38cf2, ob65239c2cc, oc5801514de, oca51eacbc4, 표 {"judge_pass_pub_Y": 4, "judge_pass_pub_N": 0, "judge_fail_pub_Y": 7, "judge_fail_pub_N": 3}
-- judge 근거 없는 주장 ≥1 × 라벨러 사실 오류 ≥1: 7/14 = 0.500 [0.268, 0.732], κ(참고) 0.1967, 불일치 o0d8d6d6ee0, o1acd87ba0a, o9ad5016cc8, oa50cd38cf2, ob65239c2cc, oc5801514de, oca51eacbc4, 표 {"judge_unsupported_ge1_err_Y": 3, "judge_unsupported_ge1_err_N": 7, "judge_unsupported_0_err_Y": 0, "judge_unsupported_0_err_N": 4}
-- judge v2 shadow(첫 초안, 기본 임계값)와 자동 라벨러(런 a). 둘 다 Gemini - 같은 계열이고 어느 쪽도 정답이 아니다.
+- [탐색 - 사전 등록 아님] judge 근거 없는 주장 ≥1 × 라벨러 사실 오류 ≥1: 7/14 = 0.500 [0.268, 0.732], κ(참고) 0.1967, 불일치 o0d8d6d6ee0, o1acd87ba0a, o9ad5016cc8, oa50cd38cf2, ob65239c2cc, oc5801514de, oca51eacbc4, 표 {"judge_unsupported_ge1_err_Y": 3, "judge_unsupported_ge1_err_N": 7, "judge_unsupported_0_err_Y": 0, "judge_unsupported_0_err_N": 4}
+- judge v2 shadow(첫 초안, 기본 임계값)와 자동 라벨러(런 a). 둘 다 Gemini - 같은 계열이고 어느 쪽도 정답이 아니다. judge 판정 × publishable은 A8.13 (c)5(A8.8 쓰임 4)의 계산이고, '근거 없는 주장 × 사실 오류'는 탐색(사전 등록 아님)이다.
 
 ## 7. 크기 버킷별(런 a)
 
@@ -145,6 +146,8 @@ E0 기준선(ADR 0009 A8)의 사람 라벨 자리를 자동 라벨러가 채운 
 
 - 라벨러(gemini-3-flash-preview)·generator(gemini-3.5-flash-lite)·judge v2(gemini-3.1-flash-lite)가 모두 Gemini다(같은 계열). 라벨러 대 judge 일치는 독립 검증이 아니다.
 - 라벨러는 요청받은 '가장 강한 모델'이 아니다 - 비용 상한 $0.50 때문에 선정 규칙(A8.13 (b)1)이 고른 preview 모델이다.
-- 기사당 앞 1500자만 보여 줬다(가이드는 전체 본문). 1500자 뒤에만 있는 사실을 초안이 맞게 썼다면 오류로 세므로 사실 오류율은 높게, 발행 가능률은 낮게 치우칠 수 있다.
+- 기사당 앞 1500자만 보여 줬다(가이드는 전체 본문). 생성기가 보는 것(긴 순 기사 10건 × 앞 1500자)은 라벨러가 보는 것(모든 기사의 앞 1500자) 안에 있으므로, 이 창이 사실 오류율과 발행 가능률을 어느 쪽으로 치우치게 하는지는 이 자료로 정할 수 없다 (A8.13 (b)3의 '사실 오류를 늘리고 발행 가능률을 낮춘다'는 방향 서술은 A8.14에서 정정했다).
 - thinking은 최소(minimal), temperature 1.0(기본값). 런 b는 재라벨 대상 + 예산 안의 나머지라 전 항목이 아니다.
 - n이 작다(클러스터 15, 출력 14). 비율의 Wilson 95% CI가 넓다. 가설 검정은 없다.
+- 라벨러와 judge v2의 불일치 7건은 judge FAIL·라벨러 publishable 7건, judge PASS·라벨러 not publishable 0건이다(첫 초안 14건). 한쪽으로 쏠려 있다는 사실만 있고 어느 쪽이 맞는지는 모른다 - 라벨러가 judge보다 관대하거나 같은 계열 생성물에 호의적이어서 발행 가능률이 높게 나왔을 가능성도, judge가 엄격할 가능성도 배제하지 못한다.
+- 응답의 modelVersion은 gemini-3-flash-preview뿐이라 프로토콜에 적은 models.list 버전(3-flash-preview-12-2025)으로 고정됐는지는 확인하지 못했다(preview 모델은 제공사가 동작을 바꿀 수 있다).
