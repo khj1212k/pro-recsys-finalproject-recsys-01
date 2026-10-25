@@ -5,6 +5,8 @@
 - downgrade: 'blocked_origin' -> 'fetch_failed'(시도 횟수를 상한 이상으로), 'rss_summary' -> 'dropped'(본문·임베딩을 비움,
   보존 잡이 이미 비운 행은 본문을 건드리지 않는다). 다른 상태의 행은 그대로이고, 이전 코드의 추출기가 다시 집지 않는다
 - 다시 upgrade해도 되돌린 행이 남는다
+- 요약 행의 같은 요약 조회를 받치는 부분 인덱스 ix_news_raw_content_sha256_rss_summary: upgrade가 만들고 downgrade가 지우며,
+  수집기의 중복 조회가 이 인덱스와 uq_news_raw_content_sha256_ok를 함께 탄다(순차 읽기 없음)
 
 모든 본문은 지어낸 문장이다.
 """
@@ -20,6 +22,8 @@ import pytest
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BEFORE = "f1db3221e45f"
 CAP = 3
+SUMMARY_INDEX = "ix_news_raw_content_sha256_rss_summary"
+OK_INDEX = "uq_news_raw_content_sha256_ok"
 
 
 def _alembic_config():
@@ -44,6 +48,13 @@ def _constraint(pg_conn):
         )
         definition, validated = cur.fetchone()
     return set(re.findall(r"'([a-z_]+)'", definition)), validated
+
+
+def _index_definition(pg_conn, name=SUMMARY_INDEX):
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT indexdef FROM pg_indexes WHERE tablename = 'news_raw' AND indexname = %s", (name,))
+        row = cur.fetchone()
+    return row[0] if row else None
 
 
 def _insert(pg_conn, press_id, url, status, content, attempts=0, length=None, purged=False, embedding_axis=None,
@@ -104,6 +115,7 @@ def test_previous_revision_rejects_the_new_statuses_and_head_accepts_them(databa
             press_id = _new_press(pg_conn, suffix)
             allowed, validated = _constraint(pg_conn)
             assert allowed == {"ok", "dropped", "empty", "fetch_failed", "error", "duplicate"} and validated
+            assert _index_definition(pg_conn) is None  # 이전 리비전에는 요약 해시 인덱스가 없다
             for status in ("rss_summary", "blocked_origin"):
                 with pytest.raises(psycopg2.errors.CheckViolation):
                     _insert(pg_conn, press_id, f"http://status/{suffix}/old-{status}", status, "지어낸 요약")
@@ -112,6 +124,9 @@ def test_previous_revision_rejects_the_new_statuses_and_head_accepts_them(databa
 
         allowed, validated = _constraint(pg_conn)
         assert allowed == set(NEWS_RAW_EXTRACT_STATUSES) and validated
+        definition = _index_definition(pg_conn)
+        assert definition and "(raw_news_content_sha256)" in definition and "rss_summary" in definition
+        assert "UNIQUE" not in definition  # 중복은 수집기가 막는다 - ON CONFLICT (raw_news_url)을 다른 인덱스 충돌로 깨지 않는다
         for status in ("rss_summary", "blocked_origin"):
             _insert(pg_conn, press_id, f"http://status/{suffix}/new-{status}", status, "지어낸 요약")
         with pytest.raises(psycopg2.errors.CheckViolation):
@@ -151,6 +166,7 @@ def test_downgrade_maps_the_new_statuses_and_leaves_other_rows_alone(database_ur
             command.downgrade(cfg, BEFORE)
             allowed, validated = _constraint(pg_conn)
             assert allowed == {"ok", "dropped", "empty", "fetch_failed", "error", "duplicate"} and validated
+            assert _index_definition(pg_conn) is None  # downgrade가 요약 해시 인덱스를 지운다
 
             # 'rss_summary' -> 'dropped': 본문 ''(길이 0), 임베딩 NULL, 해시는 남는다
             assert _row(pg_conn, ids["summary"]) == ("dropped", "", 0, 0, _sha(summary), False, False)
@@ -178,6 +194,7 @@ def test_downgrade_maps_the_new_statuses_and_leaves_other_rows_alone(database_ur
 
         allowed, validated = _constraint(pg_conn)
         assert "rss_summary" in allowed and "blocked_origin" in allowed and validated
+        assert _index_definition(pg_conn)  # 다시 올리면 인덱스도 다시 생긴다
         assert _row(pg_conn, ids["summary"])[:2] == ("dropped", "")  # 되돌린 행은 다시 올려도 돌아오지 않는다
         assert _row(pg_conn, ids["blocked_new"])[:3] == ("fetch_failed", "", CAP)
     finally:
@@ -194,3 +211,48 @@ def test_downgrade_refuses_a_bad_attempt_cap(database_url, pg_conn, monkeypatch)
     with pg_conn.cursor() as cur:  # 아무것도 바꾸지 않았다
         cur.execute("SELECT version_num FROM alembic_version")
         assert cur.fetchone()[0] != BEFORE
+
+
+class _PlanCursor:
+    """실행할 SQL마다 EXPLAIN을 먼저 떠 계획을 남기고 SQL을 그대로 실행한다."""
+
+    def __init__(self, cur):
+        self.cur, self.plan = cur, []
+
+    def execute(self, sql, params=None):
+        self.cur.execute("EXPLAIN " + sql, params)
+        self.plan.append("\n".join(row[0] for row in self.cur.fetchall()))
+        self.cur.execute(sql, params)
+
+    def fetchall(self):
+        return self.cur.fetchall()
+
+
+def test_summary_dedupe_lookup_uses_both_partial_indexes_instead_of_scanning_the_table(database_url, pg_conn):
+    """수집기의 같은 요약 조회(_existing_summary_hashes)는 'ok'를 uq_news_raw_content_sha256_ok로, 'rss_summary'를
+    ix_news_raw_content_sha256_rss_summary로 받는다. 순차 읽기를 꺼 두면(enable_seqscan = off) 술어를 플래너가 증명하지
+    못하는 조회는 순차 읽기로 떨어져 계획에 'Seq Scan on news_raw'가 남는다 - 상태 = ANY(...) 한 줄로 묻던 이전 조회가 그랬다
+    (VM에서 확인). 작은 테스트 테이블에서도 인덱스 사용 여부를 가리려고 순차 읽기를 끈다."""
+    from crawler.rss_collector import _existing_summary_hashes
+
+    digests = {hashlib.sha256(f"요약 {n}".encode("utf-8")).hexdigest() for n in range(3)}
+    with pg_conn.cursor() as cur:
+        cur.execute("SET enable_seqscan = off")
+        try:
+            probe = _PlanCursor(cur)
+            assert _existing_summary_hashes(probe, digests) == set()
+            (plan,) = probe.plan
+
+            # 이전 조회(상태 = ANY)는 같은 조건에서 인덱스를 못 탄다 - 이 테스트가 순차 읽기 회피를 실제로 가려낸다는 증거
+            old = _PlanCursor(cur)
+            old.execute(
+                "SELECT DISTINCT raw_news_content_sha256 FROM news_raw "
+                "WHERE raw_news_content_sha256 = ANY(%s) AND raw_news_extract_status = ANY(%s)",
+                (sorted(digests), ["ok", "rss_summary"]),
+            )
+            (old_plan,) = old.plan
+        finally:
+            cur.execute("RESET enable_seqscan")
+    assert OK_INDEX in plan and SUMMARY_INDEX in plan, plan
+    assert "Seq Scan on news_raw" not in plan, plan
+    assert "Seq Scan on news_raw" in old_plan, old_plan

@@ -75,12 +75,19 @@ def _summary_digest(summary: str) -> str:
 
 
 def _existing_summary_hashes(cur, digests) -> Set[str]:
-    """digests 가운데 SUMMARY_DEDUPE_STATUSES 행이 이미 갖고 있는 해시(같은 트랜잭션에서 앞서 넣은 행 포함)."""
-    cur.execute(
-        "SELECT DISTINCT raw_news_content_sha256 FROM news_raw "
-        "WHERE raw_news_content_sha256 = ANY(%s) AND raw_news_extract_status = ANY(%s)",
-        (sorted(digests), list(SUMMARY_DEDUPE_STATUSES)),
-    )
+    """digests 가운데 SUMMARY_DEDUPE_STATUSES 행이 이미 갖고 있는 해시(같은 트랜잭션에서 앞서 넣은 행 포함).
+
+    상태마다 SELECT를 따로 내고 UNION한다 - 상태 IN (...) 한 줄로 묻으면 플래너가 부분 인덱스의 술어
+    (uq_news_raw_content_sha256_ok의 상태 = 'ok', ix_news_raw_content_sha256_rss_summary의 상태 = 'rss_summary')를
+    함의로 증명하지 못해 news_raw 전체를 순차로 읽는다(VM EXPLAIN으로 확인, b7e4a1c93d52). 상태는 psycopg2가 SQL에 리터럴로
+    채워 넣으므로 플래너가 술어를 증명한다.
+    """
+    select = ("SELECT raw_news_content_sha256 FROM news_raw "
+              "WHERE raw_news_content_sha256 = ANY(%s) AND raw_news_extract_status = %s")
+    params = []
+    for status in SUMMARY_DEDUPE_STATUSES:
+        params += [sorted(digests), status]
+    cur.execute(" UNION ".join([select] * len(SUMMARY_DEDUPE_STATUSES)), params)
     return {row[0] for row in cur.fetchall()}
 
 

@@ -10,15 +10,25 @@
   (scripts/oci/close_donga_pending.sql이 쓴다).
 
 uq_news_raw_content_sha256_ok는 바꾸지 않는다. 같은 요약이 두 행에 들어가는 것은 수집기가 막는다(같은 해시의 'ok'/
-'rss_summary' 행이 이미 있으면 'duplicate'로 넣는다 - crawler/rss_collector.py).
+'rss_summary' 행이 이미 있으면 'duplicate'로 넣는다 - crawler/rss_collector.py). 그 조회가 'rss_summary' 쪽에서도 인덱스를
+타도록 부분 인덱스 ix_news_raw_content_sha256_rss_summary(해시, WHERE 상태 = 'rss_summary')를 더한다 - 'ok' 쪽은 기존
+uq_news_raw_content_sha256_ok가 덮는다. 유일 인덱스가 아니다: 수집기의 INSERT ... ON CONFLICT (raw_news_url) DO NOTHING이 다른
+인덱스의 충돌로 깨지면 안 되고, 중복 방지는 수집기가 맡는다. 이 인덱스가 없으면 조회의 조건(상태 IN ('ok', 'rss_summary'))이
+'ok'만 덮는 기존 인덱스의 술어를 함의하지 않아 플래너가 news_raw 전체를 순차로 읽는다(2026-10-25 VM EXPLAIN: Seq Scan,
+힙 54 MB·4.3만 행, 해시 50개에 0.18~0.52초(두 번 쟀다) - 동아일보 피드를 읽을 때마다, 테이블 크기에 비례해 늘어난다).
 
-락과 I/O (Tier 0: E2.1.Micro 1 GB, news_raw 약 3만 행 - 힙 28 MB):
-1. 제약을 넓히기만 하므로 기존 행은 모두 새 제약을 만족한다. DROP + ADD ... NOT VALID는 테이블을 읽지 않는다
+락과 I/O (Tier 0: E2.1.Micro 1 GB, news_raw 약 4만 행 - 힙 54 MB):
+1. 인덱스를 먼저 만든다 - 이 시점에 'rss_summary' 행이 없어 인덱스는 비지만, 만드는 동안 힙을 한 번 읽는다(SHARE 락:
+   읽기는 되고 쓰기만 기다린다, 1초 안팎). 같은 트랜잭션이라 그 락은 커밋까지 이어지므로 이 마이그레이션은 수집기가 도는
+   중에 돌리지 않는다(런북 6.9: 스케줄러를 멈춘 상태에서 한다). CONCURRENTLY를 쓰지 않는 이유: 다른 세션이 열어 둔 트랜잭션이
+   끝나기를 무한히 기다릴 수 있고, 이 크기에서는 얻는 것이 없다.
+2. 제약을 넓히기만 하므로 기존 행은 모두 새 제약을 만족한다. DROP + ADD ... NOT VALID는 테이블을 읽지 않는다
    (ACCESS EXCLUSIVE는 이 트랜잭션이 커밋될 때까지, 수 밀리초). lock_timeout 10초: 긴 트랜잭션이 news_raw를 잡고 있으면
    그 뒤에 줄을 서서 다른 쿼리까지 막는 대신 실패한다(f1db3221e45f와 같은 방식).
-2. 커밋한 뒤(autocommit 블록) VALIDATE한다 - SHARE UPDATE EXCLUSIVE라 읽기·쓰기를 막지 않는다.
+3. 커밋한 뒤(autocommit 블록) VALIDATE한다 - SHARE UPDATE EXCLUSIVE라 읽기·쓰기를 막지 않는다.
 
 downgrade는 이전 스키마에 없는 두 상태를 먼저 바꾼 뒤 제약을 좁힌다:
+- 인덱스 ix_news_raw_content_sha256_rss_summary를 지운다(아래 매핑으로 'rss_summary' 행이 없어진다).
 - 'blocked_origin' -> 'fetch_failed'이고 시도 횟수를 MAX_EXTRACT_ATTEMPTS(환경 변수, 없으면 3) 이상으로 올린다.
   이전 코드에서 "본문 요청이 계속 실패해 재시도를 마친 행"이 되어 다시 내려받지 않는다(본문은 처음부터 ''였다).
 - 'rss_summary' -> 'dropped'이고 본문을 ''(길이 0)로, 임베딩을 NULL로 비운다. 근거: 이전 코드에는 "본문이 아닌 텍스트를
@@ -37,6 +47,7 @@ Create Date: 2026-10-25 12:00:00.000000
 import os
 from typing import Sequence, Union
 
+import sqlalchemy as sa
 from alembic import context, op
 
 
@@ -50,12 +61,15 @@ depends_on: Union[str, Sequence[str], None] = None
 DDL_LOCK_TIMEOUT = "10s"
 VALIDATE_STATEMENT_TIMEOUT = "60s"
 CHECK_NAME = "ck_news_raw_extract_status"
+# 요약 행의 중복 조회용 부분 인덱스(모델 backend/app/models/news.py의 Index와 이름·열·술어가 같아야 한다).
+SUMMARY_HASH_INDEX = "ix_news_raw_content_sha256_rss_summary"
 
 OLD_EXTRACT_STATUSES = ("ok", "dropped", "empty", "fetch_failed", "error", "duplicate")
 EXTRACT_STATUSES = OLD_EXTRACT_STATUSES + ("rss_summary", "blocked_origin")
 
 # downgrade에서 'blocked_origin' 행의 시도 횟수를 올릴 상한. 추출기의 Settings.MAX_EXTRACT_ATTEMPTS와 같은 환경 변수·기본값
-# (config/settings.py)이다 - 마이그레이션은 앱 설정 모듈을 임포트하지 않는다. 컨테이너의 .env가 같은 값을 준다.
+# (config/settings.py)이다 - 마이그레이션은 앱 설정 모듈을 임포트하지 않는다. 같은 컨테이너 환경을 읽으므로 두 값이 같다.
+# compose는 이 변수를 컨테이너로 넘기지 않아(AI_ENV_FILE로 넘기는 경우만 예외) 호스트 .env에 적어도 소용없고, 기본 3이 된다.
 DEFAULT_MAX_EXTRACT_ATTEMPTS = 3
 SMALLINT_MAX = 32767
 
@@ -76,6 +90,16 @@ def _max_extract_attempts() -> int:
     if not 1 <= value <= SMALLINT_MAX:
         raise RuntimeError(f"MAX_EXTRACT_ATTEMPTS는 1 이상 {SMALLINT_MAX} 이하여야 한다: {value}")
     return value
+
+
+def _create_summary_hash_index() -> None:
+    op.create_index(
+        SUMMARY_HASH_INDEX,
+        "news_raw",
+        ["raw_news_content_sha256"],
+        postgresql_where=sa.text("raw_news_extract_status = 'rss_summary'"),
+        if_not_exists=True,
+    )
 
 
 def _replace_check(statuses) -> None:
@@ -104,6 +128,8 @@ def _validate_check() -> None:
 
 def upgrade() -> None:
     """Upgrade schema."""
+    op.execute(f"SET LOCAL lock_timeout = '{DDL_LOCK_TIMEOUT}'")
+    _create_summary_hash_index()
     _replace_check(EXTRACT_STATUSES)
     _validate_check()
 
@@ -127,5 +153,6 @@ def downgrade() -> None:
         "    embedding_result = NULL "
         "WHERE raw_news_extract_status = 'rss_summary'"
     )
+    op.drop_index(SUMMARY_HASH_INDEX, table_name="news_raw", if_exists=True)
     _replace_check(OLD_EXTRACT_STATUSES)
     _validate_check()

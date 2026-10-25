@@ -42,14 +42,32 @@ def _summary(n):
     return f"{n}번 지어낸 요약 문장이다. " * 30
 
 
-def _run(feeds, entries, existing_hashes=(), inserted="all"):
+def _run(feeds, entries, existing_hashes=(), inserted="all", existing_urls=(), sql_log=None):
     """collect_rss를 한 번 돌린다. 돌려주는 값: (INSERT SQL, INSERT 행, 해시 조회 인자 또는 None, collect_rss 결과).
-    inserted="all"이면 INSERT가 모든 행을 새로 넣은 것으로(RETURNING이 모든 URL), 목록이면 그 URL만 넣은 것으로 흉내낸다."""
+    inserted="all"이면 INSERT가 모든 행을 새로 넣은 것으로(RETURNING이 모든 URL), 목록이면 그 URL만 넣은 것으로 흉내낸다.
+    existing_urls는 DB에 이미 있는 URL(URL 조회가 돌려준다), existing_hashes는 같은 요약을 가진 행의 해시(해시 조회가 돌려준다).
+    sql_log(목록)를 주면 cur.execute가 받은 SQL을 차례로 담는다. INSERT 호출이 없었으면 INSERT SQL과 행은 None이다."""
     conn, cur = MagicMock(), MagicMock()
     conn.cursor.return_value.__enter__.return_value = cur
     conn.cursor.return_value.__exit__.return_value = False
     cur.fetchone.return_value = (1,)
-    cur.fetchall.return_value = [(h,) for h in existing_hashes]
+    last = {}
+
+    def fake_execute(sql, params=None):
+        last["sql"] = sql
+        if sql_log is not None:
+            sql_log.append(sql)
+
+    def fake_fetchall():
+        sql = last.get("sql", "")
+        if "WHERE raw_news_url = ANY" in sql:
+            return [(u,) for u in existing_urls]
+        if "raw_news_content_sha256" in sql:
+            return [(h,) for h in existing_hashes]
+        return []
+
+    cur.execute.side_effect = fake_execute
+    cur.fetchall.side_effect = fake_fetchall
     feed = MagicMock()
     feed.entries = entries
 
@@ -63,9 +81,12 @@ def _run(feeds, entries, existing_hashes=(), inserted="all"):
          patch("crawler.rss_collector.parse_feed_with_retry", return_value=feed), \
          patch("crawler.rss_collector.execute_values", side_effect=fake_execute_values) as ev:
         result = collect_rss()
-    _, args, _ = ev.mock_calls[0]
     lookups = [c for c in cur.execute.call_args_list if "raw_news_content_sha256" in str(c.args[0])]
-    return args[1], args[2], (lookups[0].args[1] if lookups else None), result
+    lookup_params = lookups[0].args[1] if lookups else None
+    if not ev.mock_calls:
+        return None, None, lookup_params, result
+    _, args, _ = ev.mock_calls[0]
+    return args[1], args[2], lookup_params, result
 
 
 def _by_url(rows):
@@ -177,10 +198,22 @@ def test_summary_already_stored_as_ok_or_rss_summary_is_inserted_as_a_duplicate(
     by_url = _by_url(rows)
     assert (by_url["http://s.example/5"][2], by_url["http://s.example/5"][6]) == ("", "duplicate")
     assert by_url["http://s.example/6"][6] == RSS_SUMMARY_STATUS
-    # 조회는 새 요약의 해시를 한 번에 물어보고, 'ok'와 'rss_summary' 행을 본다
-    hashes, statuses = lookup
-    assert digest in hashes and len(hashes) == 2
-    assert set(statuses) == set(SUMMARY_DEDUPE_STATUSES) == {"ok", "rss_summary"}
+    # 조회는 새 요약의 해시를 한 번에 물어보고, 'ok'와 'rss_summary' 행을 본다 - 상태마다 SELECT를 따로 내 UNION한다
+    # (파라미터: 해시 목록, 상태, 해시 목록, 상태)
+    hashes_ok, status_ok, hashes_summary, status_summary = lookup
+    assert digest in hashes_ok and len(hashes_ok) == 2 and hashes_ok == hashes_summary
+    assert {status_ok, status_summary} == set(SUMMARY_DEDUPE_STATUSES) == {"ok", "rss_summary"}
+
+
+def test_summary_dedupe_lookup_asks_each_status_separately_so_each_partial_index_can_be_used():
+    # 상태 = ANY(...) 한 줄로 물으면 부분 인덱스(uq_news_raw_content_sha256_ok: 'ok', ix_news_raw_content_sha256_rss_summary:
+    # 'rss_summary')의 술어를 플래너가 증명하지 못해 news_raw 전체를 순차로 읽는다(VM EXPLAIN으로 확인)
+    log = []
+    _run(FEEDS, [FakeEntry("http://s.example/p1", "제목", _recent(), summary=_summary(30))], sql_log=log)
+    (sql,) = [q for q in log if "raw_news_content_sha256" in q]
+    assert sql.count("raw_news_extract_status = %s") == len(SUMMARY_DEDUPE_STATUSES) == 2
+    assert sql.count("UNION") == 1
+    assert "raw_news_extract_status = ANY" not in sql and "IN (" not in sql
 
 
 def test_summary_stats_count_only_rows_that_were_really_inserted():

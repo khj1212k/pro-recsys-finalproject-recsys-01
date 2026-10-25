@@ -50,6 +50,12 @@ class NewsRaw(SQLModel, table=True):
             "uq_news_raw_content_sha256_ok", "raw_news_content_sha256", unique=True,
             postgresql_where=text("raw_news_extract_status = 'ok'"),
         ),
+        # 요약 행('rss_summary', 동아일보)의 같은 요약 조회용(b7e4a1c93d52, ADR 0026 2026-10-25). 유일 인덱스가 아니다 -
+        # 중복은 수집기가 막고, 이 인덱스는 'ok'만 덮는 위 인덱스로는 못 타는 조회를 받친다.
+        Index(
+            "ix_news_raw_content_sha256_rss_summary", "raw_news_content_sha256",
+            postgresql_where=text("raw_news_extract_status = 'rss_summary'"),
+        ),
         # 본문 보존(f1db3221e45f, ADR 0023): 비운 행에는 본문이 없고 길이가 남는다.
         CheckConstraint(
             "raw_news_content_purged_at IS NULL "
