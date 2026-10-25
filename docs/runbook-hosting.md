@@ -358,7 +358,7 @@ micro "$VMPSQL -c \"SELECT status, stats->>'purged' AS purged, stats->>'purged_b
   새로 추출한 본문에는 모두 길이가 있다. AI타임스 새 행은 KST로 맞게 저장된다(6.7의 경계 `2026-10-16 20:05:01` UTC).
 - 앞의 덤프 두 개는 6.5의 "최신 1개만" 대신 이미 정한 만료일(10-25·10-26)에 지운다.
 
-### 4.2 RSS 재시도 잡 `rss_retry` (2026-10-25, [ADR 0026](adr/0026-hosting-tiers-and-contingency.md) "2026-10-25 갱신 2" · 배포 대기)
+### 4.2 RSS 재시도 잡 `rss_retry` (2026-10-25, [ADR 0026](adr/0026-hosting-tiers-and-contingency.md) "2026-10-25 갱신 2" · 2026-10-25 배포)
 
 `python -m jobs.run rss_retry`가 매시 :40(popularity :35 뒤, `docker/crontab.micro`)에 **직전 ingest 실행이 읽지 못한 RSS 피드만** 다시 읽는다.
 동아일보 RSS는 VM에서 정시 회차의 약 75%가 `RemoteDisconnected`로 실패하고, 피드가 50건이라 읽기에 성공한 회차 사이가 6시간을 넘으면 그 사이
@@ -699,7 +699,7 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 30초 대기)와 우리 재시도 3번에 곱해진 결과다 — 09-26 ~ 10-17 ingest 418회에서 추출 시간 ≈ 181초 + 실패 기사 1건당
 120.5초(R² 0.96). VM의 IP 하나 때문인지, OCI 대역·일본 출발이라서인지는 가르지 못했다(VM이 한 대뿐).
 
-**코드의 대응(브랜치 `fix/extraction-donga-failures`, ADR 0026 결정 9 — Tier 0에는 아직 배포하지 않았다).**
+**코드의 대응(브랜치 `fix/extraction-donga-failures`, ADR 0026 결정 9 — Tier 0에는 아직 배포하지 않았다 - 2026-10-18 `e9864cf`로 배포(범위 종결 C-29)).**
 
 범위 종결 C-29 (2026-10-18): 완료(배포) - 2026-10-18 06:29~06:32 UTC에 4.1 절차로 main `e9864cf`(PR #37·#40)를 배포했고 6.5대로 백업 스크립트도 다시 깔았다. 배포 뒤 확인은 진행 중이다([목록](design/2026-10-18-scope-closure.md)).
 - 기사 요청 1번은 연결 10초·읽기 15초·전체 30초 상한, 숨은 재시도 없음. 같은 실행 안에서는 2번까지(대기 2초).
@@ -893,7 +893,9 @@ Mac 덤프(`data/backups/mac-compose-2026-09-26.dump`)의 AI타임스 행도 같
 - **시점: 재배포(1단계) 약 11시간 뒤, 호스트 밖 백업 직후.** 보정 전 값은 보관 표와 06:29 UTC의 백업 사본에 남아 있다.
 
 
-### 6.8 국민일보 본문 추출 붕괴 복구 (2026-10-19 ~, 아직 하지 않았다)
+### 6.8 국민일보 본문 추출 붕괴 복구 (2026-10-19 ~, 2026-10-25 적용)
+
+**2026-10-25 적용했다**: `2b74c25` 배포(03:28 UTC) 뒤 첫 ingest(04:05:01 UTC = until)를 확인하고 04:08 UTC에 1,195행(duplicate 707·ok 488)을 되돌렸다. 05:05 UTC ingest가 다시 받아 ok 1,083(중앙값 1,082자)·dropped 71·duplicate 40·fetch_failed 1이 됐다. 아래는 그 절차의 기록이다.
 
 **Tier 0는 2026-10-25 현재 옛 추출기(`e9864cf`)로 돌고 있어 국민일보 본문은 특집 카드 글이다.** 원인·증거는
 [ADR 0026](adr/0026-hosting-tiers-and-contingency.md) 결정 9 "2026-10-25 추가"와 증거 12다. 이 절은 고친 추출기를 올리고 영향 행 1,190건(2026-10-25 02:56 UTC 조회)을
@@ -997,12 +999,12 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 
 복구를 해도 **이중 수집된 같은 기사는 합쳐지지 않는다**(ADR 0026 결정 9 "하지 않은 것"). 국민일보 `raw_news_created_at`의 미래 시각(ADR 0026 증거 12 g)도 고치지 않는다.
 
-### 6.9 동아일보 RSS 요약 전환과 추출 대기 행 닫기 (2026-10-25, ADR 0026 C-31 · 배포 대기)
+### 6.9 동아일보 RSS 요약 전환과 추출 대기 행 닫기 (2026-10-25, ADR 0026 C-31 · 2026-10-25 배포)
 
 동아일보는 VM 출발지의 본문 요청을 거절한다. 이 변경이 배포된 뒤 수집기는 동아일보 RSS 요약을 본문 칸에 넣고 상태를 `rss_summary`로
 닫는다(요약이 350자 미만이거나 없으면 `dropped`, 같은 요약이 이미 있으면 `duplicate` - 본문 ''). 동아일보 서버에는 본문 요청을 보내지 않는다.
 배포 전 행 중 아직 추출 대기인 것은 한 번 닫는다(되돌릴 수 있다). 결정과 한계는 [ADR 0026](adr/0026-hosting-tiers-and-contingency.md)의
-"2026-10-25 결정 - 동아일보"다. **아직 배포하지 않았다.**
+"2026-10-25 결정 - 동아일보"다. **2026-10-25에 배포·적용했다**: `03b174c`(마이그레이션 15초), 05:09 UTC 대기 행 984 닫음(ADR 0026 "2026-10-25 갱신(배포·복구 기록)").
 
 **이 배포에는 Alembic 변경이 있다**: `f1db3221e45f` → `b7e4a1c93d52`(`ck_news_raw_extract_status`에 `rss_summary`·`blocked_origin`을 더하고, 같은 요약 조회용 부분 인덱스
 `ix_news_raw_content_sha256_rss_summary`를 만든다. 인덱스를 만드는 동안(힙을 한 번 읽는다, 54 MB에서 1초 안팎으로 추정 - 만들어 보지는 않았다) 쓰기가 기다리고 그 락이 커밋까지 이어지므로
