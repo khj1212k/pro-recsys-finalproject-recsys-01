@@ -1081,14 +1081,15 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 
 **Tier 0 DB는 2026-10-25 11:12 UTC에 보정했다**(441행, [ADR 0008](adr/0008-db-layer-pgvector-schema-and-upsert.md) "2026-10-25 갱신"). 국민일보 RSS의 `pubDate`로 저장한 `raw_news_created_at`이 수집 시각보다
 최대 24시간 뒤인 행이 있다(10-19 ~ 10-23 수집분 440행. 저장값 − 기사 페이지의 발행 시각이 -5.3 ~ +24.0시간이라 일정하지 않고, 식으로 고칠 수 없다). 이 절은 그 기록이자 같은 이상이 다시 났을 때의 절차다
-(10-25 10:05 UTC 수집분 27행에 다시 났다 - ADR 0026 증거 13 (7)). 원인은 모르고 수집기는 고치지 않았다.
+(10-25 10:05 UTC 수집분 27행에 다시 났다 - ADR 0026 증거 13 (7)). 원인은 모른다. **본문 추출기는 같은 날 뒤에 고쳤다**(ADR 0008 "2026-10-25 갱신 2": 저장된 발행 시각이 수집보다 10분 넘게 뒤인 행을 추출 때 기사 페이지 값으로 바꾼다.
+코드만 고쳤고 Tier 0에는 배포하지 않았다). 배포한 뒤 새로 들어오는 행은 스스로 고쳐지고, 이 절의 손 절차는 그 앞에 들어와 이미 추출이 끝난 행(아래 "수집기 수정과 2차 보정")과 수집기가 못 고친 행(페이지에 발행 시각이 없음 등)에 쓴다.
 
 SQL은 생성기가 만든다 - `scripts/oci/build_kmib_created_at_fix.py`(입력 CSV → 보정 SQL)와 되돌리기 `scripts/oci/fix_kmib_created_at_revert.sql`.
 CI의 PostgreSQL에서 `tests/integration/test_fix_kmib_created_at_sql.py`가, 생성기는 `tests/test_build_kmib_created_at_fix.py`가 먼저 돈다.
 
 지켜야 할 것:
 
-- **한 행은 한 번만 보정한다.** 생성한 SQL은 원래 값이 그대로인 행만 바꾸고, 보관 표 `news_raw_kmib_created_at_fix`가 이미 있으면 멈춘다. 이미 보정한 DB에서 새 행을 더 보정하려면 5단계의 "다시 보정할 때"를 본다.
+- **한 행은 한 번만 보정한다.** 생성한 SQL은 원래 값이 그대로인 행만 바꾸고, 보관 표 `news_raw_kmib_created_at_fix`가 이미 있으면 멈춘다. 이미 보정한 DB에서 새 행을 더 보정하려면 아래 "2차 보정"(보관 표를 따로 둬 1차 보정을 되돌리지 않는다)을 쓴다. 5단계의 "다시 보정할 때"는 1차 보관 표를 치우고 처음부터 다시 하는 방법이다.
 - **페이지 값이 사실이라는 것은 가정이다.** `datePublished`는 기사 페이지가 스스로 적은 발행 시각이다. 독립된 확인은 개편 전 RSS(구 URL)로 같은 기사를 이미 받은 16쌍(10분 안 16/16, 1분 안 13)뿐이라 대부분의 행은 간접 근거에 기댄다(ADR 0008). 결과 수치가 다른 언론사의 수집 지연(중앙 0.4 ~ 1.3시간)과 같은 범위인지 6단계처럼 본다.
 - **페이지는 Mac에서 받는다.** 기사당 한 번, 요청 사이 2초 이상, 응답에서 `datePublished` 값만 읽고 본문은 저장하지 않는다. VM에서 받지 않는다(1 GB 수집 서버의 요청을 늘릴 이유가 없다).
 - 수집이 도는 중에 적용해도 된다(대상 id의 행 단위 UPDATE, `lock_timeout` 5초). 그래도 :50~:59가 겹침이 가장 적다.
@@ -1189,6 +1190,175 @@ CI의 PostgreSQL에서 `tests/integration/test_fix_kmib_created_at_sql.py`가, �
    창(10-18 07:00 ~ 10-25 07:00 UTC) 수집 10,980행의 지연 p95: 보정 전 2.095시간(음수 440행 그대로) → 보정 후 2.443시간(ADR 0026 증거 13 (3)). 보정으로 음수 행은 440 → 1이 됐다.
    같은 날 10:05·11:05 UTC 수집분 27행은 이 보정에 들어 있지 않다. 이 441행의 보정 앞뒤 수치는 6.11의 질의(`C1`·`C5`)로 다시 잴 수 있다.
 
+#### 수집기 수정과 2차 보정 (ADR 0008 "2026-10-25 갱신 2", 코드만 - 배포·실행은 아직)
+
+**수집기(본문 추출기)가 하는 일.** `ai_workspace/crawler/content_extractor/page_pubdate.py`. 기사 페이지를 받은 뒤, 행의 저장된 발행 시각(`raw_news_created_at`)이 수집 시각(`raw_news_crawled_at`, 시간대 없는 UTC)보다 **10분 넘게 뒤**일 때만
+페이지의 JSON-LD `datePublished`(없으면 `<head>`의 `<meta property="article:published_time">`)로 바꾼다. 쓰는 값은 그 기사 자신의 것뿐이다 - JSON-LD는 **최상위 기사 노드**(`@type`이 `*Article`이나 `BlogPosting` 같은 게시물 형식이고 — `JobPosting`은 아니다 — 덩어리 최상위이거나 최상위 배열의 항목이거나 최상위 객체의 `@graph` 항목인 노드)의
+**문자열** `datePublished`만 받는다. 그런 노드가 여럿이면 문서 순서로 첫 노드가 정하고, 그 노드에 값이 없으면 JSON-LD 값은 없는 것이다(다음 노드·중첩된 관련 기사·`ItemList`·`image`·`WebPage`의 값으로는 넘어가지 않는다). 정상으로 읽힌 기사 노드가 있으면 깨진 JSON-LD 덩어리는 보지 않고,
+깨진 덩어리뿐일 때는 값이 하나이고 글자상 첫 `"@type"`이 Article 계열이며 그 값이 둘째 `"@type"`보다 앞에 있을 때만 쓴다. JSON-LD 값이 없거나 못 쓰면 meta를 본다(첫 `<body>` 뒤의 meta는 보지 않는다). **시각이 있는 페이지 값끼리(JSON-LD와 meta, meta와 meta) 10분 넘게 다르면 쓰지 않는다**(`conflict`; 날짜만 적은 값은 견주지 않고 시간대 있는 쪽을 쓴다). 페이지 값에 시간대가 있고, 수집 시각 + 10분 이하이고, 수집 시각 − 7일 이상일 때만 쓴다(위 3단계 생성기와 같은 조건).
+미래가 아닌 행은 읽지도 않는다. 언론사를 가리지 않는다. 추출 결과를 쓰는 같은 트랜잭션에서 쓰고, `WHERE`가 "지금도 미래일 때만"이라 먼저 고쳐진 행(예: 이 절의 보정)은 덮지 않는다.
+**ingest의 `stats.extract`에 남는 키:** `created_at_from_page`(언론사별로 바꾼 행 수), `created_at_unfixed`(미래였는데 못 바꾼 행의 언론사별 사유 개수 - `no_page_time` · `no_tz` · `conflict` · `after_crawl` · `too_old`, 그리고 `fetch_failed` · `error`. 그 행은 미래인 채 남는다),
+`created_at_fixed_rows`(바꾼 행의 `[raw_news_id, 바꾸기 전 값, 바꾼 뒤 값]`, 값은 UTC ISO, 행 번호순, 한 회차에 최대 200개)와 `created_at_fixed_rows_omitted`(200개를 넘어 목록에 못 넣은 행 수 - 그 행의 값은 컨테이너 로그에 남는다).
+`fetch_failed`(페이지를 못 받았다)·`error`(처리 중 예외로 롤백했다)로 끝난 미래 행은 그 시도에서 못 고치고 시도마다 이 두 사유로 센다 - 시도 상한(3회) 안에서 다시 받을 때 고친다. 동아일보는 RSS 요약이라 추출 단계를 거치지 않아 이 경로로는 고치지 못한다.
+
+**수집기가 바꾼 행 되돌리기.** 수집기는 같은 ingest 안에서 RSS 값을 넣고 몇 분 뒤 고치므로 원래 값이 DB의 다른 곳에도 매일 18:10 UTC 백업에도 남지 않는다 - `job_runs.stats.extract.created_at_fixed_rows`(`job_runs`는 백업된다)가 유일한 기록이다.
+되돌릴 ingest 회차의 `job_runs.id`를 정해(아래 "배포 뒤 확인"의 첫 질의가 `started_at`과 함께 보여 준다) 아래 읽기 전용 질의로 되돌리기 `UPDATE` 문장을 만든다. 문장은 "지금 값이 수집기가 쓴 값 그대로일 때만" 되돌리므로 그 뒤 다른 곳이 다시 바꾼 행은 덮지 않고(`UPDATE 0`),
+출력을 눈으로 확인한 뒤 `BEGIN; ... ROLLBACK;`으로 리허설하고 `COMMIT`한다.
+
+```sql
+-- revert_created_at_from_stats.sql (읽기 전용: UPDATE 문장만 출력한다. <run_ids>는 되돌릴 ingest 회차의 job_runs.id를 쉼표로)
+\set QUIET on
+SET default_transaction_read_only = on;
+\pset format unaligned
+\pset tuples_only on
+SELECT format('UPDATE news_raw SET raw_news_created_at = %L WHERE raw_news_id = %s AND raw_news_created_at = %L;',
+              r.value ->> 1, r.value ->> 0, r.value ->> 2)
+FROM job_runs j, jsonb_array_elements(j.stats -> 'extract' -> 'created_at_fixed_rows') AS r(value)
+WHERE j.job = 'ingest' AND j.id IN (<run_ids>)
+ORDER BY j.id, (r.value ->> 0)::bigint;
+```
+
+```bash
+# 1) UPDATE 문장 만들기(읽기 전용). 812, 813은 예시 - 되돌릴 회차의 id로 바꾼다
+sed 's/<run_ids>/812, 813/' revert_created_at_from_stats.sql \
+  | ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -U newsletter -d newsletter -f -" > revert_updates.sql
+wc -l revert_updates.sql   # 되돌릴 행 수 = 그 회차들의 created_at_fixed_rows 길이의 합. 문장을 눈으로 읽는다
+# 2) 리허설: 줄마다 UPDATE 1이 나오고(다시 바뀐 행은 UPDATE 0) 마지막에 ROLLBACK
+( echo 'BEGIN;'; cat revert_updates.sql; echo 'ROLLBACK;' ) \
+  | ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 -U newsletter -d newsletter -f -"
+# 3) 적용: 같은 명령의 ROLLBACK을 COMMIT으로
+( echo 'BEGIN;'; cat revert_updates.sql; echo 'COMMIT;' ) \
+  | ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 -U newsletter -d newsletter -f -"
+```
+
+**목록이 모자랄 수 있는 경우.**
+`created_at_fixed_rows_omitted`가 0이 아닌 회차는 목록이 모자란다(한 회차 200개 상한) - 모자란 행은 컨테이너 로그(`발행 시각을 바꾼 행이 목록 상한`)에서 찾는다.
+회차가 도중에 끊겨도 `stats.extract`는 남는다 - ingest가 추출기에 자기 `stats`를 넘겨 채우게 하므로 종료 신호(`docker compose stop`·재배포의 SIGTERM, scheduler의 정지 유예는 60초)나 예외로 빠져나올 때 `runtime`이 그때까지의 목록을 `job_runs`에 쓰고(`failed`),
+바꾼 행이 10개 쌓일 때마다 중간 저장도 한다(OOM/SIGKILL은 마지막 중간 저장까지가 남는다). 그래도 목록에 없을 수 있는 행이 둘 있다.
+① OOM/SIGKILL(`abandoned`)로 죽은 회차에서 마지막 중간 저장 뒤에 바꾼 행(최대 9개). ② 정지 신호가 잡의 프로세스 그룹 전체에 가므로 진행 중이던 워커 프로세스도 같이 끊긴다 - 커밋한 직후에 끊긴 행(워커 수 이하)은 부모가 결과를 받지 못해 목록에 없다.
+①의 원래 값은 컨테이너 로그의 `발행 시각을 기사 페이지 값으로 바꿨다: id=… 전=… 후=…` 줄에 있고(②는 로그에도 없다),
+**`docker compose up -d --build`는 scheduler 컨테이너를 다시 만들어 그 로그도 지운다.** 그래서 `failed`·`abandoned` 회차가 있으면 컨테이너를 다시 만들기 전에 `docker compose logs scheduler | grep '발행 시각을 기사 페이지 값으로'`로 먼저 뽑아 둔다.
+
+**배포 뒤 확인(읽기 전용).** 국민일보 새 행이 있는 회차에서 `created_at_from_page`에 국민일보 건수가 찍히는지, `created_at_unfixed`가 무엇으로 차는지 본다:
+
+```sql
+SELECT id, started_at AT TIME ZONE 'UTC' AS start_utc, git_sha,
+       stats->'extract'->'created_at_from_page' AS fixed, stats->'extract'->'created_at_unfixed' AS unfixed,
+       jsonb_array_length(stats->'extract'->'created_at_fixed_rows') AS listed, stats->'extract'->'created_at_fixed_rows_omitted' AS omitted
+FROM job_runs WHERE job = 'ingest' ORDER BY started_at DESC LIMIT 12;
+
+-- 배포 뒤 수집된 행에 미래 값이 남았는가 (<deploy>는 새 커밋의 첫 ingest 시작 시각, UTC). 아직 추출 대기인 행과 못 고친 행만 남아야 한다
+SELECT p.press_name, coalesce(n.raw_news_extract_status, 'NULL') AS status, count(*)
+FROM news_raw n JOIN press p USING (press_id)
+WHERE n.raw_news_crawled_at >= '<deploy>'
+  AND n.raw_news_created_at > (n.raw_news_crawled_at AT TIME ZONE 'UTC') + interval '10 minutes'
+GROUP BY 1, 2 ORDER BY 1, 2;
+```
+
+**지금 미래 시각인 행(Tier 0, 읽기 전용, 2026-10-25 12:31 UTC).** 저장된 발행 시각이 수집보다 10분 넘게 뒤인 행은 **30행이고 모두 국민일보**다(수집 10-25 29행 = 10시 25 · 11시 2 · 12시 2, 수집 10-20 1행 = 1차에서 페이지 값이 수집보다 뒤라 건너뛴 행).
+수집보다 17.75 ~ 23.78시간 뒤이고, 추출 상태는 `ok` 24 · `dropped` 6(모두 시도 1회 - 수집기가 이미 지나갔다). 다른 언론사는 DB 전체에서 0행이다. 1차 보관 표(441행)와 겹치는 행은 없다. 이 수는 배포 전까지 늘어난다 - 배포한 뒤 다시 센다:
+
+```sql
+-- future_counts.sql (읽기 전용)
+SELECT p.press_name, coalesce(n.raw_news_extract_status, 'NULL') AS status, count(*),
+       min(n.raw_news_crawled_at)::date AS first_crawl, max(n.raw_news_crawled_at)::date AS last_crawl
+FROM news_raw n JOIN press p USING (press_id)
+WHERE n.raw_news_created_at > (n.raw_news_crawled_at AT TIME ZONE 'UTC') + interval '10 minutes'
+GROUP BY 1, 2 ORDER BY 1, 2;
+```
+
+**2차 보정.** 수집기 수정이 닿지 않는 행 - 이미 추출이 끝난 행 - 을 고친다. **수정을 배포한 뒤 한 번** 한다(배포 전에 하면 그 사이 새 미래 행이 또 생긴다). 1차와 달리 언론사를 가리지 않고, 보관 표는 1차(`news_raw_kmib_created_at_fix`)와 따로
+`news_raw_created_at_fix_2`를 써서 1차 보정은 그대로 둔 채 더 고치고 따로 되돌린다. 위 1~6단계와 같은 모양이고 다른 곳만 적는다:
+
+1. **대상 뽑기(VM, 읽기 전용).** 지금 미래이면서 **수집기가 다시 고르지 않는** 행이다. 수집기가 다시 고르는 행은 빼는데, 배포한 수집기가 그 행을 받을 때 스스로 고치고 그 사이 값이 바뀌면 생성 SQL이 "원래 값이 그대로였다"며 통째로 멈추기 때문이다.
+   수집기(추출기의 대상 조회)가 고르는 행은 추출 상태가 `NULL`(아직 대기)이거나 `fetch_failed`·`error`이면서 시도 3회 미만(`Settings.MAX_EXTRACT_ATTEMPTS`)인 행 가운데,
+   본문을 비운 적이 없고(`raw_news_content_purged_at IS NULL`) 수집 뒤 30일 안(`BODY_RETENTION_DAYS`)인 행이다. 아래 질의는 이 조건을 **그대로 뒤집은 것**(`NOT (...)`)이라 미래 행은 수집기와 이 질의 가운데 정확히 한 쪽에 든다.
+   `NULL` 상태라도 수집 30일이 지났거나 본문을 비운 행은 수집기가 영영 고르지 않으므로 이 질의의 대상이다(그런 행을 빼면 아무도 못 고친다). 이 질의와 추출기의 대상 조회가 한 행도 겹치거나 빠지지 않는지는
+   `tests/integration/test_extract_created_at_from_page_db.py`가 상태 · 시도 횟수 · 수집 경과 · 본문 비움의 조합으로 본다.
+
+   ```sql
+   -- future_targets.sql
+   \set QUIET on
+   SET default_transaction_read_only = on;
+   \pset format unaligned
+   \pset fieldsep ','
+   \pset tuples_only on
+   SELECT n.raw_news_id, n.raw_news_url,
+          to_char(n.raw_news_created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+          to_char(n.raw_news_crawled_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+   FROM news_raw n
+   WHERE n.raw_news_created_at > (n.raw_news_crawled_at AT TIME ZONE 'UTC') + interval '10 minutes'
+     AND NOT ((n.raw_news_extract_status IS NULL
+               OR (n.raw_news_extract_status IN ('fetch_failed', 'error') AND n.raw_news_extract_attempts < 3))
+              AND n.raw_news_content_purged_at IS NULL
+              AND n.raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - interval '30 days')
+   ORDER BY n.raw_news_id;
+   ```
+
+   ```bash
+   ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -U newsletter -d newsletter -f -" < future_targets.sql > future_targets.csv
+   wc -l future_targets.csv   # 2026-10-25 12:31 UTC에는 30 (배포 전 기준 - 배포 뒤 다시 뽑는다)
+   ```
+
+2. **페이지 값 받기(Mac, 2초 간격).** 수집기와 **같은 판정**을 쓰려고 `page_pubdate.py`를 경로로 읽는다(표준 라이브러리만 쓴다). 입력은 1단계의 네 칸 CSV(`future_targets.csv`, 머리줄 없음)이고, 출력은 생성기가 받는 여섯 칸 CSV(`future_pub.csv`)다. 이 스크립트는 페이지 값 칸에 판정이 `fixed`일 때만 UTC 시각을 쓰며
+   아니면 비우고 오류 칸에 사유(`no_page_time` · `no_tz` · `conflict` · `after_crawl` · `too_old`)를 쓴다. 본문은 저장하지 않는다. 요청은 기사당 한 번이다.
+
+   ```python
+   # fetch_pub_2.py <입력 CSV> <출력 CSV> <저장소 루트>  (스크래치 폴더에 두고 python3 -I로 돌린다)
+   #   python3 -I fetch_pub_2.py future_targets.csv future_pub.csv <저장소 루트>
+   import collections, csv, importlib.util, sys, time, urllib.request
+   from datetime import datetime
+   src, out, repo = sys.argv[1:4]
+   spec = importlib.util.spec_from_file_location("page_pubdate", f"{repo}/ai_workspace/crawler/content_extractor/page_pubdate.py")
+   pp = importlib.util.module_from_spec(spec); sys.modules["page_pubdate"] = pp; spec.loader.exec_module(pp)
+   iso = lambda t: datetime.fromisoformat(t.replace("Z", "+00:00"))
+   outcomes = collections.Counter()
+   with open(out, "w", newline="") as f:
+       w = csv.writer(f)
+       for rid, url, created, crawled in csv.reader(open(src)):
+           pub, err = "", ""
+           try:
+               req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+               html = urllib.request.urlopen(req, timeout=20).read(2_000_000).decode("utf-8", "replace")
+               d = pp.decide_created_at(iso(created), iso(crawled), html)
+               pub, err = (d.value.isoformat(), "") if d.value else ("", d.outcome or "not_future")
+           except Exception as e:
+               err = type(e).__name__
+           outcomes[err or "fixed"] += 1
+           w.writerow([rid, url, created, crawled, pub, err]); f.flush()
+           time.sleep(2)
+   print(dict(outcomes), file=sys.stderr)
+   ```
+
+   이 일회성 요청은 수집기의 출발지·User-Agent와 상관없다 - 수집기는 바꾸지 않는다(ADR 0026 결정 9 "하지 않은 것"). 동아일보처럼 Mac에서도 거절하는 곳이 있으면 오류 칸이 차고 그 행은 건너뛴다. `not_future`가 나오면
+   대상을 뽑은 뒤 값이 바뀐 행이다(수집기가 고쳤다) - 생성기에 넣지 말고 1단계부터 다시 뽑는다.
+3. **SQL 만들기.** `--all-presses`와 둘째 보관 표 이름을 준다:
+
+   ```bash
+   python3 -I scripts/oci/build_kmib_created_at_fix.py future_pub.csv --all-presses --table news_raw_created_at_fix_2 > fix_created_at_2.sql   # stderr: rows=N skipped={...}
+   ```
+
+   `--press 국민일보`처럼 한 언론사로 좁힐 수도 있다(`--all-presses`와 함께는 못 쓴다). 보관 표 이름은 소문자·숫자·밑줄만 받는다. `skipped`가 0이 아닌 행은 보정하지 않는다(위 3단계와 같다). 2단계 스크립트가 페이지 값을 비운 행은 생성기에서 모두 `no_page_time`으로 세어지므로 사유별 개수는 2단계 스크립트가 stderr에 찍은 값을 본다.
+4. **리허설 → 적용.** 위 4단계와 같은 명령에 파일만 바꾼다:
+
+   ```bash
+   ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 -U newsletter -d newsletter -f -" < fix_created_at_2.sql             # 리허설: NOTICE fixed=N이 rows와 같아야 한다
+   ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 -v apply=1 -U newsletter -d newsletter -f -" < fix_created_at_2.sql   # 적용
+   ```
+
+   적용 뒤 읽기 전용으로: `SELECT count(*) FROM news_raw_created_at_fix_2;`가 `rows`와 같고, 위 `future_counts.sql`이 건너뛴 행과 아직 추출 대기인 행만 남기는지 본다.
+5. **되돌리기.** 2차 보관 표 이름을 바꾼 되돌리기 SQL을 생성기가 만든다(보관 표가 없으면 멈추고, 보정 뒤 값이 다시 바뀐 행이 있으면 덮지 않도록 멈춘다. 기본은 리허설). **1차 보관 표와 1차 보정은 건드리지 않는다**:
+
+   ```bash
+   python3 -I scripts/oci/build_kmib_created_at_fix.py --revert --table news_raw_created_at_fix_2 > revert_created_at_2.sql
+   ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 [-v apply=1] -U newsletter -d newsletter -f -" < revert_created_at_2.sql
+   # NOTICE: fix_kmib_created_at_revert restore=<n>
+   ```
+
+2차 보정 전의 값은 `news_raw_created_at_fix_2`에 있다. 6.11의 `C5`(보정 전 읽기)는 1차 보관 표만 읽으므로 2차 행의 보정 전 값은 반영하지 않는다(질의는 이번에 바꾸지 않았다). 배포와 2차 보정을 마친 뒤 6.11의 `C4` 줄에는 생성기가 건너뛴 행만 남는다.
+CI에서는 `tests/test_content_extractor_page_pubdate.py` · `tests/test_content_extractor_created_at.py`(수집기), `tests/test_build_kmib_created_at_fix.py`(생성기 인자), PostgreSQL의 `tests/integration/test_extract_created_at_from_page_db.py` ·
+`tests/integration/test_fix_kmib_created_at_sql.py`(2차 보정과 되돌리기)가 먼저 돈다. `test_extract_created_at_from_page_db.py`는 이 절의 `future_targets.sql`(2차 대상 질의)과 `revert_created_at_from_stats.sql`(수집기가 바꾼 행 되돌리기)을 이 문서에서 그대로 꺼내 돌린다. **이 절의 2차 보정은 실행하지 않았다.**
+
 ### 6.11 승격 기준 7일 창 재측정 (2026-10-25 판정, 2026-11-01 이후 재확인)
 
 [ADR 0026](adr/0026-hosting-tiers-and-contingency.md) 결정 3의 기준(7일 창에서 잡 성공률·OOM·수집 지연 p95, 매일 백업과 복원 검증)을 같은 질의로 다시 재는 절차다. 2026-10-25 판정(증거 13)은 일회용 질의로 했고,
@@ -1198,7 +1368,7 @@ CI의 PostgreSQL에서 `tests/integration/test_fix_kmib_created_at_sql.py`가, �
 순서:
 
 1. **국민일보 발행 시각 이상부터 정리한다.** 보정(6.10) 뒤에도 국민일보 새 행의 발행 시각이 수집보다 뒤인 이상이 다시 난다(2026-10-25 10:05 UTC 이후). 정리하지 않으면 재확인 창의 지연 p95를 읽을 수 없다
-   (10-25 07:00 ~ 12:00 UTC 조각에서는 미보정 27행이 음수로 잡혔다). 이 질의의 `C4` 줄이 비어 있도록 6.10을 먼저 돌린다.
+   (10-25 07:00 ~ 12:00 UTC 조각에서는 미보정 27행이 음수로 잡혔다). 이 질의의 `C4` 줄이 비어 있도록 6.10을 먼저 돌린다 - 수집기 수정(6.10 "수집기 수정과 2차 보정")을 배포한 뒤에는 새 행이 스스로 고쳐지므로 배포 전에 들어온 행만 2차 보정으로 한 번 정리하면 된다.
 2. **새 스키마의 복원 검증을 창 안에서 한 번 한다**(6.5의 "복원 검증", 버킷에서 받은 사본). 28일 주기 자동 검증(11-22 이후)은 재확인에 늦다. 결과는 `E2` 줄에 나온다 - 리비전이 지금 head(`b7e4a1c93d52`)여야 한다.
 3. **질의를 돌린다.** 창은 파일 앞의 `\set w0`·`\set w1` 두 줄이다(처음 값은 2026-10-25 판정 창 10-18 07:00 ~ 10-25 07:00 UTC). 재확인은 `w0`을 `2026-10-25 07:00+00`, `w1`을 `2026-11-01 07:00+00`으로 바꾼 사본을 쓴다 -
    **정시**여야 한다(정시 슬롯을 시 단위로 센다).

@@ -146,3 +146,81 @@ def test_apply_fixes_only_kmib_rows_and_revert_restores(psql_bin, database_url, 
     reverted = _run(psql_bin, database_url, schema, REVERT_SQL, "apply=1")
     assert reverted.returncode == 0, reverted.stderr
     assert _created(pg_conn, schema) == before
+
+
+def _generated(tmp_path, capsys, name, *cli_args):
+    """생성기의 명령줄(런북 6.10)과 같은 경로로 SQL 파일을 만든다."""
+    capsys.readouterr()
+    assert gen.cli(list(cli_args)) == 0
+    out = tmp_path / name
+    out.write_text(capsys.readouterr().out, encoding="utf-8")
+    return out
+
+
+def _audit_ids(pg_conn, schema, table):
+    with pg_conn.cursor() as cur:
+        cur.execute(f'SELECT raw_news_id FROM "{schema}".{table} ORDER BY 1')
+        return [r[0] for r in cur.fetchall()]
+
+
+def test_second_pass_for_all_presses_has_its_own_audit_table_and_reverts_without_touching_the_first(
+        psql_bin, database_url, pg_conn, schema, tmp_path, capsys):
+    """런북 6.10의 2차 보정: 1차 보관 표가 남아 있는 DB에서 다른 이름의 보관 표로, 언론사를 가리지 않고 보정한다."""
+    ids = _seed(pg_conn, schema)  # k1(국민일보) k2(국민일보) o1(경향신문)
+    before = _created(pg_conn, schema)
+
+    first_csv = tmp_path / "first.csv"
+    first_csv.write_text(f"{ids[0]},u1,2026-10-23T10:38:00Z,2026-10-22T19:07:00Z,2026-10-23T03:05:00+09:00,\n", encoding="utf-8")
+    first = _generated(tmp_path, capsys, "fix1.sql", str(first_csv))
+    assert _run(psql_bin, database_url, schema, first, "apply=1").returncode == 0
+    after_first = _created(pg_conn, schema)
+    assert after_first["k1"] != before["k1"]
+
+    second_csv = tmp_path / "second.csv"
+    second_csv.write_text(
+        f"{ids[1]},u2,2026-10-22T09:29:00Z,2026-10-21T19:06:00Z,2026-10-22T03:04:00+09:00,\n"
+        f"{ids[2]},u3,2026-10-22T09:29:00Z,2026-10-21T19:06:00Z,2026-10-22T03:04:00+09:00,\n", encoding="utf-8")
+    second = _generated(tmp_path, capsys, "fix2.sql", str(second_csv), "--all-presses", "--table", "news_raw_created_at_fix_2")
+
+    rehearsal = _run(psql_bin, database_url, schema, second)
+    assert rehearsal.returncode == 0, rehearsal.stderr
+    assert "fixed=2" in rehearsal.stderr and _created(pg_conn, schema) == after_first
+
+    done = _run(psql_bin, database_url, schema, second, "apply=1")
+    assert done.returncode == 0, done.stderr
+    after_second = _created(pg_conn, schema)
+    assert after_second["k2"] == datetime(2026, 10, 21, 18, 4, tzinfo=UTC)
+    assert after_second["o1"] == datetime(2026, 10, 21, 18, 4, tzinfo=UTC)  # 경향신문 행도 바뀐다
+    assert after_second["k1"] == after_first["k1"]  # 1차에 고친 행은 그대로
+    assert _audit_ids(pg_conn, schema, "news_raw_kmib_created_at_fix") == [ids[0]]
+    assert _audit_ids(pg_conn, schema, "news_raw_created_at_fix_2") == [ids[1], ids[2]]
+
+    again = _run(psql_bin, database_url, schema, second, "apply=1")
+    assert again.returncode == PSQL_SCRIPT_ERROR and "already exists" in again.stderr
+
+    revert = _generated(tmp_path, capsys, "revert2.sql", "--revert", "--table", "news_raw_created_at_fix_2")
+    reverted = _run(psql_bin, database_url, schema, revert, "apply=1")
+    assert reverted.returncode == 0 and "restore=2" in reverted.stderr, reverted.stderr
+    assert _created(pg_conn, schema) == after_first  # 2차만 되돌아가고 1차 보정은 남는다
+    assert _audit_ids(pg_conn, schema, "news_raw_kmib_created_at_fix") == [ids[0]]
+    with pg_conn.cursor() as cur:
+        cur.execute("SELECT to_regclass(%s)", (f'"{schema}".news_raw_created_at_fix_2',))
+        assert cur.fetchone()[0] is None  # 2차 보관 표는 지워졌다
+
+    assert _run(psql_bin, database_url, schema, REVERT_SQL, "apply=1").returncode == 0
+    assert _created(pg_conn, schema) == before
+
+
+def test_press_limit_still_holds_for_the_first_pass_when_a_row_of_another_press_is_listed(
+        psql_bin, database_url, pg_conn, schema, tmp_path, capsys):
+    """--all-presses를 쓰지 않으면 국민일보 밖의 행이 CSV에 있어도 바꾸지 못하고 멈춘다(예전과 같다)."""
+    ids = _seed(pg_conn, schema)
+    before = _created(pg_conn, schema)
+    csv_path = tmp_path / "mixed.csv"
+    csv_path.write_text(f"{ids[2]},u3,2026-10-22T09:29:00Z,2026-10-21T19:06:00Z,2026-10-22T03:04:00+09:00,\n", encoding="utf-8")
+    fix = _generated(tmp_path, capsys, "fix.sql", str(csv_path))
+
+    refused = _run(psql_bin, database_url, schema, fix, "apply=1")
+
+    assert refused.returncode == PSQL_SCRIPT_ERROR and "원래 값이 그대로였다" in refused.stderr
+    assert _created(pg_conn, schema) == before

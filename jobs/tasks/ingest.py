@@ -320,10 +320,15 @@ def run(ctx) -> Dict[str, Any]:
         if deadline_s is not None:
             # 다음 정시 회차와 겹치지 않게 하는 것은 추출 단계 길이가 아니라 잡이 끝나는 시각이다(ADR 0026 결정 9)
             budget_s = round(max(EXTRACT_MIN_BUDGET_S, deadline_s - (_clock() - job_started)), 1)
-        ctx.stats["extract"] = _timed(
-            ContentExtractor().extract_parallel_with_stats, args.workers, time_budget_s=budget_s,
+        # 추출기가 이 dict를 채운다(retention과 같은 방식). 추출 도중에 끊겨도(종료 신호 · 예외) runtime이 그때까지의 값을 job_runs에 남기고,
+        # ctx.checkpoint는 바꾼 행이 쌓일 때마다 중간 저장을 한다 - 바꾼 행의 원래 발행 시각(created_at_fixed_rows)이 DB 어디에도 없기 때문이다
+        extract_started = time.monotonic()
+        extract_stats = ctx.stats["extract"] = {}
+        ContentExtractor().extract_parallel_with_stats(
+            args.workers, time_budget_s=budget_s, stats=extract_stats, checkpoint=ctx.checkpoint,
         )
-        ctx.stats["extract"]["deadline_s"] = deadline_s
+        extract_stats["duration_s"] = round(time.monotonic() - extract_started, 3)
+        extract_stats["deadline_s"] = deadline_s
         ctx.checkpoint()
         check_extract_health(ctx, ctx.stats["extract"])
 
