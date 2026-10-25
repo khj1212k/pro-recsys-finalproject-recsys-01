@@ -393,7 +393,7 @@ oci compute instance get --instance-id $INSTANCE --query 'data."lifecycle-state"
 oci compute instance action --action START --instance-id $INSTANCE
 ```
 
-compose 서비스는 `restart: unless-stopped`라 부팅 후 스스로 올라온다. `job_runs`에 공백 시간대가 생기는데,
+2026-10-25(무료 체험 종료)부터 개발 Mac의 감시 루프(`.ops/micro_watch.sh`, git 제외)가 15분마다 상태만 읽어 `STOPPED`면 위 START를 보낸다 - 맥이 꺼져 있으면 이 절을 손으로 한다(ADR 0026 2026-10-25 갱신). compose 서비스는 `restart: unless-stopped`라 부팅 후 스스로 올라온다. `job_runs`에 공백 시간대가 생기는데,
 다음 ingest가 따라잡을 수 있는 공백은 **피드마다 다르다**(6.3).
 
 재부팅에서는 확인됐다: 2026-10-03 03:40 KST에 unattended-upgrades가 커널 업데이트로 예약 재부팅을 했고,
@@ -456,7 +456,8 @@ Tier 0는 고친 코드로 재배포돼 있어야 한다(아니면 A1과 Tier 0�
    arm64로 직접 빌드한다. `sudo docker compose up -d db`로 **DB만** 올린다(스케줄러는 아직 끈다).
 3. Mac 덤프를 복원한다(Alembic 리비전까지 덤프에 들어 있다 — Mac 덤프는 `d48994e9d26e`). 5단계 병합 SQL은
    본문 보존 열(`f1db3221e45f`, ADR 0023)을 쓰므로 **복원한 뒤 병합 전에** `sudo docker compose run --rm migrate`로
-   head까지 올린다. Tier 0도 4.1의 배포 뒤라면 `f1db3221e45f`다:
+   head까지 올린다(동아일보 요약 배포, 6.9 뒤의 Tier 0는 상태 `rss_summary`·`blocked_origin` 행을 갖고 있어 **대상이 `b7e4a1c93d52`
+   이상이어야** 한다 - 아니면 병합이 CheckViolation으로 되돌아간다). Tier 0도 4.1의 배포 뒤라면 `f1db3221e45f`다:
 
    ```bash
    scp -F <a1 ssh_config> data/backups/mac-compose-2026-09-26.dump a1:mac.dump
@@ -751,6 +752,8 @@ User-Agent도 똑같이 막혔다. 동아일보를 어디서 얼마나 수집할
 Tier 0 피드에서 빼기)는 정하지 않았다(사용자 결정 대기).
 
 범위 종결 C-31 (2026-10-18): 유보 - 소유자 결정이다. 결정 9를 배포한 뒤의 관측(미시도 잔량, 최종 `fetch_failed` 비율)이 판단 자료다.
+범위 종결 C-31 (2026-10-25 갱신): 결정 · 배포 대기 - 위 "정하지 않았다"는 10-18 시점의 기록이다. 소유자가 위임한 상태에서 넷째 안(동아일보 RSS 요약을 본문 칸에 저장)을
+택했다([ADR 0026](adr/0026-hosting-tiers-and-contingency.md) "2026-10-25 결정 — 동아일보는 RSS 요약으로 받는다", 6.9).
 
 ### 6.7 AI타임스 기존 행의 발행 시각 보정 (Tier 0는 2026-10-17에 했다)
 
@@ -952,6 +955,79 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 - 원래 ok였던 행은 본문을 보관하지 않아 되돌리지 못하고 미시도로 남는다. 보관 표와 함께 그 행의 이전 해시·길이 기록도 사라진다.
 
 복구를 해도 **이중 수집된 같은 기사는 합쳐지지 않는다**(ADR 0026 결정 9 "하지 않은 것"). 국민일보 `raw_news_created_at`의 미래 시각(ADR 0026 증거 12 g)도 고치지 않는다.
+
+### 6.9 동아일보 RSS 요약 전환과 추출 대기 행 닫기 (2026-10-25, ADR 0026 C-31 · 배포 대기)
+
+동아일보는 VM 출발지의 본문 요청을 거절한다. 이 변경이 배포된 뒤 수집기는 동아일보 RSS 요약을 본문 칸에 넣고 상태를 `rss_summary`로
+닫는다(요약이 350자 미만이거나 없으면 `dropped`, 같은 요약이 이미 있으면 `duplicate` - 본문 ''). 동아일보 서버에는 본문 요청을 보내지 않는다.
+배포 전 행 중 아직 추출 대기인 것은 한 번 닫는다(되돌릴 수 있다). 결정과 한계는 [ADR 0026](adr/0026-hosting-tiers-and-contingency.md)의
+"2026-10-25 결정 - 동아일보"다. **아직 배포하지 않았다.**
+
+**이 배포에는 Alembic 변경이 있다**: `f1db3221e45f` → `b7e4a1c93d52`(`ck_news_raw_extract_status`에 `rss_summary`·`blocked_origin`을 더하고, 같은 요약 조회용 부분 인덱스
+`ix_news_raw_content_sha256_rss_summary`를 만든다. 인덱스를 만드는 동안(힙을 한 번 읽는다, 54 MB에서 1초 안팎으로 추정 - 만들어 보지는 않았다) 쓰기가 기다리고 그 락이 커밋까지 이어지므로
+**스케줄러를 멈춘 상태에서 돌린다**(아래 2단계). 제약을 바꾸는 동안은 테이블 락이 잡혀 수 밀리초이고, 그 뒤 검증이 힙을 한 번 읽는다 - 읽기·쓰기를 막지 않는다). **새 이미지로 첫 ingest가 돌기 전에 `migrate`를 한다.** 제약이 그 두 상태를 모르는 채 새 수집기가 돌면 동아일보 INSERT가
+`CheckViolation`으로 피드째 실패해(`per_feed`의 `error`) 동아일보가 매시 0건이 되고, close SQL도 같은 이유로 멈춘다. `docker compose up`은 scheduler 앞에
+`migrate`를 돌리지만(compose `depends_on`), `run --rm worker ingest`처럼 손으로 띄우는 실행은 그렇지 않으므로 아래 2단계에서 따로 돌려 확인한다.
+
+**배포** (4.1의 절차를 쓴다. 이 변경에 맞춰 달라지는 곳만 적는다)
+
+1. 사전 확인은 4.1의 0단계와 같다(CI success, 도는 잡 없음, 메모리·디스크). 하나 더 - close SQL에 넘길 시도 횟수 상한을 **컨테이너 안의 실효값**으로
+   읽어 둔다. VM의 `.env`를 보지 않는다: compose는 `MAX_EXTRACT_ATTEMPTS`를 컨테이너로 넘기지 않아(`AI_ENV_FILE`로 넘기는 경우만 예외) `.env`에
+   무엇을 적어도 추출기와 마이그레이션은 설정 기본값을 쓴다(2026-10-25 VM: `.env`에 이 키가 없고 `fetch_failed` 행의 시도 횟수 최댓값이 3):
+   `micro 'cd ~/newsletter-recsys && sudo docker compose run --rm --no-deps --entrypoint python worker -c "from config.settings import Settings; print(Settings.MAX_EXTRACT_ATTEMPTS)"'` (기본 3).
+2. 스케줄러를 멈추고(4.1의 1단계) 백업을 당긴 뒤(2단계) 코드를 바꾸고 이미지를 다시 빌드하고(3·4단계), **마이그레이션을 돌린다**:
+
+   ```bash
+   micro 'cd ~/newsletter-recsys && time sudo docker compose run --rm migrate'
+   # 기대: "Running upgrade f1db3221e45f -> b7e4a1c93d52", "[migrate] 완료"
+   micro "$VMPSQL -At -c 'SELECT version_num FROM alembic_version'"   # b7e4a1c93d52
+   micro "$VMPSQL -At -c \"SELECT pg_get_constraintdef(oid), convalidated FROM pg_constraint WHERE conname = 'ck_news_raw_extract_status'\""
+   # 기대: 목록에 'rss_summary'와 'blocked_origin'이 있고 convalidated = t
+   micro "$VMPSQL -At -c \"SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_news_raw_content_sha256_rss_summary'\""
+   # 기대: ... (raw_news_content_sha256) WHERE ((raw_news_extract_status)::text = 'rss_summary'::text)
+   ```
+
+   그다음 스케줄러를 켠다(4.1의 7단계).
+3. 첫 정시 ingest가 끝난 뒤 동아일보 새 행의 상태를 본다. `raw_news_crawled_at`은 시간대 없는 UTC 값이라 기준도 UTC로 만든다:
+
+   ```bash
+   micro "$VMPSQL -c \"SELECT n.raw_news_extract_status, count(*) FROM news_raw n JOIN press p USING (press_id) \
+     WHERE p.press_name = '동아일보' AND n.raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - interval '2 hours' GROUP BY 1 ORDER BY 2 DESC\""
+   micro "$VMPSQL -c \"SELECT id, status, stats->'rss'->'per_feed'->'동아일보' AS donga FROM job_runs WHERE job = 'ingest' ORDER BY id DESC LIMIT 3\""
+   ```
+
+   기대: `rss_summary`가 대부분이고 `dropped`·`duplicate`가 조금(상태 NULL은 없다). `donga`의 `summary`에 stored·dropped·duplicate가 있다. 동아일보 RSS 읽기는 VM에서
+   75% 실패하므로(ADR 0026 한계) 한 회차의 `error`가 `RemoteDisconnected`이고 신규 0건인 것은 이 배포의 결함이 아니다 - 읽기에 성공한 회차를 본다.
+   `error`에 `CheckViolation`이 보이면 2단계의 마이그레이션이 적용되지 않은 것이다.
+
+**추출 대기 행 닫기**
+
+4. 리허설. `max_attempts`는 위 1단계에서 읽은 컨테이너의 `MAX_EXTRACT_ATTEMPTS`와 **같아야 한다**(기본 3). 다르면 "추출 대기"의 뜻이 추출기와 어긋나 닫을
+   행을 놓치거나 이미 끝난 행까지 닫는다:
+
+   ```bash
+   micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -U newsletter -d newsletter -v ON_ERROR_STOP=1 -v max_attempts=3 -f -" < scripts/oci/close_donga_pending.sql
+   # NOTICE close_donga closed=N, 끝이 ROLLBACK
+   ```
+
+   `ingest가 돌고 있다`로 멈추면(job_runs에 `running`인 ingest가 있다) 그 회차가 끝난 뒤 다시 한다. 프로세스가 죽어 남은 `running` 행이면 다음 ingest가 `abandoned`로 바꾼다.
+5. 적용: 같은 명령에 `-v apply=1`. 스크립트가 `job_runs`를 잠가 새 실행이 시작하지 못하게 하지만, 정시 ingest(:05)가 길어지는 날이 있으므로 :50~:59에 하면 겹침이 가장 적다.
+6. **다음 ingest가 끝난 뒤 대기 행이 0인지 다시 센다.** 닫은 직후 0이어도, 닫기 전 코드(이전 이미지)로 돈 수집이 넣은 행이나 그 사이 들어온 행이 남을 수 있다:
+
+   ```bash
+   micro "$VMPSQL -At -c \"SELECT count(*) FROM news_raw n JOIN press p USING (press_id) WHERE p.press_name = '동아일보' \
+     AND COALESCE(n.raw_news_content, '') = '' AND n.raw_news_content_purged_at IS NULL AND (n.raw_news_extract_status IS NULL \
+     OR (n.raw_news_extract_status IN ('fetch_failed', 'error') AND n.raw_news_extract_attempts < 3))\""   # 3 = 위 max_attempts. 0이어야 한다
+   ```
+
+   0이 아니면 새 이미지가 도는지(`docker compose ps`, `.env`의 `GIT_SHA`)를 보고, 이미 닫은 DB라 close SQL을 다시 돌릴 수 없으므로(보관 표가 있으면 멈춘다) 7단계로 되돌린 뒤 다시 닫는다.
+7. 되돌리기: `scripts/oci/close_donga_pending_revert.sql`(리허설 뒤 `-v apply=1`). 보관 표 `news_raw_donga_close_pending`가 있어야 하고, 도는 ingest가 있으면 멈춘다.
+   되돌리는 것은 상태와 시도 횟수뿐이다 - **본문 보존 잡(30일)이 닫은 뒤에 돈 행은 본문 칸이 이미 NULL이고 `raw_news_content_purged_at`이 찍혀 있어, 되돌려도 그 칸은 그대로이고 상태만 돌아온다**
+   (리허설의 NOTICE `purged=N`이 그 수다. 추출기는 비운 행을 다시 고르지 않는다).
+
+**코드를 되돌릴 때** - 이전 이미지는 `b7e4a1c93d52`를 몰라 그 `migrate`가 "Can't locate revision"으로 멈춘다(4.1의 R3와 같다). 새 이미지로 먼저
+`alembic downgrade f1db3221e45f`를 한다: 요약 해시 인덱스를 지우고, `blocked_origin`은 `fetch_failed`(시도 횟수를 `MAX_EXTRACT_ATTEMPTS` 이상으로)로, `rss_summary`는 `dropped`(본문 ''·임베딩 NULL, 이미 비운 행은 본문을
+그대로)로 바뀌고 요약 텍스트는 돌아오지 않는다.
 
 ## 7. Tier 0 내리기
 

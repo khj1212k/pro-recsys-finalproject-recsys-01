@@ -157,3 +157,53 @@ def test_db_loader_leaves_out_clusters_whose_bodies_were_purged(conn):
                 cur.execute("DELETE FROM news_raw WHERE raw_news_id = ANY(%s)", (ids["articles"],))
             if "press" in ids:
                 cur.execute("DELETE FROM press WHERE press_id = %s", (ids["press"],))
+
+
+def test_db_loader_leaves_out_clusters_with_rss_summary_articles(conn):
+    """본문 칸이 RSS 요약인 행(상태 'rss_summary', 동아일보 - ADR 0026 2026-10-25)은 본문이 비지 않았어도 표본에 넣지
+    않는다. 그런 기사가 든 클러스터는 후보에서 빠지고 수가 보고된다 - 요약이 '본문'으로 평가셋에 섞이지 않는다."""
+    from evaluation.llm.evalset import load_candidates_from_db
+
+    suffix = uuid.uuid4().hex[:10]
+    run_id = int(uuid.uuid4().int % 900_000_000) + 100_000_000
+    ids = {}
+    try:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO press (press_name) VALUES (%s) RETURNING press_id", (f"요약일보-{suffix}",))
+            press_id = cur.fetchone()[0]
+            ids["press"] = press_id
+            article_ids = []
+            for k in range(6):
+                status = "rss_summary" if k == 1 else "ok"
+                cur.execute(
+                    "INSERT INTO news_raw (press_id, raw_news_title, raw_news_content, raw_news_url, "
+                    "raw_news_crawled_at, raw_news_extract_status, raw_news_content_length) "
+                    "VALUES (%s, %s, %s, %s, NOW() AT TIME ZONE 'UTC', %s, %s) RETURNING raw_news_id",
+                    (press_id, f"제목{k}", f"합성 본문{k}", f"https://news.example/{suffix}/s{k}", status,
+                     len(f"합성 본문{k}")),
+                )
+                article_ids.append(cur.fetchone()[0])
+            ids["articles"] = article_ids
+            log = {"0": article_ids[:3], "1": article_ids[3:6]}
+            cur.execute(
+                "INSERT INTO cluster_history (run_id, cluster_log, created_at) VALUES (%s, %s, NOW()) "
+                "RETURNING history_id",
+                (run_id, json.dumps(log)),
+            )
+            ids["history"] = cur.fetchone()[0]
+
+        report = {}
+        candidates, articles = load_candidates_from_db(conn, report=report)
+
+        mine = {c.cluster_id for c in candidates if c.run_id == run_id}
+        assert mine == {1}
+        assert article_ids[1] not in articles
+        assert report["articles_body_summary"] >= 1 and report["clusters_without_body"] >= 1
+    finally:
+        with conn.cursor() as cur:
+            if "history" in ids:
+                cur.execute("DELETE FROM cluster_history WHERE history_id = %s", (ids["history"],))
+            if "articles" in ids:
+                cur.execute("DELETE FROM news_raw WHERE raw_news_id = ANY(%s)", (ids["articles"],))
+            if "press" in ids:
+                cur.execute("DELETE FROM press WHERE press_id = %s", (ids["press"],))

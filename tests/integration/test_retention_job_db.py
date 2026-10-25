@@ -16,7 +16,6 @@ import psycopg2
 import pytest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-HEAD = "f1db3221e45f"
 BEFORE = "a6f1e83b0d57"
 DIM = 1024
 
@@ -54,6 +53,14 @@ def _alembic_config():
     cfg = Config(os.path.join(REPO_ROOT, "backend", "alembic.ini"))
     cfg.set_main_option("script_location", os.path.join(REPO_ROOT, "backend", "alembic"))
     return cfg
+
+
+# 이 파일이 검증하는 리비전 f1db3221e45f 뒤에 리비전이 더해져도 "head까지 올렸다"를 확인하도록 head를 스크립트 디렉터리에서 읽는다
+# (b7e4a1c93d52가 head일 때 상수로 박아 두면 이 테스트가 CI에서 깨진다).
+def _head():
+    from alembic.script import ScriptDirectory
+
+    return ScriptDirectory.from_config(_alembic_config()).get_current_head()
 
 
 @pytest.fixture
@@ -467,7 +474,7 @@ def test_downgrade_does_not_resurrect_bodies_and_upgrade_backfills_lengths(datab
 
     with pg_conn.cursor() as cur:
         cur.execute("SELECT version_num FROM alembic_version")
-        assert cur.fetchone() == (HEAD,)
+        assert cur.fetchone() == (_head(),)
         cur.execute("SELECT conname, convalidated FROM pg_constraint WHERE conrelid = 'news_raw'::regclass "
                     "AND conname IN ('ck_news_raw_kogl_type', 'ck_news_raw_purged_body_gone')")
         assert dict(cur.fetchall()) == {"ck_news_raw_kogl_type": True, "ck_news_raw_purged_body_gone": True}

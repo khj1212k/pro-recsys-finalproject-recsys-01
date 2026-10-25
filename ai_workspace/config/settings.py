@@ -265,7 +265,10 @@ class BaseSettings:
     # 한국 밖 시간대로 내보내면서 시간대 표기를 빼는 피드를 추가하려면 그 가정부터 고쳐야 한다.
     RSS_FEEDS: Dict[str, Tuple[str, str]] = {
         # 종합 일간지
-        '동아일보': ('direct', 'https://rss.donga.com/total.xml'),
+        # 동아일보는 VM(OCI) 출발지의 본문 요청을 거절한다(ADR 0026 결정 9·증거 10) - 본문 대신 RSS 요약(약 500자)을
+        # 수집 때 바로 저장하고 본문 추출 대상에서 뺀다(상태 'rss_summary'. 요약이 짧거나 없으면 'dropped', 같은 요약이 이미
+        # 있으면 'duplicate' - 본문은 요청하지 않는다. crawler/rss_collector.py build_insert_rows, ADR 0026 2026-10-25 C-31 결정).
+        '동아일보': ('rss_summary', 'https://rss.donga.com/total.xml'),
         '경향신문': ('direct', 'https://www.khan.co.kr/rss/rssdata/total_news.xml'),
         '매일경제': ('direct', 'https://www.mk.co.kr/rss/30000001/'),
         '한국경제': ('direct', 'https://www.hankyung.com/feed/all-news'),

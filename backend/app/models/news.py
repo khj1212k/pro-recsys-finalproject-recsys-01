@@ -30,8 +30,11 @@ class RSS_URI(SQLModel, table=True):
     uri: str
 
 # 4. 원문 기사 (News_Raw)
-# 본문 추출 상태 (f87f7378672e, d48994e9d26e). NULL = 아직 시도 안 함.
-NEWS_RAW_EXTRACT_STATUSES = ("ok", "dropped", "empty", "fetch_failed", "error", "duplicate")
+# 본문 추출 상태 (f87f7378672e, d48994e9d26e, b7e4a1c93d52). NULL = 아직 시도 안 함.
+# 'rss_summary' = 본문 칸이 RSS 요약인 행(동아일보), 'blocked_origin' = 출발지 거절로 본문 없이 닫은 행 - ADR 0026 2026-10-25.
+NEWS_RAW_EXTRACT_STATUSES = (
+    "ok", "dropped", "empty", "fetch_failed", "error", "duplicate", "rss_summary", "blocked_origin",
+)
 
 
 class NewsRaw(SQLModel, table=True):
@@ -46,6 +49,12 @@ class NewsRaw(SQLModel, table=True):
         Index(
             "uq_news_raw_content_sha256_ok", "raw_news_content_sha256", unique=True,
             postgresql_where=text("raw_news_extract_status = 'ok'"),
+        ),
+        # 요약 행('rss_summary', 동아일보)의 같은 요약 조회용(b7e4a1c93d52, ADR 0026 2026-10-25). 유일 인덱스가 아니다 -
+        # 중복은 수집기가 막고, 이 인덱스는 'ok'만 덮는 위 인덱스로는 못 타는 조회를 받친다.
+        Index(
+            "ix_news_raw_content_sha256_rss_summary", "raw_news_content_sha256",
+            postgresql_where=text("raw_news_extract_status = 'rss_summary'"),
         ),
         # 본문 보존(f1db3221e45f, ADR 0023): 비운 행에는 본문이 없고 길이가 남는다.
         CheckConstraint(

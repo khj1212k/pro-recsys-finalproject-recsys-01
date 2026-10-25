@@ -33,6 +33,9 @@ MANIFEST_DIR = REPO_ROOT / "evaluation" / "llm" / "evalsets"
 BODIES_DIR = REPO_ROOT / "data" / "evalsets"
 
 UNCATEGORIZED = "미분류"
+# news_raw.raw_news_extract_status: 본문 칸이 RSS 요약인 행(동아일보, ADR 0026 2026-10-25). 값은 수집기의
+# crawler.rss_collector.RSS_SUMMARY_STATUS와 같다(tests/evaluation/test_evalset.py가 확인한다) - 이 모듈은 수집기를 임포트하지 않는다.
+RSS_SUMMARY_STATUS = "rss_summary"
 SIZE_BUCKETS: Tuple[Tuple[int, Optional[int], str], ...] = ((3, 4, "3-4"), (5, 9, "5-9"), (10, None, "10+"))
 # cluster_log의 클러스터 키가 아닌 부가 항목 (pipeline/stages.py가 함께 저장)
 _NON_CLUSTER_KEYS = {"clustering_stats", "cluster_meta", "cluster_outcomes"}
@@ -364,10 +367,13 @@ def load_candidates_from_db(conn, since: Optional[str] = None, until: Optional[s
                             ) -> Tuple[List[ClusterCandidate], Dict[int, ArticleRecord]]:
     """cluster_history의 클러스터와 그 기사들을 읽는다.
 
-    본문이 없는 기사 - 보존 기한(ADR 0023, 수집 후 30일)이 지나 비운 본문(NULL)과 빈 본문('') - 는 표본에
-    넣지 않는다: 그런 기사가 하나라도 있는 클러스터는 후보에서 빠진다(생성·판정 입력이 온전하지 않다).
-    report(dict)를 넘기면 빠진 수를 적는다: articles_body_purged, articles_body_empty, clusters_without_body."""
-    purged_ids, empty_ids = set(), set()
+    본문이 온전하지 않은 기사 - 보존 기한(ADR 0023, 수집 후 30일)이 지나 비운 본문(NULL), 빈 본문(''), 본문 칸이 RSS 요약인
+    기사(상태 'rss_summary', 동아일보, ADR 0026 2026-10-25) - 는 표본에 넣지 않는다: 그런 기사가 하나라도 있는
+    클러스터는 후보에서 빠진다(생성·판정 입력이 온전하지 않다). 운영 클러스터에는 요약 행이 들어가므로(그게 그 결정의
+    목적이다) 이 거름이 없으면 약 500자 요약이 '본문'으로 평가셋에 섞인다.
+    report(dict)를 넘기면 빠진 수를 적는다: articles_body_purged, articles_body_empty, articles_body_summary,
+    clusters_without_body."""
+    purged_ids, empty_ids, summary_ids = set(), set(), set()
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -393,15 +399,18 @@ def load_candidates_from_db(conn, since: Optional[str] = None, until: Optional[s
         cur.execute(
             """
             SELECT n.raw_news_id, n.raw_news_url, p.press_name, n.raw_news_title,
-                   n.raw_news_content, n.news_letter_id
+                   n.raw_news_content, n.news_letter_id, n.raw_news_extract_status
             FROM news_raw n JOIN press p ON p.press_id = n.press_id
             WHERE n.raw_news_id = ANY(%s)
             """,
             (sorted(all_ids),),
         )
         articles, letter_of = {}, {}
-        for rid, url, press, title, body, letter_id in cur.fetchall():
+        for rid, url, press, title, body, letter_id, extract_status in cur.fetchall():
             letter_of[int(rid)] = letter_id
+            if extract_status == RSS_SUMMARY_STATUS:
+                summary_ids.add(int(rid))  # 본문이 있어 보여도 RSS 요약이다
+                continue
             if not body:
                 (purged_ids if body is None else empty_ids).add(int(rid))
                 continue
@@ -440,15 +449,16 @@ def load_candidates_from_db(conn, since: Optional[str] = None, until: Optional[s
         for c in candidates_from_cluster_log(run_id, log, cats):
             if all(a in articles for a in c.article_ids):
                 candidates.append(c)
-            elif any(a in purged_ids or a in empty_ids for a in c.article_ids):
+            elif any(a in purged_ids or a in empty_ids or a in summary_ids for a in c.article_ids):
                 without_body += 1
     if report is not None:
         report.update({"articles_body_purged": len(purged_ids), "articles_body_empty": len(empty_ids),
-                       "clusters_without_body": without_body})
-    if purged_ids or empty_ids:
+                       "articles_body_summary": len(summary_ids), "clusters_without_body": without_body})
+    if purged_ids or empty_ids or summary_ids:
         logger.warning(
-            f"본문 없는 기사 {len(purged_ids) + len(empty_ids)}건(보존 기한으로 비움 {len(purged_ids)}건, "
-            f"빈 본문 {len(empty_ids)}건) - 그 기사가 든 클러스터 {without_body}개를 후보에서 뺐다"
+            f"온전한 본문이 없는 기사 {len(purged_ids) + len(empty_ids) + len(summary_ids)}건(보존 기한으로 비움 "
+            f"{len(purged_ids)}건, 빈 본문 {len(empty_ids)}건, RSS 요약 {len(summary_ids)}건) - "
+            f"그 기사가 든 클러스터 {without_body}개를 후보에서 뺐다"
         )
     return candidates, articles
 
@@ -517,7 +527,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"평가셋 {args.name}: eval {n_eval}개 / warmup {len(sample) - n_eval}개 (모집단 {len(candidates)}개)")
     if excluded.get("clusters_without_body"):
         print(f"  본문 없는 기사 때문에 뺀 클러스터: {excluded['clusters_without_body']}개 "
-              f"(보존 기한으로 비운 기사 {excluded['articles_body_purged']}건, 빈 본문 {excluded['articles_body_empty']}건)")
+              f"(보존 기한으로 비운 기사 {excluded['articles_body_purged']}건, 빈 본문 {excluded['articles_body_empty']}건, "
+              f"RSS 요약 {excluded['articles_body_summary']}건)")
     print(f"  매니페스트(커밋 대상): {manifest_path}")
     print(f"  본문(로컬 전용, gitignore): {bodies_path}")
     return 0

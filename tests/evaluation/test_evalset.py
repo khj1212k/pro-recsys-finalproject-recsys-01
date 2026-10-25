@@ -254,12 +254,12 @@ def test_db_loader_drops_clusters_with_purged_or_empty_bodies_and_reports_counts
     빠진 수가 보고된다. 본문이 NULL인 기사를 빈 문자열로 바꿔 그대로 쓰지 않는다."""
     log = {"0": [1, 2, 3], "1": [4, 5, 6], "2": [7, 8, 9]}
     rows = [
-        (1, "u1", "언론A", "제목1", "본문 1", None), (2, "u2", "언론A", "제목2", "본문 2", None),
-        (3, "u3", "언론A", "제목3", "본문 3", None),
-        (4, "u4", "언론B", "제목4", None, None), (5, "u5", "언론B", "제목5", "본문 5", None),
-        (6, "u6", "언론B", "제목6", "본문 6", None),
-        (7, "u7", "언론C", "제목7", "", None), (8, "u8", "언론C", "제목8", "본문 8", None),
-        (9, "u9", "언론C", "제목9", "본문 9", None),
+        (1, "u1", "언론A", "제목1", "본문 1", None, "ok"), (2, "u2", "언론A", "제목2", "본문 2", None, "ok"),
+        (3, "u3", "언론A", "제목3", "본문 3", None, "ok"),
+        (4, "u4", "언론B", "제목4", None, None, "ok"), (5, "u5", "언론B", "제목5", "본문 5", None, "ok"),
+        (6, "u6", "언론B", "제목6", "본문 6", None, "ok"),
+        (7, "u7", "언론C", "제목7", "", None, "duplicate"), (8, "u8", "언론C", "제목8", "본문 8", None, "ok"),
+        (9, "u9", "언론C", "제목9", "본문 9", None, "ok"),
     ]
     conn = _ScriptedConn([[(11, log)], rows])
     report = {}
@@ -269,4 +269,38 @@ def test_db_loader_drops_clusters_with_purged_or_empty_bodies_and_reports_counts
     assert [c.cluster_id for c in candidates] == [0]
     assert 4 not in articles and 7 not in articles
     assert all(a.body for a in articles.values())
-    assert report == {"articles_body_purged": 1, "articles_body_empty": 1, "clusters_without_body": 2}
+    assert report == {"articles_body_purged": 1, "articles_body_empty": 1, "articles_body_summary": 0,
+                      "clusters_without_body": 2}
+
+
+def test_db_loader_drops_clusters_with_rss_summary_articles_even_though_their_body_column_is_not_empty():
+    """동아일보 요약 행(상태 'rss_summary')은 본문 칸에 약 500자 요약이 있다 - 본문이 비지 않았다고 표본에 넣으면 요약이
+    '본문'으로 평가셋에 섞인다(ADR 0026 2026-10-25). 그런 기사가 든 클러스터는 후보에서 빠지고 수가 보고된다."""
+    log = {"0": [1, 2, 3], "1": [4, 5, 6]}
+    rows = [
+        (1, "u1", "동아일보", "제목1", "지어낸 요약 문장이다.", None, "rss_summary"),
+        (2, "u2", "언론A", "제목2", "본문 2", None, "ok"), (3, "u3", "언론A", "제목3", "본문 3", None, "ok"),
+        (4, "u4", "언론B", "제목4", "본문 4", None, "ok"), (5, "u5", "언론B", "제목5", "본문 5", None, "ok"),
+        (6, "u6", "언론B", "제목6", "본문 6", None, "ok"),
+    ]
+    conn = _ScriptedConn([[(12, log)], rows])
+    report = {}
+
+    candidates, articles = es.load_candidates_from_db(conn, report=report)
+
+    assert [c.cluster_id for c in candidates] == [1]
+    assert 1 not in articles
+    assert report == {"articles_body_purged": 0, "articles_body_empty": 0, "articles_body_summary": 1,
+                      "clusters_without_body": 1}
+    assert "n.raw_news_extract_status" in conn.cur.queries[1]  # news_raw 조회가 상태를 함께 읽는다
+
+
+def test_rss_summary_status_matches_the_collectors_constant():
+    import os
+    import sys
+
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                                    "ai_workspace"))
+    from crawler.rss_collector import RSS_SUMMARY_STATUS
+
+    assert es.RSS_SUMMARY_STATUS == RSS_SUMMARY_STATUS

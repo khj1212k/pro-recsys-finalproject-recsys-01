@@ -5,6 +5,10 @@
 --   * 같은 URL이 이미 있으면 대상 쪽 행을 그대로 둔다(ON CONFLICT DO NOTHING) - Mac 행에는 임베딩이 있다.
 --   * 새 URL인데 정제 본문 해시가 대상의 'ok' 행과 같으면 'duplicate'로 넣고 본문을 비운다
 --     (부분 UNIQUE uq_news_raw_content_sha256_ok, Alembic d48994e9d26e와 같은 규칙).
+--     원본 행이 'rss_summary'(동아일보 RSS 요약, ADR 0026 2026-10-25)면 대상의 'ok'뿐 아니라 'rss_summary' 행과 해시가 같을 때도
+--     'duplicate'다 - 수집기(crawler/rss_collector.py)가 같은 요약을 두 번 넣지 않는 규칙을 이 경로에서도 지킨다. 'rss_summary'
+--     쪽은 UNIQUE가 없어(부분 인덱스 ix_news_raw_content_sha256_rss_summary는 유일하지 않다) 이 규칙이 유일한 방어다.
+--     'blocked_origin' 행(본문 없이 닫은 행)은 해시가 없어 그대로 들어간다.
 --   * 병합된 행의 embedding_result는 NULL이다 - 대상 호스트의 embed 잡이 채운다.
 --   * 보존 기한(ADR 0023)이 지나 원본에서 본문을 비운 행(본문 NULL, raw_news_content_purged_at 있음)은 본문 없이
 --     비운 시각·길이·해시와 함께 들어간다 - 본문이 되살아나지 않는다. 원본에서 아직 비우지 않은 만료 본문은
@@ -14,7 +18,9 @@
 --     후보를 두 개 만들고 ON CONFLICT DO NOTHING이 그중 하나를 조용히 고르면, 행 수 검증은 통과하는데
 --     press_id가 임의로 정해지기 때문이다.
 --
--- 입력: Tier 0에서 뽑은 CSV (열 순서 고정, 헤더 포함). 원본과 대상 모두 Alembic f1db3221e45f 이상이어야 한다.
+-- 입력: Tier 0에서 뽑은 CSV (열 순서 고정, 헤더 포함). 원본은 Alembic f1db3221e45f 이상, **대상은 b7e4a1c93d52 이상**이어야 한다 -
+--   동아일보 요약 배포(런북 6.9) 뒤의 원본에는 상태 'rss_summary'·'blocked_origin' 행이 있고, 대상 제약이 두 상태를 모르면
+--   CheckViolation으로 병합 전체가 되돌아간다. 대상은 복원한 뒤 migrate로 head까지 올린다(런북 6.4의 3단계).
 --   psql -d newsletter -c "COPY (SELECT p.press_name, n.raw_news_title, n.raw_news_content, n.raw_news_url,
 --       n.raw_news_created_at, n.raw_news_crawled_at, n.raw_news_extract_status, n.raw_news_extracted_at,
 --       n.raw_news_extract_attempts, n.raw_news_content_sha256, n.raw_news_content_length,
@@ -94,12 +100,28 @@ WITH ins AS (
     FROM tier0_news_raw t
     JOIN press p ON p.press_name = t.press_name
     CROSS JOIN LATERAL (
-        SELECT t.raw_news_extract_status = 'ok' AND EXISTS (
-            SELECT 1 FROM news_raw k
-            WHERE k.raw_news_extract_status = 'ok'
-              AND k.raw_news_content_sha256 = t.raw_news_content_sha256
-              AND k.raw_news_url <> t.raw_news_url
-        ) AS hit
+        -- 상태마다 EXISTS를 따로 둔다: 각각 부분 인덱스(uq_news_raw_content_sha256_ok, ix_news_raw_content_sha256_rss_summary)를
+        -- 탄다. 상태 IN (...) 한 줄이면 행마다 news_raw 전체를 읽는다.
+        SELECT CASE t.raw_news_extract_status
+            WHEN 'ok' THEN EXISTS (
+                SELECT 1 FROM news_raw k
+                WHERE k.raw_news_extract_status = 'ok'
+                  AND k.raw_news_content_sha256 = t.raw_news_content_sha256
+                  AND k.raw_news_url <> t.raw_news_url
+            )
+            WHEN 'rss_summary' THEN EXISTS (
+                SELECT 1 FROM news_raw k
+                WHERE k.raw_news_extract_status = 'ok'
+                  AND k.raw_news_content_sha256 = t.raw_news_content_sha256
+                  AND k.raw_news_url <> t.raw_news_url
+            ) OR EXISTS (
+                SELECT 1 FROM news_raw k
+                WHERE k.raw_news_extract_status = 'rss_summary'
+                  AND k.raw_news_content_sha256 = t.raw_news_content_sha256
+                  AND k.raw_news_url <> t.raw_news_url
+            )
+            ELSE false
+        END AS hit
     ) dup
     ORDER BY t.raw_news_crawled_at, t.raw_news_url
     ON CONFLICT (raw_news_url) DO NOTHING

@@ -277,3 +277,48 @@ def test_merge_keeps_purged_rows_purged(database_url, pg_conn, psql_bin, tiers):
     assert rows[u["purged"]] == (None, "ok", SHA_B, 1234, True)
     assert rows[u["purged_dup"]] == (None, "duplicate", SHA_A, 99, True)
     assert rows[u["anchor"]][:2] == ("본문 A", "ok")
+
+
+def test_merge_keeps_the_no_duplicate_summary_rule_for_rss_summary_rows(database_url, pg_conn, psql_bin, tiers):
+    """동아일보 요약 행(ADR 0026 2026-10-25, 상태 'rss_summary')도 같은 요약이 두 행으로 들어가지 않는다. 'rss_summary'는
+    'ok'만 덮는 부분 UNIQUE 밖이라 수집기가 막던 불변식이다 - 병합이 URL만 달리해 같은 요약을 대상에 다시 넣으면 깨진다.
+    - 대상의 'rss_summary' 행과 해시가 같은 원본 요약 -> 'duplicate'(본문 ''), 해시는 남는다
+    - 대상의 'ok' 행과 해시가 같은 원본 요약 -> 'duplicate'
+    - 해시가 새로운 요약은 'rss_summary' 그대로, 'blocked_origin' 행(본문 없이 닫음)도 그대로 들어간다
+    대상은 b7e4a1c93d52 이상이어야 한다(스키마 복제가 head이므로 이 테스트의 대상은 둘 다 받는다)."""
+    src, dst = tiers
+    tag = uuid.uuid4().hex[:8]
+    u = {k: f"https://example.com/{tag}/{k}" for k in
+         ("dst_summary", "dst_ok", "same_summary", "same_as_ok", "new_summary", "blocked")}
+    dst_press = _add_press(pg_conn, dst, f"동아-{tag}")
+    src_press = _add_press(pg_conn, src, f"동아-{tag}")
+    _add_news(pg_conn, dst, dst_press, u["dst_summary"], title="대상 요약", content="요약 A", status="rss_summary",
+              sha=SHA_A)
+    _add_news(pg_conn, dst, dst_press, u["dst_ok"], title="대상 본문", content="본문 B", status="ok", sha=SHA_B)
+    _add_news(pg_conn, src, src_press, u["same_summary"], title="같은 요약 다른 URL", content="요약 A",
+              status="rss_summary", sha=SHA_A, crawled_at="2026-10-26 08:05:00")
+    _add_news(pg_conn, src, src_press, u["same_as_ok"], title="본문과 같은 요약", content="본문 B",
+              status="rss_summary", sha=SHA_B, crawled_at="2026-10-26 08:05:01")
+    _add_news(pg_conn, src, src_press, u["new_summary"], title="새 요약", content="요약 C", status="rss_summary",
+              sha=SHA_C, crawled_at="2026-10-26 08:05:02")
+    _add_news(pg_conn, src, src_press, u["blocked"], title="본문 없이 닫음", content="", status="blocked_origin",
+              attempts=0, crawled_at="2026-10-26 08:05:03")
+
+    done = _merge(psql_bin, database_url, dst, _export_csv(psql_bin, database_url, src))
+
+    assert done.returncode == 0, done.stderr
+    notice = NOTICE_RE.search(done.stderr)
+    assert notice, done.stderr
+    assert tuple(map(int, notice.groups())) == (2, 4, 4, 6, 6)
+
+    rows = _rows(pg_conn, dst)
+    assert (rows[u["same_summary"]]["status"], rows[u["same_summary"]]["content"], rows[u["same_summary"]]["sha"]) == (
+        "duplicate", "", SHA_A)
+    assert (rows[u["same_as_ok"]]["status"], rows[u["same_as_ok"]]["content"], rows[u["same_as_ok"]]["sha"]) == (
+        "duplicate", "", SHA_B)
+    assert (rows[u["new_summary"]]["status"], rows[u["new_summary"]]["content"], rows[u["new_summary"]]["sha"]) == (
+        "rss_summary", "요약 C", SHA_C)
+    assert (rows[u["blocked"]]["status"], rows[u["blocked"]]["content"], rows[u["blocked"]]["sha"]) == (
+        "blocked_origin", "", None)
+    # 대상 쪽 기존 행은 그대로다
+    assert (rows[u["dst_summary"]]["status"], rows[u["dst_ok"]]["status"]) == ("rss_summary", "ok")
