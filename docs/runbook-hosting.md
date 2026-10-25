@@ -358,7 +358,7 @@ micro "$VMPSQL -c \"SELECT status, stats->>'purged' AS purged, stats->>'purged_b
   새로 추출한 본문에는 모두 길이가 있다. AI타임스 새 행은 KST로 맞게 저장된다(6.7의 경계 `2026-10-16 20:05:01` UTC).
 - 앞의 덤프 두 개는 6.5의 "최신 1개만" 대신 이미 정한 만료일(10-25·10-26)에 지운다.
 
-### 4.2 RSS 재시도 잡 `rss_retry` (2026-10-25, [ADR 0026](adr/0026-hosting-tiers-and-contingency.md) "2026-10-25 갱신 2" · 배포 대기)
+### 4.2 RSS 재시도 잡 `rss_retry` (2026-10-25, [ADR 0026](adr/0026-hosting-tiers-and-contingency.md) "2026-10-25 갱신 2" · 2026-10-25 배포)
 
 `python -m jobs.run rss_retry`가 매시 :40(popularity :35 뒤, `docker/crontab.micro`)에 **직전 ingest 실행이 읽지 못한 RSS 피드만** 다시 읽는다.
 동아일보 RSS는 VM에서 정시 회차의 약 75%가 `RemoteDisconnected`로 실패하고, 피드가 50건이라 읽기에 성공한 회차 사이가 6시간을 넘으면 그 사이
