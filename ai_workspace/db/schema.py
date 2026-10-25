@@ -2,6 +2,21 @@ from db.connection import get_connection, release_connection
 
 
 
+# press 테이블 초기 언론사. RSS_FEED_SEEDS의 언론사 이름은 모두 여기에 있어야 한다(없으면 rss_uri 씨앗에서 press_id를 못 찾는다).
+PRESS_NAMES = [
+    '동아일보',
+    '경향신문',
+    '매일경제',
+    '한국경제',
+    '국민일보',
+    '세계일보',
+    '전자신문',
+    'AI타임스',
+    # RSS가 아니라 공공데이터포털 Open API로 수집한다(crawler/policy_briefing.py, ADR 0023)
+    '정책브리핑',
+]
+
+
 # RSS 피드 매핑 (언론사명, URI). config.settings.Settings.RSS_FEEDS와 같은 피드여야 한다
 # (tests/test_rss_feed_seeds.py가 확인한다 - 수집기는 Settings를 읽고, 이 목록은 rss_uri 테이블에 들어간다).
 RSS_FEED_SEEDS = [
@@ -38,18 +53,7 @@ def insert_initial_press_data():
     conn = get_connection()
     cur = conn.cursor()
 
-    press_list = [
-        '동아일보',
-        '경향신문',
-        '매일경제',
-        '한국경제',
-        '국민일보',
-        '세계일보',
-        '전자신문',
-        'AI타임스',
-        # RSS가 아니라 공공데이터포털 Open API로 수집한다(crawler/policy_briefing.py, ADR 0023)
-        '정책브리핑',
-    ]
+    press_list = PRESS_NAMES
 
     for press_name in press_list:
         try:
