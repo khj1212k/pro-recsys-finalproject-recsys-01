@@ -14,10 +14,12 @@ SSH는 `ssh -F .ops/micro/ssh_config micro`로 접속한다(전용 known_hosts�
 
 2026-09-26 17:00 KST부터(노트북 응답성을 위해 Mac 로컬 서버를 모두 내린 뒤)의 배치다. A1이 확보될 때까지
 **Tier 0가 유일한 수집기**이고, 기록 시스템은 "Mac 덤프(16:59 KST, 동결) + Tier 0 DB"의 합집합이다.
+2026-10-25부터 Tier 0는 승격 조건(ADR 0026 결정 3)을 충족한 기록 시스템이다 - 범위 한정(RSS 메타데이터와 일부 언론사 본문), 소유자 위임 아래 판단,
+증거는 ADR 0026 증거 13. 2026-11-01 07:00 UTC 이후 지금 코드의 7일 창으로 다시 확인하고 하나라도 못 미치면 "임시 단독 수집"으로 되돌린다.
 
 | 작업 | 개발(Mac) | Tier 0 (E2.1.Micro, 1 GB) | Tier 1 (A1, 2 OCPU/12 GB) |
 |---|---|---|---|
-| Postgres + pgvector | 꺼 둠 — 16:59 KST 덤프만 보관 | O — **유일한 수집 DB**(임시 단독 수집) | O (확보 시 기록 시스템) |
+| Postgres + pgvector | 꺼 둠 — 16:59 KST 덤프만 보관 | O — **유일한 수집 DB**(2026-10-25부터 기록 시스템, 범위 한정 - ADR 0026 증거 13. 그 전에는 "임시 단독 수집") | O (확보 시 기록 시스템) |
 | `ingest --stages rss,extract` 매시 | 꺼 둠 | O (추출 워커 2개) | O |
 | `rss_retry` 매시 :40 (직전 ingest가 못 읽은 피드만, 4.2) | 꺼 둠 | O | 정하지 않음 (`docker/crontab`에는 없다) |
 | `embed` (BGE-M3) | 필요할 때 수동(호스트 MPS) | **X** (모델 로드만 3.6 GB) | O (컨테이너 CPU) |
@@ -997,7 +999,7 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
   않는다(재시도 대상은 `fetch_failed`·`error`뿐, `config/retention.py`). 되돌린 뒤 본문을 받으려면 범위를 고쳐 복구 SQL을 다시 돌린다 - 보관 표를 지웠으므로 돈다.
 - 원래 ok였던 행은 본문을 보관하지 않아 되돌리지 못하고 미시도로 남는다. 보관 표와 함께 그 행의 이전 해시·길이 기록도 사라진다.
 
-복구를 해도 **이중 수집된 같은 기사는 합쳐지지 않는다**(ADR 0026 결정 9 "하지 않은 것"). 국민일보 `raw_news_created_at`의 미래 시각(ADR 0026 증거 12 g)도 고치지 않는다.
+복구를 해도 **이중 수집된 같은 기사는 합쳐지지 않는다**(ADR 0026 결정 9 "하지 않은 것"). 국민일보 `raw_news_created_at`의 미래 시각(ADR 0026 증거 12 g)은 이 절이 고치지 않는다 - 6.10이 기사 페이지 값으로 고친다.
 
 ### 6.9 동아일보 RSS 요약 전환과 추출 대기 행 닫기 (2026-10-25, ADR 0026 C-31 · 2026-10-25 배포)
 
@@ -1074,6 +1076,115 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 **코드를 되돌릴 때** - 이전 이미지는 `b7e4a1c93d52`를 몰라 그 `migrate`가 "Can't locate revision"으로 멈춘다(4.1의 R3와 같다). 새 이미지로 먼저
 `alembic downgrade f1db3221e45f`를 한다: 요약 해시 인덱스를 지우고, `blocked_origin`은 `fetch_failed`(시도 횟수를 `MAX_EXTRACT_ATTEMPTS` 이상으로)로, `rss_summary`는 `dropped`(본문 ''·임베딩 NULL, 이미 비운 행은 본문을
 그대로)로 바뀌고 요약 텍스트는 돌아오지 않는다.
+
+### 6.10 국민일보 발행 시각 보정 (2026-10-19 ~ 수집분, 2026-10-25 적용)
+
+**Tier 0 DB는 2026-10-25 11:12 UTC에 보정했다**(441행, [ADR 0008](adr/0008-db-layer-pgvector-schema-and-upsert.md) "2026-10-25 갱신"). 국민일보 RSS의 `pubDate`로 저장한 `raw_news_created_at`이 수집 시각보다
+최대 24시간 뒤인 행이 있다(10-19 ~ 10-23 수집분 440행. 저장값 − 기사 페이지의 발행 시각이 -5.3 ~ +24.0시간이라 일정하지 않고, 식으로 고칠 수 없다). 이 절은 그 기록이자 같은 이상이 다시 났을 때의 절차다
+(10-25 10:05 UTC 수집분 27행에 다시 났다 - ADR 0026 증거 13 (7)). 원인은 모르고 수집기는 고치지 않았다.
+
+SQL은 생성기가 만든다 - `scripts/oci/build_kmib_created_at_fix.py`(입력 CSV → 보정 SQL)와 되돌리기 `scripts/oci/fix_kmib_created_at_revert.sql`.
+CI의 PostgreSQL에서 `tests/integration/test_fix_kmib_created_at_sql.py`가, 생성기는 `tests/test_build_kmib_created_at_fix.py`가 먼저 돈다.
+
+지켜야 할 것:
+
+- **한 행은 한 번만 보정한다.** 생성한 SQL은 원래 값이 그대로인 행만 바꾸고, 보관 표 `news_raw_kmib_created_at_fix`가 이미 있으면 멈춘다. 이미 보정한 DB에서 새 행을 더 보정하려면 5단계의 "다시 보정할 때"를 본다.
+- **페이지 값이 사실이라는 것은 가정이다.** `datePublished`는 기사 페이지가 스스로 적은 발행 시각이고 독립된 출처로 확인하지 못했다(ADR 0008). 결과 수치가 다른 언론사의 수집 지연(중앙 0.4 ~ 1.3시간)과 같은 범위인지 6단계처럼 본다.
+- **페이지는 Mac에서 받는다.** 기사당 한 번, 요청 사이 2초 이상, 응답에서 `datePublished` 값만 읽고 본문은 저장하지 않는다. VM에서 받지 않는다(1 GB 수집 서버의 요청을 늘릴 이유가 없다).
+- 수집이 도는 중에 적용해도 된다(대상 id의 행 단위 UPDATE, `lock_timeout` 5초). 그래도 :50~:59가 겹침이 가장 적다.
+
+순서:
+
+1. **대상 뽑기(VM, 읽기 전용).** 새 URL 형식의 국민일보 행 중 저장된 발행 시각이 수집보다 뒤이거나 저장된 발행일(KST)이 URL 날짜의 하루 뒤인 행이다. `<from>`·`<until>`은 UTC 수집 시각이다
+   (처음에는 `2026-10-19`와 `2026-10-25`):
+
+   ```sql
+   -- kmib_targets.sql
+   \set QUIET on
+   SET default_transaction_read_only = on;
+   \pset format unaligned
+   \pset fieldsep ','
+   \pset tuples_only on
+   SELECT n.raw_news_id, n.raw_news_url,
+          to_char(n.raw_news_created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+          to_char(n.raw_news_crawled_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
+   FROM news_raw n JOIN press p USING (press_id)
+   WHERE p.press_name = '국민일보' AND n.raw_news_url LIKE 'https://www.kmib.co.kr/article/%'
+     AND n.raw_news_crawled_at >= '<from>' AND n.raw_news_crawled_at < '<until>'
+     AND ( n.raw_news_crawled_at < n.raw_news_created_at AT TIME ZONE 'UTC'
+           OR (n.raw_news_created_at AT TIME ZONE 'Asia/Seoul')::date
+              - to_date(substring(n.raw_news_url FROM '/article/([0-9]{8})'), 'YYYYMMDD') = 1 )
+   ORDER BY n.raw_news_id;
+   ```
+
+   ```bash
+   ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -U newsletter -d newsletter -f -" < kmib_targets.sql > kmib_targets.csv
+   wc -l kmib_targets.csv   # 2026-10-25: 442
+   ```
+
+2. **페이지 값 받기(Mac, 2초 간격).** 입력 CSV는 머리줄 없이 `raw_news_id, url, 보정 전 값, 수집 시각, 페이지 값, 오류`다. 먼저 10건 안팎을 받아 페이지 값이 대개 수집 시각보다 1시간 안쪽으로 이른지, 일정한 오프셋이 아닌지(저장값 − 페이지값)
+   보고 전수를 받는다. 이 일회성 요청은 수집기의 User-Agent·출발지와 상관없다 - 수집기는 바꾸지 않는다(ADR 0026 결정 9 "하지 않은 것"):
+
+   ```python
+   # fetch_pub.py <입력 CSV> <출력 CSV>  (스크래치 폴더에 두고 python3 -I로 돌린다)
+   import csv, re, sys, time, urllib.request
+   src, out = sys.argv[1], sys.argv[2]
+   rx = re.compile(r'"datePublished"\s*:\s*"([^"]+)"')
+   rows = list(csv.reader(open(src)))
+   with open(out, "w", newline="") as f:
+       w = csv.writer(f)
+       for rid, url, created, crawled in rows:
+           pub, err = "", ""
+           try:
+               req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+               html = urllib.request.urlopen(req, timeout=20).read(400_000).decode("utf-8", "replace")
+               m = rx.search(html); pub = m.group(1) if m else ""
+               if not pub: err = "no datePublished"
+           except Exception as e:
+               err = type(e).__name__
+           w.writerow([rid, url, created, crawled, pub, err]); f.flush()
+           time.sleep(2)
+   ```
+
+   442건이 약 15분 걸린다(요청 사이 2초). 오류 칸이 비지 않은 행은 생성기가 건너뛴다 - 많으면 멈추고 원인을 본다.
+3. **SQL 만들기.**
+
+   ```bash
+   python3 -I scripts/oci/build_kmib_created_at_fix.py kmib_pub.csv > fix_kmib_created_at.sql   # stderr: rows=441 skipped={...}
+   ```
+
+   `skipped`의 `after_crawl`(페이지 값이 수집보다 10분 넘게 뒤)·`too_old`(7일 넘게 앞)·`no_tz`·`no_page_time`이 0이 아니면 그 행은 보정하지 않는다(저장값이 그대로 남는다). 2026-10-25에는 `after_crawl` 1행이었다.
+4. **리허설 → 적용.** 기본은 리허설(ROLLBACK)이고 `-v apply=1`일 때만 COMMIT이다. 리허설의 `NOTICE: fix_kmib_created_at fixed=N`이 3단계의 `rows`와 같아야 한다. 스크립트가 기준을 스스로 확인하고 하나라도 어기면
+   예외로 멈춘다(psql 종료 코드 3, 아무것도 커밋되지 않음) - 보관 표가 이미 있음, 바꾼 행 수가 기대와 다름(원래 값이 그 사이 바뀐 행이 있음), 바꾼 뒤에도 발행 시각이 수집보다 10분 넘게 뒤인 대상 행이 남음.
+
+   ```bash
+   ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 -U newsletter -d newsletter -f -" < fix_kmib_created_at.sql             # 리허설
+   ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 -v apply=1 -U newsletter -d newsletter -f -" < fix_kmib_created_at.sql   # 적용
+   ```
+
+   적용 뒤 읽기 전용으로 확인한다:
+
+   ```sql
+   SELECT count(*) FROM news_raw_kmib_created_at_fix;     -- 3단계의 rows와 같다
+   SELECT count(*) FROM news_raw n JOIN press p USING (press_id)
+   WHERE p.press_name = '국민일보' AND n.raw_news_created_at > (n.raw_news_crawled_at AT TIME ZONE 'UTC') + interval '10 minutes';
+   -- 건너뛴 행과 아직 보정하지 않은 새 행만 남는다 (2026-10-25 11:12 UTC 직후 1행)
+   ```
+
+5. **되돌리기.** 보관 표의 원래 값으로 돌리고 보관 표까지 지운다. 보관 표가 없으면 멈추고, 보정 뒤 발행 시각이 다시 바뀐 행이 있으면 덮어쓰지 않도록 멈춘다. 기본은 리허설이다.
+
+   ```bash
+   ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 [-v apply=1] -U newsletter -d newsletter -f -" < scripts/oci/fix_kmib_created_at_revert.sql
+   # NOTICE: fix_kmib_created_at_revert restore=<n>
+   ```
+
+   **다시 보정할 때.** 이미 보정한 DB에 새로 들어온 행을 더 보정하려면 생성 SQL이 보관 표 때문에 멈추므로, 되돌리기로 보관 표를 치운 뒤 1단계부터 다시 한다 - 되돌린 행도 대상에 다시 들어간다(저장값이 원래 값으로 돌아왔다).
+   이미 받은 페이지 값은 새 CSV에 그대로 합쳐도 된다(보정 전 값이 되돌린 뒤의 값과 같다). 새 행만 받으면 된다.
+   보정 전에 만든 사본(2026-10-25 11:12 UTC 앞의 덤프 · 반출본 · 호스트 밖 백업)을 복원한 DB에도 같은 절차를 쓴다 - 보관 표가 없으므로 되돌리기는 필요 없다.
+6. **결과 수치(2026-10-25).** 대상 442행(수집 10-19 121 · 10-20 73 · 10-21 110 · 10-22 103 · 10-23 33 · 10-24 2), 페이지 대조 442건 오류 0, 생성기 `rows=441 skipped={'after_crawl': 1}`, 적용 11:12:47 UTC, 보관 표 441행.
+   저장값 − 페이지값 -5.29 ~ +23.98시간(중앙 19.38, 24시간 ±0.1시간 안 59행). 페이지 발행 → 수집은 중앙 0.72시간(3시간 넘는 63행이 두 회차에 모여 있고 나머지 378행은 3시간 안).
+   창(10-18 07:00 ~ 10-25 07:00 UTC) 수집 10,980행의 지연 p95: 보정 전 2.095시간(음수 440행 그대로) → 보정 후 2.443시간(ADR 0026 증거 13 (3)). 보정으로 음수 행은 440 → 1이 됐다.
+   같은 날 10:05·11:05 UTC 수집분 27행은 이 보정에 들어 있지 않다.
 
 ## 7. Tier 0 내리기
 
