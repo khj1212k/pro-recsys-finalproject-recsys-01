@@ -10,4 +10,4 @@
 
 차트는 [`scripts/portfolio_charts.py`](../../scripts/portfolio_charts.py)가 리포트 JSON에서 만든다([`docs/assets/README.md`](../assets/README.md)).
 
-원문 기사와 생성 초안의 텍스트는 [ADR 0023](../adr/0023-data-sources-copyright-retention.md) 때문에 싣지 않았다.
+원문 기사 본문은 [ADR 0023](../adr/0023-data-sources-copyright-retention.md) 때문에 싣지 않았다. 생성한 뉴스레터는 [데모](../demo/README.md)에 있다.
