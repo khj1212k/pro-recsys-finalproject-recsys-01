@@ -24,6 +24,35 @@ jobs:
       - name: ruff check
         run: uvx --from "ruff==0.16.9" ruff check --output-format=github .
 
+  # 프런트엔드(React + TypeScript) 타입 검사. 빌드는 하지 않고 tsc --noEmit만 돌린다(범위 종결 C-19).
+  # tsconfig.app.json은 strict가 꺼진 팀 시절 설정 그대로다 - 이 잡은 "지금 타입 오류가 없다"를 지키는 회귀 검사다.
+  frontend-typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm ci
+        run: npm ci --no-audit --no-fund
+
+      - name: tsc (app)
+        run: npx tsc -p tsconfig.app.json --noEmit
+
+      - name: tsc (node config)
+        run: npx tsc -p tsconfig.node.json --noEmit
+
   # 이 push·PR이 새로 들이는 커밋만 비밀 값을 검사한다. git 이력에는 평문 DB 비밀번호 유출 전력이 있지만
   # (tests/test_no_plaintext_db_password_in_env_example.py) 이력은 다시 쓰지 않으므로 옛 커밋은 보지 않는다.
   # 바이너리는 릴리스 체크섬으로 고정해 내려받는다. 설정: .gitleaks.toml
