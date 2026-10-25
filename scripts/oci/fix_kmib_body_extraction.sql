@@ -39,6 +39,9 @@
 --   - 대상이 0행이다 = boundary·until·press가 틀렸다
 --   - 대상이 max_rows를 넘는다 = 범위가 너무 넓다(기본 3000. 붕괴 엿새에 1,200행쯤이었다)
 --   - 대상 중 임베딩이 있거나 뉴스레터에 묶인 행이 있다 = 이 스크립트가 다루지 않는 후속 산출물이다 (먼저 처리한다)
+--   - until이 지금보다 뒤이거나, until 뒤에 고친 추출기로 돈 ingest가 없거나(job_runs의 stats.extract.body_container는 고친 추출기만
+--     남기는 키다), until 뒤에 옛 추출기로 돈 ingest가 있다 = 고친 추출기를 아직 배포하지 않았거나 until이 첫 ingest보다 이르다.
+--     옛 추출기가 도는 채로 되돌리면 다음 ingest가 되돌린 행을 같은 특집 글로 다시 채운다
 -- 트랜잭션을 연 채로 기다리지 않는다(스크립트가 한 번에 끝난다). 대상 행의 락을 잡는 동안 같은 행을 쓰는 잡이 기다린다.
 
 \set ON_ERROR_STOP on
@@ -68,6 +71,31 @@ SET LOCAL lock_timeout = '5s';
 SET LOCAL statement_timeout = '120s';
 SET LOCAL TIME ZONE 'UTC';
 SELECT set_config('fix_kmib.max_rows', :'max_rows', true) AS max_rows \gset fix_kmib_
+SELECT set_config('fix_kmib.until', :'until', true) AS until_value \gset fix_kmib_
+
+-- 고친 추출기가 배포됐는지 확인한다(운영자의 순서 지키기에만 기대지 않는다). 고친 추출기가 도는 ingest만 stats.extract에
+-- body_container 키를 남긴다(비어 있어도 있다 - crawler/content_extractor/extractor.py). extract 단계를 돌지 않은 실행은 세지 않는다.
+DO $$
+DECLARE
+    until_at timestamptz := current_setting('fix_kmib.until')::timestamptz;
+    fixed_runs bigint;
+    old_runs bigint;
+BEGIN
+    IF until_at > now() THEN
+        RAISE EXCEPTION 'until=%가 지금(%)보다 뒤다 - 고친 추출기의 첫 ingest started_at을 UTC로 적는다(런북 6.8 2단계)', until_at, now();
+    END IF;
+    SELECT count(*) FILTER (WHERE stats->'extract' ? 'body_container'),
+           count(*) FILTER (WHERE NOT (stats->'extract' ? 'body_container'))
+      INTO fixed_runs, old_runs
+    FROM job_runs
+    WHERE job = 'ingest' AND started_at >= until_at AND jsonb_typeof(stats->'extract') = 'object';
+    IF fixed_runs = 0 THEN
+        RAISE EXCEPTION 'until=% 뒤에 고친 추출기(stats.extract.body_container)로 돈 ingest가 없다 - 고친 추출기를 배포했는지, until이 그 첫 ingest의 started_at인지 확인한다(런북 6.8 1~2단계)', until_at;
+    END IF;
+    IF old_runs > 0 THEN
+        RAISE EXCEPTION 'until=% 뒤에 옛 추출기로 돈 ingest가 %회 있다 - until이 고친 추출기의 첫 ingest보다 이르거나 옛 추출기로 되돌렸다. 옛 추출기가 도는 채로 되돌리면 다음 ingest가 같은 특집 글로 다시 채운다', until_at, old_runs;
+    END IF;
+END $$;
 
 CREATE TABLE news_raw_kmib_extract_fix (
     raw_news_id integer PRIMARY KEY,

@@ -858,7 +858,8 @@ CI의 PostgreSQL에서 `tests/integration/test_fix_kmib_body_extraction_sql.py`�
 
 지켜야 할 것:
 
-- **고친 추출기를 먼저 배포한다.** 옛 추출기인 채로 SQL을 돌리면 되돌린 행을 다음 ingest가 같은 특집 글로 다시 채운다.
+- **고친 추출기를 먼저 배포한다.** 옛 추출기인 채로 SQL을 돌리면 되돌린 행을 다음 ingest가 같은 특집 글로 다시 채운다. 스크립트가 `job_runs`로 이를 확인한다 - `until` 뒤에 고친 추출기
+  (`stats.extract.body_container` 키)로 돈 ingest가 없거나 옛 추출기로 돈 ingest가 있거나 `until`이 지금보다 뒤이면 리허설도 멈춘다.
 - **`until`은 고친 추출기의 첫 ingest `started_at`이다.** 그 뒤에 추출된 행은 고친 추출기가 받은 것이라 건드리지 않는다. `boundary`는 붕괴 시작 직전이다 - 마지막 정상 추출(10-19 03:06:10 UTC)과
   첫 이상 추출(05:06:54 UTC) 사이면 된다: `2026-10-19 04:00:00+00`.
 - **본문은 보관 표에 복사하지 않는다**(ADR 0023). 되돌리기는 본문이 원래 없던 행(duplicate·dropped·empty)만 원상으로 돌린다. 원래 ok였던 행은 미시도로 남아 원본 페이지에서 다시 받는다.
@@ -909,7 +910,7 @@ CI의 PostgreSQL에서 `tests/integration/test_fix_kmib_body_extraction_sql.py`�
    기대: `linked`가 모두 0, 행 수가 위 숫자에서 크게 벗어나지 않는다(그 뒤로 옛 추출기가 돈 시간만큼 늘었다).
 4. **복구.** 기본 실행은 리허설이다(한 트랜잭션, 끝이 `ROLLBACK`). 출력을 보고 기준을 만족하면 `-v apply=1`을 더해 한 번 더 돈다. 스크립트가 기준을 스스로 확인하고 하나라도 어기면 예외로 멈춘다
    (psql 종료 코드 3, 아무것도 커밋되지 않음) - 보관 표 `news_raw_kmib_extract_fix`가 이미 있음(이미 복구한 DB), 대상 0행(`boundary`·`until` 확인), 대상이 `max_rows`(기본 3000)를 넘음,
-   임베딩·뉴스레터에 묶인 행이 있음.
+   임베딩·뉴스레터에 묶인 행이 있음, 고친 추출기를 배포하지 않았거나 `until`이 틀림(위 "지켜야 할 것").
 
    ```bash
    B='2026-10-19 04:00:00+00'; U='<2단계의 until, UTC>'

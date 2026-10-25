@@ -5,6 +5,7 @@
 스크립트는 테이블 이름에 스키마를 붙이지 않으므로 PGOPTIONS의 search_path로 그 스키마를 고른다(보관 표도 그 스키마에 생긴다).
 public에는 아무것도 쓰지 않는다. 본문은 모두 지어낸 짧은 글이다(ADR 0023).
 """
+import json
 import os
 import re
 import shutil
@@ -41,6 +42,7 @@ def schema(pg_conn):
         cur.execute(f'CREATE SCHEMA "{name}"')
         cur.execute(f'CREATE TABLE "{name}".press (LIKE public.press INCLUDING ALL)')
         cur.execute(f'CREATE TABLE "{name}".news_raw (LIKE public.news_raw INCLUDING ALL)')
+        cur.execute(f'CREATE TABLE "{name}".job_runs (LIKE public.job_runs INCLUDING ALL)')
     try:
         yield name
     finally:
@@ -94,8 +96,30 @@ def _news(pg_conn, schema, press_id, key, status, extracted_at, sha=None, length
         )
 
 
+def _job_run(pg_conn, schema, job, started_at, stats):
+    with pg_conn.cursor() as cur:
+        cur.execute(
+            f'INSERT INTO "{schema}".job_runs (job, started_at, finished_at, status, stats) '
+            "VALUES (%s, %s, %s, 'succeeded', %s::jsonb)",
+            (job, started_at, started_at + timedelta(minutes=3), json.dumps(stats)))
+
+
+FIXED_STATS = {"extract": {"targets": 3, "body_container": {}}}  # 고친 추출기만 body_container 키를 남긴다(비어 있어도 있다)
+OLD_STATS = {"extract": {"targets": 3}}
+
+
+def _seed_job_runs(pg_conn, schema):
+    """옛 추출기로 돈 ingest(붕괴 기간) -> 고친 추출기의 첫 ingest(= UNTIL)와 그 뒤 ingest. 가드가 세지 않는 실행도 둔다."""
+    _job_run(pg_conn, schema, "ingest", BOUNDARY + timedelta(minutes=30), OLD_STATS)
+    _job_run(pg_conn, schema, "ingest", UNTIL, FIXED_STATS)
+    _job_run(pg_conn, schema, "ingest", NOW - timedelta(hours=1), FIXED_STATS)
+    _job_run(pg_conn, schema, "ingest", UNTIL + timedelta(minutes=20), {"rss": {"new": 1}})  # extract 단계가 없다 - 세지 않는다
+    _job_run(pg_conn, schema, "embed", UNTIL + timedelta(minutes=25), OLD_STATS)  # ingest가 아니다 - 세지 않는다
+
+
 def _seed(pg_conn, schema):
     """붕괴 기간(BOUNDARY ~ UNTIL)의 국민일보 행 9개(되돌릴 행)와 건드리면 안 되는 행들."""
+    _seed_job_runs(pg_conn, schema)
     kmib, other = _press(pg_conn, schema, KMIB), _press(pg_conn, schema, OTHER)
     inside = lambda hours: BOUNDARY + timedelta(hours=hours)  # noqa: E731
     junk = "특집 글을 뽑은 지어낸 본문"
@@ -225,8 +249,9 @@ def test_apply_stops_on_empty_wide_or_linked_targets_and_missing_arguments(psql_
     kmib, _ = _seed(pg_conn, schema)
     before = _rows(pg_conn, schema)
 
-    nothing = _run(psql_bin, database_url, schema, FIX_SQL, f"boundary={_utc(NOW + timedelta(days=1))}",
-                   f"until={_utc(NOW + timedelta(days=2))}", "apply=1")
+    # 고친 추출기의 ingest(NOW-1h)가 until 뒤에 있어 가드는 통과하고, 이 창(UNTIL+2h ~ +3h)에는 추출된 행이 없다
+    nothing = _run(psql_bin, database_url, schema, FIX_SQL, f"boundary={_utc(UNTIL + timedelta(hours=2))}",
+                   f"until={_utc(UNTIL + timedelta(hours=3))}", "apply=1")
     assert nothing.returncode == PSQL_SCRIPT_ERROR and "0행" in nothing.stderr
 
     wide = _run(psql_bin, database_url, schema, FIX_SQL, BOUNDARY_ARG, UNTIL_ARG, "max_rows=8", "apply=1")
@@ -265,6 +290,37 @@ def test_duplicate_of_an_ok_row_from_before_the_boundary_is_not_a_target(psql_bi
     after = _rows(pg_conn, schema)
     assert after["dup_of_before_ok"] == before["dup_of_before_ok"] and before["dup_of_before_ok"][0] == "duplicate"
     assert after["dup1"][0] is None  # 같은 duplicate라도 원본(ok1)이 붕괴 기간이면 되돌린다
+
+
+def test_apply_refuses_until_the_fixed_extractor_has_run_the_ingest_after_until(psql_bin, database_url, pg_conn, schema):
+    """옛 추출기가 도는 채로 되돌리면 다음 ingest가 되돌린 행을 같은 특집 글로 다시 채운다. 고친 추출기가 배포됐는지는 job_runs의
+    stats.extract.body_container(고친 추출기만 남기는 키)로 확인한다."""
+    _seed(pg_conn, schema)
+    before = _rows(pg_conn, schema)
+
+    future = _run(psql_bin, database_url, schema, FIX_SQL, BOUNDARY_ARG, f"until={_utc(NOW + timedelta(hours=1))}",
+                  "apply=1")
+    assert future.returncode == PSQL_SCRIPT_ERROR and "보다 뒤다" in future.stderr
+
+    # until 뒤에 ingest 실행이 없다 = 고친 추출기를 아직 배포하지 않았거나 until이 틀렸다
+    not_yet = _run(psql_bin, database_url, schema, FIX_SQL, BOUNDARY_ARG, f"until={_utc(NOW - timedelta(minutes=30))}",
+                   "apply=1")
+    assert not_yet.returncode == PSQL_SCRIPT_ERROR and "고친 추출기" in not_yet.stderr and "ingest가 없다" in not_yet.stderr
+
+    # until 뒤에 옛 추출기로 돈 ingest가 있다 = until이 첫 ingest보다 이르거나 옛 추출기로 되돌렸다
+    _job_run(pg_conn, schema, "ingest", NOW - timedelta(hours=2), OLD_STATS)
+    old_after = _run(psql_bin, database_url, schema, FIX_SQL, BOUNDARY_ARG, UNTIL_ARG, "apply=1")
+    assert old_after.returncode == PSQL_SCRIPT_ERROR and "옛 추출기로 돈 ingest가 1회" in old_after.stderr
+
+    assert _rows(pg_conn, schema) == before and not _has_audit(pg_conn, schema)  # 어느 거부도 아무것도 커밋하지 않았다
+
+
+def test_rehearsal_also_runs_the_deployment_guard(psql_bin, database_url, pg_conn, schema):
+    _seed(pg_conn, schema)
+
+    done = _run(psql_bin, database_url, schema, FIX_SQL, BOUNDARY_ARG, f"until={_utc(NOW - timedelta(minutes=30))}")
+
+    assert done.returncode == PSQL_SCRIPT_ERROR and "ingest가 없다" in done.stderr
 
 
 def test_other_press_can_be_selected_with_the_press_variable(psql_bin, database_url, pg_conn, schema):
