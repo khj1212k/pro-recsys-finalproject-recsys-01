@@ -203,25 +203,43 @@ def test_apply_resets_only_the_broken_window_rows_and_keeps_their_old_metadata(p
     assert audit["ok1"][5] == BOUNDARY and audit["ok1"][6] == UNTIL
 
 
-def test_reset_rows_are_exactly_what_the_extractor_picks_up_next(psql_bin, database_url, pg_conn, schema):
-    """본문 추출기의 대상 조회(extractor.py)와 같은 조건 - 복구한 행은 모두 다음 ingest가 고르고, 이미 끝난 행은 고르지 않는다.
-    스크립트의 30일은 config.retention.BODY_RETENTION_DAYS(ADR 0023)와 같아야 한다."""
-    from config.retention import BODY_RETENTION_DAYS, RETRYABLE_EXTRACT_STATUSES
+def _picked_by_the_extractor(monkeypatch, database_url, schema):
+    """실제 본문 추출기의 대상 조회(crawler/content_extractor/extractor.py)를 이 스키마에서 돌려 다음 ingest가 고를 기사의 제목을
+    돌려준다. 쿼리를 손으로 옮겨 적지 않는다 - 추출기의 조건이 바뀌면 이 테스트도 따라 바뀐다. 기사를 내려받지 않도록 기사
+    처리만 가짜로 바꾼다."""
+    import psycopg2
     from config.settings import Settings
+    from crawler.content_extractor import extractor
+    from crawler.content_extractor.extractor import ContentExtractor, ExtractionResult
+
+    picked = []
+
+    def fake_process(article):
+        picked.append(article[3])  # (raw_news_id, url, press_name, title)
+        return ExtractionResult(article[0], article[2], "fetch_failed")
+
+    monkeypatch.setattr(Settings, "MAX_EXTRACT_ATTEMPTS", 3)
+    monkeypatch.setattr(extractor, "get_connection",
+                        lambda: psycopg2.connect(database_url, options=f"-c search_path={schema}"))
+    monkeypatch.setattr(extractor, "release_connection", lambda conn: conn.close())
+    monkeypatch.setattr(ContentExtractor, "process_single_article", staticmethod(fake_process))
+    ContentExtractor().extract_parallel_with_stats(num_workers=1)
+    return set(picked)
+
+
+def test_reset_rows_are_exactly_what_the_extractor_picks_up_next(psql_bin, database_url, pg_conn, schema, monkeypatch):
+    """복구한 행은 모두 다음 ingest가 고르고(실제 추출기의 대상 조회), 이미 끝난 행은 고르지 않는다.
+    스크립트의 30일은 config.retention.BODY_RETENTION_DAYS(ADR 0023)와 같아야 한다."""
+    from config.retention import BODY_RETENTION_DAYS
 
     assert f"interval '{BODY_RETENTION_DAYS} days'" in open(FIX_SQL, encoding="utf-8").read()
     _seed(pg_conn, schema)
+    assert _picked_by_the_extractor(monkeypatch, database_url, schema) == {"pending1", "failed1"}  # 복구 전: 원래 대기 중인 행뿐
+
     assert _run(psql_bin, database_url, schema, FIX_SQL, BOUNDARY_ARG, UNTIL_ARG, "apply=1").returncode == 0
-    with pg_conn.cursor() as cur:
-        cur.execute(
-            "SELECT N.raw_news_title FROM " + f'"{schema}".news_raw N JOIN "{schema}".press P ON N.press_id = P.press_id '
-            "WHERE (N.raw_news_extract_status IS NULL OR (N.raw_news_extract_status = ANY(%s) "
-            "AND N.raw_news_extract_attempts < %s)) AND N.raw_news_content_purged_at IS NULL "
-            "AND N.raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - make_interval(days => %s)",
-            (list(RETRYABLE_EXTRACT_STATUSES), Settings.MAX_EXTRACT_ATTEMPTS, BODY_RETENTION_DAYS))
-        picked = {r[0] for r in cur.fetchall()}
+
     # 복구한 9행 + 원래 대기 중이던 pending1 + 시도 여지가 남은 failed1(attempts=2 < MAX_EXTRACT_ATTEMPTS)
-    assert picked == RESET_KEYS | {"pending1", "failed1"}
+    assert _picked_by_the_extractor(monkeypatch, database_url, schema) == RESET_KEYS | {"pending1", "failed1"}
 
 
 def test_boundary_without_an_offset_is_read_as_utc_even_from_a_kst_session(psql_bin, database_url, pg_conn, schema):
