@@ -152,3 +152,74 @@ def test_ingest_suspect_runs_counts_runs_that_flagged_a_press_and_ignores_other_
         found = dr.ingest_suspect_runs(cur, "24 hours")
 
     assert found.get(kmib) == 3 and found.get(segye) == 2
+
+
+def _news_row(cur, ids, press, status, length, crawled_at, purged_at=None):
+    """news_raw 한 줄. 본문은 읽지 않는 질의라 ''(비운 행은 CHECK대로 NULL + 길이)로 둔다. 해시는 NULL이라 'ok' 유일 인덱스에 걸리지 않는다."""
+    cur.execute(
+        "INSERT INTO news_raw (press_id, raw_news_title, raw_news_url, raw_news_content, raw_news_crawled_at, "
+        "raw_news_extract_status, raw_news_content_length, raw_news_content_purged_at) "
+        "VALUES (%s, 't', %s, %s, %s, %s, %s, %s) RETURNING raw_news_id",
+        (press, f"https://example.com/len/{uuid.uuid4().hex}", None if purged_at else "", crawled_at, status, length,
+         purged_at))
+    ids["news_raw"].append(cur.fetchone()[0])
+
+
+def _press(cur, ids):
+    """(press_id, press_name). 이름이 겹치지 않게 접두 + 무작위."""
+    name = f"len-{uuid.uuid4().hex[:8]}"
+    cur.execute("INSERT INTO press (press_name) VALUES (%s) RETURNING press_id", (name,))
+    press_id = cur.fetchone()[0]
+    ids["press"].append(press_id)
+    return press_id, name
+
+
+def test_length_window_stats_counts_ok_lengths_by_window_including_purged_rows(pg_conn, cleanup):
+    """최근 7일 / 그 앞 21일 창의 ok 본문 길이 p75. 경계 가까운 행(±3시간)으로 시간대를 확인한다: raw_news_crawled_at은 시간대 없는 UTC
+    값이고 세션이 KST여도 창은 UTC로 잰다. 본문을 비운 행(길이는 남음)도 센다. ok가 아닌 행·길이 NULL·28일 밖 행은 세지 않는다."""
+    with pg_conn.cursor() as cur:
+        cur.execute("SET TIME ZONE 'Asia/Seoul'")
+        press, name = _press(cur, cleanup)
+        cur.execute("SELECT now() AT TIME ZONE 'UTC', now()")
+        now, now_tz = cur.fetchone()
+        day, hour = timedelta(days=1), timedelta(hours=3)
+        # 최근 창: 1000, 2000, 3000, 4000(비움), 5000(경계 안쪽) -> p75 4000
+        _news_row(cur, cleanup, press, "ok", 1000, now - day)
+        _news_row(cur, cleanup, press, "ok", 2000, now - day)
+        _news_row(cur, cleanup, press, "ok", 3000, now - day)
+        _news_row(cur, cleanup, press, "ok", 4000, now - 2 * day, purged_at=now_tz)
+        _news_row(cur, cleanup, press, "ok", 5000, now - timedelta(days=7) + hour)
+        # 앞 창: 100(바깥 경계 안쪽), 200, 300(비움), 400(안쪽 경계 바깥) -> p75 325
+        _news_row(cur, cleanup, press, "ok", 100, now - timedelta(days=28) + hour)
+        _news_row(cur, cleanup, press, "ok", 200, now - timedelta(days=20))
+        _news_row(cur, cleanup, press, "ok", 300, now - timedelta(days=10), purged_at=now_tz)
+        _news_row(cur, cleanup, press, "ok", 400, now - timedelta(days=7) - hour)
+        # 세지 않는 행
+        _news_row(cur, cleanup, press, "ok", 99999, now - timedelta(days=28) - hour)  # 28일 밖
+        _news_row(cur, cleanup, press, "ok", 99999, now - timedelta(days=40))
+        _news_row(cur, cleanup, press, "ok", None, now - day)  # 길이 NULL
+        _news_row(cur, cleanup, press, "duplicate", 0, now - day)
+        _news_row(cur, cleanup, press, "dropped", 0, now - day)
+        _news_row(cur, cleanup, press, "rss_summary", 480, now - day)
+
+        windows = dr.length_window_stats(cur)
+
+    assert windows[name] == {"recent_rows": 5, "recent": 4000.0, "base_rows": 4, "base": 325.0}
+
+
+def test_length_drift_suspects_from_real_windows_needs_fifty_rows_in_each_window(pg_conn, cleanup):
+    with pg_conn.cursor() as cur:
+        bloated_id, bloated = _press(cur, cleanup)
+        short_id, short = _press(cur, cleanup)
+        cur.execute("SELECT now() AT TIME ZONE 'UTC'")
+        (now,) = cur.fetchone()
+        for press, recent_rows in ((bloated_id, 50), (short_id, 49)):  # 최근 창이 정확히 50건 / 49건
+            for i in range(recent_rows):
+                _news_row(cur, cleanup, press, "ok", 9000, now - timedelta(hours=1 + i))
+            for i in range(50):
+                _news_row(cur, cleanup, press, "ok", 1000, now - timedelta(days=8, hours=i))
+
+        found = dr.length_drift_suspects(dr.length_window_stats(cur))
+
+    assert found[bloated]["ratio"] == 9.0 and found[bloated]["recent_rows"] == 50 and found[bloated]["base_rows"] == 50
+    assert short not in found

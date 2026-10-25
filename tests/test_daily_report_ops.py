@@ -482,3 +482,256 @@ def test_news_status_keys_follow_the_column_order_of_the_report_query():
         else:
             names.append("total")
     assert tuple(names) == dr.NEWS_STATUS_KEYS
+
+
+# ----------------------------------------------------------------------------- 본문 길이 급변 (ADR 0026 결정 6의 2026-10-25 절, 증거 14)
+#
+# 국민일보(2026-10-19)는 모든 기사가 특집 묶음 글을 받아 ok 본문 길이가 10배 넘게 부풀었고, 매일경제는 해설 모달이 본문에 섞여 일부가 3~4배로
+# 부풀었다. 24시간 창의 건수로는 보이지 않아 언론사별 최근 7일과 그 앞 21일의 ok 본문 길이(p75)를 견준다.
+
+
+def _win(recent_rows, recent, base_rows, base):
+    return {"recent_rows": recent_rows, "recent": recent, "base_rows": base_rows, "base": base}
+
+
+class _WindowsCur:
+    """length_window_stats가 부르는 cursor 흉내: 질의와 인자를 기록하고 언론사별 창 요약 행을 돌려준다."""
+
+    def __init__(self, rows):
+        self.rows, self.calls = rows, []
+
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+
+    def fetchall(self):
+        return self.rows
+
+
+def test_length_drift_thresholds_are_the_backtest_values():
+    """ADR 0026 증거 14의 백테스트로 정한 값이다 - 바꾸려면 백테스트를 다시 하고 ADR의 표와 상수 옆 주석을 함께 고친다."""
+    assert (dr.LENGTH_RECENT_DAYS, dr.LENGTH_BASE_DAYS, dr.LENGTH_QUANTILE) == (7, 21, 0.75)
+    assert (dr.LENGTH_MIN_ROWS, dr.LENGTH_RATIO_LOW, dr.LENGTH_RATIO_HIGH) == (50, 0.5, 2.0)
+
+
+def test_length_drift_flags_a_ratio_outside_the_band_in_both_directions():
+    """2026-10-25 VM의 실제 값: 매일경제는 최근 7일 p75가 앞 21일의 0.28배(해설 모달 섞임이 줄어듦), 다른 언론사는 1.0 안팎.
+    국민일보는 10-21 00:10 UTC에 되돌린 값(특집 묶음 글이 ok로 저장돼 있던 때) - 9.6배."""
+    windows = {
+        "매일경제": _win(2088, 1835.0, 5362, 6596.75),
+        "경향신문": _win(1325, 1574.0, 3970, 1561.0),
+        "국민일보": _win(118, 13160.0, 560, 1370.0),
+        "AI타임스": _win(203, 1991.0, 565, 1850.0),
+    }
+
+    found = dr.length_drift_suspects(windows)
+
+    assert sorted(found) == ["국민일보", "매일경제"]
+    assert found["매일경제"] == {"recent_rows": 2088, "recent": 1835.0, "base_rows": 5362, "base": 6596.75, "ratio": 0.278}
+    assert found["국민일보"]["ratio"] == 9.606
+
+
+def test_length_drift_band_edges_are_inside_and_just_outside_is_flagged():
+    inside = {"A": _win(60, 500.0, 60, 1000.0), "B": _win(60, 2000.0, 60, 1000.0)}  # 정확히 0.5배, 2배
+    assert dr.length_drift_suspects(inside) == {}
+    outside = {"A": _win(60, 499.0, 60, 1000.0), "B": _win(60, 2001.0, 60, 1000.0)}
+    assert sorted(dr.length_drift_suspects(outside)) == ["A", "B"]
+
+
+def test_length_drift_needs_enough_rows_in_both_windows_and_no_division_by_zero():
+    huge = 10_000.0  # 비율은 대역 밖이지만 표본이 모자라면 말하지 않는다
+    assert dr.length_drift_suspects({"A": _win(49, huge, 500, 1000.0)}) == {}  # 최근 창 49건
+    assert dr.length_drift_suspects({"A": _win(500, huge, 49, 1000.0)}) == {}  # 앞 창 49건
+    assert sorted(dr.length_drift_suspects({"A": _win(50, huge, 50, 1000.0)})) == ["A"]  # 정확히 50건씩은 센다
+    # ok 본문이 사라진 언론사(동아일보가 RSS 요약으로 바뀐 뒤)나 앞 창이 비었거나 0인 언론사
+    assert dr.length_drift_suspects({"동아일보": _win(0, None, 2742, 1451.5)}) == {}
+    assert dr.length_drift_suspects({"A": _win(60, 900.0, 0, None)}) == {}
+    assert dr.length_drift_suspects({"A": _win(60, 900.0, 60, 0.0)}) == {}
+    assert dr.length_drift_suspects({}) == {}
+
+
+def test_length_windows_query_reads_stored_lengths_so_purged_rows_still_count():
+    """본문을 비운 행(raw_news_content NULL, 길이는 남음)도 센다: 질의는 길이 칸만 읽고 본문 칸·비운 시각으로 거르지 않는다."""
+    import re
+
+    cur = _WindowsCur([("경향신문", 1325, 1574.0, 3970, 1561.0), ("국민일보", 0, None, 12, 1380.75)])
+
+    windows = dr.length_window_stats(cur)
+
+    assert windows == {
+        "경향신문": {"recent_rows": 1325, "recent": 1574.0, "base_rows": 3970, "base": 1561.0},
+        "국민일보": {"recent_rows": 0, "recent": None, "base_rows": 12, "base": 1380.75},
+    }
+    sql, params = cur.calls[0]
+    assert "raw_news_extract_status = 'ok'" in sql and "raw_news_content_length IS NOT NULL" in sql
+    assert not re.search(r"\braw_news_content\b", sql) and "purged_at" not in sql
+    assert "now() AT TIME ZONE 'UTC'" in sql  # raw_news_crawled_at은 시간대 없는 UTC 값이다
+    assert params == {"quantile": 0.75, "recent_days": 7, "base_days": 21}
+    assert dr.length_window_stats(_WindowsCur([])) == {}
+
+
+def test_the_retention_job_keeps_the_length_of_the_bodies_it_purges():
+    """길이 감시가 비운 행을 세는 근거: 보존 잡이 본문을 NULL로 바꿀 때 길이를 char_length로 다시 쓰고 지우지 않는다.
+    이 가정이 깨지면(길이를 0·NULL로 두면) 30일이 지난 ok 행이 창에서 빠지거나 0으로 끌어내린다 - 질의를 고쳐야 한다."""
+    from jobs.tasks.retention import PURGE_BATCH_SQL
+
+    assert "raw_news_content_length = char_length(n.raw_news_content)" in PURGE_BATCH_SQL
+    assert "raw_news_content_length = NULL" not in PURGE_BATCH_SQL and "raw_news_content_length = 0" not in PURGE_BATCH_SQL
+
+
+def test_length_window_is_shorter_than_the_retention_period():
+    """창(7+21=28일)이 보존 기한(30일)보다 짧아서 정상이면 비운 행은 창에 아예 들어오지 않는다. 보존 잡이 밀리거나 기한이
+    짧아져도 위 테스트대로 길이가 남아 있어 센다."""
+    from config.retention import BODY_RETENTION_DAYS
+
+    assert dr.LENGTH_RECENT_DAYS + dr.LENGTH_BASE_DAYS <= BODY_RETENTION_DAYS
+
+
+def test_length_drift_warning_text_names_the_press_both_windows_and_the_direction():
+    shrunk = dr.length_drift_suspects({"매일경제": _win(2088, 1835.0, 5362, 6596.75)})["매일경제"]
+    grown = dr.length_drift_suspects({"국민일보": _win(118, 13160.0, 560, 1370.0)})["국민일보"]
+
+    assert dr.length_drift_warning("매일경제", shrunk) == (
+        "매일경제: 본문 길이 급변 - ok 본문 길이 p75가 최근 7일 1,835자(2088건), 그 앞 21일 6,597자(5362건)의 0.28배로 "
+        "짧아졌다 (기준 0.5~2배, docs/runbook-hosting.md 6.5 매일 확인)")
+    assert "9.61배로 길어졌다" in dr.length_drift_warning("국민일보", grown)
+
+
+def _report_with(per_press, **extra):
+    report = _base_report(**extra)
+    report["news_raw_24h"] = {**report["news_raw_24h"], "per_press": per_press}
+    return report
+
+
+def test_report_marks_the_press_whose_body_length_drifted_and_adds_a_warning_line():
+    per_press = {"매일경제": _press(212, ok=200), "세계일보": _press(150, ok=140)}
+    drift = dr.length_drift_suspects({"매일경제": _win(2088, 1835.0, 5362, 6596.75),
+                                      "세계일보": _win(1639, 1541.0, 4330, 1555.0)})
+
+    lines = dr.format_report(_report_with(per_press, length_drift=drift)).splitlines()
+
+    assert "  · 매일경제: 212건 (본문 200, 임베딩 0) ⚠ 본문 길이 급변" in lines
+    assert "  · 세계일보: 150건 (본문 140, 임베딩 0)" in lines  # 정상 언론사의 줄은 그대로
+    warning = [l for l in lines if l.startswith("- ⚠ ")]
+    assert warning == ["- ⚠ " + dr.length_drift_warning("매일경제", drift["매일경제"])]
+
+
+def test_report_shows_both_marks_when_the_same_body_check_and_the_length_check_both_fire():
+    per_press = {"국민일보": _press(249, ok=5, duplicate=244)}
+    suspect = dr.same_body_suspects(per_press, {"국민일보": 22})
+    drift = dr.length_drift_suspects({"국민일보": _win(118, 13160.0, 560, 1370.0)})
+
+    lines = dr.format_report(_report_with(per_press, suspect_press=suspect, length_drift=drift)).splitlines()
+
+    assert "  · 국민일보: 249건 (본문 5, 임베딩 0) ⚠ 같은 본문 반복 - 추출 이상 의심 ⚠ 본문 길이 급변" in lines
+    assert sum(1 for l in lines if l.startswith("- ⚠ ")) == 2  # 경고 줄은 검사마다 하나
+
+
+def test_report_warns_about_a_press_that_had_no_new_rows_today():
+    """길이 감시는 7일·28일 창이라 오늘 새 기사가 없는 언론사도 걸린다 - 언론사 줄이 없어도 경고 줄은 나온다."""
+    drift = dr.length_drift_suspects({"매일경제": _win(2088, 1835.0, 5362, 6596.75)})
+
+    lines = dr.format_report(_report_with({"세계일보": _press(150, ok=140)}, length_drift=drift)).splitlines()
+
+    assert not any(l.startswith("  · 매일경제") for l in lines)
+    assert any(l.startswith("- ⚠ 매일경제: 본문 길이 급변") for l in lines)
+
+
+def test_report_without_length_drift_keeps_the_old_layout():
+    per_press = {"세계일보": _press(150, ok=140)}
+    for report in (_report_with(per_press), _report_with(per_press, length_drift={})):  # 키가 없는 예전 모양도
+        text = dr.format_report(report)
+        assert "⚠" not in text and "본문 길이 급변" not in text
+
+
+class _ScriptedCur:
+    """run()이 보내는 질의에 글자 조각으로 답하는 cursor 흉내. 모르는 질의는 실패시킨다."""
+
+    def __init__(self, script):
+        self.script, self.rows, self.sql = script, [], []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def execute(self, sql, params=None):
+        self.sql.append(sql)
+        for needle, rows in self.script:
+            if needle in sql:
+                self.rows = rows
+                return
+        raise AssertionError(f"예상 밖의 질의: {' '.join(sql.split())[:100]}")
+
+    def fetchall(self):
+        return self.rows
+
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+
+
+class _Ctx:
+    def __init__(self):
+        self.warnings = []
+
+    def warn(self, message):
+        self.warnings.append(message)
+
+
+def _run_report(monkeypatch, length_rows):
+    """run()을 가짜 DB로 끝까지 돌린다: 언론사 둘, 길이 창 요약은 length_rows."""
+    import contextlib
+
+    import db.connection
+    import jobs.notify
+
+    cur = _ScriptedCur([
+        ("SELECT job, status, COUNT(*) FROM job_runs", [("ingest", "succeeded", 24)]),
+        ("'dropped'", [("매일경제", 212, 200, 3, 0, 0, 0, 5, 0, 0, 180), ("세계일보", 150, 140, 2, 0, 0, 0, 8, 0, 0, 120)]),
+        ("SELECT (SELECT COUNT(*) FROM news_raw)", [(43000, 36000, 3)]),
+        ("raw_news_content_purged_at >=", [(0, 0, 0, 0, None)]),
+        ("suspect_press", []),
+        ("percentile_cont", length_rows),
+        ("recommendation_impression_log", []),
+        ("SELECT now()", [(_t(25, 0, 10),)]),
+        ("status = 'succeeded'", []),
+        ("status IN ('failed', 'abandoned')", [(0, 0)]),
+    ])
+
+    class _Conn:
+        def cursor(self):
+            return cur
+
+    @contextlib.contextmanager
+    def fake_connection():
+        yield _Conn()
+
+    posted = []
+    monkeypatch.setattr(db.connection, "get_db_connection", fake_connection)
+    monkeypatch.setattr(jobs.notify, "post_message", lambda text: posted.append(text) or False)
+    monkeypatch.delenv("SCHEDULER_CRONTAB", raising=False)
+    ctx = _Ctx()
+    return dr.run(ctx), ctx, cur, posted
+
+
+def test_run_warns_once_per_press_whose_body_length_drifted_and_reports_it(monkeypatch, capsys):
+    length_rows = [("매일경제", 2088, 1835.0, 5362, 6596.75), ("세계일보", 1639, 1541.0, 4330, 1555.0)]
+
+    result, ctx, cur, posted = _run_report(monkeypatch, length_rows)
+
+    expected = dr.length_drift_warning("매일경제", result["report"]["length_drift"]["매일경제"])
+    assert ctx.warnings == [expected]
+    assert list(result["report"]["length_drift"]) == ["매일경제"] and result["report"]["length_drift"]["매일경제"]["ratio"] == 0.278
+    printed = capsys.readouterr().out
+    assert "  · 매일경제: 212건 (본문 200, 임베딩 180) ⚠ 본문 길이 급변" in printed and f"- ⚠ {expected}" in printed
+    assert posted == [printed.rstrip("\n")]  # Slack 웹훅으로 가는 글은 로그에 찍힌 리포트와 같다
+    assert sum("percentile_cont" in sql for sql in cur.sql) == 1  # 하루 한 번, 질의 하나
+
+
+def test_run_stays_quiet_when_no_press_drifted_or_the_samples_are_short(monkeypatch, capsys):
+    length_rows = [("세계일보", 1639, 1541.0, 4330, 1555.0), ("동아일보", 30, 9000.0, 2742, 1451.5)]  # 정상 / 표본 부족
+
+    result, ctx, _, _ = _run_report(monkeypatch, length_rows)
+
+    assert ctx.warnings == [] and result["report"]["length_drift"] == {}
+    assert "본문 길이 급변" not in capsys.readouterr().out

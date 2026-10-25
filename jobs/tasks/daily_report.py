@@ -3,6 +3,10 @@
 운영 줄 세 개(ADR 0026 결정 6): 정시 회차(예정 vs 시작 - 건너뛴 회차는 job_runs에 행이 없다), 호스트 밖 백업의
 경과 시간, 유휴 회수 위험. 뒤의 둘은 VM 호스트의 cron이 돌리는 scripts/oci/tier0_backup.py가 job_runs에 남긴
 'backup'·'idle_check'·'restore_check' 행을 읽는다(그 잡들은 jobs.run이 아니다).
+
+언론사별 본문 길이 급변(ADR 0026 결정 6의 2026-10-25 절, 증거 14): 24시간 창으로는 보이지 않는 추출 이상 -
+본문 대신 다른 블록을 뽑아 길이가 부풀거나(국민일보 2026-10-19, 매일경제 해설 모달) 줄어드는 것 - 을 최근 7일과 그 앞
+21일의 ok 본문 길이로 비교해 잡는다.
 """
 import os
 from datetime import datetime, timedelta, timezone
@@ -41,6 +45,39 @@ MISSED_SLOTS_SHOWN = 6
 # 요약(duplicate)' 몇 건만으로 절반을 넘겨 오경보가 난다(예: 하루 요약 190건에 dropped 3·duplicate 3). 요약 피드가 같은 요약만
 # 내보내는 고장은 첫 건만 rss_summary이고 나머지가 duplicate라 분모에 넣어도 걸린다.
 PARSED_STATUSES = ("ok", "rss_summary", "dropped", "empty", "duplicate")
+# 언론사별 본문 길이 급변: ok 행의 raw_news_content_length(본문을 쓸 때 함께 쓰고, 보존 잡이 본문을 비운 뒤에도 남는다 - 비울 때
+# char_length로 다시 쓰고 ck_news_raw_purged_body_gone이 비운 행의 길이 NULL을 막는다. 그래서 비운 행을 따로 빼지 않는다)의
+# 최근 LENGTH_RECENT_DAYS일 p75를 그 앞 LENGTH_BASE_DAYS일의 p75와 견줘 비율이 [LOW, HIGH] 밖이면 경고한다. 값의 근거는 ADR 0026
+# 증거 14(VM 읽기 전용 백테스트: 매일 00:10 UTC 시점 22일, 국민일보 10-19·매일경제 10-17~19 전후):
+# - 통계는 p75다. 중앙값은 절반쯤 부푼 분포(매일경제)에서 뒤집혀 변화가 없던 날의 비율이 0.41~2.54(경고 7일)인 반면 p75는 0.66~1.47(0일)이고,
+#   평균은 같은 대역에서 매일경제를 못 잡고 극단값 몇 건에 끌린다. p75는 부푼 행이 절반 아래여도 보이지만(모의: 8,000자가 붙은 행이
+#   25%면 100%) 짧아지는 쪽은 4분의 3이 줄어야 보인다(4분의 1 크기가 된 행 75%에서 91%, 50%에서 0%) - 한계.
+# - 대역 0.5~2.0: 나머지 6사의 22일 비율은 0.75~1.21(경고 0일). 국민일보는 10-21부터 5일, 매일경제는 10-23부터 3일 걸린다.
+# - 최소 표본 50건: 두 창이 각각 50건일 때 대역 밖일 확률이 가장 흔들리는 분포(매일경제)에서도 0.16%/일(30건이면 1.6%).
+LENGTH_RECENT_DAYS = 7
+LENGTH_BASE_DAYS = 21
+LENGTH_QUANTILE = 0.75
+LENGTH_MIN_ROWS = 50
+LENGTH_RATIO_LOW = 0.5
+LENGTH_RATIO_HIGH = 2.0
+LENGTH_DRIFT_LABEL = "본문 길이 급변"
+# 최근 창과 그 앞 창의 ok 본문 길이 분위수. 창 경계는 DB의 지금(UTC)에서 잰다: raw_news_crawled_at은 시간대 없는 UTC 값이다.
+# 순차 스캔이다(raw_news_crawled_at 인덱스가 없고, 28일 창이 테이블의 83%라 있어도 플래너가 순차 스캔을 고른다 - 증거 14).
+_LENGTH_SPLIT = "(now() AT TIME ZONE 'UTC') - make_interval(days => %(recent_days)s)"
+LENGTH_WINDOWS_SQL = f"""
+    SELECT P.press_name,
+           count(*) FILTER (WHERE N.raw_news_crawled_at > {_LENGTH_SPLIT}),
+           percentile_cont(%(quantile)s) WITHIN GROUP (ORDER BY N.raw_news_content_length)
+               FILTER (WHERE N.raw_news_crawled_at > {_LENGTH_SPLIT}),
+           count(*) FILTER (WHERE N.raw_news_crawled_at <= {_LENGTH_SPLIT}),
+           percentile_cont(%(quantile)s) WITHIN GROUP (ORDER BY N.raw_news_content_length)
+               FILTER (WHERE N.raw_news_crawled_at <= {_LENGTH_SPLIT})
+    FROM news_raw N JOIN press P ON P.press_id = N.press_id
+    WHERE N.raw_news_extract_status = 'ok' AND N.raw_news_content_length IS NOT NULL
+      AND N.raw_news_crawled_at > (now() AT TIME ZONE 'UTC')
+          - make_interval(days => %(recent_days)s + %(base_days)s)
+    GROUP BY P.press_name
+"""
 
 
 def format_report(report: Dict[str, Any]) -> str:
@@ -60,11 +97,15 @@ def format_report(report: Dict[str, Any]) -> str:
         f"{blocked_part}임베딩 {news['embedded']})"
     )
     suspects = report.get("suspect_press") or {}
+    drift = report.get("length_drift") or {}
     for press, p in sorted(news["per_press"].items()):
-        mark = f" ⚠ {SAME_BODY_LABEL}" if press in suspects else ""
+        mark = (f" ⚠ {SAME_BODY_LABEL}" if press in suspects else "") + (
+            f" ⚠ {LENGTH_DRIFT_LABEL}" if press in drift else "")
         lines.append(f"  · {press}: {p['total']}건 ({press_status_text(p)}){mark}")
     for press, found in sorted(suspects.items()):
         lines.append(f"- ⚠ {same_body_warning(press, found)}")
+    for press, found in sorted(drift.items()):
+        lines.append(f"- ⚠ {length_drift_warning(press, found)}")
     totals = report["totals"]
     lines.append(
         f"- 누적 기사 {totals['news_raw']}건 / 임베딩 {totals['embedded']}건 / "
@@ -152,6 +193,44 @@ def same_body_warning(press: str, found: Dict[str, int]) -> str:
     if found["ingest_runs"]:
         text += f", ingest 실행 {found['ingest_runs']}회가 같은 경고를 남겼다"
     return text + " (docs/runbook-hosting.md 6.8)"
+
+
+def length_window_stats(cur) -> Dict[str, Dict[str, Any]]:
+    """언론사별 ok 본문 길이의 최근 창과 그 앞 창 요약: {언론사: {recent_rows, recent, base_rows, base}}.
+    recent·base는 LENGTH_QUANTILE 분위수(글자 수, 표본이 없으면 None). 길이는 raw_news_content_length를 읽으므로 보존 잡이
+    본문을 비운 행도 센다(본문 칸은 읽지 않는다)."""
+    cur.execute(LENGTH_WINDOWS_SQL, {"quantile": LENGTH_QUANTILE, "recent_days": LENGTH_RECENT_DAYS,
+                                     "base_days": LENGTH_BASE_DAYS})
+    return {
+        press: {"recent_rows": recent_rows, "recent": recent, "base_rows": base_rows, "base": base}
+        for press, recent_rows, recent, base_rows, base in cur.fetchall()
+    }
+
+
+def length_drift_suspects(windows: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """본문 길이가 급변한 언론사. 두 창 모두 표본이 LENGTH_MIN_ROWS건 이상이고 최근/앞 비율이 [LENGTH_RATIO_LOW,
+    LENGTH_RATIO_HIGH] 밖(경계는 안)일 때 걸린다 - 부푼 쪽(국민일보 특집 묶음·매일경제 해설 모달)과 줄어든 쪽 모두."""
+    found: Dict[str, Dict[str, Any]] = {}
+    for press, w in sorted(windows.items()):
+        recent, base = w.get("recent"), w.get("base")
+        if (w.get("recent_rows", 0) < LENGTH_MIN_ROWS or w.get("base_rows", 0) < LENGTH_MIN_ROWS
+                or recent is None or not base):
+            continue
+        ratio = recent / base
+        if ratio < LENGTH_RATIO_LOW or ratio > LENGTH_RATIO_HIGH:
+            found[press] = {"recent_rows": w["recent_rows"], "recent": recent, "base_rows": w["base_rows"],
+                            "base": base, "ratio": round(ratio, 3)}
+    return found
+
+
+def length_drift_warning(press: str, found: Dict[str, Any]) -> str:
+    direction = "길어졌다" if found["ratio"] > 1 else "짧아졌다"
+    return (
+        f"{press}: {LENGTH_DRIFT_LABEL} - ok 본문 길이 p75가 최근 {LENGTH_RECENT_DAYS}일 {found['recent']:,.0f}자"
+        f"({found['recent_rows']}건), 그 앞 {LENGTH_BASE_DAYS}일 {found['base']:,.0f}자({found['base_rows']}건)의 "
+        f"{found['ratio']:.2f}배로 {direction} (기준 {LENGTH_RATIO_LOW:g}~{LENGTH_RATIO_HIGH:g}배, "
+        "docs/runbook-hosting.md 6.5 매일 확인)"
+    )
 
 
 def retention_warning(retention: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -532,6 +611,7 @@ def run(ctx) -> Dict[str, Any]:
         total, embedded, newsletters = cur.fetchone()
         retention = retention_status(cur, window)
         suspect_press = same_body_suspects(per_press, ingest_suspect_runs(cur, window))
+        length_drift = length_drift_suspects(length_window_stats(cur))
         recsys_by_source = impression_sources(cur, window)
         cur.execute("SELECT now()")
         (now,) = cur.fetchone()
@@ -547,6 +627,7 @@ def run(ctx) -> Dict[str, Any]:
         "totals": {"news_raw": total, "embedded": embedded, "newsletters_24h": newsletters},
         "retention": retention,
         "suspect_press": suspect_press,
+        "length_drift": length_drift,
         "recsys_24h": {"by_source": recsys_by_source},
         "schedule": schedule,
         "backup": backup,
@@ -557,6 +638,8 @@ def run(ctx) -> Dict[str, Any]:
         ctx.warn(warning)
     for press, found in suspect_press.items():
         ctx.warn(same_body_warning(press, found))
+    for press, found in length_drift.items():
+        ctx.warn(length_drift_warning(press, found))
     for warning in ops_warnings(backup):
         ctx.warn(warning)
     text = format_report(report)
