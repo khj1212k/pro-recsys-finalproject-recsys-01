@@ -964,7 +964,7 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 "2026-10-25 결정 - 동아일보"다. **아직 배포하지 않았다.**
 
 **이 배포에는 Alembic 변경이 있다**: `f1db3221e45f` → `b7e4a1c93d52`(`ck_news_raw_extract_status`에 `rss_summary`·`blocked_origin`을 더하고, 같은 요약 조회용 부분 인덱스
-`ix_news_raw_content_sha256_rss_summary`를 만든다. 인덱스를 만드는 동안(힙을 한 번 읽는다, 54 MB에서 1초 안팎) 쓰기가 기다리고 그 락이 커밋까지 이어지므로
+`ix_news_raw_content_sha256_rss_summary`를 만든다. 인덱스를 만드는 동안(힙을 한 번 읽는다, 54 MB에서 1초 안팎으로 추정 - 만들어 보지는 않았다) 쓰기가 기다리고 그 락이 커밋까지 이어지므로
 **스케줄러를 멈춘 상태에서 돌린다**(아래 2단계). 제약을 바꾸는 동안은 테이블 락이 잡혀 수 밀리초이고, 그 뒤 검증이 힙을 한 번 읽는다 - 읽기·쓰기를 막지 않는다). **새 이미지로 첫 ingest가 돌기 전에 `migrate`를 한다.** 제약이 그 두 상태를 모르는 채 새 수집기가 돌면 동아일보 INSERT가
 `CheckViolation`으로 피드째 실패해(`per_feed`의 `error`) 동아일보가 매시 0건이 되고, close SQL도 같은 이유로 멈춘다. `docker compose up`은 scheduler 앞에
 `migrate`를 돌리지만(compose `depends_on`), `run --rm worker ingest`처럼 손으로 띄우는 실행은 그렇지 않으므로 아래 2단계에서 따로 돌려 확인한다.
