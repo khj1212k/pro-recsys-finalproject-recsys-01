@@ -1,4 +1,4 @@
-"""scripts/oci/close_donga_pending.sql(과 되돌리기)을 실제 PostgreSQL에서 돌린다 (ADR 0026 2026-10-25 C-31, 런북 6.8).
+"""scripts/oci/close_donga_pending.sql(과 되돌리기)을 실제 PostgreSQL에서 돌린다 (ADR 0026 2026-10-25 C-31, 런북 6.9).
 
 fix_aitimes_created_at_kst_sql 테스트와 같은 방식: 테스트 DB 안에 스키마를 만들고 press / news_raw를 복제한 뒤
 PGOPTIONS의 search_path로 그 스키마를 고른다. public에는 쓰지 않는다. 지어낸 제목만 쓴다.

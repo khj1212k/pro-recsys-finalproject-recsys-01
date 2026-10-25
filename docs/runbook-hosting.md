@@ -848,7 +848,112 @@ Mac 덤프(`data/backups/mac-compose-2026-09-26.dump`)의 AI타임스 행도 같
   9시간 밀려도 수집 시각을 넘지 않던 행이라는 추정과 맞는다.
 - **시점: 재배포(1단계) 약 11시간 뒤, 호스트 밖 백업 직후.** 보정 전 값은 보관 표와 06:29 UTC의 백업 사본에 남아 있다.
 
-### 6.8 동아일보 RSS 요약 전환과 추출 대기 행 닫기 (2026-10-25, ADR 0026 C-31 · 배포 대기)
+
+### 6.8 국민일보 본문 추출 붕괴 복구 (2026-10-19 ~, 아직 하지 않았다)
+
+**Tier 0는 2026-10-25 현재 옛 추출기(`e9864cf`)로 돌고 있어 국민일보 본문은 특집 카드 글이다.** 원인·증거는
+[ADR 0026](adr/0026-hosting-tiers-and-contingency.md) 결정 9 "2026-10-25 추가"와 증거 12다. 이 절은 고친 추출기를 올리고 영향 행 1,190건(2026-10-25 02:56 UTC 조회)을
+다시 받게 하는 절차다. SQL은 파일이다 - `scripts/oci/fix_kmib_body_extraction.sql`(복구)과 `scripts/oci/fix_kmib_body_extraction_revert.sql`(되돌리기),
+CI의 PostgreSQL에서 `tests/integration/test_fix_kmib_body_extraction_sql.py`가 먼저 돌린다.
+
+지켜야 할 것:
+
+- **고친 추출기를 먼저 배포한다.** 옛 추출기인 채로 SQL을 돌리면 되돌린 행을 다음 ingest가 같은 특집 글로 다시 채운다. 스크립트가 `job_runs`로 이를 확인한다 - `until` 뒤에 고친 추출기
+  (`stats.extract.body_container` 키)로 돈 ingest가 없거나 옛 추출기로 돈 ingest가 있거나 `until`이 지금보다 뒤이면 리허설도 멈춘다.
+- **`until`은 고친 추출기의 첫 ingest `started_at`이다.** 그 뒤에 추출된 행은 고친 추출기가 받은 것이라 건드리지 않는다. `boundary`는 붕괴 시작 직전이다 - 마지막 정상 추출(10-19 03:06:10 UTC)과
+  첫 이상 추출(05:06:54 UTC) 사이면 된다: `2026-10-19 04:00:00+00`.
+- **본문은 보관 표에 복사하지 않는다**(ADR 0023). 되돌리기는 본문이 원래 없던 행(duplicate·dropped·empty)만 원상으로 돌린다. 원래 ok였던 행은 미시도로 남아 원본 페이지에서 다시 받는다.
+- 수집한 지 30일이 넘었거나 본문을 이미 비운 행은 건드리지 않는다. 지금은 해당 행이 없다(가장 이른 만료 11-18). **11-18 이후에 하면 일부 행이 대상에서 빠진다.**
+- 임베딩이 있거나 뉴스레터에 묶인 대상 행이 있으면 스크립트가 멈춘다(지금은 0건). 그런 행은 이 스크립트가 다루지 않는다.
+
+순서:
+
+1. **백업과 배포.** 6.5로 호스트 밖 백업을 뜨고, 4절의 재배포 절차로 이 브랜치가 병합된 main을 올린다. `.env`의 `GIT_SHA`도 새 커밋으로 고친다.
+2. **고친 추출기의 첫 ingest 확인(읽기 전용).**
+
+   ```sql
+   -- 새 커밋의 첫 ingest 시작 시각(UTC) = until
+   SELECT git_sha, count(*) AS runs, min(started_at) AT TIME ZONE 'UTC' AS first_start_utc
+   FROM job_runs WHERE job = 'ingest' GROUP BY git_sha ORDER BY first_start_utc;
+
+   -- 그 실행들의 국민일보 추출 경로: container만 있고 container_missing이 없어야 한다
+   SELECT started_at AT TIME ZONE 'UTC' AS start_utc,
+          stats->'extract'->'body_container' AS body_container,
+          stats->'extract'->'per_press'->'국민일보' AS kmib,
+          stats->'extract'->'suspect_press' AS suspect_press
+   FROM job_runs WHERE job = 'ingest' AND git_sha = '<새 커밋>' ORDER BY started_at DESC LIMIT 5;
+
+   -- 새 행의 본문 길이: 중앙값이 1,000자 안팎(개편 전 중앙값 1,045)이고 duplicate가 적어야 한다
+   SELECT n.raw_news_extract_status, count(*),
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY n.raw_news_content_length)::int AS median_chars
+   FROM news_raw n JOIN press p ON p.press_id = n.press_id
+   WHERE p.press_name = '국민일보' AND n.raw_news_extracted_at >= '<until>'
+   GROUP BY 1 ORDER BY 1;
+   ```
+
+   기대: `body_container`에 `{"국민일보": {"container": N}}`만 있다. `container_missing`이 있거나 중앙값이 수천 자 이상이면 여기서 멈춘다 - 고친 추출기가 새 페이지에 맞지 않는 것이다.
+   주말에는 국민일보 새 행이 적다(하루 20~40건) - 새 행이 5건 이상 쌓인 뒤에 본다.
+3. **사전 확인(읽기 전용).** 스크립트와 같은 조건의 영향 행 수다(2026-10-25 02:56 UTC: duplicate 703, ok 487 = 1,190. 원본이 개편 전인 duplicate 1건은 뺀다):
+
+   ```sql
+   SELECT n.raw_news_extract_status, count(*), count(DISTINCT n.raw_news_content_sha256) AS distinct_hashes,
+          count(*) FILTER (WHERE n.embedding_result IS NOT NULL OR n.news_letter_id IS NOT NULL) AS linked
+   FROM news_raw n JOIN press p ON p.press_id = n.press_id
+   WHERE p.press_name = '국민일보' AND n.raw_news_extract_status IN ('ok', 'duplicate', 'dropped', 'empty')
+     AND n.raw_news_extracted_at >= '2026-10-19 04:00:00+00' AND n.raw_news_extracted_at < '<until>'
+     AND n.raw_news_content_purged_at IS NULL AND n.raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - interval '30 days'
+     AND NOT (n.raw_news_extract_status = 'duplicate' AND EXISTS (SELECT 1 FROM news_raw o WHERE o.raw_news_extract_status = 'ok'
+              AND o.raw_news_content_sha256 = n.raw_news_content_sha256 AND o.raw_news_extracted_at < '2026-10-19 04:00:00+00'))
+   GROUP BY 1 ORDER BY 1;
+   ```
+
+   기대: `linked`가 모두 0, 행 수가 위 숫자에서 크게 벗어나지 않는다(그 뒤로 옛 추출기가 돈 시간만큼 늘었다).
+4. **복구.** 기본 실행은 리허설이다(한 트랜잭션, 끝이 `ROLLBACK`). 출력을 보고 기준을 만족하면 `-v apply=1`을 더해 한 번 더 돈다. 스크립트가 기준을 스스로 확인하고 하나라도 어기면 예외로 멈춘다
+   (psql 종료 코드 3, 아무것도 커밋되지 않음) - 보관 표 `news_raw_kmib_extract_fix`가 이미 있음(이미 복구한 DB), 대상 0행(`boundary`·`until` 확인), 대상이 `max_rows`(기본 3000)를 넘음,
+   임베딩·뉴스레터에 묶인 행이 있음, 고친 추출기를 배포하지 않았거나 `until`이 틀림(위 "지켜야 할 것").
+
+   ```bash
+   B='2026-10-19 04:00:00+00'; U='<2단계의 until, UTC>'
+   ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 \
+     -v boundary='$B' -v until='$U' -U newsletter -d newsletter -f -" < scripts/oci/fix_kmib_body_extraction.sql          # 리허설
+   ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 \
+     -v boundary='$B' -v until='$U' -v apply=1 -U newsletter -d newsletter -f -" < scripts/oci/fix_kmib_body_extraction.sql  # 적용
+   ```
+
+   읽을 것: `NOTICE: fix_kmib reset=<행 수> ok=<n> duplicate=<n> dropped=<n> empty=<n>`, 요약 표(이전 상태별 행 수·서로 다른 해시 수·수집 시각 범위), 끝 줄 `ROLLBACK`/`COMMIT`.
+   리허설과 적용은 같은 수치여야 한다(그 사이 옛 추출기가 새 행을 쓰지 않았다면).
+5. **다음 ingest 뒤 확인(읽기 전용).** 되돌린 행은 `ORDER BY raw_news_id`로 오래된 것부터 다시 받는다. 1,190건은 약 15분이라 한두 회차에 끝난다(회차 마감 45분).
+
+   ```sql
+   SELECT n.raw_news_extract_status, count(*),
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY n.raw_news_content_length)::int AS median_chars
+   FROM news_raw n JOIN press p ON p.press_id = n.press_id
+   WHERE p.press_name = '국민일보' AND n.raw_news_crawled_at >= '2026-10-19 05:00:00'
+   GROUP BY 1 ORDER BY 1;
+   ```
+
+   기대: `NULL`(미시도) 행이 0으로 줄고, ok의 중앙값이 1,000자 안팎이고, duplicate는 구 URL·신 URL로 이중 수집된 기사(최대 47건쯤) 정도다. 미시도가 줄지 않으면 6.6의 확인 쿼리로
+   회차가 건너뛰어지는지 본다. `daily_report`의 "같은 본문 반복" 줄이 사라지는 것은 24시간 창이 지난 뒤다.
+
+되돌리기(복구 SQL이 만든 보관 표까지 지운다 - 그래야 범위를 바꿔 다시 복구할 수 있다. 이미 다시 받은 행은 덮어쓰지 않는다 - 돌려놓을 행의 조건을 UPDATE가 행의 현재 값으로 판정하므로 ingest가 도는 중에 돌려도 된다):
+
+```bash
+ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 \
+  [-v apply=1] -U newsletter -d newsletter -f -" < scripts/oci/fix_kmib_body_extraction_revert.sql
+```
+
+읽을 것: `NOTICE: fix_kmib_revert restored=<n> left_unattempted_ok=<n> already_reextracted=<n> missing_from_news_raw=<n>`. 되돌리기가 필요한 경우는 드물다 - 복구가 미시도로 둔 행은 되돌리지 않아도
+다음 ingest가 원본 페이지에서 다시 받는다. 복구 직후 다시 받기 전에 멈추고 싶을 때, 또는 범위를 바꿔 다시 복구하려고 보관 표를 치울 때 쓴다. 되돌리기는 옛 특집 글을 다시 만들지 않는다.
+
+되돌리기는 완전한 왕복이 아니다:
+
+- **돌려놓은 duplicate는 본문을 받지 못한다.** 그 해시의 원본(ok)은 미시도로 남았거나(`left_unattempted_ok`) 다시 받아 새 해시가 됐으므로 짝 없는 duplicate가 되고, 추출기는 duplicate를 다시 받지
+  않는다(재시도 대상은 `fetch_failed`·`error`뿐, `config/retention.py`). 되돌린 뒤 본문을 받으려면 범위를 고쳐 복구 SQL을 다시 돌린다 - 보관 표를 지웠으므로 돈다.
+- 원래 ok였던 행은 본문을 보관하지 않아 되돌리지 못하고 미시도로 남는다. 보관 표와 함께 그 행의 이전 해시·길이 기록도 사라진다.
+
+복구를 해도 **이중 수집된 같은 기사는 합쳐지지 않는다**(ADR 0026 결정 9 "하지 않은 것"). 국민일보 `raw_news_created_at`의 미래 시각(ADR 0026 증거 12 g)도 고치지 않는다.
+
+### 6.9 동아일보 RSS 요약 전환과 추출 대기 행 닫기 (2026-10-25, ADR 0026 C-31 · 배포 대기)
 
 동아일보는 VM 출발지의 본문 요청을 거절한다. 이 변경이 배포된 뒤 수집기는 동아일보 RSS 요약을 본문 칸에 넣고 상태를 `rss_summary`로
 닫는다(요약이 350자 미만이거나 없으면 `dropped`, 같은 요약이 이미 있으면 `duplicate` - 본문 ''). 동아일보 서버에는 본문 요청을 보내지 않는다.

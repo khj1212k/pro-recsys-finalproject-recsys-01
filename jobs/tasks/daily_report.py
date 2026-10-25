@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from jobs.runtime import resolve_git_sha
 from jobs.schedule import JOB_RE, SLOT_MATCH_TOLERANCE, expected_slots, match_slots, parse_crontab
+# 같은 본문 반복 기준은 ingest 잡의 것과 같다(임포트가 가볍다 - 모듈 최상단은 argparse·time뿐).
+from jobs.tasks.ingest import SAME_BODY_LABEL, SAME_BODY_MIN_ARTICLES, SAME_BODY_RATIO_LIMIT
 
 WINDOW_HOURS = 24
 # 본문 보존 잡(retention)은 하루 한 번 돈다. 만료된 지 이보다 오래된 본문이 남아 있으면 잡이 돌지 않은 것이다.
@@ -46,8 +48,12 @@ def format_report(report: Dict[str, Any]) -> str:
         f"본문없음 {news['empty']}, 다운로드 실패 {news['fetch_failed']}, 추출 오류 {news['error']}, "
         f"임베딩 {news['embedded']})"
     )
+    suspects = report.get("suspect_press") or {}
     for press, p in sorted(news["per_press"].items()):
-        lines.append(f"  · {press}: {p['total']}건 (본문 {p['ok']}, 임베딩 {p['embedded']})")
+        mark = f" ⚠ {SAME_BODY_LABEL}" if press in suspects else ""
+        lines.append(f"  · {press}: {p['total']}건 (본문 {p['ok']}, 임베딩 {p['embedded']}){mark}")
+    for press, found in sorted(suspects.items()):
+        lines.append(f"- ⚠ {same_body_warning(press, found)}")
     totals = report["totals"]
     lines.append(
         f"- 누적 기사 {totals['news_raw']}건 / 임베딩 {totals['embedded']}건 / "
@@ -81,6 +87,48 @@ def format_report(report: Dict[str, Any]) -> str:
         else:
             lines.append("- 추천 응답 0건 (노출 로그 기준)")
     return "\n".join(lines)
+
+
+def ingest_suspect_runs(cur, window: str) -> Dict[str, int]:
+    """창 안의 ingest 실행 중 언론사별로 '같은 본문 반복' 경고(stats.extract.suspect_press, jobs/tasks/ingest.py)를 남긴 실행 수."""
+    cur.execute(
+        """
+        SELECT s.key, count(*)
+        FROM job_runs j
+        CROSS JOIN LATERAL jsonb_each(
+            CASE WHEN jsonb_typeof(j.stats #> '{extract,suspect_press}') = 'object'
+                 THEN j.stats #> '{extract,suspect_press}' ELSE '{}'::jsonb END) AS s(key, value)
+        WHERE j.job = 'ingest' AND j.started_at >= now() - %s::interval
+        GROUP BY s.key
+        """,
+        (window,),
+    )
+    return {press: runs for press, runs in cur.fetchall()}
+
+
+def same_body_suspects(per_press: Dict[str, Dict[str, int]], ingest_runs: Dict[str, int]) -> Dict[str, Dict[str, int]]:
+    """추출 이상이 의심되는 언론사. 둘 중 하나면 걸린다: (1) 창 안에 쌓인 기사 중 본문을 받은 기사가 SAME_BODY_MIN_ARTICLES건
+    이상이고 그 SAME_BODY_RATIO_LIMIT 이상이 duplicate이거나, (2) 창 안의 ingest 실행이 그 언론사에 같은 경고를 남겼을 때.
+    (2)는 한 회차 안에서는 절반을 넘었어도 하루로 보면 묻히는 경우(회차마다 걸러지다 마는 개편 초기)를 잡는다."""
+    found: Dict[str, Dict[str, int]] = {}
+    for press in sorted(set(per_press) | set(ingest_runs)):
+        counts = per_press.get(press) or {}
+        parsed = sum(counts.get(k, 0) for k in ("ok", "dropped", "empty", "duplicate"))
+        duplicate = counts.get("duplicate", 0)
+        by_rows = parsed >= SAME_BODY_MIN_ARTICLES and duplicate / parsed >= SAME_BODY_RATIO_LIMIT
+        runs = ingest_runs.get(press, 0)
+        if by_rows or runs:
+            found[press] = {"parsed": parsed, "duplicate": duplicate, "ingest_runs": runs}
+    return found
+
+
+def same_body_warning(press: str, found: Dict[str, int]) -> str:
+    text = (
+        f"{press}: {SAME_BODY_LABEL} - 최근 {WINDOW_HOURS}시간 본문을 받은 기사 {found['parsed']}건 중 중복 {found['duplicate']}건"
+    )
+    if found["ingest_runs"]:
+        text += f", ingest 실행 {found['ingest_runs']}회가 같은 경고를 남겼다"
+    return text + " (docs/runbook-hosting.md 6.8)"
 
 
 def retention_warning(retention: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -458,6 +506,7 @@ def run(ctx) -> Dict[str, Any]:
         )
         total, embedded, newsletters = cur.fetchone()
         retention = retention_status(cur, window)
+        suspect_press = same_body_suspects(per_press, ingest_suspect_runs(cur, window))
         recsys_by_source = impression_sources(cur, window)
         cur.execute("SELECT now()")
         (now,) = cur.fetchone()
@@ -472,6 +521,7 @@ def run(ctx) -> Dict[str, Any]:
         "news_raw_24h": news_24h,
         "totals": {"news_raw": total, "embedded": embedded, "newsletters_24h": newsletters},
         "retention": retention,
+        "suspect_press": suspect_press,
         "recsys_24h": {"by_source": recsys_by_source},
         "schedule": schedule,
         "backup": backup,
@@ -480,6 +530,8 @@ def run(ctx) -> Dict[str, Any]:
     warning = retention_warning(retention)
     if warning:
         ctx.warn(warning)
+    for press, found in suspect_press.items():
+        ctx.warn(same_body_warning(press, found))
     for warning in ops_warnings(backup):
         ctx.warn(warning)
     text = format_report(report)

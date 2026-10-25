@@ -17,6 +17,7 @@ from tqdm import tqdm
 from db.connection import get_connection, release_connection
 from config.retention import BODY_RETENTION_DAYS, RETRYABLE_EXTRACT_STATUSES
 from config.settings import Settings
+from .body_container import FULL_PAGE, select_body_html
 from .cleaners import clean_text_lite, is_drop_article
 from .fetch import fetch_page, is_site_failure, latency_bucket
 
@@ -31,6 +32,9 @@ class ExtractionResult(NamedTuple):
     detail: str = ""
     fetch_cause: str = ""  # fetch_failed일 때 마지막 요청의 실패 원인(fetch.py) - 개수만 stats에 남긴다
     fetch_s: Optional[float] = None  # 다운로드에 성공했을 때 그 요청 1번에 걸린 시간 - 구간별 개수만 stats에 남긴다
+    # 본문 컨테이너 규칙이 있는 언론사(body_container.py)만 채운다: "container"(본문 노드만 잘라 추출) 또는
+    # "container_missing"(노드를 못 찾아 전체 페이지로 되돌아감). 규칙이 없는 언론사는 "" - 개수만 stats에 남긴다
+    container: str = ""
 
 
 # raw_news_extract_status 값(d48994e9d26e의 CHECK 제약과 동일).
@@ -169,8 +173,13 @@ class ContentExtractor:
                 conn.commit()
                 return ExtractionResult(raw_news_id, press_name, "fetch_failed", fetch_cause=fetched.cause)
 
+            # 언론사별 본문 컨테이너 규칙이 있으면 본문 노드만 잘라 넘긴다. 전체 페이지를 넘기면 trafilatura가 본문 대신
+            # 특집 카드 묶음을 고르는 사이트가 있다(국민일보 2026-10-19 개편, body_container.py). 규칙이 없는 언론사는
+            # 페이지를 그대로 넘기므로 동작이 같다.
+            selected = select_body_html(fetched.html, press_name)
+            container = "" if selected.mode == FULL_PAGE else selected.mode
             text = trafilatura.extract(
-                fetched.html,
+                selected.html,
                 include_comments=False,
                 include_tables=False
             )
@@ -185,18 +194,18 @@ class ContentExtractor:
                     _record_extraction(cur, raw_news_id, '', 'dropped')
                     conn.commit()
                     return ExtractionResult(raw_news_id, press_name, "dropped", tuple(drop_reasons),
-                                            fetch_s=fetched.request_s)
+                                            fetch_s=fetched.request_s, container=container)
 
                 status = _record_ok_or_duplicate(conn, cur, raw_news_id, cleaned)
                 return ExtractionResult(
                     raw_news_id, press_name, status, detail=f"raw={len(text)} clean={len(cleaned)}",
-                    fetch_s=fetched.request_s,
+                    fetch_s=fetched.request_s, container=container,
                 )
 
             # 페이지는 받았지만 본문을 뽑지 못함(목록/영상 페이지 등) - 재시도해도 같으므로 확정
             _record_extraction(cur, raw_news_id, '', 'empty')
             conn.commit()
-            return ExtractionResult(raw_news_id, press_name, "empty", fetch_s=fetched.request_s)
+            return ExtractionResult(raw_news_id, press_name, "empty", fetch_s=fetched.request_s, container=container)
 
         except Exception as e:
             conn.rollback()
@@ -261,6 +270,9 @@ class ContentExtractor:
             "fetch_fail_causes": {},
             # 다운로드에 성공한 요청의 시간 구간(<5s·5-15s·>=15s)별 개수 - 언론사별(fetch.latency_bucket)
             "fetch_ok_latency": {},
+            # 본문 컨테이너 규칙이 있는 언론사(body_container.py)의 추출 경로별 개수: container | container_missing.
+            # container_missing은 노드를 못 찾아 전체 페이지로 되돌아간 기사 - 페이지 개편 신호라 ingest가 경고한다
+            "body_container": {},
             "deferred_reasons": {}, "press_breaker": {},
             "time_budget_s": time_budget_s, "time_budget_exhausted": False,
         }
@@ -295,6 +307,9 @@ class ContentExtractor:
                 buckets = stats["fetch_ok_latency"].setdefault(result.press_name, {})
                 bucket = latency_bucket(result.fetch_s)
                 buckets[bucket] = buckets.get(bucket, 0) + 1
+            if result.container:
+                paths = stats["body_container"].setdefault(result.press_name, {})
+                paths[result.container] = paths.get(result.container, 0) + 1
             if result.status == "error" and len(stats["error_samples"]) < 5:
                 stats["error_samples"].append(result.detail)
                 logger.error(f"   [Error] {result.press_name}: {result.detail}")
