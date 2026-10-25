@@ -1015,9 +1015,9 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 1. 사전 확인은 4.1의 0단계와 같다(CI success, 도는 잡 없음, 메모리·디스크). 하나 더 - close SQL에 넘길 시도 횟수 상한을 **컨테이너 안의 실효값**으로
    읽어 둔다. VM의 `.env`를 보지 않는다: compose는 `MAX_EXTRACT_ATTEMPTS`를 컨테이너로 넘기지 않아(`AI_ENV_FILE`로 넘기는 경우만 예외) `.env`에
    무엇을 적어도 추출기와 마이그레이션은 설정 기본값을 쓴다(2026-10-25 VM: `.env`에 이 키가 없고 `fetch_failed` 행의 시도 횟수 최댓값이 3).
-   2026-10-25 재배포 때의 운영 기록에는 'VM에 worker가 없어 scheduler로 대체'했다고 남아 있다. 저장소의 compose는 `worker`를 `profiles: ["tools"]`로 정의하므로 어긋나고
-   원인은 가르지 않았다(VM에서 `docker compose config --services`로 확인할 일이다). 같은 이미지를 쓰는 `scheduler`로 읽으면 어느 쪽이든 되므로 아래는 `scheduler`로 적는다
-   (이 런북의 다른 `run --rm worker ...` 명령은 확인하기 전이라 고치지 않았다):
+   VM에도 `worker`가 있다 - `profiles: ["tools"]`라 `docker compose config --services`에는 안 보이고 `--profile tools`를 붙이면 보인다(2026-10-25 VM 확인:
+   기본 `db migrate scheduler`, `--profile tools`는 `worker`까지). `docker compose run`은 프로필이 꺼진 서비스도 띄우므로 이 런북의 `run --rm worker ...` 명령은 그대로 된다.
+   같은 이미지인 `scheduler`로 읽어도 같다(2026-10-25에 이 명령으로 3을 읽었다):
    `micro 'cd ~/newsletter-recsys && sudo docker compose run --rm --no-deps --entrypoint python scheduler -c "from config.settings import Settings; print(Settings.MAX_EXTRACT_ATTEMPTS)"'` (기본 3).
 2. 스케줄러를 멈추고(4.1의 1단계) 백업을 당긴 뒤(2단계) 코드를 바꾸고 이미지를 다시 빌드하고(3·4단계), **마이그레이션을 돌린다**:
 
