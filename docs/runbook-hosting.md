@@ -456,7 +456,8 @@ Tier 0는 고친 코드로 재배포돼 있어야 한다(아니면 A1과 Tier 0�
    arm64로 직접 빌드한다. `sudo docker compose up -d db`로 **DB만** 올린다(스케줄러는 아직 끈다).
 3. Mac 덤프를 복원한다(Alembic 리비전까지 덤프에 들어 있다 — Mac 덤프는 `d48994e9d26e`). 5단계 병합 SQL은
    본문 보존 열(`f1db3221e45f`, ADR 0023)을 쓰므로 **복원한 뒤 병합 전에** `sudo docker compose run --rm migrate`로
-   head까지 올린다. Tier 0도 4.1의 배포 뒤라면 `f1db3221e45f`다:
+   head까지 올린다(동아일보 요약 배포, 6.9 뒤의 Tier 0는 상태 `rss_summary`·`blocked_origin` 행을 갖고 있어 **대상이 `b7e4a1c93d52`
+   이상이어야** 한다 - 아니면 병합이 CheckViolation으로 되돌아간다). Tier 0도 4.1의 배포 뒤라면 `f1db3221e45f`다:
 
    ```bash
    scp -F <a1 ssh_config> data/backups/mac-compose-2026-09-26.dump a1:mac.dump
@@ -751,6 +752,8 @@ User-Agent도 똑같이 막혔다. 동아일보를 어디서 얼마나 수집할
 Tier 0 피드에서 빼기)는 정하지 않았다(사용자 결정 대기).
 
 범위 종결 C-31 (2026-10-18): 유보 - 소유자 결정이다. 결정 9를 배포한 뒤의 관측(미시도 잔량, 최종 `fetch_failed` 비율)이 판단 자료다.
+범위 종결 C-31 (2026-10-25 갱신): 결정 · 배포 대기 - 위 "정하지 않았다"는 10-18 시점의 기록이다. 소유자가 위임한 상태에서 넷째 안(동아일보 RSS 요약을 본문 칸에 저장)을
+택했다([ADR 0026](adr/0026-hosting-tiers-and-contingency.md) "2026-10-25 결정 — 동아일보는 RSS 요약으로 받는다", 6.9).
 
 ### 6.7 AI타임스 기존 행의 발행 시각 보정 (Tier 0는 2026-10-17에 했다)
 
@@ -960,15 +963,18 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 배포 전 행 중 아직 추출 대기인 것은 한 번 닫는다(되돌릴 수 있다). 결정과 한계는 [ADR 0026](adr/0026-hosting-tiers-and-contingency.md)의
 "2026-10-25 결정 - 동아일보"다. **아직 배포하지 않았다.**
 
-**이 배포에는 Alembic 변경이 있다**: `f1db3221e45f` → `b7e4a1c93d52`(`ck_news_raw_extract_status`에 `rss_summary`·`blocked_origin`을 더한다. 제약을 바꾸는 동안만 테이블 락이 잡혀 수 밀리초이고,
-그 뒤 검증이 힙을 한 번 읽는다 - 읽기·쓰기를 막지 않는다). **새 이미지로 첫 ingest가 돌기 전에 `migrate`를 한다.** 제약이 그 두 상태를 모르는 채 새 수집기가 돌면 동아일보 INSERT가
+**이 배포에는 Alembic 변경이 있다**: `f1db3221e45f` → `b7e4a1c93d52`(`ck_news_raw_extract_status`에 `rss_summary`·`blocked_origin`을 더하고, 같은 요약 조회용 부분 인덱스
+`ix_news_raw_content_sha256_rss_summary`를 만든다. 인덱스를 만드는 동안(힙을 한 번 읽는다, 54 MB에서 1초 안팎) 쓰기가 기다리고 그 락이 커밋까지 이어지므로
+**스케줄러를 멈춘 상태에서 돌린다**(아래 2단계). 제약을 바꾸는 동안은 테이블 락이 잡혀 수 밀리초이고, 그 뒤 검증이 힙을 한 번 읽는다 - 읽기·쓰기를 막지 않는다). **새 이미지로 첫 ingest가 돌기 전에 `migrate`를 한다.** 제약이 그 두 상태를 모르는 채 새 수집기가 돌면 동아일보 INSERT가
 `CheckViolation`으로 피드째 실패해(`per_feed`의 `error`) 동아일보가 매시 0건이 되고, close SQL도 같은 이유로 멈춘다. `docker compose up`은 scheduler 앞에
 `migrate`를 돌리지만(compose `depends_on`), `run --rm worker ingest`처럼 손으로 띄우는 실행은 그렇지 않으므로 아래 2단계에서 따로 돌려 확인한다.
 
 **배포** (4.1의 절차를 쓴다. 이 변경에 맞춰 달라지는 곳만 적는다)
 
-1. 사전 확인은 4.1의 0단계와 같다(CI success, 도는 잡 없음, 메모리·디스크). 하나 더 - close SQL에 넘길 시도 횟수 상한을 VM에서 읽어 둔다:
-   `micro "grep '^MAX_EXTRACT_ATTEMPTS=' ~/newsletter-recsys/.env || echo '없음 = 기본 3'"`.
+1. 사전 확인은 4.1의 0단계와 같다(CI success, 도는 잡 없음, 메모리·디스크). 하나 더 - close SQL에 넘길 시도 횟수 상한을 **컨테이너 안의 실효값**으로
+   읽어 둔다. VM의 `.env`를 보지 않는다: compose는 `MAX_EXTRACT_ATTEMPTS`를 컨테이너로 넘기지 않아(`AI_ENV_FILE`로 넘기는 경우만 예외) `.env`에
+   무엇을 적어도 추출기와 마이그레이션은 설정 기본값을 쓴다(2026-10-25 VM: `.env`에 이 키가 없고 `fetch_failed` 행의 시도 횟수 최댓값이 3):
+   `micro 'cd ~/newsletter-recsys && sudo docker compose run --rm --no-deps --entrypoint python worker -c "from config.settings import Settings; print(Settings.MAX_EXTRACT_ATTEMPTS)"'` (기본 3).
 2. 스케줄러를 멈추고(4.1의 1단계) 백업을 당긴 뒤(2단계) 코드를 바꾸고 이미지를 다시 빌드하고(3·4단계), **마이그레이션을 돌린다**:
 
    ```bash
@@ -977,6 +983,8 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
    micro "$VMPSQL -At -c 'SELECT version_num FROM alembic_version'"   # b7e4a1c93d52
    micro "$VMPSQL -At -c \"SELECT pg_get_constraintdef(oid), convalidated FROM pg_constraint WHERE conname = 'ck_news_raw_extract_status'\""
    # 기대: 목록에 'rss_summary'와 'blocked_origin'이 있고 convalidated = t
+   micro "$VMPSQL -At -c \"SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_news_raw_content_sha256_rss_summary'\""
+   # 기대: ... (raw_news_content_sha256) WHERE ((raw_news_extract_status)::text = 'rss_summary'::text)
    ```
 
    그다음 스케줄러를 켠다(4.1의 7단계).
@@ -994,7 +1002,7 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 
 **추출 대기 행 닫기**
 
-4. 리허설. `max_attempts`는 위 1단계에서 읽은 VM `.env`의 `MAX_EXTRACT_ATTEMPTS`와 **같아야 한다**(없으면 기본 3). 다르면 "추출 대기"의 뜻이 추출기와 어긋나 닫을
+4. 리허설. `max_attempts`는 위 1단계에서 읽은 컨테이너의 `MAX_EXTRACT_ATTEMPTS`와 **같아야 한다**(기본 3). 다르면 "추출 대기"의 뜻이 추출기와 어긋나 닫을
    행을 놓치거나 이미 끝난 행까지 닫는다:
 
    ```bash
@@ -1018,7 +1026,7 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
    (리허설의 NOTICE `purged=N`이 그 수다. 추출기는 비운 행을 다시 고르지 않는다).
 
 **코드를 되돌릴 때** - 이전 이미지는 `b7e4a1c93d52`를 몰라 그 `migrate`가 "Can't locate revision"으로 멈춘다(4.1의 R3와 같다). 새 이미지로 먼저
-`alembic downgrade f1db3221e45f`를 한다: `blocked_origin`은 `fetch_failed`(시도 횟수를 `MAX_EXTRACT_ATTEMPTS` 이상으로)로, `rss_summary`는 `dropped`(본문 ''·임베딩 NULL, 이미 비운 행은 본문을
+`alembic downgrade f1db3221e45f`를 한다: 요약 해시 인덱스를 지우고, `blocked_origin`은 `fetch_failed`(시도 횟수를 `MAX_EXTRACT_ATTEMPTS` 이상으로)로, `rss_summary`는 `dropped`(본문 ''·임베딩 NULL, 이미 비운 행은 본문을
 그대로)로 바뀌고 요약 텍스트는 돌아오지 않는다.
 
 ## 7. Tier 0 내리기

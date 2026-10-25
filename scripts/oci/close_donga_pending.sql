@@ -10,9 +10,10 @@
 --
 --   psql -X -v ON_ERROR_STOP=1 [-v apply=1] [-v max_attempts=3] -f <이 파일>
 --
--- max_attempts는 VM .env의 MAX_EXTRACT_ATTEMPTS(없으면 3, config/settings.py)와 같아야 한다 - 다르면 "추출 대기"의 뜻이
--- 추출기와 어긋난다: 더 작으면 추출기가 아직 다시 시도할 행을 닫지 못하고, 더 크면 재시도를 이미 마친 fetch_failed까지
--- 닫는다. 아래 두 곳의
+-- max_attempts는 컨테이너의 실효 MAX_EXTRACT_ATTEMPTS(config/settings.py: 환경 변수, 없으면 3)와 같아야 한다. compose는 이
+-- 변수를 컨테이너로 넘기지 않으므로(AI_ENV_FILE로 넘기는 경우만 예외) 호스트 .env 값이 아니라 컨테이너에서 읽는다(런북 6.9의
+-- 1단계). 다르면 "추출 대기"의 뜻이 추출기와 어긋난다: 더 작으면 추출기가 아직 다시 시도할 행을 닫지 못하고, 더 크면 재시도를
+-- 이미 마친 fetch_failed까지 닫는다. 아래 두 곳의
 -- ('fetch_failed', 'error')는 config/retention.py의 RETRYABLE_EXTRACT_STATUSES를 옮겨 적은 것이다 - 그 값이 바뀌면 함께
 -- 고쳐야 한다(tests/test_news_raw_extract_statuses.py가 같은지 확인한다).
 --
