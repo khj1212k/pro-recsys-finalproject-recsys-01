@@ -14,6 +14,7 @@ for _path in (os.path.join(REPO_ROOT, "ai_workspace"), os.path.join(REPO_ROOT, "
 
 from app.models.news import NEWS_RAW_EXTRACT_STATUSES  # noqa: E402
 from crawler.content_extractor.extractor import _RECORDED_STATUSES  # noqa: E402
+from config.retention import RETRYABLE_EXTRACT_STATUSES  # noqa: E402
 from crawler.rss_collector import RSS_SUMMARY_STATUS  # noqa: E402
 
 VERSIONS = os.path.join(REPO_ROOT, "backend", "alembic", "versions")
@@ -50,3 +51,15 @@ def test_close_sql_only_writes_allowed_statuses():
         sql = f.read()
     written = set(re.findall(r"raw_news_extract_status\s*=\s*'([a-z_]+)'", sql))
     assert "blocked_origin" in written and written <= set(NEWS_RAW_EXTRACT_STATUSES)
+
+
+def test_close_sql_pending_statuses_match_the_extractors_retryable_statuses():
+    # close SQL의 "추출 대기" 조건에 옮겨 적은 ('fetch_failed', 'error')가 추출기·보존 잡이 쓰는 목록과 같아야 한다 -
+    # 어긋나면 추출기가 아직 집는 행을 닫지 못하거나 끝난 행을 닫는다(scripts/oci/close_donga_pending.sql 머리말).
+    path = os.path.join(REPO_ROOT, "scripts", "oci", "close_donga_pending.sql")
+    with open(path, encoding="utf-8") as f:
+        sql = f.read()
+    lists = re.findall(r"raw_news_extract_status IN \(([^)]*)\)", sql)
+    assert lists, "close SQL에서 재시도 가능한 상태 목록을 찾지 못했다"
+    for items in lists:
+        assert set(re.findall(r"'([a-z_]+)'", items)) == set(RETRYABLE_EXTRACT_STATUSES)

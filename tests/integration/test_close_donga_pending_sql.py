@@ -17,6 +17,7 @@ CLOSE_SQL = os.path.join(REPO_ROOT, "scripts", "oci", "close_donga_pending.sql")
 REVERT_SQL = os.path.join(REPO_ROOT, "scripts", "oci", "close_donga_pending_revert.sql")
 PSQL_SCRIPT_ERROR = 3
 NOTICE_RE = re.compile(r"close_donga closed=(\d+)")
+REVERT_NOTICE_RE = re.compile(r"close_donga_revert restore=(\d+) purged=(\d+)")
 NOW = datetime(2026, 10, 25, 3, 0, tzinfo=timezone.utc)
 
 
@@ -35,6 +36,7 @@ def schema(pg_conn):
         cur.execute(f'CREATE SCHEMA "{name}"')
         cur.execute(f'CREATE TABLE "{name}".press (LIKE public.press INCLUDING ALL)')
         cur.execute(f'CREATE TABLE "{name}".news_raw (LIKE public.news_raw INCLUDING ALL)')
+        cur.execute(f'CREATE TABLE "{name}".job_runs (LIKE public.job_runs INCLUDING ALL)')
     try:
         yield name
     finally:
@@ -78,6 +80,11 @@ def _has_audit(pg_conn, schema):
     with pg_conn.cursor() as cur:
         cur.execute("SELECT to_regclass(%s)", (f'"{schema}".news_raw_donga_close_pending',))
         return cur.fetchone()[0] is not None
+
+
+def _job_run(pg_conn, schema, job, status):
+    with pg_conn.cursor() as cur:
+        cur.execute(f'INSERT INTO "{schema}".job_runs (job, status) VALUES (%s, %s)', (job, status))
 
 
 def _seed(pg_conn, schema):
@@ -131,3 +138,54 @@ def test_revert_refuses_when_a_closed_row_changed_since(psql_bin, database_url, 
     refused = _run(psql_bin, database_url, schema, REVERT_SQL, "apply=1")
     assert refused.returncode == PSQL_SCRIPT_ERROR
     assert _has_audit(pg_conn, schema)
+
+
+def test_close_stops_while_an_ingest_is_running_and_proceeds_when_only_other_jobs_run(psql_bin, database_url, pg_conn, schema):
+    _seed(pg_conn, schema)
+    before = _state(pg_conn, schema)
+    _job_run(pg_conn, schema, "ingest", "running")
+    refused = _run(psql_bin, database_url, schema, CLOSE_SQL, "apply=1")
+    assert refused.returncode == PSQL_SCRIPT_ERROR and "ingest가 돌고 있다" in refused.stderr
+    assert _state(pg_conn, schema) == before and not _has_audit(pg_conn, schema)
+
+    with pg_conn.cursor() as cur:
+        cur.execute(f'DELETE FROM "{schema}".job_runs')
+    _job_run(pg_conn, schema, "ingest", "succeeded")   # 끝난 ingest
+    _job_run(pg_conn, schema, "ingest", "abandoned")   # 죽은 ingest
+    _job_run(pg_conn, schema, "popularity", "running")  # 다른 잡
+    ok = _run(psql_bin, database_url, schema, CLOSE_SQL, "apply=1")
+    assert ok.returncode == 0, ok.stderr
+    assert NOTICE_RE.search(ok.stderr).group(1) == "2"
+
+
+def test_revert_stops_while_an_ingest_is_running(psql_bin, database_url, pg_conn, schema):
+    _seed(pg_conn, schema)
+    assert _run(psql_bin, database_url, schema, CLOSE_SQL, "apply=1").returncode == 0
+    closed = _state(pg_conn, schema)
+    _job_run(pg_conn, schema, "ingest", "running")
+    refused = _run(psql_bin, database_url, schema, REVERT_SQL, "apply=1")
+    assert refused.returncode == PSQL_SCRIPT_ERROR and "ingest가 돌고 있다" in refused.stderr
+    assert _state(pg_conn, schema) == closed and _has_audit(pg_conn, schema)
+
+
+def test_revert_after_retention_restores_only_the_status_and_reports_the_purged_rows(psql_bin, database_url, pg_conn, schema):
+    _seed(pg_conn, schema)
+    assert _run(psql_bin, database_url, schema, CLOSE_SQL, "apply=1").returncode == 0
+    with pg_conn.cursor() as cur:  # 보존 잡이 닫은 행 하나의 본문 칸을 비웠다(ADR 0023)
+        cur.execute(
+            f"""UPDATE "{schema}".news_raw SET raw_news_content = NULL, raw_news_content_length = 0,
+                raw_news_content_purged_at = now() WHERE raw_news_title = 'pending_retry'"""
+        )
+    rehearsal = _run(psql_bin, database_url, schema, REVERT_SQL)
+    assert rehearsal.returncode == 0, rehearsal.stderr
+    assert REVERT_NOTICE_RE.search(rehearsal.stderr).groups() == ("2", "1")
+
+    reverted = _run(psql_bin, database_url, schema, REVERT_SQL, "apply=1")
+    assert reverted.returncode == 0, reverted.stderr
+    assert _state(pg_conn, schema)["pending_retry"] == ("fetch_failed", 1)  # 상태·시도 횟수는 돌아온다
+    with pg_conn.cursor() as cur:  # 비운 칸은 돌아오지 않는다
+        cur.execute(
+            f"""SELECT raw_news_content, raw_news_content_purged_at IS NOT NULL FROM "{schema}".news_raw
+                WHERE raw_news_title = 'pending_retry'"""
+        )
+        assert cur.fetchone() == (None, True)
