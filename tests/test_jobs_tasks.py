@@ -586,3 +586,23 @@ def test_no_container_warning_when_every_page_had_its_container(monkeypatch):
     ingest.run(ctx)
 
     assert ctx.warnings == []
+
+
+def test_feed_failures_are_grouped_per_press_when_a_press_has_several_feeds(monkeypatch):
+    """국민일보 여섯·전자신문 셋처럼 피드가 여럿인 언론사는 언론사마다 한 줄로 경고한다(PR #54 리뷰)."""
+    rss = {"inserted": 3, "skipped": 0, "failed_feeds": 4, "per_feed": {
+        "국민일보": {"press": "국민일보", "inserted": 0, "error": "RemoteDisconnected: closed"},
+        "국민일보_정치": {"press": "국민일보", "inserted": 0, "error": "skipped: www.kmib.co.kr unreadable earlier in this run"},
+        "국민일보_경제": {"press": "국민일보", "inserted": 0, "error": "skipped: www.kmib.co.kr unreadable earlier in this run"},
+        "전자신문_IT": {"press": "전자신문", "inserted": 0, "error": "feed unreadable (HTTP 503): x"},
+        "전자신문_AI": {"press": "전자신문", "inserted": 2, "error": None},
+        "경향신문": {"press": "경향신문", "inserted": 1, "error": None},
+    }}
+    ingest, ctx, _ = _ingest_rss_only(monkeypatch, lambda: {"skipped": "no service key"}, rss=rss)
+
+    ingest.run(ctx)
+
+    assert ctx.warnings == [
+        "국민일보: RSS 피드 3개 모두 실패 (RemoteDisconnected, skipped) - 이번 회차 신규 기사 0건",
+        "전자신문: RSS 피드 2개 중 1개 실패 (feed unreadable (HTTP 503)) - 전자신문_IT",
+    ]
