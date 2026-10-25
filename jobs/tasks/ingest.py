@@ -32,6 +32,21 @@ PRESS_ALL_FAILED_MIN = 3
 PRESS_FAILURE_RATIO_LIMIT = 0.5
 UNHEALTHY_PRESS_LIMIT = 2
 
+# 같은 본문 반복 감지(ADR 0026 결정 9, 2026-10-25 절). 국민일보는 2026-10-19 페이지 템플릿이 바뀐 뒤 trafilatura가 모든
+# 기사에서 같은 특집 글을 뽑았고, 본문 해시 중복 제거가 나머지를 duplicate로 지웠다. 다운로드는 성공하므로 위 실패 규칙에
+# 걸리지 않아 ingest는 매시 succeeded로 끝났다(10-25까지 엿새). 한 언론사에서 본문을 받은(ok·dropped·empty·duplicate)
+# 기사가 SAME_BODY_MIN_ARTICLES건 이상이고 그 중 SAME_BODY_RATIO_LIMIT 이상이 duplicate면 경고한다.
+# 같은 기준을 Tier 0의 ingest 기록에 대 봤다(job_runs.stats, 읽기만): 개편 전(2026-10-07 ~ 10-19 05시 UTC) 235회 x 언론사
+# 8곳 = 1,323건에서 걸린 곳이 0이고(한 회차 한 언론사의 최대 duplicate 7건), 개편 뒤 국민일보는 123회 중 44회가 걸렸다
+# (첫 감지 10-20 03:05 UTC - 개편 뒤 약 22시간. 개편 직후 회차들은 특집 글이 기사마다 본문과 섞여 해시가 서로 달랐다).
+# 다른 언론사는 개편 뒤 714건에서도 0이다. 잡을 실패시키지 않는다: 추출·저장은 정상이고 다음 실행에 영향이 없으며
+# 되돌리는 방법이 있다(scripts/oci/fix_kmib_body_extraction.sql). 다운로드 실패와 달리 '건강하지 않은 언론사' 수
+# (UNHEALTHY_PRESS_LIMIT)에도 넣지 않는다.
+SAME_BODY_MIN_ARTICLES = 5
+SAME_BODY_RATIO_LIMIT = 0.5
+SAME_BODY_LABEL = "같은 본문 반복 - 추출 이상 의심"
+_PARSED_STATUSES = ("ok", "dropped", "empty", "duplicate")
+
 # --extract-deadline-s는 ingest 시작부터 잰다 - RSS 단계가 늦을수록 추출 시간이 준다. RSS가 마감을 거의 다 써도
 # 추출은 이만큼은 돈다(앞서 실패한 기사만 계속 미뤄지지 않게).
 EXTRACT_MIN_BUDGET_S = 60.0
@@ -149,6 +164,19 @@ def _press_counts(counts: Dict[str, int]) -> Tuple[int, int]:
     return attempted, failed
 
 
+def _same_body_repeats(per_press: Dict[str, Dict[str, int]]) -> Dict[str, Dict[str, Any]]:
+    """한 실행 안에서 본문을 받은 기사 중 duplicate가 SAME_BODY_RATIO_LIMIT 이상인 언론사(받은 기사 SAME_BODY_MIN_ARTICLES건
+    이상일 때만) -> job_runs.stats에 남기는 항목. 다운로드 실패·오류·미룬 기사는 분모에 넣지 않는다."""
+    suspects: Dict[str, Dict[str, Any]] = {}
+    for press, counts in sorted(per_press.items()):
+        parsed = sum(counts.get(status, 0) for status in _PARSED_STATUSES)
+        duplicate = counts.get("duplicate", 0)
+        if parsed >= SAME_BODY_MIN_ARTICLES and duplicate / parsed >= SAME_BODY_RATIO_LIMIT:
+            suspects[press] = {"reason": "same_body_repeated", "label": SAME_BODY_LABEL,
+                               "parsed": parsed, "duplicate": duplicate}
+    return suspects
+
+
 def _cause_text(causes: Dict[str, int]) -> str:
     return ", ".join(f"{cause} {n}" for cause, n in sorted(causes.items(), key=lambda kv: (-kv[1], kv[0])))
 
@@ -171,6 +199,22 @@ def check_extract_health(ctx, stats: Dict[str, Any]) -> None:
         if tripped:
             detail += f", 연속 실패로 남은 {breaker[press].get('deferred', 0)}건은 다음 실행으로 미룸"
         ctx.warn(detail + " - 차단/사이트 개편 확인")
+
+    for press, found in sorted((stats.get("body_container") or {}).items()):
+        if found.get("container_missing"):
+            ctx.warn(
+                f"{press}: 본문 컨테이너를 못 찾아 전체 페이지로 추출한 기사 {found['container_missing']}건 "
+                f"(컨테이너로 추출 {found.get('container', 0)}건) - 페이지 개편 확인"
+            )
+
+    suspects = _same_body_repeats(per_press)
+    if suspects:
+        stats["suspect_press"] = suspects  # 언론사별 통계: daily_report가 읽는다
+    for press, found in suspects.items():
+        ctx.warn(
+            f"{press}: 본문을 받은 기사 {found['parsed']}건 중 {found['duplicate']}건이 duplicate - "
+            f"{SAME_BODY_LABEL} (본문 컨테이너·페이지 개편 확인)"
+        )
 
     budget_deferred = (stats.get("deferred_reasons") or {}).get("time_budget", 0)
     if stats.get("time_budget_exhausted"):
