@@ -9,6 +9,7 @@ from dateutil import parser as date_parser
 from psycopg2.extras import execute_values
 from db.connection import get_connection, release_connection
 from config.settings import Settings
+from config.sources import press_name_for_feed
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ def collect_rss(hours: int = 100) -> Dict[str, Any]:
     try:
         with conn.cursor() as cur:
             for feed_name, (_, url) in Settings.RSS_FEEDS.items():
-                press_name = '전자신문' if feed_name.startswith('전자신문') else feed_name
+                press_name = press_name_for_feed(feed_name)
                 feed_stats = {
                     "press": press_name, "entries": 0, "inserted": 0, "skipped": 0,
                     "too_old": 0, "bad_date": 0, "error": None,
