@@ -368,7 +368,7 @@ DB 변경과 배포 순서: CHECK 제약 `ck_news_raw_extract_status`는 `rss_su
      - 수정: `crawler/content_extractor/body_container.py`의 `PRESS_BODY_CONTAINERS`에 `"매일경제": '//*[@itemprop="articleBody"]'`를 더했다(국민일보와 같은 구조 - 노드만 잘라 `<article>`로 감싸 넘기고, 못 찾으면 전체 페이지
        추출로 되돌아가되 `container_missing`으로 세어 ingest가 언론사별로 경고한다. 노드가 있는데 글이 없으면 `empty`/`dropped`). 다른 언론사의 본문과 해시는 바뀌지 않는다. `extractor.py`는 건드리지 않았다 - 통계와 경고가 언론사 이름으로 일반화돼 있다.
        테스트는 지어낸 HTML(`tests/mk_fake_pages.py`, 본문 노드·모달 구조만 흉내)로 모달이 있어도 컨테이너 추출 본문과 해시가 모달 없는 같은 기사와 글자까지 같음을 확인한다.
-     - 측정(2026-10-25 12:39 ~ 13:05 UTC. VM은 `SET default_transaction_read_only = on` 아래 SELECT만 - 본문·제목 칸은 읽지 않고 길이·상태·URL만 뽑았다. 페이지는 Mac에서 2초 간격으로 60쪽만 받았고(`fetch_page`),
+     - 측정(2026-10-25 12:39 ~ 13:05 UTC. VM은 `SET default_transaction_read_only = on` 아래 SELECT만 - 본문·제목 칸은 읽지 않고 길이·상태·URL만 뽑았다. 표본 60쪽은 Mac에서 2초 간격으로 받았고(`fetch_page`) 구조(태그·클래스·글자 수) 확인용으로 한 쪽을 세 번 더 받았다.
        본문은 출력·저장하지 않고 길이만 남겼다): 30일 창 매일경제 `ok`·본문을 안 비운 7,706행을 저장 길이 구간으로 나눠 구간마다 무작위로(`setseed` 고정) 뽑았다. 첫 표본 40건(5구간 x 8건)에 경계 근처 20건(2,500~2,999자 8건·
        3,000~3,499자 12건, 첫 표본 제외)을 더해 60건이다. 컨테이너 길이 = 새 규칙으로 trafilatura + `clean_text_lite`. **부푼 행** = 저장 길이가 컨테이너 길이의 1.3배를 넘고 500자 넘게 긴 행. 60쪽 모두 다운로드에
        성공했고 본문 노드는 모두 한 개(`container` 60/60, `container_missing` 0)였다.
