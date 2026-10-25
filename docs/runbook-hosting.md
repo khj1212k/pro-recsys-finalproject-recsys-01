@@ -1193,10 +1193,10 @@ CI의 PostgreSQL에서 `tests/integration/test_fix_kmib_created_at_sql.py`가, �
 #### 수집기 수정과 2차 보정 (ADR 0008 "2026-10-25 갱신 2", 코드만 - 배포·실행은 아직)
 
 **수집기(본문 추출기)가 하는 일.** `ai_workspace/crawler/content_extractor/page_pubdate.py`. 기사 페이지를 받은 뒤, 행의 저장된 발행 시각(`raw_news_created_at`)이 수집 시각(`raw_news_crawled_at`, 시간대 없는 UTC)보다 **10분 넘게 뒤**일 때만
-페이지의 JSON-LD `datePublished`(없으면 `<meta property="article:published_time">`)로 바꾼다. 페이지 값에 시간대가 있고, 수집 시각 + 10분 이하이고, 수집 시각 − 7일 이상일 때만 쓴다(위 3단계 생성기와 같은 조건).
+페이지의 JSON-LD `datePublished`(없으면 `<meta property="article:published_time">`)로 바꾼다. 쓰는 값은 그 기사 자신의 것뿐이다 - JSON-LD는 모든 덩어리를 통틀어 우선순위 1위 노드의 값 하나만 보고(관련 기사 목록 등 다른 노드의 값으로는 넘어가지 않는다), 그 값을 못 쓰면 meta를 본다. 페이지 값에 시간대가 있고, 수집 시각 + 10분 이하이고, 수집 시각 − 7일 이상일 때만 쓴다(위 3단계 생성기와 같은 조건).
 미래가 아닌 행은 읽지도 않는다. 언론사를 가리지 않는다. 추출 결과를 쓰는 같은 트랜잭션에서 쓰고, `WHERE`가 "지금도 미래일 때만"이라 먼저 고쳐진 행(예: 이 절의 보정)은 덮지 않는다.
-**ingest의 `stats.extract`에 남는 키:** `created_at_from_page`(언론사별로 바꾼 행 수), `created_at_unfixed`(미래였는데 못 바꾼 행의 언론사별 사유 개수 - `no_page_time` · `no_tz` · `after_crawl` · `too_old`. 그 행은 미래인 채 남는다).
-`fetch_failed`·`error`로 끝난 행은 페이지를 못 받았으므로 못 고치고, 시도 상한(3회) 안에서 다시 받을 때 고친다. 동아일보는 RSS 요약이라 추출 단계를 거치지 않아 이 경로로는 고치지 못한다.
+**ingest의 `stats.extract`에 남는 키:** `created_at_from_page`(언론사별로 바꾼 행 수), `created_at_unfixed`(미래였는데 못 바꾼 행의 언론사별 사유 개수 - `no_page_time` · `no_tz` · `after_crawl` · `too_old`, 그리고 `fetch_failed` · `error`. 그 행은 미래인 채 남는다).
+`fetch_failed`(페이지를 못 받았다)·`error`(처리 중 예외로 롤백했다)로 끝난 미래 행은 그 시도에서 못 고치고 시도마다 이 두 사유로 센다 - 시도 상한(3회) 안에서 다시 받을 때 고친다. 동아일보는 RSS 요약이라 추출 단계를 거치지 않아 이 경로로는 고치지 못한다.
 
 **배포 뒤 확인(읽기 전용).** 국민일보 새 행이 있는 회차에서 `created_at_from_page`에 국민일보 건수가 찍히는지, `created_at_unfixed`가 무엇으로 차는지 본다:
 
@@ -1253,11 +1253,12 @@ GROUP BY 1, 2 ORDER BY 1, 2;
    wc -l future_targets.csv   # 2026-10-25 12:31 UTC에는 30 (배포 전 기준 - 배포 뒤 다시 뽑는다)
    ```
 
-2. **페이지 값 받기(Mac, 2초 간격).** 수집기와 **같은 판정**을 쓰려고 `page_pubdate.py`를 경로로 읽는다(표준 라이브러리만 쓴다). 입력 CSV는 위 2단계와 같은 여섯 칸(머리줄 없음)이고, 이 스크립트는 페이지 값 칸에 판정이 `fixed`일 때만 UTC 시각을 쓰며
+2. **페이지 값 받기(Mac, 2초 간격).** 수집기와 **같은 판정**을 쓰려고 `page_pubdate.py`를 경로로 읽는다(표준 라이브러리만 쓴다). 입력은 1단계의 네 칸 CSV(`future_targets.csv`, 머리줄 없음)이고, 출력은 생성기가 받는 여섯 칸 CSV(`future_pub.csv`)다. 이 스크립트는 페이지 값 칸에 판정이 `fixed`일 때만 UTC 시각을 쓰며
    아니면 비우고 오류 칸에 사유(`no_page_time` · `no_tz` · `after_crawl` · `too_old`)를 쓴다. 본문은 저장하지 않는다. 요청은 기사당 한 번이다.
 
    ```python
    # fetch_pub_2.py <입력 CSV> <출력 CSV> <저장소 루트>  (스크래치 폴더에 두고 python3 -I로 돌린다)
+   #   python3 -I fetch_pub_2.py future_targets.csv future_pub.csv <저장소 루트>
    import collections, csv, importlib.util, sys, time, urllib.request
    from datetime import datetime
    src, out, repo = sys.argv[1:4]

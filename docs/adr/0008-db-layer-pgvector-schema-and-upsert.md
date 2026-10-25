@@ -461,28 +461,30 @@ AI타임스의 값이 KST라는 근거는 같은 응답 안에 있다: HTTP `Las
 ### 결정
 - **대상: 저장된 `raw_news_created_at`이 `raw_news_crawled_at`(시간대 없는 UTC)보다 10분 넘게 뒤인 행.** 10분은 서버 시계 차이로 몇 분 앞서는 값을 정상으로 두려는 여유다(일회성 보정과 같은 값). 그 밖의 행은 **페이지를 읽지도 않고 건드리지 않는다** -
   정상으로 보이는 피드의 값을 페이지 값으로 덮지 않는다(위 대안 4).
-- **값: 기사 페이지의 JSON-LD `datePublished`, 없으면 `<meta property="article:published_time">`.** JSON-LD 안에서는 `@type`이 *Article인 노드를, 같으면 얕은 노드를 앞세운다(관련 기사 같은 중첩 항목이 뒤로 간다). 깨진 JSON-LD는 값만 정규식으로 읽는다. 수정 시각(`dateModified`)은 읽지 않는다.
+- **값: 기사 페이지의 JSON-LD `datePublished`, 없으면 `<meta property="article:published_time">`.** **쓰는 값은 그 기사 자신의 값뿐이다.** 우선순위는 페이지의 모든 JSON-LD 덩어리를 통틀어 매긴다: `@type`이 *Article인 노드를, 같으면 얕은 노드를, 같으면 문서 순서를 앞세운다(관련 기사 목록 같은 중첩 항목이 뒤로 가고, 앞 덩어리가 관련 기사 목록이어도 뒤 덩어리에 있는 페이지 자신의 기사가 앞선다).
+  후보는 우선순위 1위 노드의 값 하나와 meta `article:published_time`이다. 1위 값에 시간대가 없거나 형식이 깨졌을 때 meta로는 넘어가도 2위 이하 JSON-LD 값(관련 기사 등 다른 노드)으로는 넘어가지 않는다 - 그러면 다른 기사의 시각을 이 행에 써 넣는다. 그 경우는 `no_tz`·`no_page_time`으로 남는다.
+  깨진 JSON-LD는 값만 정규식으로 읽고, `@type`을 알 수 없으므로 최상위 *Article 층으로 보고 문서 순서에 둔다. 수정 시각(`dateModified`)은 읽지 않는다.
   새 모듈 `ai_workspace/crawler/content_extractor/page_pubdate.py`(표준 라이브러리만, `body_container.py`처럼 추출기와 분리)가 읽고 판정한다. 예외를 던지지 않는다 - 발행 시각을 못 고치는 것이 본문 추출을 막지 않는다.
 - **페이지 값을 쓰는 조건(일회성 생성기와 같다): 시간대가 붙어 있고, 수집 시각 + 10분 이하이고, 수집 시각 - 7일 이상.** 어긴 행은 저장값을 그대로 두고 사유를 센다(`no_page_time` · `no_tz` · `after_crawl` · `too_old`). 두 곳의 상수는 `tests/test_content_extractor_page_pubdate.py`가 같은지 확인한다.
 - **언론사를 가리지 않는다.** 미래의 발행 시각은 어느 언론사든 틀린 값이다(기사는 수집 앞에 발행된다). 규칙은 미래인 행에만 걸리고, 지금 다른 언론사의 해당 행은 DB 전체에서 0이므로 국민일보 밖의 동작은 지금 달라지지 않는다. 국민일보로 한정하면 다른 언론사에서 같은 이상이 날 때
   코드를 또 고쳐 배포해야 한다. 한계: 동아일보는 RSS 요약 전략(ADR 0026 C-31)이라 추출 단계를 거치지 않아 이 경로로 고치지 못한다(지금 해당 행 0).
-- **쓰는 곳: 추출 결과를 쓰는 같은 트랜잭션.** `ok`·`dropped`·`empty`·`duplicate` 모두(페이지를 받았으므로) 발행 시각도 함께 바꾼다. `fetch_failed`·`error`는 페이지를 못 받았으므로 못 고치고, 시도 상한(3회) 안에서 다시 받을 때 고친다. 발행 시각을 쓰는 `UPDATE`는
+- **쓰는 곳: 추출 결과를 쓰는 같은 트랜잭션.** `ok`·`dropped`·`empty`·`duplicate` 모두(페이지를 받았으므로) 발행 시각도 함께 바꾼다. `fetch_failed`(페이지를 못 받았다)·`error`(처리 중 예외로 롤백했다, 페이지를 받은 뒤일 수도 있다)는 그 시도에서 못 고치고, 시도 상한(3회) 안에서 다시 받을 때 고친다. 미래인 행이면 이 두 경우도 `created_at_unfixed`에 센다(아래 통계). 발행 시각을 쓰는 `UPDATE`는
   `WHERE`가 지금 행의 값이 아직 미래일 때만 바꾼다 - 대상을 고른 뒤 다른 곳(런북 6.10의 보정)이 먼저 고친 값을 덮지 않고, 0행이면 바꾼 행으로 세지 않는다. `ok`가 본문 해시 unique 인덱스에 막혀 롤백하고 `duplicate`로 다시 쓸 때는 발행 시각도 다시 쓴다.
 - **대상 조회: SELECT 열에 발행 시각·수집 시각을 더했다.** 고르는 조건(`WHERE`)은 그대로라 보존 잡(`jobs/tasks/retention.py`)의 "추출 대기" 조건과 같다 - `tests/test_retention_job.py`의 SQL 조각 검사가 그대로 통과한다.
-- **통계(`job_runs.stats.extract`): `created_at_from_page`**(언론사별 바꾼 행 수) · **`created_at_unfixed`**(미래였는데 못 바꾼 행의 언론사별 사유 개수. 그 행은 미래인 채 남는다). 경고(`ctx.warn`)로 연결하지는 않았다 - 배포 뒤 몇 회차를 보고 정한다.
+- **통계(`job_runs.stats.extract`): `created_at_from_page`**(언론사별 바꾼 행 수) · **`created_at_unfixed`**(미래였는데 못 바꾼 행의 언론사별 사유 개수. 그 행은 미래인 채 남는다. 사유: 페이지를 읽었다 - `no_page_time` · `no_tz` · `after_crawl` · `too_old`, 읽기 전에 끝났다 - `fetch_failed` · `error`. 뒤 둘은 시도마다 세므로 같은 행이 시도 상한까지 여러 회차에 잡힐 수 있다). 경고(`ctx.warn`)로 연결하지는 않았다 - 배포 뒤 몇 회차를 보고 정한다.
 - **2차 보정(이미 추출이 끝난 행).** 위 30행처럼 수집기가 이미 지나간 행은 이 수정이 닿지 않는다. `scripts/oci/build_kmib_created_at_fix.py`가 `--table`(보관 표 이름) · `--all-presses`/`--press`(언론사) · `--revert`(보관 표 이름을 바꾼 되돌리기 SQL)를 받게 했다 -
   1차 보관 표(`news_raw_kmib_created_at_fix`)와 따로 `news_raw_created_at_fix_2`를 써서 1차 보정을 되돌리지 않고 더 고친다. 절차는 런북 6.10 "2차 보정". **실행하지 않았다**(수정을 배포한 뒤에 한다).
 
 ### 검증
-`tests/test_content_extractor_page_pubdate.py`(읽기와 판정: JSON-LD 있음 · 없음 · 시간대 없음 · 잘못된 값 · `@graph` · 깨진 JSON · meta, 경계 +10분 · −7일), `tests/test_content_extractor_created_at.py`(미래 행만 바뀜 · 같은 트랜잭션 · `duplicate` 폴백 · 이미 고쳐진 행 · 통계 키 · 대상 조회),
-`tests/test_build_kmib_created_at_fix.py`(생성기 새 인자), PostgreSQL 통합 테스트 `tests/integration/test_extract_created_at_from_page_db.py`(실제 `UPDATE`와 경계) · `tests/integration/test_fix_kmib_created_at_sql.py`(2차 보정과 되돌리기가 1차 보관 표를 건드리지 않음).
+`tests/test_content_extractor_page_pubdate.py`(읽기와 판정: JSON-LD 있음 · 없음 · 시간대 없음 · 잘못된 값 · `@graph` · 깨진 JSON · meta, 덩어리를 가로지르는 우선순위 · 기사 자신의 값에서 다른 노드로 넘어가지 않음, 경계 +10분 · −7일), `tests/test_content_extractor_created_at.py`(미래 행만 바뀜 · 같은 트랜잭션 · `duplicate` 폴백 · 이미 고쳐진 행 · `fetch_failed`·`error`인 미래 행의 분류 · 통계 키 · 대상 조회),
+`tests/test_build_kmib_created_at_fix.py`(생성기 새 인자, 인자 없이 부른 출력이 예전과 글자 하나까지 같음), PostgreSQL 통합 테스트 `tests/integration/test_extract_created_at_from_page_db.py`(실제 `UPDATE`와 경계) · `tests/integration/test_fix_kmib_created_at_sql.py`(2차 보정과 되돌리기가 1차 보관 표를 건드리지 않음).
 페이지는 모두 구조만 흉내 낸 지어낸 HTML이다(ADR 0023). 통합 테스트는 CI의 PostgreSQL에서 돈다 - 이 작업에서는 로컬에서 돌리지 않았다.
 
 ### 결과와 한계
 - **미래로 드러나는 오류만 고친다.** RSS 값이 틀렸는데 수집 시각보다 앞서는 행은 이 규칙으로 가려내지 못하고 그대로 둔다. 위 441행에도 그런 행이 2행 있었다: 저장값이 수집보다 앞섰지만 저장 날짜가 URL 날짜의 하루 뒤인 앞의 440행과 같은 모양이라 1차 보정의 선정 기준에 걸려 들어갔고(수집 지연 3.43 · 5.35시간으로 읽히던 것이
   페이지 값으로는 1.09 · 0.07시간), 이 규칙은 그 모양을 보지 않고 미래만 보므로 그런 행은 놓친다. 그런 행이 얼마나 있는지, 지연 통계를 어느 쪽으로 틀리게 하는지는 모른다. 페이지 값이 RSS 값보다 맞다는 근거가 미래인 행(441행, 독립 확인 16쌍)에서만 있어서 모든 행을 페이지와 대조하는 쪽(대안 4)은 택하지 않았다.
 - **페이지 값을 사실로 둔 것은 가정이다**(위 "결과와 한계"와 같다). 이 수정은 그 가정을 미래 행에 한해 수집기에 넣은 것이다.
-- **못 고친 행은 미래로 남는다**(`created_at_unfixed`). 지연 p95 판정에서는 위 보정과 같이 대조하지 못한 행을 최악(99시간)으로 읽는다. 국민일보 페이지가 JSON-LD를 빼면 `no_page_time`이 늘어 통계로 드러나지만, 아직 경고는 없다.
+- **못 고친 행은 미래로 남는다**(`created_at_unfixed` - 페이지를 읽고도 못 쓴 행뿐 아니라 `fetch_failed`·`error`로 끝난 미래 행도 센다). 지연 p95 판정에서는 위 보정과 같이 대조하지 못한 행을 최악(99시간)으로 읽는다. 국민일보 페이지가 JSON-LD를 빼면 `no_page_time`이 늘어 통계로 드러나지만, 아직 경고는 없다.
 - **원인은 여전히 모른다.** 이 수정은 증상을 막을 뿐이다. RSS가 왜 그런 값을 주는지는 가르지 않았고, 이상이 멈추거나 다른 언론사로 번지는지는 배포 뒤 `created_at_from_page`로 본다.
 - **미배포.** Tier 0은 이 수정이 없는 코드로 돈다. 배포 전까지 새 행은 미래 값으로 들어오고 위 30행은 그대로다. 배포한 뒤: ① 첫 ingest의 `stats.extract.created_at_from_page`에 국민일보 건수가 찍히는지(국민일보 새 행이 있는 회차에서), `created_at_unfixed`가 비었거나 사유가 보이는지 ② 읽기 전용으로 새 행 중
   미래 값이 남았는지(런북 6.10 6단계 질의) ③ 이미 추출이 끝난 행을 2차 보정으로 정리한다(배포 전에 하면 그 사이 새 미래 행이 생기므로 배포 뒤 한 번). 배포 기록은 그때 이 절 위의 상태 줄에 더한다.
