@@ -3,6 +3,8 @@
 #   기사는 수집 시각 앞에 발행됐으므로 수집보다 뒤인 발행 시각은 어느 언론사든 틀린 값이다.
 # - 본문 추출기는 어차피 기사 페이지를 받는다. 저장된 발행 시각이 수집 시각보다 10분 넘게 뒤인 행에 한해, 그 페이지의
 #   JSON-LD datePublished(없으면 meta article:published_time)로 바꾼다. 미래가 아닌 행은 건드리지 않는다.
+# - 쓰는 값은 그 기사 자신의 값뿐이다: 모든 JSON-LD 덩어리를 통틀어 우선순위 1위인 노드의 값, 그다음 meta. 1위 값을 못 쓴다고
+#   관련 기사 목록 같은 다른 노드의 값으로 넘어가지 않는다(다른 기사의 시각을 이 행에 써 넣게 된다).
 # - 표준 라이브러리만 쓴다 - 런북 6.10의 Mac 쪽 페이지 받기 스크립트가 같은 파일을 경로로 읽어 같은 규칙을 쓴다.
 #
 # 페이지 값을 쓰는 조건은 scripts/oci/build_kmib_created_at_fix.py(일회성 보정 생성기)와 같다:
@@ -30,7 +32,9 @@ NO_PAGE_TIME = "no_page_time"  # 미래인데 페이지에서 읽을 수 있는 
 NO_TZ = "no_tz"                # 페이지 값에 시간대가 없다 - 어느 시각인지 정할 수 없다
 AFTER_CRAWL = "after_crawl"    # 페이지 값도 수집 시각보다 10분 넘게 뒤다
 TOO_OLD = "too_old"            # 페이지 값이 수집 시각보다 7일 넘게 앞이다
-UNFIXED_REASONS = (NO_PAGE_TIME, NO_TZ, AFTER_CRAWL, TOO_OLD)
+FETCH_FAILED = "fetch_failed"  # 미래인데 이번 시도에서 페이지를 못 받았다 - 다음 시도(상한 3회)에서 고칠 수 있다. 시도마다 센다
+ERROR = "error"                # 미래인데 처리 중 예외로 롤백됐다(페이지를 받은 뒤일 수도 있다). 시도마다 센다
+UNFIXED_REASONS = (NO_PAGE_TIME, NO_TZ, AFTER_CRAWL, TOO_OLD, FETCH_FAILED, ERROR)
 
 _META_KEY = "article:published_time"
 _LD_JSON_TYPE = "application/ld+json"
@@ -86,16 +90,20 @@ def _is_article_node(node: dict) -> bool:
     return any(isinstance(k, str) and ("article" in k.lower() or "posting" in k.lower()) for k in kinds)
 
 
-def _ld_date_published(block: str) -> List[str]:
-    """JSON-LD 한 덩어리에서 datePublished 문자열을 우선순위 순으로 돌려준다.
+# JSON-LD 후보의 순위 키: (@type이 *Article이 아니다, 깊이, 덩어리 번호, 덩어리 안 순서). 작을수록 앞선다. 값은 맨 뒤에 붙는다.
+_Ranked = Tuple[bool, int, int, int, str]
+
+
+def _ld_date_published(block: str, block_index: int) -> List[_Ranked]:
+    """JSON-LD 한 덩어리의 datePublished 값을 순위 키와 함께 돌려준다(정렬은 부르는 쪽이 모든 덩어리를 모아서 한다).
 
     기사 자신의 값이 앞선다: @type이 *Article/*Posting인 노드 > 그 밖의 노드, 얕은 노드 > 깊은 노드(관련 기사 목록 같은
-    중첩된 항목이 뒤로 간다), 같으면 문서 순서."""
+    중첩된 항목이 뒤로 간다), 같으면 문서 순서. 깨진 JSON-LD는 형식 정보가 없어 최상위 *Article 층으로 보고 문서 순서에 둔다."""
     try:
         data = json.loads(block, strict=False)
     except ValueError:
-        return [m.group(1) for m in _DATE_PUBLISHED_RE.finditer(block)]
-    found: List[Tuple[bool, int, int, str]] = []
+        return [(False, 0, block_index, i, m.group(1)) for i, m in enumerate(_DATE_PUBLISHED_RE.finditer(block))]
+    found: List[_Ranked] = []
     queue = deque([(data, 0)])
     visited = 0
     while queue and visited < _MAX_NODES:
@@ -106,15 +114,17 @@ def _ld_date_published(block: str) -> List[str]:
         elif isinstance(node, dict):
             value = node.get("datePublished")
             if isinstance(value, str) and value.strip():
-                found.append((not _is_article_node(node), depth, len(found), value.strip()))
+                found.append((not _is_article_node(node), depth, block_index, len(found), value.strip()))
             queue.extend((child, depth + 1) for child in node.values() if isinstance(child, (dict, list)))
-    return [value for _, _, _, value in sorted(found)]
+    return found
 
 
-def page_published_candidates(html: str) -> List[str]:
-    """페이지가 적은 발행 시각 문자열들. JSON-LD datePublished가 먼저, 그다음 meta article:published_time. 예외를 던지지 않는다."""
+def _read_page(html: str) -> Tuple[List[str], List[str]]:
+    """(JSON-LD datePublished 값들을 우선순위 순으로, meta article:published_time 값들). 예외를 던지지 않는다.
+
+    우선순위는 모든 JSON-LD 덩어리를 통틀어 매긴다 - 앞 덩어리가 관련 기사 목록이어도 뒤 덩어리에 있는 페이지 자신의 *Article이 앞선다."""
     if not isinstance(html, str) or not html:
-        return []
+        return [], []
     parser = _PageTimeParser()
     try:
         parser.feed(html[:_MAX_HTML_CHARS])
@@ -122,11 +132,25 @@ def page_published_candidates(html: str) -> List[str]:
     except Exception:  # noqa: BLE001 - 깨진 마크업: 읽은 데까지만 쓴다
         logger.debug("발행 시각 파싱 중 예외 - 읽은 데까지만 쓴다", exc_info=True)
     parser.flush()
-    candidates: List[str] = []
-    for block in parser.ld_blocks:
-        candidates.extend(_ld_date_published(block))
-    candidates.extend(parser.meta_values)
-    return candidates
+    ranked: List[_Ranked] = []
+    for index, block in enumerate(parser.ld_blocks):
+        ranked.extend(_ld_date_published(block, index))
+    ranked.sort()
+    return [entry[-1] for entry in ranked], parser.meta_values
+
+
+def page_published_candidates(html: str) -> List[str]:
+    """페이지가 적은 발행 시각 문자열 전부. JSON-LD datePublished가 우선순위 순으로, 그다음 meta article:published_time. 예외를 던지지 않는다."""
+    ld_values, meta_values = _read_page(html)
+    return ld_values + meta_values
+
+
+def page_own_candidates(html: str) -> List[str]:
+    """그 기사 자신의 발행 시각 후보: JSON-LD 우선순위 1위 노드의 값 하나, 그다음 meta article:published_time. 예외를 던지지 않는다.
+
+    2위 이하 JSON-LD 값(같은 페이지의 관련 기사·다른 노드)은 넣지 않는다 - 1위 값을 못 쓸 때 다른 기사의 시각으로 넘어가면 안 된다."""
+    ld_values, meta_values = _read_page(html)
+    return ld_values[:1] + meta_values
 
 
 def _parse_iso(text: str) -> Optional[datetime]:
@@ -157,13 +181,13 @@ def decide_created_at(stored_created_at: Optional[datetime], crawled_at: Optiona
         if not is_future(stored_created_at, crawled_at):
             return PageCreatedAt(NOT_FUTURE)
         crawled = _as_utc(crawled_at)
-        parsed = [d for d in (_parse_iso(c) for c in page_published_candidates(html)) if d is not None]
+        parsed = [d for d in (_parse_iso(c) for c in page_own_candidates(html)) if d is not None]
         if not parsed:
             return PageCreatedAt(NO_PAGE_TIME)
         aware = [d for d in parsed if d.tzinfo is not None]
         if not aware:
             return PageCreatedAt(NO_TZ)
-        page = aware[0].astimezone(timezone.utc)  # 우선순위가 가장 높은, 시간대가 있는 값
+        page = aware[0].astimezone(timezone.utc)  # 그 기사 자신의 값 가운데 우선순위가 가장 높은, 시간대가 있는 값
         if page > crawled + FUTURE_SLACK:
             return PageCreatedAt(AFTER_CRAWL)
         if page < crawled - MAX_AGE_BEFORE_CRAWL:
@@ -172,3 +196,14 @@ def decide_created_at(stored_created_at: Optional[datetime], crawled_at: Optiona
     except Exception:  # noqa: BLE001 - 발행 시각을 못 고치는 것이 본문 추출을 막아서는 안 된다
         logger.debug("발행 시각 판정 중 예외 - 고치지 않는다", exc_info=True)
         return PageCreatedAt(NO_PAGE_TIME)
+
+
+def unfixed_if_future(stored_created_at: Optional[datetime], crawled_at: Optional[datetime], reason: str) -> str:
+    """페이지를 읽기 전에 끝난 시도(FETCH_FAILED·ERROR)의 분류: 미래인 행이면 reason, 아니면 NOT_FUTURE. 예외를 던지지 않는다.
+
+    이런 행도 미래인 채 남으므로 created_at_unfixed 통계에 잡히게 한다."""
+    try:
+        return reason if is_future(stored_created_at, crawled_at) else NOT_FUTURE
+    except Exception:  # noqa: BLE001 - 통계를 못 남기는 것이 추출 결과를 막아서는 안 된다
+        logger.debug("미래 발행 시각 판정 중 예외 - 세지 않는다", exc_info=True)
+        return NOT_FUTURE

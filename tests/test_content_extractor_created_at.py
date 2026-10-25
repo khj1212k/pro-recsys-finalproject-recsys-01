@@ -139,22 +139,31 @@ def test_row_fixed_by_someone_else_in_the_meantime_is_left_and_not_counted():
     assert len(created_at_updates(cur)) == 1 and conn.commit.call_count == 1
 
 
-def test_failed_download_never_touches_the_published_time():
+def test_failed_download_never_touches_the_published_time_but_a_future_row_is_reported():
     result, conn, cur = run_single(article(FUTURE), None)
-    assert result.status == "fetch_failed" and result.created_at_fix == ""
+    assert result.status == "fetch_failed" and result.created_at_fix == "fetch_failed"
     assert created_at_updates(cur) == []
+    # 미래가 아닌 행은 세지 않는다
+    result, _, cur = run_single(article(NORMAL), None)
+    assert result.status == "fetch_failed" and result.created_at_fix == "" and created_at_updates(cur) == []
 
 
-def test_extraction_error_does_not_change_the_published_time():
+def _run_with_parser_crash(art):
     conn, cur = MagicMock(), MagicMock()
     conn.cursor.return_value = cur
     with patch("crawler.content_extractor.extractor.get_connection", return_value=conn), \
          patch("crawler.content_extractor.extractor.release_connection"), \
          patch("crawler.content_extractor.extractor.fetch_page", return_value=FetchOutcome(fake_page())), \
          patch("crawler.content_extractor.extractor.trafilatura.extract", side_effect=RuntimeError("parser crashed")):
-        result = ContentExtractor.process_single_article(article(FUTURE))
-    assert result.status == "error" and result.created_at_fix == ""
+        return ContentExtractor.process_single_article(art), cur
+
+
+def test_extraction_error_does_not_change_the_published_time_but_a_future_row_is_reported():
+    result, cur = _run_with_parser_crash(article(FUTURE))
+    assert result.status == "error" and result.created_at_fix == "error"
     assert created_at_updates(cur) == []
+    result, cur = _run_with_parser_crash(article(NORMAL))
+    assert result.status == "error" and result.created_at_fix == "" and created_at_updates(cur) == []
 
 
 def test_four_item_articles_from_older_callers_are_still_accepted():
@@ -194,7 +203,7 @@ def test_stats_count_the_rows_changed_per_press_and_the_reasons_for_those_that_c
         4: ExtractionResult(4, "국민일보", "ok"),  # 미래가 아니었다
         5: ExtractionResult(5, "경향신문", "duplicate", created_at_fix="fixed"),
         6: ExtractionResult(6, "경향신문", "ok", created_at_fix="after_crawl"),
-        7: ExtractionResult(7, "세계일보", "fetch_failed", fetch_cause="http_404"),
+        7: ExtractionResult(7, "세계일보", "fetch_failed", fetch_cause="http_404"),  # 미래가 아니었다
     }
 
     stats, _, _ = _extract(articles, results, num_workers=1)
@@ -203,6 +212,20 @@ def test_stats_count_the_rows_changed_per_press_and_the_reasons_for_those_that_c
     assert stats["created_at_unfixed"] == {"국민일보": {"no_page_time": 1}, "경향신문": {"after_crawl": 1}}
     # 본문 통계는 그대로다
     assert (stats["ok"], stats["dropped"], stats["duplicate"], stats["fetch_failed"]) == (4, 1, 1, 1)
+
+
+def test_future_rows_that_ended_before_the_page_was_read_are_counted_as_unfixed():
+    """못 고친 행이 모두 created_at_unfixed에 보여야 한다 - 시도 상한을 다 쓰고 미래인 채 끝나는 행도 통계에 있다."""
+    articles = [(i, f"u{i}", "국민일보", "t", FUTURE, CRAWLED) for i in range(1, 5)]
+    results = {
+        1: ExtractionResult(1, "국민일보", "fetch_failed", fetch_cause="http_404", created_at_fix="fetch_failed"),
+        2: ExtractionResult(2, "국민일보", "fetch_failed", fetch_cause="timeout", created_at_fix="fetch_failed"),
+        3: ExtractionResult(3, "국민일보", "error", detail="x", created_at_fix="error"),
+        4: ExtractionResult(4, "국민일보", "ok", created_at_fix="no_tz"),
+    }
+    stats, _, _ = _extract(articles, results, num_workers=1)
+    assert stats["created_at_unfixed"] == {"국민일보": {"fetch_failed": 2, "error": 1, "no_tz": 1}}
+    assert stats["created_at_from_page"] == {}
 
 
 def test_stats_keys_exist_and_are_empty_when_nothing_was_in_the_future():

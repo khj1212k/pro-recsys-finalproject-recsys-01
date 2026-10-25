@@ -20,7 +20,8 @@ from config.settings import Settings
 from .body_container import FULL_PAGE, select_body_html
 from .cleaners import clean_text_lite, is_drop_article
 from .fetch import fetch_page, is_site_failure, latency_bucket
-from .page_pubdate import CREATED_AT_FIXED, FUTURE_SLACK_MINUTES, NOT_FUTURE, PageCreatedAt, decide_created_at
+from .page_pubdate import (CREATED_AT_FIXED, ERROR, FETCH_FAILED, FUTURE_SLACK_MINUTES, NOT_FUTURE, PageCreatedAt,
+                           decide_created_at, unfixed_if_future)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,8 @@ class ExtractionResult(NamedTuple):
     # "container_missing"(노드를 못 찾아 전체 페이지로 되돌아감). 규칙이 없는 언론사는 "" - 개수만 stats에 남긴다
     container: str = ""
     # 저장된 발행 시각이 수집 시각보다 10분 넘게 뒤(미래)였던 행의 처리(page_pubdate.py): "fixed"(기사 페이지의 발행 시각으로
-    # 바꿨다) 또는 못 바꾼 사유(no_page_time·no_tz·after_crawl·too_old). 미래가 아니었던 행은 "" - 건수만 stats에 남긴다
+    # 바꿨다) 또는 못 바꾼 사유(no_page_time·no_tz·after_crawl·too_old, 그리고 페이지를 읽기 전에 끝난 fetch_failed·error).
+    # 미래가 아니었던 행은 "" - 건수만 stats에 남긴다
     created_at_fix: str = NOT_FUTURE
 
 
@@ -198,7 +200,8 @@ class ContentExtractor:
                 # 이번 실행의 요청(fetch.py 상한)이 모두 실패 - 다음 실행에서 Settings.MAX_EXTRACT_ATTEMPTS회까지 다시 시도
                 _record_extraction(cur, raw_news_id, '', 'fetch_failed')
                 conn.commit()
-                return ExtractionResult(raw_news_id, press_name, "fetch_failed", fetch_cause=fetched.cause)
+                return ExtractionResult(raw_news_id, press_name, "fetch_failed", fetch_cause=fetched.cause,
+                                        created_at_fix=unfixed_if_future(created_at, crawled_at, FETCH_FAILED))
 
             # 언론사별 본문 컨테이너 규칙이 있으면 본문 노드만 잘라 넘긴다. 전체 페이지를 넘기면 trafilatura가 본문 대신
             # 특집 카드 묶음을 고르는 사이트가 있다(국민일보 2026-10-19 개편, body_container.py). 규칙이 없는 언론사는
@@ -250,7 +253,8 @@ class ContentExtractor:
                 conn.commit()
             except Exception:
                 conn.rollback()
-            return ExtractionResult(raw_news_id, press_name, "error", detail=str(e)[:200])
+            return ExtractionResult(raw_news_id, press_name, "error", detail=str(e)[:200],
+                                    created_at_fix=unfixed_if_future(created_at, crawled_at, ERROR))
 
         finally:
             release_connection(conn)
@@ -311,7 +315,8 @@ class ContentExtractor:
             # container_missing은 노드를 못 찾아 전체 페이지로 되돌아간 기사 - 페이지 개편 신호라 ingest가 경고한다
             "body_container": {},
             # 저장된 발행 시각이 수집 시각보다 10분 넘게 뒤(미래)여서 기사 페이지의 발행 시각으로 바꾼 행 수 - 언론사별.
-            # created_at_unfixed는 미래였는데 못 바꾼 행의 사유(no_page_time·no_tz·after_crawl·too_old)별 개수 - 그 행은 미래인 채 남는다
+            # created_at_unfixed는 미래였는데 못 바꾼 행의 사유별 개수 - 그 행은 미래인 채 남는다. 사유: no_page_time·no_tz·after_crawl·
+            # too_old(페이지를 읽었다), fetch_failed·error(읽기 전에 끝났다 - 시도마다 센다, 다음 시도에서 고칠 수 있다)
             "created_at_from_page": {}, "created_at_unfixed": {},
             "deferred_reasons": {}, "press_breaker": {},
             "time_budget_s": time_budget_s, "time_budget_exhausted": False,

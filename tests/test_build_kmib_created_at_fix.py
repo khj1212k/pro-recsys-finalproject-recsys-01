@@ -66,6 +66,31 @@ def test_default_run_is_unchanged_kmib_only_with_the_first_audit_table(tmp_path,
     assert "FROM news_raw_kmib_created_at_fix b\nWHERE n.raw_news_id = b.raw_news_id;" in sql
 
 
+def test_default_run_keeps_the_first_pass_wording_to_the_letter(tmp_path, capsys):
+    """인자 없이 부르면 예전과 같은 출력이다 - 머리말, 보관 표 설명, 출처 기본값, 멈추는 조건의 문구까지."""
+    _, sql, _ = _cli(tmp_path, capsys)
+    lines = sql.splitlines()
+    assert lines[0] == '-- 국민일보 발행 시각 보정 (scripts/oci/build_kmib_created_at_fix.py가 만든 파일, ADR 0008 "2026-10-25 갱신", 런북 6.10).'
+    assert lines[1] == ("-- 행 1개, 건너뜀 {'no_page_time': 0, 'no_tz': 0, 'after_crawl': 0, 'too_old': 0}. "
+                        "기본은 리허설(ROLLBACK), -v apply=1이면 COMMIT.")
+    assert lines[3] == ("-- 멈추는 조건: 보관 표가 이미 있다(이미 보정함) / 바꾼 행 수가 기대와 다르다 / "
+                        "바꾼 뒤에도 수집 시각보다 10분 넘게 뒤인 국민일보 행이 대상에 남는다.")
+    assert "    source text NOT NULL DEFAULT 'article page JSON-LD datePublished',\n" in sql
+    assert ("COMMENT ON TABLE news_raw_kmib_created_at_fix IS\n"
+            "    '국민일보 발행 시각 보정(ADR 0008 2026-10-25)의 원래 값. 되돌리기용이자 \"이 DB는 보정했다\"는 표시 - 되돌리기 스크립트만 지운다.';") in sql
+    assert "보관 표 news_raw" not in sql  # 머리말에 보관 표 이름을 덧붙이는 것은 기본이 아닐 때뿐이다
+
+
+def test_second_pass_wording_names_the_second_pass_and_the_meta_fallback(tmp_path, capsys):
+    _, sql, _ = _cli(tmp_path, capsys, "--table", "news_raw_created_at_fix_2", "--all-presses")
+    lines = sql.splitlines()
+    assert lines[0].startswith("-- 전 언론사 발행 시각 보정 (")
+    assert lines[1].endswith(", 보관 표 news_raw_created_at_fix_2. 기본은 리허설(ROLLBACK), -v apply=1이면 COMMIT.")
+    assert lines[3].endswith("10분 넘게 뒤인 행이 대상에 남는다.")
+    assert "DEFAULT 'article page datePublished (JSON-LD, else meta article:published_time)'" in sql
+    assert "'전 언론사 발행 시각 보정(ADR 0008 2026-10-25 갱신 2)의 원래 값." in sql
+
+
 def test_second_pass_uses_another_audit_table_and_does_not_limit_the_press(tmp_path, capsys):
     rc, sql, err = _cli(tmp_path, capsys, "--table", "news_raw_created_at_fix_2", "--all-presses")
     assert rc == 0 and "rows=1" in err

@@ -79,15 +79,22 @@ def main(src: str, table: str = DEFAULT_TABLE, press: "str | None" = DEFAULT_PRE
     values = ",\n".join(f"    ({rid}, '{b.isoformat()}'::timestamptz, '{a.isoformat()}'::timestamptz)" for rid, b, a in keep)
     scope = press or "전 언론사"
     scope_sql = scope.replace("'", "''")
+    # 1차(기본 보관 표)의 출력은 예전과 글자 하나까지 같다 - 문구가 다른 것은 기본 보관 표가 아닐 때(2차)뿐이다.
+    first_pass = table == DEFAULT_TABLE
+    table_note = "" if first_pass else f", 보관 표 {table}"
+    adr_ref = "ADR 0008 2026-10-25" if first_pass else "ADR 0008 2026-10-25 갱신 2"
+    source_default = ("article page JSON-LD datePublished" if first_pass
+                      else "article page datePublished (JSON-LD, else meta article:published_time)")
+    press_in_stop = f"{press} " if press else ""
     if press is None:
         press_join, press_where = "", ""
     else:
         press_join = "JOIN press p ON p.press_id = n.press_id\n"
         press_where = "p.press_name = '" + press.replace("'", "''") + "' AND "
-    sys.stdout.write(f"""-- 발행 시각 보정, {scope} (scripts/oci/build_kmib_created_at_fix.py가 만든 파일, ADR 0008 "2026-10-25 갱신", 런북 6.10).
--- 행 {len(keep)}개, 건너뜀 {skipped}, 보관 표 {table}. 기본은 리허설(ROLLBACK), -v apply=1이면 COMMIT.
+    sys.stdout.write(f"""-- {scope} 발행 시각 보정 (scripts/oci/build_kmib_created_at_fix.py가 만든 파일, ADR 0008 "2026-10-25 갱신", 런북 6.10).
+-- 행 {len(keep)}개, 건너뜀 {skipped}{table_note}. 기본은 리허설(ROLLBACK), -v apply=1이면 COMMIT.
 --   psql -X -v ON_ERROR_STOP=1 [-v apply=1] -f <이 파일>
--- 멈추는 조건: 보관 표가 이미 있다(이미 보정함) / 바꾼 행 수가 기대와 다르다 / 바꾼 뒤에도 수집 시각보다 10분 넘게 뒤인 행이 대상에 남는다.
+-- 멈추는 조건: 보관 표가 이미 있다(이미 보정함) / 바꾼 행 수가 기대와 다르다 / 바꾼 뒤에도 수집 시각보다 10분 넘게 뒤인 {press_in_stop}행이 대상에 남는다.
 
 \\set ON_ERROR_STOP on
 \\if :{{?apply}}
@@ -103,11 +110,11 @@ CREATE TABLE {table} (
     raw_news_id integer PRIMARY KEY,
     created_at_before timestamptz NOT NULL,
     created_at_after timestamptz NOT NULL,
-    source text NOT NULL DEFAULT 'article page datePublished (JSON-LD, else meta article:published_time)',
+    source text NOT NULL DEFAULT '{source_default}',
     fixed_at timestamptz NOT NULL DEFAULT now()
 );
 COMMENT ON TABLE {table} IS
-    '{scope_sql} 발행 시각 보정(ADR 0008)의 원래 값. 되돌리기용이자 "이 DB는 보정했다"는 표시 - 되돌리기 스크립트만 지운다.';
+    '{scope_sql} 발행 시각 보정({adr_ref})의 원래 값. 되돌리기용이자 "이 DB는 보정했다"는 표시 - 되돌리기 스크립트만 지운다.';
 
 INSERT INTO {table} (raw_news_id, created_at_before, created_at_after)
 SELECT n.raw_news_id, n.raw_news_created_at, v.after

@@ -27,7 +27,9 @@ from crawler.content_extractor.page_pubdate import (
     NOT_FUTURE,
     TOO_OLD,
     decide_created_at,
+    page_own_candidates,
     page_published_candidates,
+    unfixed_if_future,
 )
 
 UTC = timezone.utc
@@ -105,6 +107,43 @@ def test_top_level_array_and_several_blocks_keep_document_order():
     assert page_published_candidates(html) == ["2026-10-25T18:50:00+09:00", "2026-10-24T08:00:00+09:00"]
 
 
+def related_list(published) -> dict:
+    """관련 기사 목록: ItemList > ListItem > item(NewsArticle). 페이지 자신의 기사가 아니다."""
+    return {"@context": "https://schema.org", "@type": "ItemList", "itemListElement": [
+        {"@type": "ListItem", "position": 1, "item": {"@type": "NewsArticle", "datePublished": published}}]}
+
+
+def test_the_page_own_article_in_a_later_block_beats_a_related_list_in_an_earlier_block():
+    """우선순위는 덩어리 하나 안이 아니라 모든 JSON-LD 덩어리를 통틀어 매긴다 - 앞 덩어리의 관련 기사 목록이 먼저 뽑히면 다른 기사의
+    시각이 이 행에 'fixed'로 들어간다."""
+    html = page(ld_script(related_list("2026-10-24T08:00:00+09:00")), ld_script(news_article("2026-10-25T18:50:00+09:00")))
+    assert page_published_candidates(html) == ["2026-10-25T18:50:00+09:00", "2026-10-24T08:00:00+09:00"]
+    assert page_own_candidates(html) == ["2026-10-25T18:50:00+09:00"]
+    assert decide_created_at(STORED_FUTURE, CRAWLED, html) == pp.PageCreatedAt(
+        CREATED_AT_FIXED, datetime(2026, 10, 25, 9, 50, tzinfo=UTC))
+
+
+def test_ranking_across_blocks_is_article_type_then_depth_then_document_order():
+    html = page(
+        ld_script({"@type": "WebPage", "datePublished": "2026-10-20T00:00:00+09:00"}),                  # 기사가 아닌 노드
+        ld_script(related_list("2026-10-21T00:00:00+09:00")),                                           # 기사지만 깊다
+        ld_script({"@type": "WebPage", "mainEntity": news_article("2026-10-22T00:00:00+09:00")}),     # 기사, 깊이 1
+        ld_script(news_article("2026-10-23T00:00:00+09:00")),                                           # 기사, 깊이 0
+        ld_script(news_article("2026-10-24T00:00:00+09:00")),                                           # 기사, 깊이 0, 뒤 덩어리
+    )
+    assert page_published_candidates(html) == [
+        "2026-10-23T00:00:00+09:00", "2026-10-24T00:00:00+09:00", "2026-10-22T00:00:00+09:00",
+        "2026-10-21T00:00:00+09:00", "2026-10-20T00:00:00+09:00"]
+
+
+def test_a_broken_json_ld_block_is_ranked_as_a_top_level_article_in_document_order():
+    """깨진 덩어리는 @type을 알 수 없다 - 국민일보의 기사 JSON-LD가 이런 모양이어서 값만 읽는다. 최상위 기사 층으로 보고 문서 순서에 둔다."""
+    broken = '{"@type": "NewsArticle", "datePublished": "2026-10-25T18:50:00+09:00", "headline": "끊긴 JSON'
+    html = page(ld_script(broken), ld_script(related_list("2026-10-24T08:00:00+09:00")))
+    assert page_published_candidates(html) == ["2026-10-25T18:50:00+09:00", "2026-10-24T08:00:00+09:00"]
+    assert page_own_candidates(html) == ["2026-10-25T18:50:00+09:00"]
+
+
 def test_json_ld_with_a_raw_newline_inside_a_string_is_still_read():
     broken = '{"@type": "NewsArticle", "description": "첫 줄\n둘째 줄", "datePublished": "2026-10-25T18:50:00+09:00"}'
     assert page_published_candidates(page(ld_script(broken))) == ["2026-10-25T18:50:00+09:00"]
@@ -162,7 +201,7 @@ def test_a_future_row_takes_the_page_time_converted_to_utc():
 def test_rows_that_are_not_in_the_future_are_never_touched_and_the_page_is_not_even_read(monkeypatch):
     """정상 피드의 값을 페이지 값으로 덮지 않는다. 미래가 아닌 행은 페이지를 읽지도 않는다."""
     reads = []
-    monkeypatch.setattr(pp, "page_published_candidates", lambda html: reads.append(html) or ["2026-10-25T18:50:00+09:00"])
+    monkeypatch.setattr(pp, "page_own_candidates", lambda html: reads.append(html) or ["2026-10-25T18:50:00+09:00"])
     for stored in (
         datetime(2026, 10, 25, 9, 0, tzinfo=UTC),                          # 수집 1시간 전(정상)
         datetime(2026, 10, 25, 10, 5, 8, tzinfo=UTC),                      # 수집과 같은 순간
@@ -208,6 +247,31 @@ def test_a_meta_time_with_a_zone_is_used_when_the_json_ld_value_has_none():
     assert decision == pp.PageCreatedAt(CREATED_AT_FIXED, datetime(2026, 10, 25, 9, 49, tzinfo=UTC))
 
 
+def test_the_fallback_never_moves_to_another_node_of_the_page():
+    """기사 자신의 JSON-LD 값(우선순위 1위)을 못 쓴다고 같은 페이지의 관련 기사 노드 값으로 넘어가면 다른 기사의 시각을 쓰게 된다."""
+    related = [news_article("2026-10-23T08:00:00+09:00")]
+    # 시간대가 없다 -> NO_TZ (관련 기사의 시간대 있는 값을 쓰지 않는다)
+    no_tz = page(ld_script(news_article("2026-10-25T18:50:00", isRelatedTo=related)))
+    assert decide_created_at(STORED_FUTURE, CRAWLED, no_tz) == pp.PageCreatedAt(NO_TZ)
+    # 형식이 깨졌다 -> NO_PAGE_TIME
+    broken = page(ld_script(news_article("2026.10.25 18:50", isRelatedTo=related)))
+    assert decide_created_at(STORED_FUTURE, CRAWLED, broken) == pp.PageCreatedAt(NO_PAGE_TIME)
+    # 덩어리가 달라도 같다: 앞 덩어리가 기사 자신(시간대 없음), 뒤 덩어리가 관련 기사 목록
+    split = page(ld_script(news_article("2026-10-25T18:50:00")), ld_script(related_list("2026-10-23T08:00:00+09:00")))
+    assert decide_created_at(STORED_FUTURE, CRAWLED, split) == pp.PageCreatedAt(NO_TZ)
+    # 같은 층의 다른 기사도 아니다: 최상위 배열의 둘째 기사
+    sibling = page(ld_script([news_article("2026-10-25T18:50:00"), news_article("2026-10-23T08:00:00+09:00")]))
+    assert decide_created_at(STORED_FUTURE, CRAWLED, sibling) == pp.PageCreatedAt(NO_TZ)
+
+
+def test_a_meta_time_is_still_used_after_an_unusable_json_ld_value_of_the_same_article():
+    meta = '<meta property="article:published_time" content="2026-10-25T18:49:00+09:00">'
+    for published in ("2026-10-25T18:50:00", "2026.10.25 18:50"):
+        html = page(ld_script(news_article(published, isRelatedTo=[news_article("2026-10-23T08:00:00+09:00")])), meta)
+        assert decide_created_at(STORED_FUTURE, CRAWLED, html) == pp.PageCreatedAt(
+            CREATED_AT_FIXED, datetime(2026, 10, 25, 9, 49, tzinfo=UTC)), published
+
+
 def test_meta_is_used_when_there_is_no_json_ld():
     html = page('<meta property="article:published_time" content="2026-10-25T09:40:00Z">')
     assert decide_created_at(STORED_FUTURE, CRAWLED, html) == pp.PageCreatedAt(
@@ -236,13 +300,30 @@ def test_a_failure_while_reading_never_escapes(monkeypatch):
     def boom(html):
         raise RuntimeError("parser exploded")
 
-    monkeypatch.setattr(pp, "page_published_candidates", boom)
+    monkeypatch.setattr(pp, "page_own_candidates", boom)
     assert decide_created_at(STORED_FUTURE, CRAWLED, good_page()) == pp.PageCreatedAt(NO_PAGE_TIME)
 
 
 def test_only_the_first_two_million_characters_are_read():
     late = "x" * (pp._MAX_HTML_CHARS + 10) + good_page()
     assert page_published_candidates(late) == []
+
+
+# ----------------------------------------------------------------------------- 페이지를 읽기 전에 끝난 시도
+
+
+def test_a_future_row_whose_page_could_not_be_read_is_classified_with_the_given_reason():
+    assert unfixed_if_future(STORED_FUTURE, CRAWLED, pp.FETCH_FAILED) == "fetch_failed"
+    assert unfixed_if_future(STORED_FUTURE, CRAWLED, pp.ERROR) == "error"
+    assert pp.FETCH_FAILED in pp.UNFIXED_REASONS and pp.ERROR in pp.UNFIXED_REASONS
+
+
+def test_a_row_that_is_not_in_the_future_or_has_no_times_is_not_classified():
+    normal = datetime(2026, 10, 25, 9, 0, tzinfo=UTC)
+    assert unfixed_if_future(normal, CRAWLED, pp.ERROR) == NOT_FUTURE
+    assert unfixed_if_future(None, CRAWLED, pp.ERROR) == NOT_FUTURE
+    assert unfixed_if_future(STORED_FUTURE, None, pp.ERROR) == NOT_FUTURE
+    assert unfixed_if_future("not a time", CRAWLED, pp.ERROR) == NOT_FUTURE  # 예외를 던지지 않는다
 
 
 # ----------------------------------------------------------------------------- 일회성 보정 생성기와 같은 조건
