@@ -301,7 +301,7 @@ RUNTIME_NEWS_RAW_COLUMNS = PRE_RUNTIME_NEWS_RAW_COLUMNS | {
     "raw_news_extract_status", "raw_news_extracted_at", "raw_news_extract_attempts",
     "raw_news_content_sha256",
 }
-# f1db3221e45f(본문 보존, ADR 0023, 현재 Alembic head) 적용 후
+# f1db3221e45f(본문 보존, ADR 0023) 적용 후
 RETENTION_NEWS_RAW_COLUMNS = RUNTIME_NEWS_RAW_COLUMNS | {
     "raw_news_content_length", "raw_news_content_purged_at", "raw_news_kogl_type",
 }

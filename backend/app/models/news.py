@@ -30,8 +30,11 @@ class RSS_URI(SQLModel, table=True):
     uri: str
 
 # 4. 원문 기사 (News_Raw)
-# 본문 추출 상태 (f87f7378672e, d48994e9d26e). NULL = 아직 시도 안 함.
-NEWS_RAW_EXTRACT_STATUSES = ("ok", "dropped", "empty", "fetch_failed", "error", "duplicate")
+# 본문 추출 상태 (f87f7378672e, d48994e9d26e, b7e4a1c93d52). NULL = 아직 시도 안 함.
+# 'rss_summary' = 본문 칸이 RSS 요약인 행(동아일보), 'blocked_origin' = 출발지 거절로 본문 없이 닫은 행 - ADR 0026 2026-10-25.
+NEWS_RAW_EXTRACT_STATUSES = (
+    "ok", "dropped", "empty", "fetch_failed", "error", "duplicate", "rss_summary", "blocked_origin",
+)
 
 
 class NewsRaw(SQLModel, table=True):
