@@ -59,10 +59,27 @@ def test_without_the_container_falls_back_to_the_whole_page_and_says_so():
     assert selected.html is page  # 지금까지와 같은 전체 페이지 추출로 되돌아간다
 
 
-@pytest.mark.parametrize("page", ["", "   ", "<<<>>>", '<?xml version="1.0" encoding="utf-8"?><html></html>', "<html/>"])
+@pytest.mark.parametrize("page", ["", "   ", "<<<>>>", '<?xml version="1.0" encoding="utf-8"?><html></html>', "<html/>", None])
 def test_unparsable_or_empty_pages_fall_back_without_raising(page):
     selected = select_body_html(page, "국민일보")
     assert selected.mode == CONTAINER_MISSING and selected.html is page
+
+
+@pytest.mark.parametrize("prolog", [
+    '<?xml version="1.0" encoding="utf-8"?>\n',
+    '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" '
+    '"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">\n',
+    '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" '
+    '"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">\n',
+])
+def test_a_page_with_an_xml_declaration_or_xhtml_doctype_still_finds_the_container(prolog):
+    """XML 선언이 붙은 str을 lxml이 직접 읽으면 ValueError가 나 컨테이너가 있는데도 전체 페이지(= 특집 글)로 되돌아갔다.
+    trafilatura가 읽는 방식 그대로 읽으므로 같은 입력에서 컨테이너를 찾는다."""
+    selected = select_body_html(prolog + kmib_like_page(), "국민일보")
+
+    assert selected.mode == CONTAINER_FOUND
+    text = _extract(selected.html)
+    assert text.count(BODY_MARK) == 8 * 2 and KPICK_MARK not in text
 
 
 def test_only_the_first_container_is_used_when_the_id_is_repeated():

@@ -12,6 +12,7 @@
 from typing import Dict, NamedTuple
 
 import lxml.html
+from trafilatura.utils import load_html
 
 FULL_PAGE = "full_page"  # 규칙이 없는 언론사 - 페이지 전체를 그대로 넘긴다(예전과 같다)
 CONTAINER_FOUND = "container"  # 본문 컨테이너만 잘라 넘겼다
@@ -38,11 +39,15 @@ def select_body_html(html: str, press_name: str) -> BodySelection:
     if xpath is None:
         return BodySelection(html, FULL_PAGE)
     try:
-        nodes = lxml.html.document_fromstring(html).xpath(xpath)
+        # trafilatura가 페이지를 읽는 방식 그대로 읽는다. lxml.html.document_fromstring은 XML 선언(<?xml ... encoding=...?>)이
+        # 앞에 붙은 str에서 ValueError를 내, 본문 컨테이너가 있는 페이지도 '못 찾음'으로 보고 전체 페이지 추출(= 특집 글)로
+        # 되돌아가게 한다. load_html은 같은 입력을 읽고, 읽을 수 없는 입력(빈 문자열 등)에는 None을 돌려준다.
+        tree = load_html(html)
+        nodes = tree.xpath(xpath) if tree is not None else []
         if not nodes:
             return BodySelection(html, CONTAINER_MISSING)
         fragment = lxml.html.tostring(nodes[0], encoding="unicode")
-    except Exception:  # noqa: BLE001 - 빈 문자열·인코딩 선언이 든 str·깨진 마크업: 컨테이너를 못 찾은 것과 같이 다룬다
+    except Exception:  # noqa: BLE001 - 빈 문자열·깨진 마크업·str이 아닌 값: 컨테이너를 못 찾은 것과 같이 다룬다
         return BodySelection(html, CONTAINER_MISSING)
     return BodySelection(
         f'<html><head><meta charset="utf-8"></head><body><article>{fragment}</article></body></html>',
