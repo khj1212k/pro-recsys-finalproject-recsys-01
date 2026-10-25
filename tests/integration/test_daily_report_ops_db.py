@@ -125,3 +125,30 @@ def test_backup_and_idle_status_read_the_host_script_rows(pg_conn, cleanup):
     warnings = dr.ops_warnings(backup)
     assert any("호스트 밖 백업 실패 2회 - 그중 1회는" in w for w in warnings)
     assert any("복원 검증 실패 1회 - 그중 1회는" in w for w in warnings)
+
+
+def test_ingest_suspect_runs_counts_runs_that_flagged_a_press_and_ignores_other_shapes(pg_conn, cleanup):
+    """job_runs.stats.extract.suspect_press(jobs/tasks/ingest.py)를 언론사별 실행 수로 센다. 창 밖 실행, 다른 잡, 키가 없거나
+    객체가 아닌 값은 세지 않는다 - jsonb_each가 스칼라에서 오류를 내면 일일 리포트 전체가 죽는다."""
+    import json
+
+    tag = uuid.uuid4().hex[:6]  # 다른 테스트가 넣은 행과 섞이지 않게 언론사 이름에 접두를 붙인다
+    kmib, segye = f"국민{tag}", f"세계{tag}"
+    flagged = json.dumps({"extract": {"suspect_press": {
+        kmib: {"reason": "same_body_repeated", "parsed": 12, "duplicate": 12},
+        segye: {"reason": "same_body_repeated", "parsed": 6, "duplicate": 3}}}})
+    only_kmib = json.dumps({"extract": {"suspect_press": {kmib: {"parsed": 5, "duplicate": 5}}}})
+    now = datetime.now(UTC)
+    with pg_conn.cursor() as cur:
+        _job_run(cur, cleanup, "ingest", "succeeded", now - timedelta(hours=1), now, flagged)
+        _job_run(cur, cleanup, "ingest", "succeeded", now - timedelta(hours=2), now, flagged)
+        _job_run(cur, cleanup, "ingest", "succeeded", now - timedelta(hours=3), now, only_kmib)
+        _job_run(cur, cleanup, "ingest", "succeeded", now - timedelta(hours=30), now, flagged)  # 창 밖
+        _job_run(cur, cleanup, "embed", "succeeded", now - timedelta(hours=1), now, flagged)  # 다른 잡
+        for odd in ('{}', '{"extract": null}', '{"extract": {"suspect_press": null}}',
+                    '{"extract": {"suspect_press": 3}}', '{"extract": {"suspect_press": []}}', '{"extract": 5}'):
+            _job_run(cur, cleanup, "ingest", "succeeded", now - timedelta(hours=4), now, odd)
+
+        found = dr.ingest_suspect_runs(cur, "24 hours")
+
+    assert found.get(kmib) == 3 and found.get(segye) == 2

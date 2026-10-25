@@ -153,7 +153,7 @@ def _ingest_extract_only(monkeypatch, extract_stats, extra_argv=()):
 
 
 def _extract_stats(per_press, **extra):
-    totals = {k: 0 for k in ("ok", "dropped", "empty", "fetch_failed", "error", "deferred")}
+    totals = {k: 0 for k in ("ok", "dropped", "empty", "duplicate", "fetch_failed", "error", "deferred")}
     for counts in per_press.values():
         for k, v in counts.items():
             totals[k] += v
@@ -501,3 +501,88 @@ def test_rebuild_job_reports_a_mismatch_found_by_check_as_a_warning(monkeypatch)
     assert seen == {"engine": "ENGINE", "user_ids": None, "check": True}
     assert result["user_state"]["mismatch"] == 2
     assert len(ctx.warnings) == 1 and "2명" in ctx.warnings[0]
+
+
+# ----------------------------------------------------------------------------- 추출 이상 감지 (ADR 0026 결정 9, 2026-10-25 절)
+#
+# 국민일보 2026-10-19: 페이지 템플릿이 바뀌어 trafilatura가 모든 기사에서 같은 특집 글을 뽑았고, 본문 해시 중복 제거가
+# 나머지를 duplicate로 지웠다. 다운로드는 성공했으므로 fetch 실패 규칙에는 걸리지 않았고 ingest는 매시 succeeded로
+# 끝났다. 같은 실행 안에서 한 언론사의 duplicate 비율이 높으면 경고한다.
+
+
+def test_same_body_repeated_in_one_run_warns_and_marks_the_press_in_the_stats_but_does_not_fail(monkeypatch):
+    """2026-10-24 22:05 UTC 회차의 모양: 국민일보 13건이 모두 같은 본문 해시의 duplicate였다."""
+    stats = _extract_stats({"국민일보": {"duplicate": 12, "ok": 3}, "세계일보": {"ok": 9, "duplicate": 1}})
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats)
+
+    ingest.run(ctx)  # 실행을 실패시키지 않는다 - 다운로드·저장은 정상이고 행은 복구 SQL로 되돌릴 수 있다
+
+    assert ctx.warnings == [
+        "국민일보: 본문을 받은 기사 15건 중 12건이 duplicate - 같은 본문 반복 - 추출 이상 의심 "
+        "(본문 컨테이너·페이지 개편 확인)"
+    ]
+    assert ctx.stats["extract"]["suspect_press"] == {
+        "국민일보": {"reason": "same_body_repeated", "label": "같은 본문 반복 - 추출 이상 의심",
+                   "parsed": 15, "duplicate": 12},
+    }
+
+
+@pytest.mark.parametrize("counts,flagged", [
+    ({"duplicate": 4}, False),                      # 5건 미만
+    ({"duplicate": 4, "ok": 0, "fetch_failed": 9}, False),  # 받은 기사가 4건뿐 - 다운로드 실패는 분모에 넣지 않는다
+    ({"duplicate": 4, "ok": 6}, False),             # 40%
+    ({"duplicate": 5, "ok": 5}, True),              # 정확히 절반 - '절반 이상'
+    ({"duplicate": 3, "ok": 2}, True),              # 5건 중 3건
+    ({"duplicate": 4, "ok": 1, "fetch_failed": 20, "deferred": 30}, True),  # 받은 5건 중 4건. 실패·미룸은 분모 밖
+    ({"duplicate": 1, "ok": 20}, False),            # 평소 하루 0~14건의 자연 중복
+    ({"duplicate": 2, "dropped": 2, "empty": 1}, False),  # 40%
+])
+def test_same_body_repeat_threshold_is_five_parsed_articles_and_half_of_them(monkeypatch, counts, flagged):
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, _extract_stats({"국민일보": counts}))
+
+    ingest.run(ctx)
+
+    assert bool(ctx.stats["extract"].get("suspect_press")) is flagged
+    assert any("같은 본문 반복" in w for w in ctx.warnings) is flagged
+
+
+def test_the_first_run_of_the_2026_10_19_breakage_was_below_the_threshold():
+    """이 감지가 닿는 범위를 못 박아 둔다: 개편 직후 첫 회차(05:05 UTC)는 ok 84 + duplicate 15라 15%로 기준 밖이었다 -
+    특집 글이 아직 기사마다 본문과 섞여(길이 2만 자) 해시가 서로 달랐다. 해시가 하나로 모인 뒤(같은 날 밤부터)에야 걸린다."""
+    from jobs.tasks.ingest import _same_body_repeats
+
+    assert _same_body_repeats({"국민일보": {"ok": 84, "duplicate": 15}}) == {}
+    assert "국민일보" in _same_body_repeats({"국민일보": {"duplicate": 13}})
+
+
+def test_same_body_repeat_in_several_presses_still_does_not_fail_the_run(monkeypatch):
+    """다운로드 실패와 달리 이 신호는 '건강하지 않은 언론사' 수에 넣지 않는다 - 같은 실행에서 두 언론사가 동시에 걸려도
+    잡을 실패시키지 않고 경고만 한다(추출은 끝났고 되돌릴 수 있다)."""
+    stats = _extract_stats({"국민일보": {"duplicate": 8}, "세계일보": {"duplicate": 6, "ok": 1}, "경향신문": {"ok": 4}})
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats)
+
+    ingest.run(ctx)
+
+    assert sorted(ctx.stats["extract"]["suspect_press"]) == ["국민일보", "세계일보"]
+    assert len(ctx.warnings) == 2
+
+
+def test_missing_body_container_warns_per_press_with_counts(monkeypatch):
+    stats = _extract_stats(
+        {"국민일보": {"ok": 8}, "세계일보": {"ok": 4}},
+        body_container={"국민일보": {"container": 5, "container_missing": 3}},
+    )
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats)
+
+    ingest.run(ctx)
+
+    assert ctx.warnings == ["국민일보: 본문 컨테이너를 못 찾아 전체 페이지로 추출한 기사 3건 (컨테이너로 추출 5건) - 페이지 개편 확인"]
+
+
+def test_no_container_warning_when_every_page_had_its_container(monkeypatch):
+    stats = _extract_stats({"국민일보": {"ok": 8}}, body_container={"국민일보": {"container": 8}})
+    ingest, ctx, _ = _ingest_extract_only(monkeypatch, stats)
+
+    ingest.run(ctx)
+
+    assert ctx.warnings == []

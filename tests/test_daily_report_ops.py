@@ -345,3 +345,70 @@ def test_image_first_run_only_looks_at_the_scheduler_jobs_of_the_crontab():
     assert "job = ANY(%s)" in sql and params == ("abc1234", ["ingest", "popularity", "retention"])
     assert dr.image_first_run(_RecordingCur(None), "abc1234", []) is None  # crontab이 없으면 세지 않는다
     assert dr.image_first_run(_RecordingCur(None), None, ["ingest"]) is None
+
+
+# ----------------------------------------------------------------------------- 같은 본문 반복 (ADR 0026 결정 9, 2026-10-25 절)
+#
+# 국민일보 2026-10-19: 페이지 템플릿이 바뀌어 모든 기사가 같은 특집 글을 받았고 duplicate로 지워졌다. 다운로드는 정상이라
+# ingest는 매시 succeeded였고 리포트에도 본문 수만 줄었다. 리포트가 같은 본문 반복을 직접 보여 준다.
+
+
+def _press(total, ok=0, dropped=0, empty=0, duplicate=0, embedded=0):
+    return {"total": total, "ok": ok, "dropped": dropped, "empty": empty, "fetch_failed": 0, "error": 0,
+            "duplicate": duplicate, "embedded": embedded}
+
+
+def test_same_body_suspects_by_the_stored_rows_of_the_window():
+    """2026-10-22 국민일보: 249건 중 duplicate 244건."""
+    per_press = {"국민일보": _press(249, ok=5, duplicate=244), "세계일보": _press(200, ok=185, dropped=6, duplicate=9)}
+
+    found = dr.same_body_suspects(per_press, {})
+
+    assert found == {"국민일보": {"parsed": 249, "duplicate": 244, "ingest_runs": 0}}
+
+
+def test_same_body_suspects_threshold_matches_the_ingest_job():
+    from jobs.tasks.ingest import SAME_BODY_MIN_ARTICLES, SAME_BODY_RATIO_LIMIT
+
+    assert (SAME_BODY_MIN_ARTICLES, SAME_BODY_RATIO_LIMIT) == (5, 0.5)
+    assert dr.same_body_suspects({"A": _press(4, duplicate=4)}, {}) == {}  # 4건: 기준 미만
+    assert dr.same_body_suspects({"A": _press(10, ok=6, duplicate=4)}, {}) == {}  # 40%
+    assert "A" in dr.same_body_suspects({"A": _press(10, ok=5, duplicate=5)}, {})  # 정확히 절반
+    # 다운로드 실패·추출 오류는 본문을 받은 기사가 아니다
+    per_press = {"A": {**_press(30, ok=2, duplicate=2), "fetch_failed": 26}}
+    assert dr.same_body_suspects(per_press, {}) == {}
+
+
+def test_same_body_suspects_also_by_ingest_runs_that_already_warned():
+    """하루로 보면 절반 아래여도(기사가 많은 날) 한 회차 안에서 절반을 넘은 실행이 있었으면 걸린다."""
+    per_press = {"국민일보": _press(300, ok=250, duplicate=40)}
+
+    found = dr.same_body_suspects(per_press, {"국민일보": 3, "세계일보": 1})
+
+    assert found == {
+        "국민일보": {"parsed": 290, "duplicate": 40, "ingest_runs": 3},
+        "세계일보": {"parsed": 0, "duplicate": 0, "ingest_runs": 1},
+    }
+
+
+def test_report_marks_the_suspect_press_and_adds_a_warning_line():
+    per_press = {"국민일보": _press(249, ok=5, duplicate=244), "세계일보": _press(150, ok=140)}
+    suspect = dr.same_body_suspects(per_press, {"국민일보": 22})
+    report = _base_report(suspect_press=suspect)
+    report["news_raw_24h"] = {**report["news_raw_24h"], "per_press": per_press}
+
+    lines = dr.format_report(report).splitlines()
+
+    assert "  · 국민일보: 249건 (본문 5, 임베딩 0) ⚠ 같은 본문 반복 - 추출 이상 의심" in lines
+    assert "  · 세계일보: 150건 (본문 140, 임베딩 0)" in lines  # 정상 언론사는 그대로
+    assert ("- ⚠ 국민일보: 같은 본문 반복 - 추출 이상 의심 - 최근 24시간 본문을 받은 기사 249건 중 중복 244건, "
+            "ingest 실행 22회가 같은 경고를 남겼다 (docs/runbook-hosting.md 6.8)") in lines
+
+
+def test_report_without_suspects_keeps_the_old_layout():
+    per_press = {"세계일보": _press(150, ok=140)}
+    report = _base_report(suspect_press={})
+    report["news_raw_24h"] = {**report["news_raw_24h"], "per_press": per_press}
+    text = dr.format_report(report)
+    assert "⚠" not in text and "  · 세계일보: 150건 (본문 140, 임베딩 0)" in text
+    assert "⚠" not in dr.format_report(_base_report())  # suspect_press 키가 없는 예전 모양도 그대로
