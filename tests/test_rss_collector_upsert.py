@@ -229,3 +229,102 @@ def test_feeds_on_a_host_that_failed_earlier_in_the_run_are_skipped_without_retr
     for name in ("막힌언론_정치", "막힌언론_경제"):
         assert stats["per_feed"][name]["error"].startswith("skipped: down.example")
     assert stats["per_feed"]["멀쩡언론"]["error"] is None
+
+
+# ---------------------------------------------------------------------------- 피드 부분집합 (jobs.run rss_retry, ADR 0026 2026-10-25 갱신 2)
+
+
+def _subset_run(feeds, selected, parse_calls):
+    """feeds 설정에서 selected(None이면 전부)만 읽는다. 읽은 URL은 parse_calls에 담긴다."""
+    conn, cur = _make_cursor_conn()
+    cur.fetchone.return_value = (1,)
+    ok_feed = MagicMock()
+    ok_feed.bozo = 0
+    ok_feed.entries = []
+    bozo_feed = MagicMock()
+    bozo_feed.bozo = 1
+    bozo_feed.bozo_exception = OSError("timed out")
+    bozo_feed.entries = []
+
+    def fake_parse(url):
+        parse_calls.append(url)
+        return bozo_feed if "down.example" in url else ok_feed
+
+    with patch("crawler.rss_collector.get_connection", return_value=conn) as get_conn, \
+         patch("crawler.rss_collector.release_connection"), \
+         patch("crawler.rss_collector.Settings.RSS_FEEDS", feeds), \
+         patch("crawler.rss_collector.parse_feed_with_retry", side_effect=fake_parse):
+        stats = collect_rss() if selected is None else collect_rss(feeds=selected)
+    return stats, get_conn
+
+
+SUBSET_FEEDS = {
+    "동아일보": ("rss_summary", "http://donga.example/total.xml"),
+    "경향신문": ("direct", "http://khan.example/rss"),
+    "막힌언론": ("direct", "http://down.example/all.xml"),
+    "막힌언론_정치": ("direct", "http://down.example/pol.xml"),
+    "세계일보": ("direct", "http://segye.example/rss"),
+}
+
+
+def test_collect_rss_without_feeds_reads_every_configured_feed():
+    calls = []
+
+    stats, _ = _subset_run(SUBSET_FEEDS, None, calls)
+
+    assert calls == ["http://donga.example/total.xml", "http://khan.example/rss", "http://down.example/all.xml",
+                     "http://segye.example/rss"]  # 막힌언론_정치는 같은 호스트라 건너뜀
+    assert list(stats["per_feed"]) == list(SUBSET_FEEDS)
+
+
+def test_collect_rss_reads_only_the_named_feeds_in_configured_order():
+    calls = []
+
+    stats, _ = _subset_run(SUBSET_FEEDS, ["세계일보", "동아일보"], calls)  # 준 순서가 아니라 설정 순서
+
+    assert calls == ["http://donga.example/total.xml", "http://segye.example/rss"]
+    assert list(stats["per_feed"]) == ["동아일보", "세계일보"]
+    assert set(stats) == {"inserted", "skipped", "failed_feeds", "per_feed"}  # 통계 키는 전체 수집과 같다
+    assert set(stats["per_feed"]["동아일보"]) >= {"press", "entries", "inserted", "skipped", "too_old", "bad_date", "error"}
+    assert stats["failed_feeds"] == 0
+
+
+def test_collect_rss_with_an_empty_feed_list_reads_nothing_and_does_not_open_the_database():
+    calls = []
+
+    stats, get_conn = _subset_run(SUBSET_FEEDS, [], calls)
+
+    assert calls == []
+    get_conn.assert_not_called()
+    assert stats == {"inserted": 0, "skipped": 0, "failed_feeds": 0, "per_feed": {}}
+
+
+def test_collect_rss_rejects_an_unknown_feed_name_before_touching_anything():
+    import pytest
+
+    calls = []
+    with pytest.raises(ValueError, match="없는피드"):
+        _subset_run(SUBSET_FEEDS, ["동아일보", "없는피드"], calls)
+
+    assert calls == []
+
+
+def test_same_host_skip_rule_applies_inside_the_named_subset():
+    calls = []
+
+    stats, _ = _subset_run(SUBSET_FEEDS, ["막힌언론", "막힌언론_정치"], calls)
+
+    assert calls == ["http://down.example/all.xml"]  # 첫 피드만 요청하고 같은 호스트의 다음 피드는 요청 없이 건너뛴다
+    assert "timed out" in stats["per_feed"]["막힌언론"]["error"]
+    assert stats["per_feed"]["막힌언론_정치"]["error"].startswith("skipped: down.example")
+    assert stats["failed_feeds"] == 2
+
+
+def test_a_feed_skipped_for_its_host_is_not_blocked_by_a_failure_outside_the_subset():
+    # 전체 수집에서 막힌언론이 실패했어도, 부분집합으로 막힌언론_정치만 다시 읽으면 그 피드를 실제로 읽는다
+    calls = []
+
+    stats, _ = _subset_run(SUBSET_FEEDS, ["막힌언론_정치"], calls)
+
+    assert calls == ["http://down.example/pol.xml"]
+    assert "timed out" in stats["per_feed"]["막힌언론_정치"]["error"]

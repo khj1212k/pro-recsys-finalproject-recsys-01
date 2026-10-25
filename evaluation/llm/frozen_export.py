@@ -51,8 +51,9 @@ MANIFEST_FILE = "manifest.json"
 BODY_RETENTION_DAYS = 30          # ADR 0023. 이 값을 늘리는 예외는 없다.
 MAX_WINDOW_HOURS = 5 * 24         # 실험에 필요한 창만 내보낸다(ADR 0009 A8.1: 날짜 창 최대 5개).
 # Tier 0에서 반출해도 되는 분(매시). docker/crontab.micro: ingest :05(소요 중앙 15분, p95 73분 - ADR 0026 증거 8),
-# popularity :35(4~6초). :40~:55는 popularity 뒤이고 중앙값의 ingest가 끝난 뒤다. ingest가 길어진 회차는 분만으로
-# 피할 수 없으므로 런북 9.2의 running 확인을 반출 직전에 다시 한다.
+# popularity :35(4~6초). :40~:55는 popularity 뒤이고 중앙값의 ingest가 끝난 뒤다. rss_retry(:40, 직전 ingest가 못 읽은 피드가
+# 있을 때만 보통 수십 초 - 런북 4.2)는 :40에 돌 수 있다. 반출은 읽기 전용 스냅숏이라 겹쳐도 틀리지는 않아 창은 그대로 두지만
+# :45 이후가 더 한가하다(런북 9). ingest가 길어진 회차는 분만으로 피할 수 없으므로 런북 9.2의 running 확인을 반출 직전에 다시 한다.
 INGEST_GAP_MINUTES = (40, 55)
 KST = timezone(timedelta(hours=9))
 

@@ -606,3 +606,98 @@ def test_feed_failures_are_grouped_per_press_when_a_press_has_several_feeds(monk
         "국민일보: RSS 피드 3개 모두 실패 (RemoteDisconnected, skipped) - 이번 회차 신규 기사 0건",
         "전자신문: RSS 피드 2개 중 1개 실패 (feed unreadable (HTTP 503)) - 전자신문_IT",
     ]
+
+
+# ----------------------------------------------------------------------------- 동아일보 RSS 요약 (ADR 0026 2026-10-25 갱신 2)
+
+
+def _summary_feed(inserted, stored, dropped=0, duplicate=0, error=None):
+    return {"press": "동아일보", "entries": 50, "inserted": inserted, "skipped": 50 - inserted, "error": error,
+            "summary": {"stored": stored, "dropped": dropped, "duplicate": duplicate}}
+
+
+def test_summary_feed_that_stored_nothing_warns_but_does_not_fail_the_run(monkeypatch):
+    """읽기는 성공했는데 새 행 5건 이상이 모두 필터·중복으로 닫히면 피드가 요약을 못 주고 있다 - 수집량이 0인데 알림이 없던
+    국민일보 사례(추출은 성공)와 같은 모양의 침묵을 막는다. 잡은 실패시키지 않는다."""
+    rss = {"inserted": 7, "skipped": 43, "failed_feeds": 0, "per_feed": {
+        "동아일보": _summary_feed(7, stored=0, dropped=6, duplicate=1),
+        "경향신문": {"press": "경향신문", "inserted": 3, "error": None},
+    }}
+    ingest, ctx, _ = _ingest_rss_only(monkeypatch, lambda: {"skipped": "no service key"}, rss=rss)
+
+    ingest.run(ctx)
+
+    assert ctx.warnings == ["동아일보: RSS 요약으로 저장된 기사가 없다 - 새 기사 7건이 모두 필터 6건·중복 1건으로 닫혔다 "
+                            "(피드의 요약 형식 확인)"]
+
+
+@pytest.mark.parametrize("feed, warned", [
+    (_summary_feed(7, stored=1, dropped=6), False),          # 하나라도 저장되면 정상(일부가 비는 것은 daily_report가 본다)
+    (_summary_feed(4, stored=0, dropped=4), False),          # 새 행 5건 미만은 표본이 작다
+    (_summary_feed(5, stored=0, dropped=5), True),           # 정확히 5건
+    (_summary_feed(0, stored=0), False),                     # 새 기사 없음(읽기 성공)
+    (_summary_feed(8, stored=0, dropped=8, error="x"), False),  # 읽기 실패는 warn_failed_feeds의 몫
+    ({"press": "경향신문", "inserted": 9, "error": None}, False),  # 요약 피드가 아니다(summary 통계 없음)
+    (None, False),
+])
+def test_empty_summary_warning_threshold(feed, warned):
+    from jobs.tasks import ingest
+
+    ctx = JobContext(job="ingest", args=argparse.Namespace())
+    ingest.warn_empty_summaries(ctx, {"per_feed": {"동아일보": feed}})
+
+    assert bool(ctx.warnings) is warned
+    assert ingest.SUMMARY_EMPTY_MIN_NEW == 5
+
+
+def test_extract_health_never_sees_summary_rows_so_the_press_is_not_unhealthy_for_having_no_body():
+    """요약 행은 본문 추출기를 거치지 않는다 - 동아일보는 추출 통계(per_press)에 나오지 않아 '본문 0'이 실패로 세어지지 않는다."""
+    from jobs.tasks import ingest
+
+    ctx = JobContext(job="ingest", args=argparse.Namespace())
+    ingest.check_extract_health(ctx, {"per_press": {"경향신문": {"ok": 6}}, "fetch_fail_causes": {}})
+
+    assert ctx.warnings == []
+
+
+class _SnapshotConn:
+    def __init__(self, rows):
+        self.rows, self.sql = rows, None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def cursor(self):
+        return self
+
+    def execute(self, sql, params=None):
+        self.sql = sql
+
+    def fetchall(self):
+        return self.rows
+
+
+def test_news_raw_snapshot_counts_summary_rows_apart_from_bodies(monkeypatch):
+    """동아일보는 'ok' 본문이 아니라 RSS 요약을 본문 칸에 둔다 - with_content에 섞지 않고 with_summary로 따로 센다."""
+    import db.connection
+    from jobs.tasks import ingest
+
+    # (언론사, 전체, 본문 있는 ok, 요약 있는 rss_summary, 본문 비움, 임베딩)
+    conn = _SnapshotConn([("경향신문", 100, 90, 0, 10, 80), ("동아일보", 300, 20, 250, 30, 200)])
+    monkeypatch.setattr(db.connection, "get_db_connection", lambda: conn)
+
+    snapshot = ingest.news_raw_snapshot()
+
+    assert snapshot["per_press"]["동아일보"] == {
+        "total": 300, "with_content": 20, "with_summary": 250, "body_purged": 30, "embedded": 200}
+    assert snapshot["per_press"]["경향신문"]["with_summary"] == 0
+    assert (snapshot["total"], snapshot["with_content"], snapshot["with_summary"], snapshot["body_purged"],
+            snapshot["embedded"]) == (400, 110, 250, 40, 280)
+    sql = " ".join(conn.sql.split())
+    # 열 순서가 위 튜플과 같다(SQL이 바뀌면 이 순서도 함께 본다)
+    assert sql.index("= 'ok'") < sql.index("= 'rss_summary'") < sql.index("raw_news_content_purged_at IS NOT NULL") \
+        < sql.index("embedding_result IS NOT NULL")
+    assert "'rss_summary' AND N.raw_news_content_purged_at IS NULL" in sql  # 비운 요약은 세지 않는다

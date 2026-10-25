@@ -105,6 +105,8 @@ def news_raw_snapshot() -> Dict[str, Any]:
                    COUNT(*) AS total,
                    COUNT(*) FILTER (WHERE N.raw_news_extract_status = 'ok'
                                       AND N.raw_news_content_purged_at IS NULL) AS with_content,
+                   COUNT(*) FILTER (WHERE N.raw_news_extract_status = 'rss_summary'
+                                      AND N.raw_news_content_purged_at IS NULL) AS with_summary,
                    COUNT(*) FILTER (WHERE N.raw_news_content_purged_at IS NOT NULL) AS body_purged,
                    COUNT(*) FILTER (WHERE N.embedding_result IS NOT NULL) AS embedded
             FROM news_raw N JOIN press P ON P.press_id = N.press_id
@@ -112,14 +114,20 @@ def news_raw_snapshot() -> Dict[str, Any]:
             ORDER BY P.press_name
             """
         )
-        # with_content = 지금 본문이 있는 'ok' 행. 보존 기한(ADR 0023)이 지나 본문을 비운 행은 body_purged로 따로 센다.
+        # with_content = 지금 본문이 있는 'ok' 행. with_summary = 지금 RSS 요약이 본문 칸에 있는 'rss_summary' 행(동아일보 -
+        # 본문 요청을 거절하는 출발지, ADR 0026 2026-10-25). 둘을 합치지 않는다: 요약은 약 500자라 본문이 아니고, 동결 반출·평가는
+        # 'ok'만 쓰고 임베딩·클러스터는 둘 다 쓴다(ADR 0026 한계 2) - 합친 수에서는 어느 쪽이 얼마인지 되돌릴 수 없지만
+        # 합쳐서 보고 싶으면 두 값을 더하면 된다. 이 줄이 없으면 동아일보가 본문 0건의 실패 언론사로 보인다.
+        # 보존 기한(ADR 0023)이 지나 본문을 비운 행은(어느 상태든) body_purged로 따로 센다.
         per_press = {
-            name: {"total": total, "with_content": with_content, "body_purged": body_purged, "embedded": embedded}
-            for name, total, with_content, body_purged, embedded in cur.fetchall()
+            name: {"total": total, "with_content": with_content, "with_summary": with_summary,
+                   "body_purged": body_purged, "embedded": embedded}
+            for name, total, with_content, with_summary, body_purged, embedded in cur.fetchall()
         }
     return {
         "total": sum(p["total"] for p in per_press.values()),
         "with_content": sum(p["with_content"] for p in per_press.values()),
+        "with_summary": sum(p["with_summary"] for p in per_press.values()),
         "body_purged": sum(p["body_purged"] for p in per_press.values()),
         "embedded": sum(p["embedded"] for p in per_press.values()),
         "per_press": per_press,
@@ -169,6 +177,30 @@ def warn_failed_feeds(ctx, rss: Dict[str, Any]) -> None:
         else:
             names = ", ".join(feed for feed, _ in failed)
             ctx.warn(f"{press}: RSS 피드 {len(feeds)}개 중 {len(failed)}개 실패 ({kinds}) - {names}")
+
+
+# 요약 피드(동아일보)가 요약을 못 주는지 보는 기준(ADR 0026 2026-10-25 갱신 2). 읽기에 성공한 회차에서 새로 들어간 행이
+# SUMMARY_EMPTY_MIN_NEW건 이상인데 요약으로 저장된 행(stored)이 하나도 없으면 경고한다 - 피드가 요약을 비워 보내거나 형식이
+# 바뀌어 모든 항목이 짧은 요약(dropped)·같은 요약(duplicate)으로 닫히는 경우다. 읽기에 성공한 53회(2026-10-16 ~ 10-25)의 새 행은
+# 중앙값 35건이고 46회(87%)가 5건 이상이다. 정상에서는 새 행 50건 중 350자 미만이 1건(2%)이라 5건 전부가 stored 0일 확률은 없다고 본다.
+# 일부만 비는 경우(절반이 dropped 등)는 이 규칙이 보지 못한다 - daily_report의 언론사 줄(요약 N)과 피드별 stats.summary로 본다.
+# 잡을 실패시키지 않는다: 읽기·저장은 정상이고 다음 실행에 영향이 없다. check_extract_health에는 넣지 않았다 - 그 함수가 받는
+# 것은 본문 추출기의 통계이고 요약 행은 추출기를 거치지 않으므로 동아일보는 거기 나오지 않으며, 그 함수는 잡을 실패시킬 수 있다.
+SUMMARY_EMPTY_MIN_NEW = 5
+
+
+def warn_empty_summaries(ctx, rss: Dict[str, Any]) -> None:
+    """읽기에 성공한 요약 피드가 새 행 SUMMARY_EMPTY_MIN_NEW건 이상을 넣었는데 요약으로 저장된 것이 없으면 경고한다."""
+    for feed, feed_stats in (rss.get("per_feed") or {}).items():
+        feed_stats = feed_stats or {}
+        summary = feed_stats.get("summary")
+        inserted = feed_stats.get("inserted") or 0
+        if feed_stats.get("error") or not summary or inserted < SUMMARY_EMPTY_MIN_NEW or summary.get("stored"):
+            continue
+        ctx.warn(
+            f"{feed}: RSS 요약으로 저장된 기사가 없다 - 새 기사 {inserted}건이 모두 필터 {summary.get('dropped', 0)}건·"
+            f"중복 {summary.get('duplicate', 0)}건으로 닫혔다 (피드의 요약 형식 확인)"
+        )
 
 
 def _press_counts(counts: Dict[str, int]) -> Tuple[int, int]:
@@ -277,6 +309,7 @@ def run(ctx) -> Dict[str, Any]:
         if rss["per_feed"] and rss["failed_feeds"] == len(rss["per_feed"]):
             raise RuntimeError(f"모든 RSS 피드({rss['failed_feeds']}개) 수집 실패 - 네트워크/DNS를 확인하세요")
         warn_failed_feeds(ctx, rss)
+        warn_empty_summaries(ctx, rss)
         ctx.checkpoint()
 
     if "extract" in stages:
