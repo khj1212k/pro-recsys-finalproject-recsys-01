@@ -368,7 +368,7 @@ micro "$VMPSQL -c \"SELECT status, stats->>'purged' AS purged, stats->>'purged_b
 |---|---|
 | 하는 일 | 직전 ingest 실행의 `job_runs.stats.rss.per_feed`에서 `error`가 있던 피드(설정에 아직 있는 것)만 `collect_rss`로 다시 읽어 새 기사를 넣는다. 같은 호스트 건너뛰기 규칙도 그대로다 - 호스트의 첫 피드를 못 읽으면 같은 호스트의 나머지는 요청 없이 건너뛴다. |
 | 하지 않는 일 | 본문 추출·임베딩·정책브리핑(다음 정시 ingest가 한다. `rss_summary` 피드인 동아일보는 수집 때 요약이 본문 칸에 들어간다). 실패한 피드가 없으면 요청 없이 바로 끝난다(`succeeded`, `retry_feeds`가 빈 목록). |
-| 요청 수 | 피드 하나의 시간당 **읽기가 최대 1회에서 2회**로 는다(ingest :05 + 이 잡 :40). 읽기 1번은 연결 단계에서 막히면 HTTP 요청 최대 3번(`MAX_FETCH_RETRIES`, 대기 1초·2초)이다. 성공한 피드는 건드리지 않는다. |
+| 요청 수 | 피드 하나의 시간당 **읽기가 최대 1회에서 2회**로 는다(ingest :05 + 이 잡 :40). 읽기 1번은 연결 단계에서 막혀 bozo로 돌아오면 HTTP 요청 최대 3번(`MAX_FETCH_RETRIES`, 대기 1초·2초)이다. 관측한 동아일보 실패(`RemoteDisconnected` 157·`TimeoutError` 1)는 예외라 다시 보내지 않으므로 요청 1번이고, 이 잡이 더하는 요청은 하루 약 18번이다. 성공한 피드는 건드리지 않는다. |
 | ingest와 겹침 | ingest의 advisory lock을 잡고 읽는다. ingest가 돌고 있으면 `skipped`(`stats.reason = ingest_running`)이고, 이 잡이 도는 동안은 정시 ingest가 시작하지 못한다(건너뛰어지면 `job_runs`에 `skipped`로 남는다). 이 잡의 길이는 RSS 단계의 일부다 - 2026-10-16 ~ 10-25 ingest 211회의 RSS 단계 전체가 중앙값 22초·최대 136초였다. |
 | 다른 건너뛰는 경우 | `already_retried`(같은 ingest 실행의 피드는 한 번만 다시 읽는다 - ingest가 건너뛰어져 새 실행이 없을 때 되풀이하지 않는다), `no_ingest_rss_stats`(RSS 통계가 있는 ingest 실행이 아직 없다). |
 | 알림 | 다시 읽어도 실패하면 잡은 `succeeded`이고 경고도 더하지 않는다 - 그 회차의 ingest가 이미 피드별 경고를 냈다. 요약 피드가 새 기사 5건 이상을 넣고도 요약을 하나도 못 저장하면 경고한다(ingest와 같은 규칙). 예외로 죽으면 잡 런타임의 실패 알림이 간다. |
@@ -1015,7 +1015,9 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 1. 사전 확인은 4.1의 0단계와 같다(CI success, 도는 잡 없음, 메모리·디스크). 하나 더 - close SQL에 넘길 시도 횟수 상한을 **컨테이너 안의 실효값**으로
    읽어 둔다. VM의 `.env`를 보지 않는다: compose는 `MAX_EXTRACT_ATTEMPTS`를 컨테이너로 넘기지 않아(`AI_ENV_FILE`로 넘기는 경우만 예외) `.env`에
    무엇을 적어도 추출기와 마이그레이션은 설정 기본값을 쓴다(2026-10-25 VM: `.env`에 이 키가 없고 `fetch_failed` 행의 시도 횟수 최댓값이 3).
-   VM에는 `worker` 서비스가 없다 - 같은 이미지를 쓰는 `scheduler`로 읽는다(2026-10-25 VM에서 이 명령으로 3을 읽었다):
+   2026-10-25 재배포 때의 운영 기록에는 'VM에 worker가 없어 scheduler로 대체'했다고 남아 있다. 저장소의 compose는 `worker`를 `profiles: ["tools"]`로 정의하므로 어긋나고
+   원인은 가르지 않았다(VM에서 `docker compose config --services`로 확인할 일이다). 같은 이미지를 쓰는 `scheduler`로 읽으면 어느 쪽이든 되므로 아래는 `scheduler`로 적는다
+   (이 런북의 다른 `run --rm worker ...` 명령은 확인하기 전이라 고치지 않았다):
    `micro 'cd ~/newsletter-recsys && sudo docker compose run --rm --no-deps --entrypoint python scheduler -c "from config.settings import Settings; print(Settings.MAX_EXTRACT_ATTEMPTS)"'` (기본 3).
 2. 스케줄러를 멈추고(4.1의 1단계) 백업을 당긴 뒤(2단계) 코드를 바꾸고 이미지를 다시 빌드하고(3·4단계), **마이그레이션을 돌린다**:
 
