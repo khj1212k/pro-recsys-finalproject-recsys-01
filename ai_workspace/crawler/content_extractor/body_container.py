@@ -29,10 +29,6 @@ class BodySelection(NamedTuple):
     mode: str  # FULL_PAGE | CONTAINER_FOUND | CONTAINER_MISSING
 
 
-def has_container_rule(press_name: str) -> bool:
-    return press_name in PRESS_BODY_CONTAINERS
-
-
 def select_body_html(html: str, press_name: str) -> BodySelection:
     """trafilatura에 넘길 HTML을 고른다. 예외를 던지지 않는다 - 파싱이 안 되는 페이지도 전체 페이지로 되돌아간다."""
     xpath = PRESS_BODY_CONTAINERS.get(press_name)
