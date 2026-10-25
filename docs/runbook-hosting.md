@@ -1230,6 +1230,123 @@ CI의 PostgreSQL에서 `tests/integration/test_fix_kmib_created_at_sql.py`가, �
 2026-10-25 판정 창에서 이 질의의 출력은 증거 13의 수치와 같다: `A1` 168 · 168 · 168, `A2` 121 · 121 · 48, `A4` 합계 368 · 368 · 0, `B1` 167 · 168 · 292, `B2` 168 · 130 · 38, `B4` 168 · 0 · 164 · 8 · 149,
 `C1` 가 10,980행 p95 2.443, `C5` 가′ 2.095. 단 하나는 일회용 질의와 다르다: `C1`의 나(재수집)는 구 URL 행 196개를 잘못 넣은 235행 정의를 새 URL 39행으로 고쳤다(p95 2.287 → 2.232, ADR 0026 증거 13 (3)).
 
+### 6.12 매일경제 본문 부풀음 재추출 (2026-10-25, ADR 0026 결정 9 "2026-10-25 추가 2" · 코드와 SQL만, 배포·실행 전)
+
+**Tier 0는 2026-10-25 현재 옛 추출기(`a452a38`)로 돌고 있어 매일경제 본문에 해설 모달이 섞인 행이 계속 생긴다**(추출일 기준 3,000자 이상 비율 10-24 29/95, 10-25 30/159).
+원인·측정·재추출 조건은 [ADR 0026](adr/0026-hosting-tiers-and-contingency.md) 결정 9 "2026-10-25 추가 2"다. 이 절은 고친 추출기(`body_container.py`의 매일경제 규칙)를 올리고
+저장 길이 3,000자 이상인 `ok` 행(2026-10-25 12:39 UTC 조회: 30일 창 7,706행 중 3,057행, 임베딩·뉴스레터 연결 0)을 배치로 다시 받게 하는 절차다. SQL은 파일이다 -
+`scripts/oci/fix_mk_body_extraction.sql`(재추출)과 `scripts/oci/fix_mk_body_extraction_revert.sql`(보관 표 정리), CI의 PostgreSQL에서
+`tests/integration/test_fix_mk_body_extraction_sql.py`가 먼저 돌린다. 국민일보 복구(6.8)와 같은 방식(리허설이 기본, `-v apply=1`일 때만 커밋, 보관 표에는 본문을 복사하지 않음)이고 아래가 다르다.
+
+지켜야 할 것:
+
+- **고친 추출기를 먼저 배포한다.** 옛 추출기인 채로 되돌리면 다음 ingest가 되돌린 행을 같은 모달 글로 다시 채운다(옛 방식으로 다시 받으면 지금 부풀지 않은 행도 12%쯤 부푼다 - ADR의 측정). 스크립트가
+  `job_runs`로 확인한다: `until` 뒤에 고친 추출기(`stats.extract.body_container`의 **매일경제** 키)가 매일경제 기사를 처리한 ingest가 없거나, 옛 추출기가 매일경제 기사를 처리한 ingest가 있거나,
+  `container_missing`이 10%를 넘거나, `until`이 지금보다 뒤이면 리허설도 멈춘다.
+- **`until`은 고친 추출기가 매일경제 기사를 처음 처리한 ingest의 `started_at`이다.** 그 뒤에 추출된 행은 고친 추출기가 받은 것이라 건드리지 않는다. 배포 직후 회차에 새 매일경제 기사가 없으면 키가 없으니 새 기사가 쌓인 회차를 기다린다.
+- **한 회차에 몰리지 않게 배치로 돌린다.** 추출기는 미시도 행을 한 회차에 모두 받는다(국민일보 복구는 1,195행을 한 회차가 받았다). `batch_limit`(기본 500, 1000 초과는 거부)만큼 오래된 행부터 되돌리고,
+  **앞 배치가 아직 미시도로 남아 있으면 다음 배치를 거부한다**(ingest가 돌고 있을 때도 거부한다). 3,057행은 7회: 첫 배치를 `batch_limit=100`으로 시험하고(다운로드 실패·길이 확인) 500씩 이어 간다. 한 배치는 매시 ingest(:05) 한 번에 받힌다 -
+  500행은 6~8분(국민일보 복구 1,190행 약 15분 기준)이다.
+- **본문은 보관 표에 복사하지 않는다**(ADR 0023). 되돌려도 옛 본문은 돌아오지 않는다 - 부푼 본문은 모달 글이 섞인 틀린 값이라 보관하지 않는다. **다시 받지 못한 행(기사 삭제 등)은 `fetch_failed`로 끝나 본문이 없어진다**(재시도 3회).
+  옛 본문이 필요하면 시작 직전에 6.5로 호스트 밖 백업을 뜬다(본문 사본 `full/`은 하루 뒤 지워지고 다음 정시 백업이 새로 올리므로 그 안에서만 복원된다).
+- **늦을수록 대상이 준다.** 수집한 지 30일이 넘은 행은 대상이 아니고 보존 잡이 본문을 비운다. 대상 행이 하루 44~202행씩 빠진다(조회 시점 이후 10-26 44, 10-27 99, 10-28 147, 10-29 202, 10-30 189, 10-31 176, 11-01 118).
+- 임베딩이 있거나 뉴스레터에 묶인 대상 행이 있으면 스크립트가 멈춘다(지금은 0건). 그런 행은 이 스크립트가 다루지 않는다.
+- 3,000자 미만의 부푼 행은 이 절차가 다루지 않는다(ADR의 한계: 표본에서 2,658자 한 건, 구간 추정 9행쯤). 더 낮추려면 `min_length`를 바꾼다(2,500 미만은 거부).
+
+순서:
+
+1. **백업과 배포.** 6.5로 호스트 밖 백업을 뜨고, 4절의 재배포 절차로 이 브랜치가 병합된 main을 올린다. `.env`의 `GIT_SHA`도 새 커밋으로 고친다.
+2. **고친 추출기의 첫 ingest 확인(읽기 전용).** 배포 뒤 새 매일경제 기사가 5건 이상 쌓인 다음에 본다.
+
+   ```sql
+   -- until = 고친 추출기가 매일경제 기사를 처음 처리한 ingest의 시작 시각(UTC). 아직 없으면 0행이다
+   SELECT started_at AT TIME ZONE 'UTC' AS until_utc, git_sha, stats->'extract'->'body_container'->'매일경제' AS mk_container
+   FROM job_runs WHERE job = 'ingest' AND stats->'extract'->'body_container' ? '매일경제' ORDER BY started_at LIMIT 3;
+
+   -- 그 뒤 실행들의 매일경제 추출 경로: container만 있고 container_missing이 없어야 한다
+   SELECT started_at AT TIME ZONE 'UTC' AS start_utc, stats->'extract'->'body_container'->'매일경제' AS mk_container,
+          stats->'extract'->'per_press'->'매일경제' AS mk_press, stats->'extract'->'suspect_press' AS suspect_press
+   FROM job_runs WHERE job = 'ingest' AND git_sha = '<새 커밋>' ORDER BY started_at DESC LIMIT 5;
+
+   -- 새 행의 본문 길이: 중앙값이 1,000자대여야 하고 3,000자 이상은 1~2%쯤(진짜 긴 기사)이어야 한다
+   SELECT n.raw_news_extract_status, count(*), percentile_cont(0.5) WITHIN GROUP (ORDER BY n.raw_news_content_length)::int AS median_chars,
+          count(*) FILTER (WHERE n.raw_news_content_length >= 3000) AS ge3000
+   FROM news_raw n JOIN press p ON p.press_id = n.press_id
+   WHERE p.press_name = '매일경제' AND n.raw_news_extracted_at >= '<until>' GROUP BY 1 ORDER BY 1;
+   ```
+
+   기대: `body_container`에 `{"매일경제": {"container": N}}`만 있다(국민일보 키가 같이 있어도 된다). `container_missing`이 있거나 중앙값이 2,000자 이상이면 여기서 멈춘다 - 고친 추출기가 새 페이지에 맞지 않는 것이다.
+3. **사전 확인(읽기 전용).** 스크립트와 같은 조건의 대상 수다(2026-10-25 12:39 UTC: 3,057행, 연결 0).
+
+   ```sql
+   SELECT count(*) AS targets, count(*) FILTER (WHERE n.embedding_result IS NOT NULL OR n.news_letter_id IS NOT NULL) AS linked,
+          min(n.raw_news_crawled_at)::date AS first_crawled, max(n.raw_news_crawled_at)::date AS last_crawled,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY n.raw_news_content_length)::int AS median_chars
+   FROM news_raw n JOIN press p ON p.press_id = n.press_id
+   WHERE p.press_name = '매일경제' AND n.raw_news_extract_status = 'ok' AND n.raw_news_content_length >= 3000
+     AND n.raw_news_extracted_at < '<until>' AND n.raw_news_content_purged_at IS NULL
+     AND n.raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - interval '30 days';
+   ```
+
+   기대: `linked`가 0이다. `targets`는 위 숫자에서 크게 벗어나지 않는다(그 뒤 옛 추출기가 돈 시간만큼 늘고 만료만큼 준다).
+4. **첫 배치(리허설 -> 적용).** 기본 실행은 리허설이다(한 트랜잭션, 끝이 `ROLLBACK`). 출력을 보고 기준을 만족하면 `-v apply=1`을 더해 한 번 더 돈다. 하나라도 어기면 예외로 멈춘다(psql 종료 코드 3, 아무것도 커밋되지 않음) -
+   `min_length`·`batch_limit` 범위 밖, 고친 추출기 미배포·`until` 오류·`container_missing` 과다, ingest 실행 중, 앞 배치가 아직 미시도, 대상 0행(모든 배치를 마침 또는 인자 오류), 임베딩·뉴스레터 연결.
+
+   ```bash
+   U='<2단계의 until, UTC>'
+   ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 \
+     -v until='$U' -v batch_limit=100 -U newsletter -d newsletter -f -" < scripts/oci/fix_mk_body_extraction.sql          # 리허설
+   ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 \
+     -v until='$U' -v batch_limit=100 -v apply=1 -U newsletter -d newsletter -f -" < scripts/oci/fix_mk_body_extraction.sql  # 적용
+   ```
+
+   읽을 것: `NOTICE: fix_mk batch=<n> reset=<이번 배치 행 수> remaining=<이 배치 뒤 남은 대상> archived_total=<지금까지 보관한 행>`, 요약 표(배치 번호·행 수·이전 본문 길이 분포·수집 시각 범위), 끝 줄 `ROLLBACK`/`COMMIT`.
+   리허설과 적용은 같은 수치여야 한다(그 사이 ingest가 새 행을 쓰지 않았다면 - 이전 길이 분포가 같다).
+5. **다음 ingest 뒤 확인(읽기 전용).** 되돌린 행은 `ORDER BY raw_news_id`로 오래된 것부터 다시 받는다.
+
+   ```sql
+   SELECT f.batch_no, coalesce(n.raw_news_extract_status, 'NULL') AS status_now, count(*),
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY n.raw_news_content_length)::int AS median_chars_now,
+          count(*) FILTER (WHERE n.raw_news_content_length >= 3000) AS ge3000_now,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY f.content_length_before)::int AS median_chars_before
+   FROM news_raw_mk_extract_fix f JOIN news_raw n ON n.raw_news_id = f.raw_news_id
+   GROUP BY 1, 2 ORDER BY 1, 2;
+   ```
+
+   기대: `NULL`(미시도)이 0으로 줄고, `ok`의 중앙값이 1,000자대(표본: 부푼 행의 컨테이너 길이 중앙값 1,085자)이고, `ge3000_now`는 진짜 긴 기사 몇 %뿐이다. `dropped`가 몇 건 생길 수 있다(컨테이너 글이 350자 미만 = 모달 때문에
+   통과했던 짧은 기사). 미시도가 줄지 않으면 6.6의 확인 쿼리로 회차가 건너뛰어지는지 본다. `fetch_failed`가 늘면 매일경제 서버가 막는 것이다 - 멈추고 `daily_report`의 다운로드 실패 원인을 본다.
+6. **나머지 배치.** 5단계가 깨끗하면 4단계 명령에서 `batch_limit`만 500으로 바꿔(적용 때만 `-v apply=1`) 한 배치씩 돈다. 배치마다 5단계를 본다 - NOTICE의 `remaining`이 0이 될 때까지(3,057행이면 500씩 6회 더).
+   앞 배치가 다 받히기 전에 돌리면 스크립트가 "앞 배치의 행 N건이 아직 미시도"로 멈춘다 - 다음 정시 ingest(:05)가 끝난 뒤에 다시 돌린다. 마지막 배치 뒤에는 "재추출 대상이 0행이다"로 멈춘다(끝났다는 뜻이다).
+7. **마무리 확인과 정리.**
+
+   ```sql
+   SELECT count(*) AS ok_rows, count(*) FILTER (WHERE n.raw_news_content_length >= 3000) AS ge3000,
+          round(100.0 * count(*) FILTER (WHERE n.raw_news_content_length >= 3000) / count(*), 1) AS ge3000_pct,
+          percentile_cont(0.5) WITHIN GROUP (ORDER BY n.raw_news_content_length)::int AS median_chars
+   FROM news_raw n JOIN press p ON p.press_id = n.press_id
+   WHERE p.press_name = '매일경제' AND n.raw_news_extract_status = 'ok' AND n.raw_news_content_purged_at IS NULL
+     AND n.raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - interval '30 days';
+   ```
+
+   적용 전(2026-10-25 12:39 UTC)은 7,706행 중 3,057행(39.7%), 중앙값 1,576자였다. 기대(예측이지 측정이 아니다): 3,000자 이상이 1~2%쯤으로 줄고 중앙값은 1,000자대다. 5%를 넘으면 3,000자 미만의 부푼 행이 많이 남았다는 뜻이다(ADR의 한계) -
+   `min_length`를 낮춰 다시 돌리기 전에 표본을 다시 받아 본다. 확인이 끝나면 보관 표를 정리한다(아래). 보관 표는 메타데이터뿐이라 11-25쯤 모든 행의 본문이 만료될 때까지 둬도 된다.
+
+정리(보관 표를 지운다 - 그래야 범위를 바꿔 다시 재추출할 수 있다. `news_raw`는 바꾸지 않는다):
+
+```bash
+ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 \
+  [-v apply=1] -U newsletter -d newsletter -f -" < scripts/oci/fix_mk_body_extraction_revert.sql
+```
+
+읽을 것: `NOTICE: fix_mk_revert audited=<보관한 행> unattempted=<아직 미시도> reextracted_ok=<ok로 다시 받음> dropped=<350자 미만으로 버림> empty=<본문 없음> duplicate=<다른 ok 행과 같은 본문> failed=<fetch_failed·error> purged_or_missing=<본문을 비웠거나 없어진 행>`.
+
+**이 정리는 되돌리기가 아니다.** 국민일보 복구(6.8)와 달리 되돌릴 행이 없다: 재추출이 미시도로 만든 행은 모두 원래 `ok`(본문 있음)였고 본문을 복사하지 않았으므로 옛 본문이 표로 돌아오지 않는다.
+- 아직 다시 받지 않은 행(미시도)은 그대로 둔다 - 다음 ingest가 원본 페이지에서 다시 받는다. 그 ingest가 옛 추출기라면(고친 추출기를 되돌렸다면) 옛 본문과 같은 부푼 글이 다시 채워진다.
+- 이미 다시 받은 행은 새 추출 결과라 건드리지 않는다. `failed`는 옛 본문이 사라진 행이다(기사가 내려갔거나 서버가 막았다).
+- 중간에 멈춰야 하면(예: 5단계에서 `fetch_failed`가 늘어난다) 다음 배치를 돌리지 않으면 된다. 이미 되돌린 배치는 다음 ingest가 받는다.
+
+하지 않는 것: 3,000자 미만 행·`duplicate`·`dropped` 행은 건드리지 않는다. 구 URL·신 URL 이중 수집 같은 중복은 이 절과 무관하다. E0 반출본(본문을 지웠다)은 바뀌지 않는다 - 영향은 ADR과 E0 사례 문서의 한계에 적었다.
+
 ## 7. Tier 0 내리기
 
 ```bash
