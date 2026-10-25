@@ -100,12 +100,17 @@ def test_process_single_article_saves_the_article_body_for_kmib():
 
 
 def test_kmib_pages_with_different_articles_no_longer_share_one_body_hash():
-    """예전에는 모든 기사가 같은 특집 글을 받아 해시가 하나로 모였다."""
+    """예전에는 기사가 달라도 모든 페이지가 같은 특집 글을 받아 본문 해시가 하나로 모였고, 해시 중복 제거(ADR 0006)가
+    나머지를 duplicate로 지웠다. 특집 카드 묶음은 기사마다 같은 글이다(fixture의 kpick_seed가 같다)."""
+    seeds = (1, 2, 3)
+    pages = [kmib_like_page(seed=seed) for seed in seeds]
+    assert len({_extract(page) for page in pages}) == 1  # 전제: 전체 페이지를 넘기면 기사가 달라도 글이 하나로 모인다
+
     digests = set()
-    for seed in (1, 2, 3):
-        _, cur = _run_single(kmib_like_page(seed=seed), "국민일보")
+    for page in pages:
+        _, cur = _run_single(page, "국민일보")
         digests.add(cur.execute.call_args[0][1][2])
-    assert len(digests) == 3
+    assert len(digests) == len(seeds)
 
 
 def test_process_single_article_reports_the_fallback_when_the_container_is_missing():

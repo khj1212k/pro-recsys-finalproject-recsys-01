@@ -54,8 +54,11 @@ def _paragraph(mark: str, seed: int, count: int = 2) -> str:
 
 
 def kmib_like_page(*, body_paragraphs: int = 8, kpick_sentences_per_card: int = 20, container_id: str = "articleBody",
-                   seed: int = 1) -> str:
-    """개편 뒤 국민일보 기사 페이지의 구조를 흉내 낸 HTML. container_id를 바꾸면 본문 컨테이너를 못 찾는 페이지가 된다."""
+                   seed: int = 1, kpick_seed: int = 0) -> str:
+    """개편 뒤 국민일보 기사 페이지의 구조를 흉내 낸 HTML. container_id를 바꾸면 본문 컨테이너를 못 찾는 페이지가 된다.
+
+    seed는 기사 본문 문장만 바꾼다. 특집 카드 묶음은 실제 페이지처럼 기사가 달라도 같다(kpick_seed가 같으면 같은 글) -
+    그래서 전체 페이지를 추출하면 기사가 달라도 같은 특집 글이 나와 본문 해시가 하나로 모인다."""
     half = body_paragraphs // 2
     first = "".join(f"<p>{html.escape(_paragraph(BODY_MARK, seed * 100 + i))}</p>" for i in range(half))
     second = "".join(
@@ -64,7 +67,7 @@ def kmib_like_page(*, body_paragraphs: int = 8, kpick_sentences_per_card: int = 
     cards = "".join(
         '<div class="card flex_fw rgap_lg2 swiper-slide"><div class="card_body rgap_lg2">'
         f'<p class="title">{html.escape(f"가상 특집 제목 {c + 1}")}</p>'
-        f'<p class="description">{html.escape(" ".join(sentences(f"{KPICK_MARK}{c + 1}", kpick_sentences_per_card, 9000 + c + seed)))}</p>'
+        f'<p class="description">{html.escape(" ".join(sentences(f"{KPICK_MARK}{c + 1}", kpick_sentences_per_card, 9000 + c + kpick_seed)))}</p>'
         "</div></div>"
         for c in range(9)
     )
