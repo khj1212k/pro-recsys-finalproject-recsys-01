@@ -4,6 +4,7 @@ import html
 import re
 import socket
 import time
+from collections import Counter
 from contextlib import contextmanager
 import feedparser, logging
 from datetime import datetime, timedelta, timezone
@@ -25,15 +26,98 @@ KST = timezone(timedelta(hours=9))
 
 # RSS_FEEDS의 전략 값. 'rss_summary' 피드는 본문을 받지 않고 RSS 요약을 본문 칸에 바로 저장한다(동아일보).
 RSS_SUMMARY = "rss_summary"
-RSS_SUMMARY_STATUS = "rss_summary"
-_TAG = re.compile(r"<[^>]+>")
+# 요약 행이 받는 상태들(news_raw.raw_news_extract_status의 CHECK 제약에 있는 값 - backend/alembic/versions/b7e4a1c93d52).
+RSS_SUMMARY_STATUS = "rss_summary"       # 요약을 본문 칸에 둔 행. 운영 임베딩·클러스터에 들어간다
+SUMMARY_DROPPED_STATUS = "dropped"       # 요약이 짧거나 없다(is_drop_article) - 본문 추출기의 'dropped'와 같다. 본문 ''
+SUMMARY_DUPLICATE_STATUS = "duplicate"   # 같은 요약이 이미 있다(URL만 다른 같은 기사) - 본문 추출기의 'duplicate'와 같다. 본문 ''
+# 요약 행의 중복 기준: 같은 해시를 가진 이 상태의 행이 이미 있으면 'duplicate'로 넣는다. uq_news_raw_content_sha256_ok는
+# 'ok'만 덮으므로(요약 행은 그 인덱스 밖이다) 'rss_summary'는 수집기가 직접 본다.
+SUMMARY_DEDUPE_STATUSES = ("ok", RSS_SUMMARY_STATUS)
+# 요약에는 쓰지 않는 is_drop_article 사유. 리스트성 마커('실시간'·'랭킹' 등)는 700자 미만 본문에서만 의미가 있는데 요약은
+# 길어야 500자라 항상 그 안에 든다 - VM의 'ok' 본문(3.6만 건) 앞 500자의 1.4%(동아일보 3,022건 중 45건)가 마커를 담는다.
+# 본문 전체로는 통과한 기사를 요약만 보고 버리게 된다.
+SUMMARY_IGNORED_DROP_REASONS = ("list_like_markers",)
+
+# 줄바꿈·문단을 뜻하는 태그는 공백으로, 나머지 태그(img·b·span·a 등)는 빈 문자열로 걷는다 - <b>대</b>통령이 "대 통령"이 되지 않게.
+_BLOCK_TAG = re.compile(r"</?(?:br|p|div|li)\b[^<>]*>", re.IGNORECASE)
+# 태그는 '<' 바로 뒤에 영문자나 '/'가 오는 것만 본다 - "3 < 5 그리고 7 > 2" 같은 본문 속 부등호를 지우지 않는다.
+_TAG = re.compile(r"<!--.*?-->|</?[A-Za-z][^<>]*>", re.DOTALL)
 _SPACE = re.compile(r"\s+")
 
 
 def rss_summary_text(entry) -> str:
-    """RSS 항목의 요약(summary/description)을 태그·HTML 엔티티를 걷어 한 줄 텍스트로 만든다. 없으면 ''."""
+    """RSS 항목의 요약(summary/description)을 태그·HTML 엔티티를 걷어 한 줄 텍스트로 만든다. 없으면 ''.
+
+    블록 태그(br·p·div·li)만 공백으로 바꾸고 나머지 태그는 지운다. 엔티티를 푼 뒤 태그를 한 번 더 지운다 -
+    피드가 태그를 &lt;p&gt;처럼 이스케이프해 보내면 푼 뒤에야 태그가 보인다.
+    """
     raw = entry.get('summary') or entry.get('description') or ''
-    return _SPACE.sub(' ', html.unescape(_TAG.sub(' ', raw))).strip()
+    text = _TAG.sub('', _BLOCK_TAG.sub(' ', raw))
+    text = _TAG.sub('', _BLOCK_TAG.sub(' ', html.unescape(text)))
+    return _SPACE.sub(' ', text).strip()
+
+
+def summary_drop_reasons(summary: str, title: str, press_name: str):
+    """요약을 본문 추출기와 같은 기준(crawler.content_extractor.cleaners.is_drop_article)으로 걸러 사유를 돌려준다.
+    사유가 없으면 []. 요약에 맞지 않는 사유(SUMMARY_IGNORED_DROP_REASONS)는 뺀다. 요약이 비었으면 길이 사유가 붙는다.
+
+    추출기 패키지는 trafilatura를 끌어오므로 요약 피드를 처리할 때만 임포트한다(같은 ingest 프로세스가 곧바로 추출기를 쓴다).
+    """
+    from crawler.content_extractor.cleaners import is_drop_article
+
+    _, reasons = is_drop_article(summary, title, press_name)
+    return [r for r in reasons if r not in SUMMARY_IGNORED_DROP_REASONS]
+
+
+def _summary_digest(summary: str) -> str:
+    """요약의 해시. 본문 추출기의 content_sha256(정제 본문의 UTF-8 sha256 hex)과 같은 정의다."""
+    return hashlib.sha256(summary.encode("utf-8")).hexdigest()
+
+
+def _existing_summary_hashes(cur, digests) -> Set[str]:
+    """digests 가운데 SUMMARY_DEDUPE_STATUSES 행이 이미 갖고 있는 해시(같은 트랜잭션에서 앞서 넣은 행 포함)."""
+    cur.execute(
+        "SELECT DISTINCT raw_news_content_sha256 FROM news_raw "
+        "WHERE raw_news_content_sha256 = ANY(%s) AND raw_news_extract_status = ANY(%s)",
+        (sorted(digests), list(SUMMARY_DEDUPE_STATUSES)),
+    )
+    return {row[0] for row in cur.fetchall()}
+
+
+def build_insert_rows(cur, pid, press_name, strategy, entries, now_local, now_utc):
+    """(링크, 제목, 발행 시각, 요약) 항목을 INSERT 행으로 만든다. 돌려주는 값: (행 목록, 링크 -> 요약 행 상태).
+
+    행 = (press_id, 제목, 본문, 링크, 발행 시각, 수집 시각, 추출 상태, 해시, 길이, 추출 시각).
+    - 일반 피드('direct'): 본문 ''에 상태 NULL - 본문 추출기가 채운다.
+    - 'rss_summary' 피드: 요약을 본문 칸에 넣고 상태 'rss_summary'로 닫아 본문 추출 대상에서 뺀다. 단
+      · 요약이 비었거나 is_drop_article이 참이면(짧음·[포토]) 본문 ''에 'dropped'로 닫는다. 본문을 따로 요청하지 않는다 -
+        이 출발지는 본문 요청을 거절한다(ADR 0026 증거 10).
+      · 같은 요약이 이미 'ok'/'rss_summary' 행에 있거나 이번 묶음에서 앞서 나왔으면 본문 ''에 'duplicate'로 넣는다
+        (임베딩·클러스터에 같은 글이 두 번 들어가지 않게 한다 - 본문 추출기의 중복 처리와 같다).
+    상태 맵은 요약 피드의 항목만 갖는다(실제로 들어간 행의 집계에 쓴다).
+    """
+    if strategy != RSS_SUMMARY:
+        return [(pid, title, '', link, dt, now_local, None, None, None, None) for link, title, dt, _ in entries], {}
+
+    verdicts = []  # (drop 사유 있음, 해시) - 항목 순서대로
+    for link, title, dt, summary in entries:
+        dropped = bool(summary_drop_reasons(summary, title, press_name))
+        verdicts.append((dropped, None if dropped else _summary_digest(summary)))
+    digests = {digest for dropped, digest in verdicts if digest}
+    taken = _existing_summary_hashes(cur, digests) if digests else set()
+
+    rows, statuses = [], {}
+    for (link, title, dt, summary), (dropped, digest) in zip(entries, verdicts):
+        if dropped:
+            status, content, row_digest, length = SUMMARY_DROPPED_STATUS, '', None, 0
+        elif digest in taken:
+            status, content, row_digest, length = SUMMARY_DUPLICATE_STATUS, '', digest, 0
+        else:
+            status, content, row_digest, length = RSS_SUMMARY_STATUS, summary, digest, len(summary)
+            taken.add(digest)
+        rows.append((pid, title, content, link, dt, now_local, status, row_digest, length, now_utc))
+        statuses.setdefault(link, status)  # 같은 링크가 두 번 나오면 먼저 들어가는 행의 상태 - ON CONFLICT가 뒤의 행을 건너뛴다
+    return rows, statuses
 
 
 @contextmanager
@@ -163,16 +247,10 @@ def collect_rss(hours: int = 100) -> Dict[str, Any]:
 
                     # 2. ON CONFLICT DO NOTHING으로 삽입, RETURNING으로 실제
                     #    삽입된 URL만 받아 inserted/skipped 건수 계산
-                    #    rss_summary 피드는 요약을 본문 칸에 넣고 상태·해시·길이·추출 시각까지 채워 본문 추출 대상에서 빠진다
-                    #    (요약이 비면 다른 피드처럼 빈 본문으로 넣어 추출기가 시도한다). 해시는 extractor.content_sha256과 같은 정의다.
-                    now_local, now_utc = datetime.now(), datetime.now(timezone.utc)
-                    candidates = []
-                    for link, title, dt, summary in entries:
-                        if summary:
-                            candidates.append((pid, title, summary, link, dt, now_local, RSS_SUMMARY_STATUS,
-                                               hashlib.sha256(summary.encode("utf-8")).hexdigest(), len(summary), now_utc))
-                        else:
-                            candidates.append((pid, title, '', link, dt, now_local, None, None, None, None))
+                    #    'rss_summary' 피드는 요약을 본문 칸에 넣어 본문 추출 대상에서 빼고, 요약이 짧거나 이미 있으면
+                    #    'dropped'/'duplicate'로 넣는다(build_insert_rows).
+                    candidates, summary_status = build_insert_rows(
+                        cur, pid, press_name, strategy, entries, datetime.now(), datetime.now(timezone.utc))
                     inserted_rows = execute_values(
                         cur,
                         """
@@ -189,6 +267,15 @@ def collect_rss(hours: int = 100) -> Dict[str, Any]:
                     skipped_count = len(candidates) - inserted_count
                     feed_stats["inserted"] = inserted_count
                     feed_stats["skipped"] = skipped_count
+                    if summary_status:
+                        # 이번에 실제로 들어간 요약 행의 상태별 건수(이미 있어 건너뛴 행은 세지 않는다).
+                        # 피드가 요약을 비워 보내기 시작하거나 짧은 요약이 많아지면 여기서 드러난다.
+                        by_status = Counter(summary_status.get(row[0]) for row in inserted_rows)
+                        feed_stats["summary"] = {
+                            "stored": by_status[RSS_SUMMARY_STATUS],
+                            "dropped": by_status[SUMMARY_DROPPED_STATUS],
+                            "duplicate": by_status[SUMMARY_DUPLICATE_STATUS],
+                        }
                     total_inserted += inserted_count
                     total_skipped += skipped_count
                     logger.info(f"✅ {feed_name}: 신규 {inserted_count}건 추가, {skipped_count}건 스킵(중복)")
