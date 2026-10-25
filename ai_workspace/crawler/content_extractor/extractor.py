@@ -20,6 +20,7 @@ from config.settings import Settings
 from .body_container import FULL_PAGE, select_body_html
 from .cleaners import clean_text_lite, is_drop_article
 from .fetch import fetch_page, is_site_failure, latency_bucket
+from .page_pubdate import CREATED_AT_FIXED, FUTURE_SLACK_MINUTES, NOT_FUTURE, PageCreatedAt, decide_created_at
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,9 @@ class ExtractionResult(NamedTuple):
     # 본문 컨테이너 규칙이 있는 언론사(body_container.py)만 채운다: "container"(본문 노드만 잘라 추출) 또는
     # "container_missing"(노드를 못 찾아 전체 페이지로 되돌아감). 규칙이 없는 언론사는 "" - 개수만 stats에 남긴다
     container: str = ""
+    # 저장된 발행 시각이 수집 시각보다 10분 넘게 뒤(미래)였던 행의 처리(page_pubdate.py): "fixed"(기사 페이지의 발행 시각으로
+    # 바꿨다) 또는 못 바꾼 사유(no_page_time·no_tz·after_crawl·too_old). 미래가 아니었던 행은 "" - 건수만 stats에 남긴다
+    created_at_fix: str = NOT_FUTURE
 
 
 # raw_news_extract_status 값(d48994e9d26e의 CHECK 제약과 동일).
@@ -66,20 +70,40 @@ def _record_extraction(cur, raw_news_id, content, status, digest=None):
     """, (content, status, digest, len(content), raw_news_id))
 
 
-def _record_ok_or_duplicate(conn, cur, raw_news_id, cleaned) -> str:
+def _record_page_created_at(cur, raw_news_id, fix: PageCreatedAt) -> str:
+    """미래였던 발행 시각을 기사 페이지 값으로 바꾼다. 추출 결과를 쓴 UPDATE와 같은 트랜잭션에서 호출하고 커밋은 부른 쪽이 한다.
+
+    WHERE의 조건은 지금 행의 값이 아직 미래일 때만 바꾼다 - 대상을 고른 뒤에 다른 곳(런북 6.10의 보정)이 이미 고친 값을
+    덮어쓰지 않는다. 돌려주는 값은 ExtractionResult.created_at_fix에 남길 분류다(행이 이미 고쳐졌으면 "")."""
+    if fix.outcome != CREATED_AT_FIXED:
+        return fix.outcome
+    cur.execute("""
+        UPDATE news_raw
+        SET raw_news_created_at = %s
+        WHERE raw_news_id = %s
+          AND raw_news_created_at > (raw_news_crawled_at AT TIME ZONE 'UTC') + make_interval(mins => %s)
+    """, (fix.value, raw_news_id, FUTURE_SLACK_MINUTES))
+    return CREATED_AT_FIXED if cur.rowcount == 1 else NOT_FUTURE
+
+
+def _record_ok_or_duplicate(conn, cur, raw_news_id, cleaned, fix: PageCreatedAt = PageCreatedAt(NOT_FUTURE)) -> Tuple[str, str]:
     """본문을 'ok'로 저장한다. 같은 본문이 이미 'ok'로 있으면(URL만 다른 같은 기사)
     uq_news_raw_content_sha256_ok가 막으므로 사본은 본문 없이 'duplicate'로 남긴다.
-    병렬 워커가 같은 본문을 동시에 저장하는 경합도 인덱스가 한쪽만 통과시킨다."""
+    병렬 워커가 같은 본문을 동시에 저장하는 경합도 인덱스가 한쪽만 통과시킨다.
+    돌려주는 값은 (저장한 상태, 발행 시각 처리 분류). 발행 시각은 결과와 같은 트랜잭션에서 바꾼다 - 'ok'가 막혀 롤백하면
+    함께 사라지므로 'duplicate'로 다시 쓸 때 발행 시각도 다시 쓴다."""
     digest = content_sha256(cleaned)
     try:
         _record_extraction(cur, raw_news_id, cleaned, "ok", digest)
+        created_at_fix = _record_page_created_at(cur, raw_news_id, fix)
         conn.commit()
-        return "ok"
+        return "ok", created_at_fix
     except psycopg2.errors.UniqueViolation:
         conn.rollback()
     _record_extraction(cur, raw_news_id, "", "duplicate", digest)
+    created_at_fix = _record_page_created_at(cur, raw_news_id, fix)
     conn.commit()
-    return "duplicate"
+    return "duplicate", created_at_fix
 
 
 class DispatchPlan:
@@ -158,7 +182,10 @@ class ContentExtractor:
     def process_single_article(article_data) -> ExtractionResult:
         # 개별 기사 처리 (병렬 처리)
 
-        raw_news_id, url, press_name, title = article_data
+        # 대상 조회(extract_parallel_with_stats)는 발행 시각과 수집 시각을 더해 6개를 준다. 4개만 주면(예전 호출) 발행 시각은
+        # 건드리지 않는다.
+        raw_news_id, url, press_name, title, *times = article_data
+        created_at, crawled_at = times[:2] if len(times) >= 2 else (None, None)
         conn = get_connection()
         cur = conn.cursor()
 
@@ -177,6 +204,9 @@ class ContentExtractor:
             # 특집 카드 묶음을 고르는 사이트가 있다(국민일보 2026-10-19 개편, body_container.py). 규칙이 없는 언론사는
             # 페이지를 그대로 넘기므로 동작이 같다.
             selected = select_body_html(fetched.html, press_name)
+            # 저장된 발행 시각이 수집 시각보다 10분 넘게 뒤(미래)인 행만 페이지의 발행 시각으로 바꾼다(page_pubdate.py).
+            # 미래가 아닌 행은 페이지를 읽지도 않는다. 아래 추출 결과를 쓰는 트랜잭션에서 함께 쓴다.
+            fix = decide_created_at(created_at, crawled_at, fetched.html)
             container = "" if selected.mode == FULL_PAGE else selected.mode
             text = trafilatura.extract(
                 selected.html,
@@ -192,20 +222,24 @@ class ContentExtractor:
                 should_drop, drop_reasons = is_drop_article(cleaned, title, press_name)
                 if should_drop:
                     _record_extraction(cur, raw_news_id, '', 'dropped')
+                    created_at_fix = _record_page_created_at(cur, raw_news_id, fix)
                     conn.commit()
                     return ExtractionResult(raw_news_id, press_name, "dropped", tuple(drop_reasons),
-                                            fetch_s=fetched.request_s, container=container)
+                                            fetch_s=fetched.request_s, container=container,
+                                            created_at_fix=created_at_fix)
 
-                status = _record_ok_or_duplicate(conn, cur, raw_news_id, cleaned)
+                status, created_at_fix = _record_ok_or_duplicate(conn, cur, raw_news_id, cleaned, fix)
                 return ExtractionResult(
                     raw_news_id, press_name, status, detail=f"raw={len(text)} clean={len(cleaned)}",
-                    fetch_s=fetched.request_s, container=container,
+                    fetch_s=fetched.request_s, container=container, created_at_fix=created_at_fix,
                 )
 
             # 페이지는 받았지만 본문을 뽑지 못함(목록/영상 페이지 등) - 재시도해도 같으므로 확정
             _record_extraction(cur, raw_news_id, '', 'empty')
+            created_at_fix = _record_page_created_at(cur, raw_news_id, fix)
             conn.commit()
-            return ExtractionResult(raw_news_id, press_name, "empty", fetch_s=fetched.request_s, container=container)
+            return ExtractionResult(raw_news_id, press_name, "empty", fetch_s=fetched.request_s, container=container,
+                                    created_at_fix=created_at_fix)
 
         except Exception as e:
             conn.rollback()
@@ -244,11 +278,14 @@ class ContentExtractor:
         #    UTC 값이라 기준도 UTC로 만든다(jobs/tasks/retention.py와 같은 식). 기한은 설정(.env)이 아니라 ADR의
         #    상수를 쓴다 - 설정이 틀려도 기한이 지난 본문을 받지 않고, 수집을 멈추지도 않는다.
         #    보존 잡(jobs/tasks/retention.py)은 여기서 고르는 행 가운데 본문이 빈 행을 건드리지 않는다.
+        #    발행 시각·수집 시각은 고르는 조건이 아니라 기사와 함께 넘기는 값이다 - 발행 시각이 수집 시각보다 10분 넘게
+        #    뒤인 행을 페이지 값으로 바꾸는 데 쓴다(page_pubdate.py). 그래서 위 조건과 보존 잡의 "추출 대기" 조건은 그대로다.
         conn = get_connection()
         try:
             cur = conn.cursor()
             cur.execute("""
-                SELECT N.raw_news_id, N.raw_news_url, P.press_name, N.raw_news_title
+                SELECT N.raw_news_id, N.raw_news_url, P.press_name, N.raw_news_title,
+                       N.raw_news_created_at, N.raw_news_crawled_at
                 FROM news_raw N
                 JOIN press P ON N.press_id = P.press_id
                 WHERE (N.raw_news_extract_status IS NULL
@@ -273,6 +310,9 @@ class ContentExtractor:
             # 본문 컨테이너 규칙이 있는 언론사(body_container.py)의 추출 경로별 개수: container | container_missing.
             # container_missing은 노드를 못 찾아 전체 페이지로 되돌아간 기사 - 페이지 개편 신호라 ingest가 경고한다
             "body_container": {},
+            # 저장된 발행 시각이 수집 시각보다 10분 넘게 뒤(미래)여서 기사 페이지의 발행 시각으로 바꾼 행 수 - 언론사별.
+            # created_at_unfixed는 미래였는데 못 바꾼 행의 사유(no_page_time·no_tz·after_crawl·too_old)별 개수 - 그 행은 미래인 채 남는다
+            "created_at_from_page": {}, "created_at_unfixed": {},
             "deferred_reasons": {}, "press_breaker": {},
             "time_budget_s": time_budget_s, "time_budget_exhausted": False,
         }
@@ -310,6 +350,12 @@ class ContentExtractor:
             if result.container:
                 paths = stats["body_container"].setdefault(result.press_name, {})
                 paths[result.container] = paths.get(result.container, 0) + 1
+            if result.created_at_fix == CREATED_AT_FIXED:
+                fixed = stats["created_at_from_page"]
+                fixed[result.press_name] = fixed.get(result.press_name, 0) + 1
+            elif result.created_at_fix != NOT_FUTURE:
+                reasons = stats["created_at_unfixed"].setdefault(result.press_name, {})
+                reasons[result.created_at_fix] = reasons.get(result.created_at_fix, 0) + 1
             if result.status == "error" and len(stats["error_samples"]) < 5:
                 stats["error_samples"].append(result.detail)
                 logger.error(f"   [Error] {result.press_name}: {result.detail}")
