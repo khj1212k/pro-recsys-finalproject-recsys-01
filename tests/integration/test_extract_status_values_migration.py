@@ -99,17 +99,17 @@ def test_previous_revision_rejects_the_new_statuses_and_head_accepts_them(databa
     suffix = uuid.uuid4().hex[:8]
     press_id = None
     try:
-        command.downgrade(cfg, BEFORE)
-        press_id = _new_press(pg_conn, suffix)
-        allowed, validated = _constraint(pg_conn)
-        assert allowed == {"ok", "dropped", "empty", "fetch_failed", "error", "duplicate"} and validated
-        for status in ("rss_summary", "blocked_origin"):
-            with pytest.raises(psycopg2.errors.CheckViolation):
-                _insert(pg_conn, press_id, f"http://status/{suffix}/old-{status}", status, "지어낸 요약")
-    finally:
-        command.upgrade(cfg, "head")
+        try:
+            command.downgrade(cfg, BEFORE)
+            press_id = _new_press(pg_conn, suffix)
+            allowed, validated = _constraint(pg_conn)
+            assert allowed == {"ok", "dropped", "empty", "fetch_failed", "error", "duplicate"} and validated
+            for status in ("rss_summary", "blocked_origin"):
+                with pytest.raises(psycopg2.errors.CheckViolation):
+                    _insert(pg_conn, press_id, f"http://status/{suffix}/old-{status}", status, "지어낸 요약")
+        finally:
+            command.upgrade(cfg, "head")
 
-    try:
         allowed, validated = _constraint(pg_conn)
         assert allowed == set(NEWS_RAW_EXTRACT_STATUSES) and validated
         for status in ("rss_summary", "blocked_origin"):
