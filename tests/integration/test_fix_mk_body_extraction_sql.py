@@ -1,6 +1,7 @@
 """scripts/oci/fix_mk_body_extraction.sql(과 되돌리기)을 실제 PostgreSQL에서 돌린다 (ADR 0026 결정 9, 런북 6.12).
 
-런북과 같은 경로: `psql -X -v ON_ERROR_STOP=1 -v until=... [-v min_length=...] [-v batch_limit=...] [-v apply=1] -f <파일>`.
+런북과 같은 경로: `psql -X -v ON_ERROR_STOP=1 -v until=... [-v target=length|shared] [-v min_length=...] [-v batch_limit=...]
+[-v apply=1] -f <파일>`.
 테스트 DB 안에 스키마 하나를 만들고 public.press / public.news_raw / public.job_runs를 `LIKE ... INCLUDING ALL`로 복제한다
 (CHECK 제약과 'ok' 부분 unique 인덱스도 따라온다). 스크립트는 테이블 이름에 스키마를 붙이지 않으므로 PGOPTIONS의 search_path로 그
 스키마를 고른다(보관 표도 그 스키마에 생긴다). public에는 아무것도 쓰지 않는다. 본문은 모두 지어낸 짧은 글이다(ADR 0023).
@@ -127,13 +128,22 @@ def _seed_job_runs(pg_conn, schema):
     _job_run(pg_conn, schema, "embed", UNTIL + timedelta(minutes=25), {"extract": {"per_press": {MK: {"ok": 2}}}})  # ingest 아님
 
 
-# (키, 저장 길이) - 되돌릴 행 8개. 키 순서 = raw_news_id 순서(배치는 오래된 행부터 되돌린다)
-TARGETS = [("t1", 3000), ("t2", 3499), ("t3", 3800), ("t4", 4500), ("t5", 5200), ("t6", 8000), ("t7", 9500), ("t8", 12000)]
+# (키, 저장 길이) - target=length로 되돌릴 행 8개. 키 순서 = raw_news_id 순서(배치는 오래된 행부터 되돌린다). t1은 기본 min_length(2500)
+# 바로 그 길이다(경계는 이상)
+TARGETS = [("t1", 2500), ("t2", 3499), ("t3", 3800), ("t4", 4500), ("t5", 5200), ("t6", 8000), ("t7", 9500), ("t8", 12000)]
 TARGET_KEYS = {key for key, _ in TARGETS}
+# (키, 상태, 해시, 저장 길이) - target=shared로 되돌릴 행 7개: 같은 해시를 나눠 가진 묶음(ok 행 + duplicate 행). g_ok는 길이가 3,300이지만
+# duplicate 짝이 있어 target=length에서는 빠지고 짝과 함께 shared가 맡는다
+SHARED = [
+    ("w1_ok", "ok", "sha-w1", 1545), ("w1_d1", "duplicate", "sha-w1", 0), ("w1_d2", "duplicate", "sha-w1", 0),
+    ("w2_ok", "ok", "sha-w2", 1537), ("w2_d1", "duplicate", "sha-w2", 0),
+    ("g_ok", "ok", "sha-g", 3300), ("g_d1", "duplicate", "sha-g", 0),
+]
+SHARED_KEYS = {key for key, *_ in SHARED}
 
 
 def _seed(pg_conn, schema):
-    """UNTIL 앞에 추출된 부푼 매일경제 ok 행 8개(되돌릴 행)와 건드리면 안 되는 행들."""
+    """UNTIL 앞에 추출된 매일경제 행: target=length가 되돌릴 부푼 ok 행 8개, target=shared가 되돌릴 묶음 7행, 건드리면 안 되는 행들."""
     _seed_job_runs(pg_conn, schema)
     mk, other = _press(pg_conn, schema, MK), _press(pg_conn, schema, OTHER)
     before = lambda hours: UNTIL - timedelta(hours=hours)  # noqa: E731
@@ -141,17 +151,24 @@ def _seed(pg_conn, schema):
     for i, (key, length) in enumerate(TARGETS):
         _news(pg_conn, schema, mk, key, "ok", before(10 - i), f"sha-{key}", length, body)
     # --- 건드리면 안 되는 행
-    _news(pg_conn, schema, mk, "ok_2999", "ok", before(3), "sha-2999", 2999, body)  # 경계 바로 아래
+    _news(pg_conn, schema, mk, "ok_2499", "ok", before(3), "sha-2499", 2499, body)  # 경계(2500) 바로 아래
     _news(pg_conn, schema, mk, "ok_1200", "ok", before(3), "sha-1200", 1200, body)  # 평범한 길이
     _news(pg_conn, schema, mk, "after_until_ok", "ok", UNTIL + timedelta(hours=1), "sha-after", 9000, body)  # 고친 추출기가 받음
     _news(pg_conn, schema, mk, "purged_ok", "ok", before(3), "sha-purged", 9000, None, purged=True)  # 본문을 이미 비움
     _news(pg_conn, schema, mk, "expired_ok", "ok", before(3), "sha-expired", 9000, body, crawled_days_ago=40)  # 수집 30일 넘음
-    _news(pg_conn, schema, mk, "dup1", "duplicate", before(3), "sha-t1", 0, "")  # 본문이 원래 없다
+    _news(pg_conn, schema, mk, "dup1", "duplicate", before(3), "sha-orphan", 0, "")  # 본문이 원래 없고 같은 해시의 ok 행도 없다
     _news(pg_conn, schema, mk, "dropped1", "dropped", before(3), None, 0, "")
     _news(pg_conn, schema, mk, "empty1", "empty", before(3), None, 0, "")
     _news(pg_conn, schema, mk, "failed1", "fetch_failed", before(3), None, 0, "", attempts=2)
     _news(pg_conn, schema, mk, "pending1", None, None, None, None, "", attempts=0)
     _news(pg_conn, schema, other, "other_ok", "ok", before(3), "sha-other", 9000, body)  # 다른 언론사는 길어도 그대로
+    # --- 같은 해시를 나눠 가진 묶음(target=shared)과 그 곁의 건드리면 안 되는 행
+    for i, (key, status, sha, length) in enumerate(SHARED):
+        _news(pg_conn, schema, mk, key, status, before(20 - i), sha, length, "목록 글이 본문이 된 지어낸 본문" if status == "ok" else "")
+    _news(pg_conn, schema, mk, "w1_d_old", "duplicate", before(3), "sha-w1", 0, "", crawled_days_ago=40)  # 수집 30일 넘음 - 다시 받지 못한다
+    _news(pg_conn, schema, mk, "w1_d_after", "duplicate", UNTIL + timedelta(hours=1), "sha-w1", 0, "")  # 고친 추출기가 받은 행
+    _news(pg_conn, schema, mk, "w1_d_near", "duplicate", before(3), "sha-w1", 0, "", crawled_days_ago=29.9)  # 만료 2.4시간 전 - 여유 3시간 안
+    _news(pg_conn, schema, other, "other_dup", "duplicate", before(3), "sha-w1", 0, "")  # 다른 언론사의 duplicate는 짝이 아니다
     return mk, other
 
 
@@ -171,10 +188,11 @@ def _has_audit(pg_conn, schema):
 
 
 def _audit(pg_conn, schema):
+    """제목 -> (이전 상태, 해시, 길이, 시도 횟수, 언론사, min_length, until, 배치 번호, target)"""
     with pg_conn.cursor() as cur:
         cur.execute(
             "SELECT n.raw_news_title, f.extract_status_before, f.content_sha256_before, f.content_length_before, "
-            "f.extract_attempts_before, f.press_name, f.min_length, f.until_at, f.batch_no "
+            "f.extract_attempts_before, f.press_name, f.min_length, f.until_at, f.batch_no, f.target_kind "
             f'FROM "{schema}".news_raw_mk_extract_fix f JOIN "{schema}".news_raw n USING (raw_news_id)')
         return {r[0]: r[1:] for r in cur.fetchall()}
 
@@ -216,28 +234,33 @@ def test_apply_resets_only_the_oversized_ok_rows_and_keeps_their_old_metadata(ps
     for key in TARGET_KEYS:  # 수집기가 막 넣은 행과 같은 값
         assert after[key][0:4] == (None, None, None, 0) and after[key][4:] == (None, "", None), key
     for key in set(before) - TARGET_KEYS:
-        # 3,000자 미만·고친 추출기가 받은 행·비운 행·30일 넘은 행·본문이 원래 없던 행·다른 언론사는 그대로
+        # 2,500자 미만·고친 추출기가 받은 행·비운 행·30일 넘은 행·본문이 원래 없던 행·다른 언론사는 그대로. 같은 해시의 duplicate 짝이
+        # 있는 행(g_ok는 3,300자지만 짝이 있다)과 그 짝은 target=shared의 몫이라 건드리지 않는다
         assert after[key] == before[key], key
     audit = _audit(pg_conn, schema)
     assert set(audit) == TARGET_KEYS
     for key, length in TARGETS:
-        assert audit[key] == ("ok", f"sha-{key}", length, 1, MK, 3000, UNTIL, 1), key
+        assert audit[key] == ("ok", f"sha-{key}", length, 1, MK, 2500, UNTIL, 1, "length"), key
 
 
 def test_boundary_length_is_inclusive_and_min_length_can_be_changed(psql_bin, database_url, pg_conn, schema):
     _seed(pg_conn, schema)
 
-    exactly = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "min_length=3001")
-    assert exactly.returncode == 0, exactly.stderr
-    assert FIX_NOTICE.search(exactly.stderr).group(2) == "7"  # t1(3000자)은 빠진다 - 이상(>=)이다
+    default = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG)
+    assert default.returncode == 0, default.stderr
+    assert FIX_NOTICE.search(default.stderr).group(2) == "8"  # 기본 min_length=2500: t1(2500자)이 든다 - 이상(>=)이다. ok_2499는 빠진다
 
-    wider = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "min_length=2500")
-    assert wider.returncode == 0, wider.stderr
-    assert FIX_NOTICE.search(wider.stderr).group(2) == "9"  # 2,999자 행(ok_2999)이 들어온다
+    above = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "min_length=2501")
+    assert above.returncode == 0, above.stderr
+    assert FIX_NOTICE.search(above.stderr).group(2) == "7"  # t1(2500자)이 빠진다
 
-    narrower = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "min_length=9000")
+    narrower = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "min_length=3500")
     assert narrower.returncode == 0, narrower.stderr
-    assert FIX_NOTICE.search(narrower.stderr).group(2) == "2"  # t7(9,500)·t8(12,000)만
+    assert FIX_NOTICE.search(narrower.stderr).group(2) == "6"  # t2(3,499자)도 빠진다
+
+    narrowest = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "min_length=9000")
+    assert narrowest.returncode == 0, narrowest.stderr
+    assert FIX_NOTICE.search(narrowest.stderr).group(2) == "2"  # t7(9,500)·t8(12,000)만
 
 
 def _picked_by_the_extractor(monkeypatch, database_url, schema):
@@ -279,6 +302,25 @@ def test_reset_rows_are_exactly_what_the_extractor_picks_up_next(psql_bin, datab
     assert _picked_by_the_extractor(monkeypatch, database_url, schema) == TARGET_KEYS | {"pending1", "failed1"}
 
 
+def test_rows_that_expire_before_the_next_ingest_are_left_alone(psql_bin, database_url, pg_conn, schema):
+    """수집한 지 30일 - 3시간이 안 된 행만 되돌린다. 다음 정시 ingest 전에 만료되는 행을 되돌리면 다시 받히지 못한 채 만료돼 본문 길이·
+    해시까지 NULL로 남는다(보존 잡은 추출 대기 중인 빈 행을 건드리지 않는다). 그런 행은 부푼 채로 두면 보존 잡이 본문을 비우고 길이·해시는
+    남긴다."""
+    mk, _ = _seed(pg_conn, schema)
+    body = "모달 글이 섞인 지어낸 본문"
+    _news(pg_conn, schema, mk, "near_expiry", "ok", UNTIL - timedelta(hours=1), "sha-near", 6000, body, crawled_days_ago=29.9)  # 만료까지 2.4시간
+    _news(pg_conn, schema, mk, "far_expiry", "ok", UNTIL - timedelta(hours=1), "sha-far", 6000, body, crawled_days_ago=29.8)  # 4.8시간
+    before = _rows(pg_conn, schema)
+
+    done = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "apply=1")
+
+    assert done.returncode == 0, done.stderr
+    assert FIX_NOTICE.search(done.stderr).groups() == ("1", "9", "0", "9")  # 8행 + far_expiry
+    after = _rows(pg_conn, schema)
+    assert after["near_expiry"] == before["near_expiry"]
+    assert after["far_expiry"][0:4] == (None, None, None, 0)
+
+
 def test_until_without_an_offset_is_read_as_utc_even_from_a_kst_session(psql_bin, database_url, pg_conn, schema):
     _seed(pg_conn, schema)
 
@@ -306,7 +348,7 @@ def test_batches_reset_the_oldest_rows_first_and_wait_for_the_previous_batch_to_
     assert stacked.returncode == PSQL_SCRIPT_ERROR and "앞 배치" in stacked.stderr and "3건" in stacked.stderr
     assert _rows(pg_conn, schema) == rows and set(_audit(pg_conn, schema)) == {"t1", "t2", "t3"}
 
-    # 다음 ingest가 앞 배치를 다시 받았다. t3은 진짜 긴 기사라 컨테이너로 받아도 3,000자를 넘는다(3,900자)
+    # 다음 ingest가 앞 배치를 다시 받았다. t3은 진짜 긴 기사라 컨테이너로 받아도 2,500자를 넘는다(3,900자)
     _reextract(pg_conn, schema, ["t1", "t2"])
     _reextract(pg_conn, schema, ["t3"], length=3900)
     second = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, *batch)
@@ -323,8 +365,88 @@ def test_batches_reset_the_oldest_rows_first_and_wait_for_the_previous_batch_to_
     assert done.returncode == PSQL_SCRIPT_ERROR and "0행" in done.stderr
 
     audit = _audit(pg_conn, schema)
-    assert {k: v[-1] for k, v in audit.items()} == {"t1": 1, "t2": 1, "t3": 1, "t4": 2, "t5": 2, "t6": 2, "t7": 3, "t8": 3}
+    assert {k: v[7] for k, v in audit.items()} == {"t1": 1, "t2": 1, "t3": 1, "t4": 2, "t5": 2, "t6": 2, "t7": 3, "t8": 3}
     assert audit["t3"][2] == 3800  # 보관 표는 처음 되돌릴 때의 값(3,800)이다 - 다시 받은 값(3,900)으로 덮이거나 두 번 보관되지 않는다
+
+
+def test_shared_target_resets_each_hash_group_together_and_leaves_everything_else(psql_bin, database_url, pg_conn, schema):
+    """같은 해시를 나눠 가진 묶음(ok 행 + 같은 언론사의 duplicate 행)은 길이와 상관없이 함께 되돌린다. 모든 기사에 같은 목록 글이 본문으로
+    뽑혔다면 첫 기사만 ok로 남고 나머지는 duplicate가 되는데, 길이는 평범해 target=length로는 가려지지 않는다."""
+    _seed(pg_conn, schema)
+    before = _rows(pg_conn, schema)
+
+    rehearsal = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "target=shared")
+    assert rehearsal.returncode == 0, rehearsal.stderr
+    assert FIX_NOTICE.search(rehearsal.stderr).groups() == ("1", "7", "0", "7") and "target=shared" in rehearsal.stderr
+    assert _rows(pg_conn, schema) == before and not _has_audit(pg_conn, schema)
+
+    done = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "target=shared", "apply=1")
+
+    assert done.returncode == 0, done.stderr
+    after = _rows(pg_conn, schema)
+    for key in SHARED_KEYS:  # ok 행도 duplicate 행도 수집기가 막 넣은 행과 같은 값
+        assert after[key] == UNATTEMPTED, key
+    for key in set(before) - SHARED_KEYS:
+        # target=length의 대상 8행, 짝 없는 duplicate(dup1), 30일 넘은·고친 추출기가 받은·만료 여유 안의 duplicate, 다른 언론사는 그대로
+        assert after[key] == before[key], key
+    audit = _audit(pg_conn, schema)
+    assert set(audit) == SHARED_KEYS
+    assert audit["w1_ok"] == ("ok", "sha-w1", 1545, 1, MK, 2500, UNTIL, 1, "shared")
+    assert audit["w1_d2"] == ("duplicate", "sha-w1", 0, 1, MK, 2500, UNTIL, 1, "shared")
+    assert {v[-1] for v in audit.values()} == {"shared"}
+
+
+def test_shared_target_never_splits_a_group(psql_bin, database_url, pg_conn, schema):
+    """ok 행만 먼저 되돌리면 그 duplicate 행들은 짝(해시)을 잃어 다시 찾을 수 없다. 대상이 batch_limit을 넘으면 거부한다."""
+    _seed(pg_conn, schema)
+    before = _rows(pg_conn, schema)
+
+    split = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "target=shared", "batch_limit=6", "apply=1")
+
+    assert split.returncode == PSQL_SCRIPT_ERROR and "batch_limit=6" in split.stderr and "7행" in split.stderr
+    assert _rows(pg_conn, schema) == before and not _has_audit(pg_conn, schema)
+
+    exact = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "target=shared", "batch_limit=7")
+    assert exact.returncode == 0, exact.stderr  # 대상 수와 같으면 한 배치다
+
+
+def test_the_two_targets_do_not_overlap_and_share_the_previous_batch_guard(psql_bin, database_url, pg_conn, schema):
+    _seed(pg_conn, schema)
+
+    length = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "apply=1")
+    assert length.returncode == 0, length.stderr
+    assert FIX_NOTICE.search(length.stderr).groups() == ("1", "8", "0", "8")  # g_ok(3,300자)는 짝이 있어 shared에 남는다
+    assert {k for k, v in _rows(pg_conn, schema).items() if v[0] is None and k in SHARED_KEYS} == set()
+
+    # 앞 배치(target=length)가 아직 미시도라 target=shared도 거부한다 - 앞 배치 검사는 target을 가리지 않는다
+    stacked = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "target=shared", "apply=1")
+    assert stacked.returncode == PSQL_SCRIPT_ERROR and "앞 배치" in stacked.stderr and "8건" in stacked.stderr
+
+    _reextract(pg_conn, schema, TARGET_KEYS)
+    shared = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "target=shared", "apply=1")
+    assert shared.returncode == 0, shared.stderr
+    assert FIX_NOTICE.search(shared.stderr).groups() == ("2", "7", "0", "15")
+    audit = _audit(pg_conn, schema)
+    assert {k for k, v in audit.items() if v[-1] == "length"} == TARGET_KEYS
+    assert {k for k, v in audit.items() if v[-1] == "shared"} == SHARED_KEYS
+
+    _reextract(pg_conn, schema, SHARED_KEYS)  # 두 target 모두 끝났다
+    for target in ("length", "shared"):
+        done = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, f"target={target}", "apply=1")
+        assert done.returncode == PSQL_SCRIPT_ERROR and "0행" in done.stderr, target
+
+
+def test_running_shared_first_gives_the_same_rows_to_length(psql_bin, database_url, pg_conn, schema):
+    _seed(pg_conn, schema)
+
+    shared = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "target=shared", "apply=1")
+    assert shared.returncode == 0, shared.stderr
+    _reextract(pg_conn, schema, SHARED_KEYS)
+    length = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "apply=1")
+
+    assert length.returncode == 0, length.stderr
+    assert FIX_NOTICE.search(length.stderr).groups() == ("2", "8", "0", "15")  # 다시 받은 g_ok는 대상이 아니다
+    assert {k for k, v in _audit(pg_conn, schema).items() if v[-1] == "length"} == TARGET_KEYS
 
 
 def test_after_the_audit_table_is_dropped_the_unattempted_rows_are_not_targets_again(psql_bin, database_url, pg_conn, schema):
@@ -350,6 +472,10 @@ def test_arguments_are_validated(psql_bin, database_url, pg_conn, schema):
 
     low = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, "min_length=2499", "apply=1")
     assert low.returncode == PSQL_SCRIPT_ERROR and "min_length=2499" in low.stderr
+
+    for value in ("bogus", "LENGTH", ""):
+        wrong = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, f"target={value}", "apply=1")
+        assert wrong.returncode == PSQL_SCRIPT_ERROR and f"target={value}" in wrong.stderr, value
 
     for value in ("0", "1001", "-5"):
         bad = _run(psql_bin, database_url, schema, FIX_SQL, UNTIL_ARG, f"batch_limit={value}", "apply=1")
