@@ -588,6 +588,25 @@ oci os object list -ns $NS -bn newsletter-tier0-backups --fields name,size,timeC
   --query 'data[].{n:name,mb:size,t:"time-created"}' --output table     # Mac(관리자 자격)에서
 ```
 
+**`⚠ 본문 길이 급변`** (백업과 무관한 경고. 언론사별 `ok` 본문 길이 p75가 최근 7일 대 앞 21일의 0.5배 미만이거나 2배 초과, 두 창 모두 50건 이상 - ADR 0026
+결정 6의 2026-10-25 절, 증거 14)은 그 언론사의 본문 추출 결과가 바뀐 것이다. 같은 날 `같은 본문 반복` 경고가 있으면 6.8을, 없으면 그 언론사 기사 페이지 한 쪽을
+받아 컨테이너 규칙(`crawler/content_extractor/body_container.py`)이 아직 맞는지 길이·구조만 본다(본문은 읽지 않는다). 원인이 이미 알려진 변화(추출을 고친 뒤 포함)는
+수준이 그대로여도 앞 창이 새 값으로 채워질 때까지(최대 약 3주) 경고가 매일 이어진다 - 그동안 같은 언론사에 새 이상이 생기면 이 경고에 묻히므로, 아래 질의로
+그 언론사의 일별 p75를 본다(길이·건수만 나온다). 그날 `ok`가 100건 이상인 날만 보고, 경고 줄의 "최근 7일 p75"의 1.5배를 넘거나 0.67배 밑인 날이 이틀 이어지면 새 이상으로 보고 위처럼 페이지 한 쪽을 받아 본다. 건수가 작은 날(주말 등)은 튀므로 하루만으로는 판단하지 않는다:
+
+```bash
+ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T \
+  -e PGOPTIONS='-c default_transaction_read_only=on' db psql -U newsletter -d newsletter -A -F ' ' -c \"\
+  SELECT n.raw_news_crawled_at::date AS utc_day, count(*) AS ok_rows, \
+         round(percentile_cont(0.75) WITHIN GROUP (ORDER BY n.raw_news_content_length)) AS p75 \
+  FROM news_raw n JOIN press p USING (press_id) \
+  WHERE p.press_name = '매일경제' AND n.raw_news_extract_status = 'ok' AND n.raw_news_content_length IS NOT NULL \
+    AND n.raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - interval '28 days' GROUP BY 1 ORDER BY 1\""
+```
+
+경고가 풀리는 날은 최근/앞 비율이 대역 안으로 돌아온 날이다(수준이 그대로면 앞 창이 새 값으로 채워진 날). 매일경제(10-23부터 경고)는 수준이 10-25 그대로라고 가정한 모의에서 11-10에 풀린다(11-09까지 비율 0.5 미만, 11-10에 0.57 안팎 - 증거 14).
+그 사이 매일경제 본문 컨테이너를 고쳐 배포하면 비율이 다시 변해 풀리는 날도 달라진다.
+
 **설치·갱신** (처음 한 번, 그리고 스크립트가 바뀐 커밋이 main에 들어갈 때마다. 2026-10-17 설치는 브랜치 커밋 `19cf228`(리베이스 전 `0efc2f5`) - 병합 뒤 main의 판으로 다시 깐다.
 `19cf228`은 `full_enabled` 설정이 생기기 전 판이라 설정과 무관하게 매일 `full/`을 올린다)
 
