@@ -4,11 +4,13 @@ import time
 from contextlib import contextmanager
 import feedparser, logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Set
+from urllib.parse import urlparse
 from dateutil import parser as date_parser
 from psycopg2.extras import execute_values
 from db.connection import get_connection, release_connection
 from config.settings import Settings
+from config.sources import press_name_for_feed
 
 logger = logging.getLogger(__name__)
 
@@ -84,11 +86,15 @@ def collect_rss(hours: int = 100) -> Dict[str, Any]:
     per_feed: Dict[str, Dict[str, Any]] = {}
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     logger.info(f"RSS 수집 시작 (Cutoff: {hours}h)")
+    # 이번 실행에서 피드를 읽지 못한 호스트. 같은 호스트의 남은 피드(국민일보 여섯·전자신문 셋)는 재시도 없이 건너뛴다 -
+    # 연결 단계에서 막힌 사이트 하나가 피드마다 시도 3회 x 120초를 곱해 회차를 붙잡지 않게 한다(ADR 0026 결정 9).
+    failed_hosts: Set[str] = set()
 
     try:
         with conn.cursor() as cur:
             for feed_name, (_, url) in Settings.RSS_FEEDS.items():
-                press_name = '전자신문' if feed_name.startswith('전자신문') else feed_name
+                press_name = press_name_for_feed(feed_name)
+                host = urlparse(url).netloc
                 feed_stats = {
                     "press": press_name, "entries": 0, "inserted": 0, "skipped": 0,
                     "too_old": 0, "bad_date": 0, "error": None,
@@ -106,6 +112,10 @@ def collect_rss(hours: int = 100) -> Dict[str, Any]:
                         feed_stats["error"] = "press_id not found"
                         continue
                     pid = row[0]
+                    if host in failed_hosts:
+                        feed_stats["error"] = f"skipped: {host} unreadable earlier in this run"
+                        logger.error(f"❌ {feed_name} 건너뜀 - 같은 호스트({host})를 이번 실행에서 읽지 못했다")
+                        continue
                     feed = parse_feed_with_retry(url)
                     feed_stats["entries"] = len(feed.entries)
                     if getattr(feed, 'bozo', 0) and not feed.entries:
@@ -113,6 +123,7 @@ def collect_rss(hours: int = 100) -> Dict[str, Any]:
                         status = getattr(feed, 'status', None)
                         http = f" (HTTP {status})" if status else ""
                         feed_stats["error"] = f"feed unreadable{http}: {getattr(feed, 'bozo_exception', 'bozo')}"[:300]
+                        failed_hosts.add(host)
                         logger.error(f"❌ {feed_name} 피드를 읽지 못함{http}")
                     entries = []
 
@@ -161,6 +172,7 @@ def collect_rss(hours: int = 100) -> Dict[str, Any]:
 
                 except Exception as e:
                     cur.execute("ROLLBACK TO SAVEPOINT sp_press")
+                    failed_hosts.add(host)
                     feed_stats["inserted"] = feed_stats["skipped"] = 0
                     feed_stats["error"] = f"{type(e).__name__}: {e}"[:300]
                     logger.error(f"❌ {feed_name} 오류: {e}")

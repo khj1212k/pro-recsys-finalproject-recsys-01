@@ -66,9 +66,9 @@ SOURCE_LICENSES: Dict[str, SourceLicense] = {
 
 
 def press_name_for_feed(feed_name: str) -> str:
-    """Settings.RSS_FEEDS의 키를 press 테이블 이름으로 바꾼다 (전자신문_IT -> 전자신문).
-    crawler/rss_collector.py와 같은 규칙."""
-    return "전자신문" if feed_name.startswith("전자신문") else feed_name
+    """Settings.RSS_FEEDS의 키를 press 테이블 이름으로 바꾼다 (전자신문_IT -> 전자신문, 국민일보_정치 -> 국민일보).
+    한 언론사의 피드가 여럿이면 키를 '<언론사>_<분야>'로 짓는다. crawler/rss_collector.py가 이 함수를 쓴다."""
+    return feed_name.split("_", 1)[0]
 
 
 def license_for(press_name: str) -> SourceLicense:

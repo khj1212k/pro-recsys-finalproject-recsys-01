@@ -270,6 +270,13 @@ class BaseSettings:
         '매일경제': ('direct', 'https://www.mk.co.kr/rss/30000001/'),
         '한국경제': ('direct', 'https://www.hankyung.com/feed/all-news'),
         '국민일보': ('direct', 'https://www.kmib.co.kr/rss/data/kmibRssAll.xml'),
+        # 2026-10-24부터 전체 피드(kmibRssAll)에 새 기사가 하루 40건 안팎만 올라온다 - 분야별 피드를 함께 읽는다
+        # (같은 기사는 URL UNIQUE로 한 번만 들어간다, ADR 0023 2026-10-25 갱신).
+        '국민일보_정치': ('direct', 'https://www.kmib.co.kr/rss/data/kmibPolRss.xml'),
+        '국민일보_경제': ('direct', 'https://www.kmib.co.kr/rss/data/kmibEcoRss.xml'),
+        '국민일보_사회': ('direct', 'https://www.kmib.co.kr/rss/data/kmibSocRss.xml'),
+        '국민일보_국제': ('direct', 'https://www.kmib.co.kr/rss/data/kmibIntRss.xml'),
+        '국민일보_생활': ('direct', 'https://www.kmib.co.kr/rss/data/kmibLifeRss.xml'),
         '세계일보': ('direct', 'https://www.segye.com/Articles/RSSList/segye_recent.xml'),
 
         # 과학/기술
