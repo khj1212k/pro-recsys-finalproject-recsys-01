@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -47,13 +48,18 @@ def schema(pg_conn):
             cur.execute(f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
 
 
-def _run(psql_bin, database_url, schema, sql_file, *variables, timezone_name="UTC"):
-    env = {**os.environ, "PGOPTIONS": f"-c search_path={schema} -c timezone={timezone_name}", "PGCLIENTENCODING": "UTF8"}
+def _command(psql_bin, database_url, schema, sql_file, variables, timezone_name="UTC", extra_env=None):
+    env = {**os.environ, "PGOPTIONS": f"-c search_path={schema} -c timezone={timezone_name}", "PGCLIENTENCODING": "UTF8",
+           **(extra_env or {})}
     args = [psql_bin, "-X", "-v", "ON_ERROR_STOP=1"]
     for v in variables:
         args += ["-v", v]
-    return subprocess.run([*args, "-f", sql_file, database_url], capture_output=True, text=True, encoding="utf-8",
-                          env=env, timeout=120)
+    return [*args, "-f", sql_file, database_url], env
+
+
+def _run(psql_bin, database_url, schema, sql_file, *variables, timezone_name="UTC"):
+    args, env = _command(psql_bin, database_url, schema, sql_file, variables, timezone_name)
+    return subprocess.run(args, capture_output=True, text=True, encoding="utf-8", env=env, timeout=120)
 
 
 def _utc(dt):
@@ -288,6 +294,59 @@ def test_revert_restores_rows_that_had_no_body_and_leaves_reextracted_and_ok_row
 
     nothing = _run(psql_bin, database_url, schema, REVERT_SQL, "apply=1")
     assert nothing.returncode == PSQL_SCRIPT_ERROR and "보관 표" in nothing.stderr
+
+
+def _wait_until_waiting_on_a_lock(pg_conn, application_name, seconds=4.0):
+    """psql(application_name)의 쿼리가 다른 트랜잭션의 락을 기다리는 상태가 될 때까지 기다린다. 되돌리기의 lock_timeout이 5초라
+    그 안에 락을 풀어 줘야 한다."""
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        with pg_conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_stat_activity WHERE application_name = %s AND wait_event_type = 'Lock'",
+                        (application_name,))
+            if cur.fetchone():
+                return True
+        time.sleep(0.05)
+    return False
+
+
+def test_revert_does_not_overwrite_a_row_the_ingest_commits_while_it_waits(psql_bin, database_url, pg_conn, schema):
+    """되돌리기가 행 락을 기다리는 동안 ingest가 그 행을 다시 받아 커밋하면, 되돌리기는 그 행을 건드리지 않는다. 미리 찍어 둔
+    사본으로 행을 고르면 새 본문이 든 행의 상태·해시·길이만 옛 duplicate 값(길이 0)으로 덮여 '본문이 있는 duplicate'가 되고,
+    임베딩 단계(본문이 비어 있지 않으면 집는다)가 그 행을 집는다."""
+    import psycopg2
+
+    _seed(pg_conn, schema)
+    assert _run(psql_bin, database_url, schema, FIX_SQL, BOUNDARY_ARG, UNTIL_ARG, "apply=1").returncode == 0
+    ingest = psycopg2.connect(database_url)  # autocommit이 아니다 - 커밋하기 전까지 행 락을 쥔다
+    application_name = f"fix_kmib_revert_{uuid.uuid4().hex[:8]}"
+    try:
+        with ingest.cursor() as cur:  # 다음 ingest가 dup3(원래 duplicate)을 다시 받는 중 - 아직 커밋하지 않았다
+            cur.execute(
+                f'UPDATE "{schema}".news_raw SET raw_news_extract_status = \'ok\', raw_news_content = \'새 본문\', '
+                "raw_news_content_sha256 = 'fresh', raw_news_content_length = 4, raw_news_extracted_at = now(), "
+                "raw_news_extract_attempts = 1 WHERE raw_news_title = %s", ("dup3",))
+        args, env = _command(psql_bin, database_url, schema, REVERT_SQL, ["apply=1"],
+                             extra_env={"PGAPPNAME": application_name})
+        revert = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                                  env=env)
+        try:
+            blocked = _wait_until_waiting_on_a_lock(pg_conn, application_name)
+            ingest.commit()  # 되돌리기가 기다리던 락을 푼다
+            stdout, stderr = revert.communicate(timeout=60)
+        finally:
+            if revert.poll() is None:
+                revert.kill()
+        assert blocked, "되돌리기가 ingest의 행 락을 기다리는 상태가 되지 않았다"
+    finally:
+        ingest.close()
+
+    assert revert.returncode == 0, stderr
+    rows = _rows(pg_conn, schema)
+    assert rows["dup3"][0:4] == ("ok", "fresh", 4, 1) and rows["dup3"][5] == "새 본문"  # 새 추출 결과 그대로
+    for key in ("dup1", "dup2", "dup4", "dropped1", "empty1"):  # 다시 받지 않은 행은 원래대로
+        assert rows[key][0] in ("duplicate", "dropped", "empty") and rows[key][5] == "", key
+    assert REVERT_NOTICE.search(stderr).groups() == ("5", "3", "1", "0")
 
 
 def test_after_a_revert_the_range_can_be_fixed_again(psql_bin, database_url, pg_conn, schema):

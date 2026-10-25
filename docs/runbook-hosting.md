@@ -932,15 +932,21 @@ CI의 PostgreSQL에서 `tests/integration/test_fix_kmib_body_extraction_sql.py`�
    기대: `NULL`(미시도) 행이 0으로 줄고, ok의 중앙값이 1,000자 안팎이고, duplicate는 구 URL·신 URL로 이중 수집된 기사(최대 47건쯤) 정도다. 미시도가 줄지 않으면 6.6의 확인 쿼리로
    회차가 건너뛰어지는지 본다. `daily_report`의 "같은 본문 반복" 줄이 사라지는 것은 24시간 창이 지난 뒤다.
 
-되돌리기(복구 SQL이 만든 보관 표까지 지운다 - 그래야 범위를 바꿔 다시 복구할 수 있다. 이미 다시 받은 행은 건드리지 않는다):
+되돌리기(복구 SQL이 만든 보관 표까지 지운다 - 그래야 범위를 바꿔 다시 복구할 수 있다. 이미 다시 받은 행은 덮어쓰지 않는다 - 돌려놓을 행의 조건을 UPDATE가 행의 현재 값으로 판정하므로 ingest가 도는 중에 돌려도 된다):
 
 ```bash
 ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 \
   [-v apply=1] -U newsletter -d newsletter -f -" < scripts/oci/fix_kmib_body_extraction_revert.sql
 ```
 
-읽을 것: `NOTICE: fix_kmib_revert restored=<n> left_unattempted_ok=<n> already_reextracted=<n> missing_from_news_raw=<n>`. 되돌리기가 필요한 경우는 드물다 - 잘못 초기화한 행도 다음 ingest가
-원본 페이지에서 다시 받는다. 복구 직후 다시 받기 전에 멈추고 싶을 때, 또는 범위를 바꿔 다시 복구하려고 보관 표를 치울 때 쓴다. 되돌리기는 옛 특집 글을 다시 만들지 않는다.
+읽을 것: `NOTICE: fix_kmib_revert restored=<n> left_unattempted_ok=<n> already_reextracted=<n> missing_from_news_raw=<n>`. 되돌리기가 필요한 경우는 드물다 - 복구가 미시도로 둔 행은 되돌리지 않아도
+다음 ingest가 원본 페이지에서 다시 받는다. 복구 직후 다시 받기 전에 멈추고 싶을 때, 또는 범위를 바꿔 다시 복구하려고 보관 표를 치울 때 쓴다. 되돌리기는 옛 특집 글을 다시 만들지 않는다.
+
+되돌리기는 완전한 왕복이 아니다:
+
+- **돌려놓은 duplicate는 본문을 받지 못한다.** 그 해시의 원본(ok)은 미시도로 남았거나(`left_unattempted_ok`) 다시 받아 새 해시가 됐으므로 짝 없는 duplicate가 되고, 추출기는 duplicate를 다시 받지
+  않는다(재시도 대상은 `fetch_failed`·`error`뿐, `config/retention.py`). 되돌린 뒤 본문을 받으려면 범위를 고쳐 복구 SQL을 다시 돌린다 - 보관 표를 지웠으므로 돈다.
+- 원래 ok였던 행은 본문을 보관하지 않아 되돌리지 못하고 미시도로 남는다. 보관 표와 함께 그 행의 이전 해시·길이 기록도 사라진다.
 
 복구를 해도 **이중 수집된 같은 기사는 합쳐지지 않는다**(ADR 0026 결정 9 "하지 않은 것"). 국민일보 `raw_news_created_at`의 미래 시각(ADR 0026 증거 12 g)도 고치지 않는다.
 

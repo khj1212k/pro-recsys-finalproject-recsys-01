@@ -80,7 +80,7 @@ CREATE TABLE news_raw_kmib_extract_fix (
     fixed_at timestamptz NOT NULL DEFAULT now()
 );
 COMMENT ON TABLE news_raw_kmib_extract_fix IS
-    '국민일보 본문 추출 붕괴 복구(ADR 0026 결정 9, 2026-10-25)가 미시도로 되돌린 행의 원래 메타데이터. 본문은 담지 않는다(ADR 0023). 되돌리기용이자 "이 DB는 복구했다"는 표시 - 지우지 않는다.';
+    '국민일보 본문 추출 붕괴 복구(ADR 0026 결정 9, 2026-10-25)가 미시도로 되돌린 행의 원래 메타데이터. 본문은 담지 않는다(ADR 0023). 되돌리기용이자 "이 DB는 복구했다"는 표시 - 되돌리기 스크립트(fix_kmib_body_extraction_revert.sql)만 지운다.';
 
 INSERT INTO news_raw_kmib_extract_fix (
     raw_news_id, press_name, extract_status_before, content_sha256_before, content_length_before,
