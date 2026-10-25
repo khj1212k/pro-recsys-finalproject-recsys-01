@@ -31,8 +31,16 @@ IDLE_CHECK_STALE_HOURS = 48
 HOST_BACKUP_JOB = "backup"
 IDLE_CHECK_JOB = "idle_check"
 RESTORE_CHECK_JOB = "restore_check"
+# run()의 신규 기사 집계 SQL이 돌려주는 열 순서(언론사 이름 다음부터).
+NEWS_STATUS_KEYS = ("total", "ok", "dropped", "empty", "fetch_failed", "error", "duplicate", "rss_summary",
+                    "blocked_origin", "embedded")
 # 정시 회차 줄에 적는 건너뛴 회차 시각의 최대 개수
 MISSED_SLOTS_SHOWN = 6
+# '같은 본문 반복' 판단에서 본문(요약 포함)을 받은 것으로 세는 상태. 동아일보의 'rss_summary'(RSS 요약을 본문 칸에 둔 행, ADR 0026
+# 2026-10-25)를 넣는다 - 빼면 요약이 대부분인 언론사의 분모가 ok·dropped·empty·duplicate뿐이라 '짧은 요약(dropped)' 몇 건과 '같은
+# 요약(duplicate)' 몇 건만으로 절반을 넘겨 오경보가 난다(예: 하루 요약 190건에 dropped 3·duplicate 3). 요약 피드가 같은 요약만
+# 내보내는 고장은 첫 건만 rss_summary이고 나머지가 duplicate라 분모에 넣어도 걸린다.
+PARSED_STATUSES = ("ok", "rss_summary", "dropped", "empty", "duplicate")
 
 
 def format_report(report: Dict[str, Any]) -> str:
@@ -43,15 +51,18 @@ def format_report(report: Dict[str, Any]) -> str:
     if not report["job_runs"]:
         lines.append("- 실행된 잡 없음 (스케줄러가 멈췄는지 확인)")
     news = report["news_raw_24h"]
+    # 요약('rss_summary')·출발지 거절('blocked_origin')은 예전 모양의 리포트에는 키가 없다 - 있을 때만 적는다.
+    summary_part = f"요약 {news['rss_summary']}, " if "rss_summary" in news else ""
+    blocked_part = f"출발지 거절 {news['blocked_origin']}, " if "blocked_origin" in news else ""
     lines.append(
-        f"- 신규 기사 {news['total']}건 (본문 {news['ok']}, 필터 {news['dropped']}, 중복 {news['duplicate']}, "
+        f"- 신규 기사 {news['total']}건 (본문 {news['ok']}, {summary_part}필터 {news['dropped']}, 중복 {news['duplicate']}, "
         f"본문없음 {news['empty']}, 다운로드 실패 {news['fetch_failed']}, 추출 오류 {news['error']}, "
-        f"임베딩 {news['embedded']})"
+        f"{blocked_part}임베딩 {news['embedded']})"
     )
     suspects = report.get("suspect_press") or {}
     for press, p in sorted(news["per_press"].items()):
         mark = f" ⚠ {SAME_BODY_LABEL}" if press in suspects else ""
-        lines.append(f"  · {press}: {p['total']}건 (본문 {p['ok']}, 임베딩 {p['embedded']}){mark}")
+        lines.append(f"  · {press}: {p['total']}건 ({press_status_text(p)}){mark}")
     for press, found in sorted(suspects.items()):
         lines.append(f"- ⚠ {same_body_warning(press, found)}")
     totals = report["totals"]
@@ -89,6 +100,18 @@ def format_report(report: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def press_status_text(p: Dict[str, int]) -> str:
+    """언론사 줄의 상태 건수. 요약('rss_summary')과 출발지 거절('blocked_origin')은 있는 언론사에만 적는다 - 동아일보는 본문 요청을
+    거절당해 요약만 저장하므로, 이 둘이 없으면 '본문 0'으로 실패한 것처럼 보인다(ADR 0026 2026-10-25). 다른 언론사의 줄은 그대로다."""
+    parts = [f"본문 {p['ok']}"]
+    if p.get("rss_summary"):
+        parts.append(f"요약 {p['rss_summary']}")
+    if p.get("blocked_origin"):
+        parts.append(f"출발지 거절 {p['blocked_origin']}")
+    parts.append(f"임베딩 {p['embedded']}")
+    return ", ".join(parts)
+
+
 def ingest_suspect_runs(cur, window: str) -> Dict[str, int]:
     """창 안의 ingest 실행 중 언론사별로 '같은 본문 반복' 경고(stats.extract.suspect_press, jobs/tasks/ingest.py)를 남긴 실행 수."""
     cur.execute(
@@ -113,7 +136,7 @@ def same_body_suspects(per_press: Dict[str, Dict[str, int]], ingest_runs: Dict[s
     found: Dict[str, Dict[str, int]] = {}
     for press in sorted(set(per_press) | set(ingest_runs)):
         counts = per_press.get(press) or {}
-        parsed = sum(counts.get(k, 0) for k in ("ok", "dropped", "empty", "duplicate"))
+        parsed = sum(counts.get(k, 0) for k in PARSED_STATUSES)
         duplicate = counts.get("duplicate", 0)
         by_rows = parsed >= SAME_BODY_MIN_ARTICLES and duplicate / parsed >= SAME_BODY_RATIO_LIMIT
         runs = ingest_runs.get(press, 0)
@@ -484,6 +507,8 @@ def run(ctx) -> Dict[str, Any]:
                    COUNT(*) FILTER (WHERE N.raw_news_extract_status = 'fetch_failed'),
                    COUNT(*) FILTER (WHERE N.raw_news_extract_status = 'error'),
                    COUNT(*) FILTER (WHERE N.raw_news_extract_status = 'duplicate'),
+                   COUNT(*) FILTER (WHERE N.raw_news_extract_status = 'rss_summary'),
+                   COUNT(*) FILTER (WHERE N.raw_news_extract_status = 'blocked_origin'),
                    COUNT(*) FILTER (WHERE N.embedding_result IS NOT NULL)
             FROM news_raw N JOIN press P ON P.press_id = N.press_id
             WHERE N.raw_news_crawled_at >= now() - %s::interval
@@ -491,7 +516,7 @@ def run(ctx) -> Dict[str, Any]:
             """,
             (window,),
         )
-        keys = ("total", "ok", "dropped", "empty", "fetch_failed", "error", "duplicate", "embedded")
+        keys = NEWS_STATUS_KEYS
         per_press = {row[0]: dict(zip(keys, row[1:])) for row in cur.fetchall()}
         news_24h = {k: sum(p[k] for p in per_press.values()) for k in keys}
         news_24h["per_press"] = per_press

@@ -227,6 +227,8 @@ def test_ingest_snapshot_counts_purged_ok_rows_separately(pg_conn, world):
     assert (commercial["with_content"], commercial["body_purged"]) == (1, 4)
     # 정책 출처: 유형 1·미기록은 면제, 유형 2는 비움
     assert (policy["with_content"], policy["body_purged"]) == (2, 1)
+    # 이 세계에는 'rss_summary' 행이 없다 - with_summary는 'ok' 본문과 따로 세는 열이고, 키가 없거나 SQL이 틀리면 여기서 깨진다
+    assert (commercial["with_summary"], policy["with_summary"]) == (0, 0)
 
 
 def test_purged_row_cannot_get_a_body_back(pg_conn, world):

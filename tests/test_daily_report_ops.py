@@ -412,3 +412,73 @@ def test_report_without_suspects_keeps_the_old_layout():
     text = dr.format_report(report)
     assert "⚠" not in text and "  · 세계일보: 150건 (본문 140, 임베딩 0)" in text
     assert "⚠" not in dr.format_report(_base_report())  # suspect_press 키가 없는 예전 모양도 그대로
+
+
+# ----------------------------------------------------------------------------- 새 상태 집계 (rss_summary·blocked_origin, ADR 0026 2026-10-25)
+
+
+def _with_new_statuses(total, ok=0, rss_summary=0, blocked_origin=0, dropped=0, duplicate=0, embedded=0):
+    return {**_press(total, ok=ok, dropped=dropped, duplicate=duplicate, embedded=embedded),
+            "rss_summary": rss_summary, "blocked_origin": blocked_origin}
+
+
+def test_press_line_shows_summary_and_blocked_rows_so_the_press_does_not_look_like_zero_body_failure():
+    per_press = {
+        "동아일보": _with_new_statuses(200, rss_summary=186, blocked_origin=4, dropped=6, duplicate=4, embedded=186),
+        "세계일보": _with_new_statuses(150, ok=140, embedded=120),
+    }
+    news = {"total": 350, "ok": 140, "dropped": 6, "empty": 0, "fetch_failed": 0, "error": 0, "duplicate": 4,
+            "rss_summary": 186, "blocked_origin": 4, "embedded": 306, "per_press": per_press}
+    report = _base_report()
+    report["news_raw_24h"] = news
+
+    lines = dr.format_report(report).splitlines()
+
+    assert "  · 동아일보: 200건 (본문 0, 요약 186, 출발지 거절 4, 임베딩 186)" in lines
+    assert "  · 세계일보: 150건 (본문 140, 임베딩 120)" in lines  # 요약·거절이 없는 언론사의 줄은 그대로
+    assert ("- 신규 기사 350건 (본문 140, 요약 186, 필터 6, 중복 4, 본문없음 0, 다운로드 실패 0, 추출 오류 0, "
+            "출발지 거절 4, 임베딩 306)") in lines
+
+
+def test_report_of_the_old_shape_without_the_new_keys_keeps_its_layout():
+    report = _base_report()
+    report["news_raw_24h"] = {**report["news_raw_24h"], "per_press": {"세계일보": _press(150, ok=140)}}
+
+    lines = dr.format_report(report).splitlines()
+
+    assert "- 신규 기사 0건 (본문 0, 필터 0, 중복 0, 본문없음 0, 다운로드 실패 0, 추출 오류 0, 임베딩 0)" in lines
+    assert "  · 세계일보: 150건 (본문 140, 임베딩 0)" in lines
+
+
+def test_summary_rows_count_as_received_text_for_the_same_body_check():
+    """요약이 대부분인 하루(요약 190·필터 3·중복 3)가 '같은 본문 반복'으로 걸리면 안 된다 - 분모에 요약을 넣지 않으면
+    필터 3 + 중복 3 = 6건 중 중복 3건(50%)으로 걸린다."""
+    per_press = {"동아일보": _with_new_statuses(196, rss_summary=190, dropped=3, duplicate=3)}
+
+    assert dr.same_body_suspects(per_press, {}) == {}
+
+
+def test_a_summary_feed_repeating_one_summary_is_still_caught():
+    per_press = {"동아일보": _with_new_statuses(50, rss_summary=1, duplicate=49)}
+
+    assert dr.same_body_suspects(per_press, {}) == {
+        "동아일보": {"parsed": 50, "duplicate": 49, "ingest_runs": 0}}
+
+
+def test_news_status_keys_follow_the_column_order_of_the_report_query():
+    """집계 SQL의 열 순서와 NEWS_STATUS_KEYS가 어긋나면 상태 건수가 엉뚱한 이름으로 들어간다 - DB 없이 쿼리 글자에서 순서를 읽어 대조한다."""
+    import inspect
+    import re
+
+    source = inspect.getsource(dr.run)
+    select = source[source.index("SELECT P.press_name"):source.index("FROM news_raw N JOIN press P")]
+    columns = re.findall(r"COUNT\(\*\)(?: FILTER \(WHERE N\.(\w+) (?:= '(\w+)'|IS NOT NULL)\))?", select)
+    names = []
+    for column, status in columns:
+        if column == "raw_news_extract_status":
+            names.append(status)
+        elif column == "embedding_result":
+            names.append("embedded")
+        else:
+            names.append("total")
+    assert tuple(names) == dr.NEWS_STATUS_KEYS

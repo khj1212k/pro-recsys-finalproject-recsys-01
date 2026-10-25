@@ -8,7 +8,7 @@ from collections import Counter
 from contextlib import contextmanager
 import feedparser, logging
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Set
+from typing import Any, Dict, Iterable, Optional, Set
 from urllib.parse import urlparse
 from dateutil import parser as date_parser
 from psycopg2.extras import execute_values
@@ -184,8 +184,27 @@ def parse_feed_with_retry(url, parse_fn=None, max_attempts=None, sleep_fn=time.s
     return feed
 
 
-def collect_rss(hours: int = 100) -> Dict[str, Any]:
+def select_feeds(feeds: Optional[Iterable[str]] = None) -> Dict[str, Any]:
+    """읽을 피드: Settings.RSS_FEEDS 가운데 feeds에 든 것(설정에 적힌 순서를 유지한다). None이면 전부.
+
+    모르는 이름은 ValueError - 오타나 설정에서 빠진 피드를 말없이 건너뛰면 재시도 잡이 아무것도 읽지 않고 끝난다.
+    """
+    configured = Settings.RSS_FEEDS
+    if feeds is None:
+        return dict(configured)
+    wanted = set(feeds)
+    unknown = sorted(wanted - set(configured))
+    if unknown:
+        raise ValueError(f"알 수 없는 RSS 피드: {', '.join(unknown)}")
+    return {name: value for name, value in configured.items() if name in wanted}
+
+
+def collect_rss(hours: int = 100, feeds: Optional[Iterable[str]] = None) -> Dict[str, Any]:
     """RSS 피드 수집 실행.
+
+    feeds를 주면 그 이름(Settings.RSS_FEEDS의 키)의 피드만 읽는다(jobs.run rss_retry가 직전 ingest에서 읽지 못한 피드만
+    다시 읽는다 - ADR 0026 2026-10-25). 안 주면(None) 전부다 - ingest의 호출은 그대로다. 빈 목록이면 피드를 읽지도 DB를
+    열지도 않고 빈 결과를 돌려준다. 같은 호스트 건너뛰기(아래 failed_hosts)는 읽는 피드끼리만 적용된다.
 
     이전에는 INSERT 전에 SELECT raw_news_url ... WHERE raw_news_url IN %s로
     기존 URL을 조회해 후보를 걸러냈다. 이 방식은 조회와 삽입 사이에 다른
@@ -198,19 +217,25 @@ def collect_rss(hours: int = 100) -> Dict[str, Any]:
     too_old(cutoff 이전)/bad_date(날짜 파싱 실패)/error로, jobs.run ingest가
     job_runs.stats에 그대로 남긴다(수집 누락이 어느 피드에서 났는지 추적용).
     """
+    selected = select_feeds(feeds)
+    if feeds is not None and not selected:
+        logger.info("RSS 수집 건너뜀 - 지정한 피드가 없다")
+        return {"inserted": 0, "skipped": 0, "failed_feeds": 0, "per_feed": {}}
+
     conn = get_connection()
     total_inserted = 0
     total_skipped = 0
     per_feed: Dict[str, Dict[str, Any]] = {}
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    logger.info(f"RSS 수집 시작 (Cutoff: {hours}h)")
+    subset = f", 지정한 피드 {len(selected)}개만" if feeds is not None else ""
+    logger.info(f"RSS 수집 시작 (Cutoff: {hours}h{subset})")
     # 이번 실행에서 피드를 읽지 못한 호스트. 같은 호스트의 남은 피드(국민일보 여섯·전자신문 셋)는 재시도 없이 건너뛴다 -
     # 연결 단계에서 막힌 사이트 하나가 피드마다 시도 3회 x 120초를 곱해 회차를 붙잡지 않게 한다(ADR 0026 결정 9).
     failed_hosts: Set[str] = set()
 
     try:
         with conn.cursor() as cur:
-            for feed_name, (strategy, url) in Settings.RSS_FEEDS.items():
+            for feed_name, (strategy, url) in selected.items():
                 press_name = press_name_for_feed(feed_name)
                 host = urlparse(url).netloc
                 feed_stats = {

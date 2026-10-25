@@ -19,6 +19,7 @@ SSH는 `ssh -F .ops/micro/ssh_config micro`로 접속한다(전용 known_hosts�
 |---|---|---|---|
 | Postgres + pgvector | 꺼 둠 — 16:59 KST 덤프만 보관 | O — **유일한 수집 DB**(임시 단독 수집) | O (확보 시 기록 시스템) |
 | `ingest --stages rss,extract` 매시 | 꺼 둠 | O (추출 워커 2개) | O |
+| `rss_retry` 매시 :40 (직전 ingest가 못 읽은 피드만, 4.2) | 꺼 둠 | O | 정하지 않음 (`docker/crontab`에는 없다) |
 | `embed` (BGE-M3) | 필요할 때 수동(호스트 MPS) | **X** (모델 로드만 3.6 GB) | O (컨테이너 CPU) |
 | `cluster` (HDBSCAN) | 필요할 때 수동 | X (임베딩 없음) | O |
 | `popularity`, `daily_report` | 꺼 둠 | O | O |
@@ -123,7 +124,7 @@ Docker가 publish한 포트는 iptables INPUT 규칙을 우회한다. compose의
 ## 4. 수집 스택 올리기 (Tier 0)
 
 Tier 0는 `docker-compose.yml` 위에 `docker/compose.micro.yaml`을 얹는다: 수집 전용 이미지
-(`docker/ingest.Dockerfile`, torch 없음), `docker/crontab.micro`(ingest 추출 워커 2개·popularity·daily_report),
+(`docker/ingest.Dockerfile`, torch 없음), `docker/crontab.micro`(ingest 추출 워커 2개·rss_retry·popularity·daily_report),
 Postgres `shared_buffers=64MB`·`max_connections=30`, api 기본 꺼짐, scheduler `mem_limit 512m`.
 
 VM에는 저장소 자격 증명을 두지 않는다. Mac에서 커밋 스냅숏을 만들어 보낸다:
@@ -356,6 +357,46 @@ micro "$VMPSQL -c \"SELECT status, stats->>'purged' AS purged, stats->>'purged_b
 - 배포 뒤 첫 ingest(20:05)는 동아일보 본문 실패 65%로 `failed`(6.6과 같은 양상, 74분), 둘째(22:05)는 `succeeded`(44분).
   새로 추출한 본문에는 모두 길이가 있다. AI타임스 새 행은 KST로 맞게 저장된다(6.7의 경계 `2026-10-16 20:05:01` UTC).
 - 앞의 덤프 두 개는 6.5의 "최신 1개만" 대신 이미 정한 만료일(10-25·10-26)에 지운다.
+
+### 4.2 RSS 재시도 잡 `rss_retry` (2026-10-25, [ADR 0026](adr/0026-hosting-tiers-and-contingency.md) "2026-10-25 갱신 2" · 배포 대기)
+
+`python -m jobs.run rss_retry`가 매시 :40(popularity :35 뒤, `docker/crontab.micro`)에 **직전 ingest 실행이 읽지 못한 RSS 피드만** 다시 읽는다.
+동아일보 RSS는 VM에서 정시 회차의 약 75%가 `RemoteDisconnected`로 실패하고, 피드가 50건이라 읽기에 성공한 회차 사이가 6시간을 넘으면 그 사이
+기사를 잃는다. 한 번 더 읽는 것이 전부다 - 차단을 피하려는 변경(User-Agent·프록시·다른 주소)이 아니다.
+
+| | |
+|---|---|
+| 하는 일 | 직전 ingest 실행의 `job_runs.stats.rss.per_feed`에서 `error`가 있던 피드(설정에 아직 있는 것)만 `collect_rss`로 다시 읽어 새 기사를 넣는다. 같은 호스트 건너뛰기 규칙도 그대로다 - 호스트의 첫 피드를 못 읽으면 같은 호스트의 나머지는 요청 없이 건너뛴다. |
+| 하지 않는 일 | 본문 추출·임베딩·정책브리핑(다음 정시 ingest가 한다. `rss_summary` 피드인 동아일보는 수집 때 요약이 본문 칸에 들어간다). 실패한 피드가 없으면 요청 없이 바로 끝난다(`succeeded`, `retry_feeds`가 빈 목록). |
+| 요청 수 | 피드 하나의 시간당 **읽기가 최대 1회에서 2회**로 는다(ingest :05 + 이 잡 :40). 읽기 1번은 연결 단계에서 막히면 HTTP 요청 최대 3번(`MAX_FETCH_RETRIES`, 대기 1초·2초)이다. 성공한 피드는 건드리지 않는다. |
+| ingest와 겹침 | ingest의 advisory lock을 잡고 읽는다. ingest가 돌고 있으면 `skipped`(`stats.reason = ingest_running`)이고, 이 잡이 도는 동안은 정시 ingest가 시작하지 못한다(건너뛰어지면 `job_runs`에 `skipped`로 남는다). 이 잡의 길이는 RSS 단계의 일부다 - 2026-10-16 ~ 10-25 ingest 211회의 RSS 단계 전체가 중앙값 22초·최대 136초였다. |
+| 다른 건너뛰는 경우 | `already_retried`(같은 ingest 실행의 피드는 한 번만 다시 읽는다 - ingest가 건너뛰어져 새 실행이 없을 때 되풀이하지 않는다), `no_ingest_rss_stats`(RSS 통계가 있는 ingest 실행이 아직 없다). |
+| 알림 | 다시 읽어도 실패하면 잡은 `succeeded`이고 경고도 더하지 않는다 - 그 회차의 ingest가 이미 피드별 경고를 냈다. 요약 피드가 새 기사 5건 이상을 넣고도 요약을 하나도 못 저장하면 경고한다(ingest와 같은 규칙). 예외로 죽으면 잡 런타임의 실패 알림이 간다. |
+
+**배포.** Alembic 변경이 없다. crontab은 이미지 안에 있으므로 4.1의 절차대로 이미지를 다시 빌드해 스케줄러를 올려야 새 줄이 돈다. 배포 뒤 첫 :40 이후:
+
+```bash
+micro "$VMPSQL -c \"SELECT id, status, to_char(started_at, 'MM-DD HH24:MI') AS started, stats->>'reason' AS reason, stats->>'source_run_id' AS source, \
+  stats->'retry_feeds' AS retry, stats->'recovered' AS recovered, stats->'still_failed' AS still_failed, stats->'rss'->>'duration_s' AS rss_s \
+  FROM job_runs WHERE job = 'rss_retry' ORDER BY id DESC LIMIT 24\""
+```
+
+기대: 동아일보가 실패한 회차 뒤에 `retry`가 `["동아일보"]`이고 `recovered` 또는 `still_failed`에 있다. 실패한 피드가 없던 회차는 `retry`가 `[]`다. `reason`이
+`ingest_running`인 행이 이어지면 ingest가 :40을 넘기는 회차가 많은 것이다(6.6). `source`는 그 행이 근거한 `ingest`의 `job_runs.id`다.
+
+효과는 아래로 본다 - **재시도가 실제로 구하는 비율**이다. 실패가 서로 독립이면 약 25%다(ADR의 시뮬레이션 가정). 5% 아래로 이어지면 독립 가정이 틀린 것(35분 사이의 실패가 같은 원인)이고
+이 잡은 요청만 더한다:
+
+```bash
+micro "$VMPSQL -c \"SELECT count(*) AS retried, count(*) FILTER (WHERE stats->'recovered' ? '동아일보') AS recovered \
+  FROM job_runs WHERE job = 'rss_retry' AND stats->'retry_feeds' ? '동아일보'\""
+```
+
+`daily_report`에는 `job rss_retry: skipped N, succeeded M` 줄과 정시 회차 줄의 `rss_retry 24/24`로 보인다.
+
+**손으로 한 번 / 끄기.** 스케줄러가 떠 있는 상태에서 `micro 'cd ~/newsletter-recsys && sudo docker compose exec -T scheduler python -m jobs.run rss_retry'`
+(`SCHEDULER_JOBS_DISABLED`에 들어 있으면 실행하지 않는다). 끄기는 4.1의 R1과 같다 - `.env`에 `SCHEDULER_JOBS_DISABLED=rss_retry`(이미 값이 있으면 쉼표로 이어 붙인다)를 넣고
+`sudo docker compose up -d scheduler`. 끈 동안은 동아일보 RSS가 시간당 1회만 읽히던 때로 돌아간다.
 
 ## 5. 유휴 회수 점검
 
@@ -973,8 +1014,9 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 
 1. 사전 확인은 4.1의 0단계와 같다(CI success, 도는 잡 없음, 메모리·디스크). 하나 더 - close SQL에 넘길 시도 횟수 상한을 **컨테이너 안의 실효값**으로
    읽어 둔다. VM의 `.env`를 보지 않는다: compose는 `MAX_EXTRACT_ATTEMPTS`를 컨테이너로 넘기지 않아(`AI_ENV_FILE`로 넘기는 경우만 예외) `.env`에
-   무엇을 적어도 추출기와 마이그레이션은 설정 기본값을 쓴다(2026-10-25 VM: `.env`에 이 키가 없고 `fetch_failed` 행의 시도 횟수 최댓값이 3):
-   `micro 'cd ~/newsletter-recsys && sudo docker compose run --rm --no-deps --entrypoint python worker -c "from config.settings import Settings; print(Settings.MAX_EXTRACT_ATTEMPTS)"'` (기본 3).
+   무엇을 적어도 추출기와 마이그레이션은 설정 기본값을 쓴다(2026-10-25 VM: `.env`에 이 키가 없고 `fetch_failed` 행의 시도 횟수 최댓값이 3).
+   VM에는 `worker` 서비스가 없다 - 같은 이미지를 쓰는 `scheduler`로 읽는다(2026-10-25 VM에서 이 명령으로 3을 읽었다):
+   `micro 'cd ~/newsletter-recsys && sudo docker compose run --rm --no-deps --entrypoint python scheduler -c "from config.settings import Settings; print(Settings.MAX_EXTRACT_ATTEMPTS)"'` (기본 3).
 2. 스케줄러를 멈추고(4.1의 1단계) 백업을 당긴 뒤(2단계) 코드를 바꾸고 이미지를 다시 빌드하고(3·4단계), **마이그레이션을 돌린다**:
 
    ```bash
@@ -1064,8 +1106,9 @@ uv pip compile docker/requirements-ingest.in --universal --python-version 3.11 \
 - **`data/`가 백업·동기화 대상이 아니다**: `tmutil isexcluded data`(Time Machine을 쓴다면), iCloud·Dropbox 폴더 안이 아닌지. 대상이라면
   그쪽 사본은 도구가 지우지 못한다 - 제외한 뒤에 반출한다.
 - **언제**: 매시 :40~:55. `docker/crontab.micro`의 ingest(:05, 소요 중앙 15분·p95 73분 - ADR 0026 증거 8)와 popularity(:35, 4~6초)
-  뒤다. 도구가 분을 확인하고 그 밖이면 거절한다. ingest가 1시간을 넘기는 회차가 있어 분만으로는 겹침을 피할 수 없으므로, 9.2의 첫 조회
-  (돌고 있는 잡)를 **반출 직전에 한 번 더** 한다.
+  뒤다. rss_retry(:40, 4.2 - 실패한 피드가 있을 때만 보통 수십 초)가 :40에 돌 수 있으므로 :45 이후가 더 한가하다 - 반출은 읽기 전용 스냅숏이라
+  겹쳐도 틀리지는 않지만 메모리를 같이 쓴다. 도구가 분을 확인하고 그 밖이면 거절한다. ingest가 1시간을 넘기는 회차가 있어 분만으로는 겹침을
+  피할 수 없으므로, 9.2의 첫 조회(돌고 있는 잡)를 **반출 직전에 한 번 더** 한다.
 
 ### 9.1 창 정하기
 E0의 창은 T0 직전에 완결된 KST 날짜들의 06:00 KST를 의사 시각으로 하는 24시간 창이다(ADR 0009 A8.1). 손으로 계산하지 않고,
@@ -1091,7 +1134,7 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 ssh -F .ops/micro/ssh_config micro 'grep MemAvailable /proc/meminfo'
 ```
 
-- 돌고 있는 `ingest`·`popularity`가 있으면(1시간을 넘긴 회차, 6.6) 끝날 때까지 기다린다. 이 첫 조회는 9.3의 반출 직전에 한 번 더 한다.
+- 돌고 있는 `ingest`·`popularity`·`rss_retry`가 있으면(1시간을 넘긴 회차, 6.6) 끝날 때까지 기다린다. 이 첫 조회는 9.3의 반출 직전에 한 번 더 한다.
 - MemAvailable이 400 MiB 아래면 다음 시간대로 미룬다. 근거: 10일 관측의 p5가 389 MiB, 중앙값이 629 MiB다(ADR 0026 증거 8) - 평소보다
   낮은 상태에 새 부하를 얹지 않는다는 뜻이다. 반출이 실제로 쓰는 메모리는 아직 재지 않았다.
 - 둘째 줄의 건수가 반출될 행 수다. 2026-10-06 기준 3개 창 2,595행, 5개 창 5,633행(행당 평균 4.2 KB로 약 11 MB / 23 MB 추정).

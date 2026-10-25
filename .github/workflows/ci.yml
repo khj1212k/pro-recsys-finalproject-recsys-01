@@ -326,7 +326,7 @@ jobs:
           PY
 
       # 수집 전용 이미지는 worker 이미지에서 torch·hdbscan·lightgbm·LLM SDK를 뺀 것이라, Tier 0가 도는 잡
-      # (migrate, ingest --stages rss,extract, popularity, daily_report, retention)이 임포트하는 모듈에 그런 의존성이
+      # (migrate, ingest --stages rss,extract, rss_retry, popularity, daily_report, retention)이 임포트하는 모듈에 그런 의존성이
       # 새로 끼어들면 VM에서 잡이 뜰 때에야 ImportError가 난다. 잡 함수가 실행 시점에 임포트하는
       # 모듈까지 이미지 안에서 임포트해 본다. DB 접속은 하지 않는다.
       - name: Smoke-test ingest image (import Tier 0 job modules, no DB)
@@ -339,7 +339,7 @@ jobs:
 
           MODULES = (
               "jobs.run", "jobs.migrate", "jobs.notify",
-              "jobs.tasks.ingest", "jobs.tasks.popularity", "jobs.tasks.daily_report", "jobs.tasks.retention",
+              "jobs.tasks.ingest", "jobs.tasks.rss_retry", "jobs.tasks.popularity", "jobs.tasks.daily_report", "jobs.tasks.retention",
               "db.connection", "db.schema", "config.settings", "config.sources", "config.retention",
               "crawler.rss_collector", "crawler.content_extractor", "crawler.policy_briefing",
               "scheduler.calculate_ranking", "app.models",
