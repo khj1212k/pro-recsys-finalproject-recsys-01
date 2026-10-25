@@ -5,8 +5,8 @@
 'backup'·'idle_check'·'restore_check' 행을 읽는다(그 잡들은 jobs.run이 아니다).
 
 언론사별 본문 길이 급변(ADR 0026 결정 6의 2026-10-25 절, 증거 14): 24시간 창으로는 보이지 않는 추출 이상 -
-본문 대신 다른 블록을 뽑아 길이가 부풀거나(국민일보 2026-10-19, 매일경제 해설 모달) 줄어드는 것 - 을 최근 7일과 그 앞
-21일의 ok 본문 길이로 비교해 잡는다.
+본문 대신 다른 블록을 뽑아 길이가 부풀거나 줄어드는 것(국민일보 2026-10-19의 부풂, 매일경제 해설 모달 섞임이 줄어든 변화) -
+을 최근 7일과 그 앞 21일의 ok 본문 길이로 비교해 잡는다. 처음부터 있던 수준은 보지 못한다(변화를 본다).
 """
 import os
 from datetime import datetime, timedelta, timezone
@@ -53,7 +53,9 @@ PARSED_STATUSES = ("ok", "rss_summary", "dropped", "empty", "duplicate")
 #   평균은 같은 대역에서 매일경제를 못 잡고 극단값 몇 건에 끌린다. p75는 부푼 행이 절반 아래여도 보이지만(모의: 8,000자가 붙은 행이
 #   25%면 100%) 짧아지는 쪽은 4분의 3이 줄어야 보인다(4분의 1 크기가 된 행 75%에서 91%, 50%에서 0%) - 한계.
 # - 대역 0.5~2.0: 나머지 6사의 22일 비율은 0.75~1.21(경고 0일). 국민일보는 10-21부터 5일, 매일경제는 10-23부터 3일 걸린다.
-# - 최소 표본 50건: 두 창이 각각 50건일 때 대역 밖일 확률이 가장 흔들리는 분포(매일경제)에서도 0.16%/일(30건이면 1.6%).
+#   매일경제의 첫 경고일 비율 0.469는 하한과 0.03 차이라 대역에 민감하다(하한 0.45면 첫 경고는 10-24).
+# - 최소 표본 50건: 두 창이 같은 크기 n=50인 독립 재추출에서 가장 흔들리는 분포(매일경제)의 비율이 대역 밖일 확률이 약 0.2%(표본 잡음만 본
+#   값 - 날짜 사이의 상관·시간에 따른 변동은 반영하지 않았고, 하루 오경보율로 읽지 않는다. 30건이면 1.6%).
 LENGTH_RECENT_DAYS = 7
 LENGTH_BASE_DAYS = 21
 LENGTH_QUANTILE = 0.75
@@ -62,21 +64,25 @@ LENGTH_RATIO_LOW = 0.5
 LENGTH_RATIO_HIGH = 2.0
 LENGTH_DRIFT_LABEL = "본문 길이 급변"
 # 최근 창과 그 앞 창의 ok 본문 길이 분위수. 창 경계는 DB의 지금(UTC)에서 잰다: raw_news_crawled_at은 시간대 없는 UTC 값이다.
-# 순차 스캔이다(raw_news_crawled_at 인덱스가 없고, 28일 창이 테이블의 83%라 있어도 플래너가 순차 스캔을 고른다 - 증거 14).
+# news_raw를 순차 스캔한다(raw_news_crawled_at 인덱스가 없다. 28일 창이 테이블의 83%라 있어도 순차 스캔이 맞을 규모 - 추정). 실행
+# 시간의 대부분은 스캔(약 100ms)이 아니라 그 뒤의 정렬이라, press_name 문자열(en_US.utf8) 대신 press_id로 묶은 뒤 이름을 붙인다(증거 14).
 _LENGTH_SPLIT = "(now() AT TIME ZONE 'UTC') - make_interval(days => %(recent_days)s)"
 LENGTH_WINDOWS_SQL = f"""
-    SELECT P.press_name,
-           count(*) FILTER (WHERE N.raw_news_crawled_at > {_LENGTH_SPLIT}),
-           percentile_cont(%(quantile)s) WITHIN GROUP (ORDER BY N.raw_news_content_length)
-               FILTER (WHERE N.raw_news_crawled_at > {_LENGTH_SPLIT}),
-           count(*) FILTER (WHERE N.raw_news_crawled_at <= {_LENGTH_SPLIT}),
-           percentile_cont(%(quantile)s) WITHIN GROUP (ORDER BY N.raw_news_content_length)
-               FILTER (WHERE N.raw_news_crawled_at <= {_LENGTH_SPLIT})
-    FROM news_raw N JOIN press P ON P.press_id = N.press_id
-    WHERE N.raw_news_extract_status = 'ok' AND N.raw_news_content_length IS NOT NULL
-      AND N.raw_news_crawled_at > (now() AT TIME ZONE 'UTC')
-          - make_interval(days => %(recent_days)s + %(base_days)s)
-    GROUP BY P.press_name
+    SELECT P.press_name, W.recent_rows, W.recent_p, W.base_rows, W.base_p
+    FROM (
+        SELECT N.press_id,
+               count(*) FILTER (WHERE N.raw_news_crawled_at > {_LENGTH_SPLIT}) AS recent_rows,
+               percentile_cont(%(quantile)s) WITHIN GROUP (ORDER BY N.raw_news_content_length)
+                   FILTER (WHERE N.raw_news_crawled_at > {_LENGTH_SPLIT}) AS recent_p,
+               count(*) FILTER (WHERE N.raw_news_crawled_at <= {_LENGTH_SPLIT}) AS base_rows,
+               percentile_cont(%(quantile)s) WITHIN GROUP (ORDER BY N.raw_news_content_length)
+                   FILTER (WHERE N.raw_news_crawled_at <= {_LENGTH_SPLIT}) AS base_p
+        FROM news_raw N
+        WHERE N.raw_news_extract_status = 'ok' AND N.raw_news_content_length IS NOT NULL
+          AND N.raw_news_crawled_at > (now() AT TIME ZONE 'UTC')
+              - make_interval(days => %(recent_days)s + %(base_days)s)
+        GROUP BY N.press_id
+    ) W JOIN press P ON P.press_id = W.press_id
 """
 
 
@@ -209,7 +215,8 @@ def length_window_stats(cur) -> Dict[str, Dict[str, Any]]:
 
 def length_drift_suspects(windows: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     """본문 길이가 급변한 언론사. 두 창 모두 표본이 LENGTH_MIN_ROWS건 이상이고 최근/앞 비율이 [LENGTH_RATIO_LOW,
-    LENGTH_RATIO_HIGH] 밖(경계는 안)일 때 걸린다 - 부푼 쪽(국민일보 특집 묶음·매일경제 해설 모달)과 줄어든 쪽 모두."""
+    LENGTH_RATIO_HIGH] 밖(경계는 안)일 때 걸린다 - 부푼 쪽(국민일보 특집 묶음)과 줄어든 쪽(매일경제 해설 모달 섞임이 줄어든 변화) 모두.
+    처음부터 있던 수준은 보지 못한다 - 바뀐 것만 본다."""
     found: Dict[str, Dict[str, Any]] = {}
     for press, w in sorted(windows.items()):
         recent, base = w.get("recent"), w.get("base")

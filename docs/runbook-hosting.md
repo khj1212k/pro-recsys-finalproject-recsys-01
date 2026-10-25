@@ -577,11 +577,7 @@ VM의 자격은 이 버킷에 객체 만들기·목록 보기와 compute agent �
 **매일 확인.** `daily_report`(00:10 UTC)의 "호스트 밖 백업"·"유휴 회수 위험" 줄(마지막 성공 경과, 그 뒤 수집량, 실패 수, 복원 검증 경과,
 회수 위험 수준). 경고 조건: 백업이 26시간 넘게 없다(리포트는 백업 약 6시간 뒤라 한 번 거르면 다음 리포트에서 약 30시간), 최근 24시간에
 백업·복원 검증이 실패했다(1시간 넘게 `running`으로 남은 행 포함 - cron이 띄운 프로세스가 죽은 경우), 복원 검증이 35일 넘게 없다, `full/`
-객체가 60시간 넘게 남아 있다(정상 수명은 최대 약 54시간 - 수명 주기 규칙이 돌지 않음. 지우기는 "내리기"의 bulk-delete를 Mac에서).
-백업과 무관한 경고 하나: `⚠ 본문 길이 급변`(언론사별 `ok` 본문 길이 p75가 최근 7일 대 앞 21일의 0.5배 미만이거나 2배 초과, 두 창 모두 50건 이상 - ADR 0026
-증거 14)은 그 언론사의 본문 추출 결과가 바뀐 것이다 - 같은 날 `같은 본문 반복` 경고가 있으면 6.8을, 없으면 그 언론사 기사 페이지 한 쪽을 받아 컨테이너
-규칙(`crawler/content_extractor/body_container.py`)이 아직 맞는지 길이·구조만 본다(본문은 읽지 않는다). 추출을 고친 뒤나 원인이 알려진 변화는 앞 창이 새 값으로
-채워질 때까지(최대 약 3주) 경고가 매일 이어지니, 일별 p75가 새 수준에서 안정이면 무시한다. 백업 줄을 직접 볼 때:
+객체가 60시간 넘게 남아 있다(정상 수명은 최대 약 54시간 - 수명 주기 규칙이 돌지 않음. 지우기는 "내리기"의 bulk-delete를 Mac에서). 직접 볼 때:
 
 ```bash
 ssh -F .ops/micro/ssh_config micro 'sudo tail -n 3 /var/log/newsletter-backup.log | cut -c1-400'
@@ -591,6 +587,25 @@ ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compos
 oci os object list -ns $NS -bn newsletter-tier0-backups --fields name,size,timeCreated \
   --query 'data[].{n:name,mb:size,t:"time-created"}' --output table     # Mac(관리자 자격)에서
 ```
+
+**`⚠ 본문 길이 급변`** (백업과 무관한 경고. 언론사별 `ok` 본문 길이 p75가 최근 7일 대 앞 21일의 0.5배 미만이거나 2배 초과, 두 창 모두 50건 이상 - ADR 0026
+결정 6의 2026-10-25 절, 증거 14)은 그 언론사의 본문 추출 결과가 바뀐 것이다. 같은 날 `같은 본문 반복` 경고가 있으면 6.8을, 없으면 그 언론사 기사 페이지 한 쪽을
+받아 컨테이너 규칙(`crawler/content_extractor/body_container.py`)이 아직 맞는지 길이·구조만 본다(본문은 읽지 않는다). 원인이 이미 알려진 변화(추출을 고친 뒤 포함)는
+수준이 그대로여도 앞 창이 새 값으로 채워질 때까지(최대 약 3주) 경고가 매일 이어진다 - 그동안 같은 언론사에 새 이상이 생기면 이 경고에 묻히므로, 아래 질의로
+그 언론사의 일별 p75를 보고 경고 줄의 "최근 7일 p75" 근처에서 오르내리면 무시하고, 벗어나면 새 이상으로 본다(길이·건수만 나온다. 날짜별 건수가 작은 날은 튄다):
+
+```bash
+ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T \
+  -e PGOPTIONS='-c default_transaction_read_only=on' db psql -U newsletter -d newsletter -A -F ' ' -c \"\
+  SELECT n.raw_news_crawled_at::date AS utc_day, count(*) AS ok_rows, \
+         round(percentile_cont(0.75) WITHIN GROUP (ORDER BY n.raw_news_content_length)) AS p75 \
+  FROM news_raw n JOIN press p USING (press_id) \
+  WHERE p.press_name = '매일경제' AND n.raw_news_extract_status = 'ok' AND n.raw_news_content_length IS NOT NULL \
+    AND n.raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - interval '28 days' GROUP BY 1 ORDER BY 1\""
+```
+
+경고가 풀리는 날은 최근 창이 대역 안으로 돌아온 날이다. 매일경제(10-23부터 경고)는 수준이 10-25 그대로라고 가정한 모의에서 11-10에 풀린다(11-09까지 비율 0.5 미만, 11-10에 0.57 안팎 - 증거 14).
+그 사이 매일경제 본문 컨테이너를 고쳐 배포하면 비율이 다시 변해 풀리는 날도 달라진다.
 
 **설치·갱신** (처음 한 번, 그리고 스크립트가 바뀐 커밋이 main에 들어갈 때마다. 2026-10-17 설치는 브랜치 커밋 `19cf228`(리베이스 전 `0efc2f5`) - 병합 뒤 main의 판으로 다시 깐다.
 `19cf228`은 `full_enabled` 설정이 생기기 전 판이라 설정과 무관하게 매일 `full/`을 올린다)

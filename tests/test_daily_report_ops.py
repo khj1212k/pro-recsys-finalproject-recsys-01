@@ -514,12 +514,12 @@ def test_length_drift_thresholds_are_the_backtest_values():
 
 
 def test_length_drift_flags_a_ratio_outside_the_band_in_both_directions():
-    """2026-10-25 VM의 실제 값: 매일경제는 최근 7일 p75가 앞 21일의 0.28배(해설 모달 섞임이 줄어듦), 다른 언론사는 1.0 안팎.
-    국민일보는 10-21 00:10 UTC에 되돌린 값(특집 묶음 글이 ok로 저장돼 있던 때) - 9.6배."""
+    """2026-10-25 12:45 UTC에 VM에서 돌린 실제 값: 매일경제는 최근 7일 p75가 앞 21일의 0.28배(해설 모달 섞임이 줄어듦), 다른 언론사는
+    1.0 안팎. 국민일보는 10-21 00:10 UTC 시점의 값(복구가 되돌리기 전 상태 - 특집 묶음 글이 ok로 저장돼 있던 때)으로 9.6배다."""
     windows = {
         "매일경제": _win(2088, 1835.0, 5362, 6596.75),
         "경향신문": _win(1325, 1574.0, 3970, 1561.0),
-        "국민일보": _win(118, 13160.0, 560, 1370.0),
+        "국민일보": _win(1182, 13237.25, 2940, 1379.0),
         "AI타임스": _win(203, 1991.0, 565, 1850.0),
     }
 
@@ -527,7 +527,7 @@ def test_length_drift_flags_a_ratio_outside_the_band_in_both_directions():
 
     assert sorted(found) == ["국민일보", "매일경제"]
     assert found["매일경제"] == {"recent_rows": 2088, "recent": 1835.0, "base_rows": 5362, "base": 6596.75, "ratio": 0.278}
-    assert found["국민일보"]["ratio"] == 9.606
+    assert found["국민일보"]["ratio"] == 9.599
 
 
 def test_length_drift_band_edges_are_inside_and_just_outside_is_flagged():
@@ -565,6 +565,8 @@ def test_length_windows_query_reads_stored_lengths_so_purged_rows_still_count():
     assert "raw_news_extract_status = 'ok'" in sql and "raw_news_content_length IS NOT NULL" in sql
     assert not re.search(r"\braw_news_content\b", sql) and "purged_at" not in sql
     assert "now() AT TIME ZONE 'UTC'" in sql  # raw_news_crawled_at은 시간대 없는 UTC 값이다
+    # 행을 press_name(문자열 정렬)이 아니라 press_id로 묶고 이름은 마지막에 붙인다 - 실행 시간이 약 0.7초에서 0.2초로 준다(증거 14)
+    assert "GROUP BY N.press_id" in sql and "GROUP BY P.press_name" not in sql
     assert params == {"quantile": 0.75, "recent_days": 7, "base_days": 21}
     assert dr.length_window_stats(_WindowsCur([])) == {}
 
@@ -588,12 +590,12 @@ def test_length_window_is_shorter_than_the_retention_period():
 
 def test_length_drift_warning_text_names_the_press_both_windows_and_the_direction():
     shrunk = dr.length_drift_suspects({"매일경제": _win(2088, 1835.0, 5362, 6596.75)})["매일경제"]
-    grown = dr.length_drift_suspects({"국민일보": _win(118, 13160.0, 560, 1370.0)})["국민일보"]
+    grown = dr.length_drift_suspects({"국민일보": _win(1182, 13237.25, 2940, 1379.0)})["국민일보"]
 
     assert dr.length_drift_warning("매일경제", shrunk) == (
         "매일경제: 본문 길이 급변 - ok 본문 길이 p75가 최근 7일 1,835자(2088건), 그 앞 21일 6,597자(5362건)의 0.28배로 "
         "짧아졌다 (기준 0.5~2배, docs/runbook-hosting.md 6.5 매일 확인)")
-    assert "9.61배로 길어졌다" in dr.length_drift_warning("국민일보", grown)
+    assert "9.60배로 길어졌다" in dr.length_drift_warning("국민일보", grown)
 
 
 def _report_with(per_press, **extra):
@@ -618,7 +620,7 @@ def test_report_marks_the_press_whose_body_length_drifted_and_adds_a_warning_lin
 def test_report_shows_both_marks_when_the_same_body_check_and_the_length_check_both_fire():
     per_press = {"국민일보": _press(249, ok=5, duplicate=244)}
     suspect = dr.same_body_suspects(per_press, {"국민일보": 22})
-    drift = dr.length_drift_suspects({"국민일보": _win(118, 13160.0, 560, 1370.0)})
+    drift = dr.length_drift_suspects({"국민일보": _win(1182, 13237.25, 2940, 1379.0)})
 
     lines = dr.format_report(_report_with(per_press, suspect_press=suspect, length_drift=drift)).splitlines()
 
