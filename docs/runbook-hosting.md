@@ -393,7 +393,7 @@ oci compute instance get --instance-id $INSTANCE --query 'data."lifecycle-state"
 oci compute instance action --action START --instance-id $INSTANCE
 ```
 
-compose 서비스는 `restart: unless-stopped`라 부팅 후 스스로 올라온다. `job_runs`에 공백 시간대가 생기는데,
+2026-10-25(무료 체험 종료)부터 개발 Mac의 감시 루프(`.ops/micro_watch.sh`, git 제외)가 15분마다 상태만 읽어 `STOPPED`면 위 START를 보낸다 - 맥이 꺼져 있으면 이 절을 손으로 한다(ADR 0026 2026-10-25 갱신). compose 서비스는 `restart: unless-stopped`라 부팅 후 스스로 올라온다. `job_runs`에 공백 시간대가 생기는데,
 다음 ingest가 따라잡을 수 있는 공백은 **피드마다 다르다**(6.3).
 
 재부팅에서는 확인됐다: 2026-10-03 03:40 KST에 unattended-upgrades가 커널 업데이트로 예약 재부팅을 했고,
@@ -847,6 +847,18 @@ Mac 덤프(`data/backups/mac-compose-2026-09-26.dump`)의 AI타임스 행도 같
   한 언론사 안에서 기준이 갈린다. 사후 확인: 그 53행 중 47행이 09-26 첫 ingest의 피드 백로그이고 보정 뒤 수집 지연이 9.5시간 ~ 2.9일 —
   9시간 밀려도 수집 시각을 넘지 않던 행이라는 추정과 맞는다.
 - **시점: 재배포(1단계) 약 11시간 뒤, 호스트 밖 백업 직후.** 보정 전 값은 보관 표와 06:29 UTC의 백업 사본에 남아 있다.
+
+### 6.8 동아일보 추출 대기 행 닫기 (2026-10-25, ADR 0026 C-31)
+
+동아일보는 VM 출발지의 본문 요청을 거절한다. 이 변경이 배포된 뒤 수집기는 동아일보 RSS 요약을 본문 칸에 넣고 상태를 `rss_summary`로
+닫는다. 배포 전 행 중 아직 추출 대기인 것을 한 번 닫는다(되돌릴 수 있다).
+
+1. 새 이미지로 재배포한다(4.1). 첫 정시 ingest 뒤 동아일보 새 행의 상태가 `rss_summary`인지 본다:
+   `SELECT raw_news_extract_status, count(*) FROM news_raw n JOIN press p USING (press_id) WHERE p.press_name='동아일보' AND raw_news_crawled_at > now() - interval '2 hours' GROUP BY 1;`
+2. 리허설: `micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -U newsletter -d newsletter -v ON_ERROR_STOP=1 -f -" < scripts/oci/close_donga_pending.sql`
+   (NOTICE `close_donga closed=N`, 끝이 ROLLBACK).
+3. 적용: 같은 명령에 `-v apply=1`. 정시 ingest(:05) 도중은 피한다(같은 행을 기다리게 한다).
+4. 되돌리기: `scripts/oci/close_donga_pending_revert.sql`(리허설 뒤 `-v apply=1`). 보관 표 `news_raw_donga_close_pending`가 있어야 한다.
 
 ## 7. Tier 0 내리기
 

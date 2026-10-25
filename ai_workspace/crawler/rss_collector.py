@@ -1,4 +1,7 @@
 # RSS 수집기
+import hashlib
+import html
+import re
 import socket
 import time
 from contextlib import contextmanager
@@ -18,6 +21,18 @@ logger = logging.getLogger(__name__)
 # 여기에 UTC를 붙이던 때에는 발행 시각이 9시간 뒤(수집 시각보다 미래)로 저장됐다.
 # 한국은 서머타임이 없어 고정 +09:00이면 되고, 이미지에 tzdata가 없어도 된다.
 KST = timezone(timedelta(hours=9))
+
+# RSS_FEEDS의 전략 값. 'rss_summary' 피드는 본문을 받지 않고 RSS 요약을 본문 칸에 바로 저장한다(동아일보).
+RSS_SUMMARY = "rss_summary"
+RSS_SUMMARY_STATUS = "rss_summary"
+_TAG = re.compile(r"<[^>]+>")
+_SPACE = re.compile(r"\s+")
+
+
+def rss_summary_text(entry) -> str:
+    """RSS 항목의 요약(summary/description)을 태그·HTML 엔티티를 걷어 한 줄 텍스트로 만든다. 없으면 ''."""
+    raw = entry.get('summary') or entry.get('description') or ''
+    return _SPACE.sub(' ', html.unescape(_TAG.sub(' ', raw))).strip()
 
 
 @contextmanager
@@ -88,7 +103,7 @@ def collect_rss(hours: int = 100) -> Dict[str, Any]:
 
     try:
         with conn.cursor() as cur:
-            for feed_name, (_, url) in Settings.RSS_FEEDS.items():
+            for feed_name, (strategy, url) in Settings.RSS_FEEDS.items():
                 press_name = press_name_for_feed(feed_name)
                 feed_stats = {
                     "press": press_name, "entries": 0, "inserted": 0, "skipped": 0,
@@ -124,7 +139,8 @@ def collect_rss(hours: int = 100) -> Dict[str, Any]:
                             dt = date_parser.parse(dt_str)
                             if dt.tzinfo is None: dt = dt.replace(tzinfo=KST)
                             if dt >= cutoff:
-                                entries.append((e.link, e.title, dt)) # cutoff 시간 이후의 기사만 추가
+                                summary = rss_summary_text(e) if strategy == RSS_SUMMARY else ''
+                                entries.append((e.link, e.title, dt, summary)) # cutoff 시간 이후의 기사만 추가
                             else:
                                 feed_stats["too_old"] += 1
                         except (ValueError, TypeError, OverflowError) as date_err:
@@ -137,14 +153,21 @@ def collect_rss(hours: int = 100) -> Dict[str, Any]:
 
                     # 2. ON CONFLICT DO NOTHING으로 삽입, RETURNING으로 실제
                     #    삽입된 URL만 받아 inserted/skipped 건수 계산
-                    candidates = [
-                        (pid, title, '', link, dt, datetime.now())
-                        for link, title, dt in entries
-                    ]
+                    #    rss_summary 피드는 요약을 본문 칸에 넣고 상태·해시·길이·추출 시각까지 채워 본문 추출 대상에서 빠진다
+                    #    (요약이 비면 다른 피드처럼 빈 본문으로 넣어 추출기가 시도한다). 해시는 extractor.content_sha256과 같은 정의다.
+                    now_local, now_utc = datetime.now(), datetime.now(timezone.utc)
+                    candidates = []
+                    for link, title, dt, summary in entries:
+                        if summary:
+                            candidates.append((pid, title, summary, link, dt, now_local, RSS_SUMMARY_STATUS,
+                                               hashlib.sha256(summary.encode("utf-8")).hexdigest(), len(summary), now_utc))
+                        else:
+                            candidates.append((pid, title, '', link, dt, now_local, None, None, None, None))
                     inserted_rows = execute_values(
                         cur,
                         """
-                        INSERT INTO news_raw (press_id, raw_news_title, raw_news_content, raw_news_url, raw_news_created_at, raw_news_crawled_at)
+                        INSERT INTO news_raw (press_id, raw_news_title, raw_news_content, raw_news_url, raw_news_created_at, raw_news_crawled_at,
+                                              raw_news_extract_status, raw_news_content_sha256, raw_news_content_length, raw_news_extracted_at)
                         VALUES %s
                         ON CONFLICT (raw_news_url) DO NOTHING
                         RETURNING raw_news_url
