@@ -139,8 +139,9 @@ def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=Non
             rows = cur.fetchall() # 임베딩 없는 기사 목록 (본문 있는 것만)
 
             # 본문이 없어 임베딩하지 않는 기사: 아직 추출 전(다음 실행에서 채워질 수 있음)과
-            # 추출했지만 본문이 없는 것(dropped/empty/duplicate/재시도 소진 - 영구 제외)을 나눠 센다.
-            # 'ok'인데 본문이 NULL인 행은 보존 기한(ADR 0023)이 지나 본문을 비운 기사다 - 임베딩되기 전에
+            # 추출했지만 본문이 없는 것(dropped/empty/duplicate/blocked_origin/재시도 소진 - 영구 제외)을 나눠 센다.
+            # 'blocked_origin'은 출발지가 본문 요청을 거절해 본문 없이 닫은 행이다(ADR 0026 2026-10-25).
+            # 'ok'/'rss_summary'인데 본문이 NULL인 행은 보존 기한(ADR 0023)이 지나 본문을 비운 기사다 - 임베딩되기 전에
             # 비워졌으면 영영 임베딩할 수 없다(다시 내려받지 않는다). 따로 센다.
             cur.execute("""
                 SELECT
@@ -149,11 +150,11 @@ def embed_pending_articles(settings, force_cpu=False, batch_size=None, limit=Non
                            OR (raw_news_extract_status IN ('fetch_failed', 'error')
                                AND raw_news_extract_attempts < %s)),
                     COUNT(*) FILTER (
-                        WHERE raw_news_extract_status IN ('dropped', 'empty', 'duplicate')
+                        WHERE raw_news_extract_status IN ('dropped', 'empty', 'duplicate', 'blocked_origin')
                            OR (raw_news_extract_status IN ('fetch_failed', 'error')
                                AND raw_news_extract_attempts >= %s)),
                     COUNT(*) FILTER (
-                        WHERE raw_news_extract_status = 'ok' AND raw_news_content IS NULL)
+                        WHERE raw_news_extract_status IN ('ok', 'rss_summary') AND raw_news_content IS NULL)
                 FROM news_raw
                 WHERE embedding_result IS NULL
                   AND (raw_news_content IS NULL OR raw_news_content = '')
