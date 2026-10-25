@@ -20,8 +20,8 @@ from config.settings import Settings
 from .body_container import FULL_PAGE, select_body_html
 from .cleaners import clean_text_lite, is_drop_article
 from .fetch import fetch_page, is_site_failure, latency_bucket
-from .page_pubdate import (CREATED_AT_FIXED, ERROR, FETCH_FAILED, FUTURE_SLACK_MINUTES, NOT_FUTURE, PageCreatedAt,
-                           decide_created_at, unfixed_if_future)
+from .page_pubdate import (CREATED_AT_FIXED, ERROR, FETCH_FAILED, FUTURE_SLACK_MINUTES, NOT_FUTURE, CreatedAtChange,
+                           PageCreatedAt, decide_created_at, unfixed_if_future)
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +38,11 @@ class ExtractionResult(NamedTuple):
     # "container_missing"(노드를 못 찾아 전체 페이지로 되돌아감). 규칙이 없는 언론사는 "" - 개수만 stats에 남긴다
     container: str = ""
     # 저장된 발행 시각이 수집 시각보다 10분 넘게 뒤(미래)였던 행의 처리(page_pubdate.py): "fixed"(기사 페이지의 발행 시각으로
-    # 바꿨다) 또는 못 바꾼 사유(no_page_time·no_tz·after_crawl·too_old, 그리고 페이지를 읽기 전에 끝난 fetch_failed·error).
+    # 바꿨다) 또는 못 바꾼 사유(no_page_time·no_tz·conflict·after_crawl·too_old, 그리고 페이지를 읽기 전에 끝난 fetch_failed·error).
     # 미래가 아니었던 행은 "" - 건수만 stats에 남긴다
     created_at_fix: str = NOT_FUTURE
+    # 발행 시각을 실제로 바꾼 행(커밋한 뒤)의 (행 번호, 바꾸기 전 값, 바꾼 뒤 값). stats의 created_at_fixed_rows로 남아 되돌리는 데 쓴다
+    created_at_change: Optional[CreatedAtChange] = None
 
 
 # raw_news_extract_status 값(d48994e9d26e의 CHECK 제약과 동일).
@@ -52,6 +54,8 @@ DEFER_TIME_BUDGET = "time_budget"
 # 다시 받으면 결과가 달라질 수 있는 상태 - Settings.MAX_EXTRACT_ATTEMPTS회까지만 다시 시도한다.
 # 보존 잡(jobs/tasks/retention.py)의 "추출 대기" 조건과 같아야 해서 가벼운 config.retention에 두고 함께 쓴다.
 RETRYABLE_STATUSES = RETRYABLE_EXTRACT_STATUSES
+# stats.created_at_fixed_rows(발행 시각을 바꾼 행의 원래 값 목록)의 상한 - job_runs.stats가 한 회차에 커지지 않게 한다. 넘친 행은 건수만 센다.
+CREATED_AT_FIXED_ROWS_LIMIT = 200
 
 
 def content_sha256(text: str) -> str:
@@ -72,40 +76,48 @@ def _record_extraction(cur, raw_news_id, content, status, digest=None):
     """, (content, status, digest, len(content), raw_news_id))
 
 
-def _record_page_created_at(cur, raw_news_id, fix: PageCreatedAt) -> str:
+def _record_page_created_at(cur, raw_news_id, fix: PageCreatedAt) -> Tuple[str, Optional[CreatedAtChange]]:
     """미래였던 발행 시각을 기사 페이지 값으로 바꾼다. 추출 결과를 쓴 UPDATE와 같은 트랜잭션에서 호출하고 커밋은 부른 쪽이 한다.
 
     WHERE의 조건은 지금 행의 값이 아직 미래일 때만 바꾼다 - 대상을 고른 뒤에 다른 곳(런북 6.10의 보정)이 이미 고친 값을
-    덮어쓰지 않는다. 돌려주는 값은 ExtractionResult.created_at_fix에 남길 분류다(행이 이미 고쳐졌으면 "")."""
+    덮어쓰지 않는다. 바꾸기 전 값은 행을 잠그는 부질의(FOR UPDATE)에서 RETURNING으로 받는다 - 원래 RSS 값이 어디에도 남지 않으면
+    되돌릴 수 없다(job_runs.stats가 남긴다). 돌려주는 값은 (ExtractionResult.created_at_fix에 남길 분류, 바꾼 기록).
+    행이 이미 고쳐졌으면 ("", None)이다."""
     if fix.outcome != CREATED_AT_FIXED:
-        return fix.outcome
+        return fix.outcome, None
     cur.execute("""
-        UPDATE news_raw
+        UPDATE news_raw AS n
         SET raw_news_created_at = %s
-        WHERE raw_news_id = %s
-          AND raw_news_created_at > (raw_news_crawled_at AT TIME ZONE 'UTC') + make_interval(mins => %s)
+        FROM (SELECT raw_news_id, raw_news_created_at FROM news_raw WHERE raw_news_id = %s FOR UPDATE) AS locked
+        WHERE n.raw_news_id = locked.raw_news_id
+          AND n.raw_news_created_at > (n.raw_news_crawled_at AT TIME ZONE 'UTC') + make_interval(mins => %s)
+        RETURNING locked.raw_news_created_at, n.raw_news_created_at
     """, (fix.value, raw_news_id, FUTURE_SLACK_MINUTES))
-    return CREATED_AT_FIXED if cur.rowcount == 1 else NOT_FUTURE
+    changed = cur.fetchone()
+    if changed is None:
+        return NOT_FUTURE, None
+    return CREATED_AT_FIXED, CreatedAtChange(raw_news_id, changed[0], changed[1])
 
 
-def _record_ok_or_duplicate(conn, cur, raw_news_id, cleaned, fix: PageCreatedAt = PageCreatedAt(NOT_FUTURE)) -> Tuple[str, str]:
+def _record_ok_or_duplicate(conn, cur, raw_news_id, cleaned,
+                            fix: PageCreatedAt = PageCreatedAt(NOT_FUTURE)) -> Tuple[str, str, Optional[CreatedAtChange]]:
     """본문을 'ok'로 저장한다. 같은 본문이 이미 'ok'로 있으면(URL만 다른 같은 기사)
     uq_news_raw_content_sha256_ok가 막으므로 사본은 본문 없이 'duplicate'로 남긴다.
     병렬 워커가 같은 본문을 동시에 저장하는 경합도 인덱스가 한쪽만 통과시킨다.
-    돌려주는 값은 (저장한 상태, 발행 시각 처리 분류). 발행 시각은 결과와 같은 트랜잭션에서 바꾼다 - 'ok'가 막혀 롤백하면
-    함께 사라지므로 'duplicate'로 다시 쓸 때 발행 시각도 다시 쓴다."""
+    돌려주는 값은 (저장한 상태, 발행 시각 처리 분류, 바꾼 기록). 발행 시각은 결과와 같은 트랜잭션에서 바꾼다 - 'ok'가 막혀
+    롤백하면 함께 사라지므로 'duplicate'로 다시 쓸 때 발행 시각도 다시 쓰고, 그때의 기록만 돌려준다."""
     digest = content_sha256(cleaned)
     try:
         _record_extraction(cur, raw_news_id, cleaned, "ok", digest)
-        created_at_fix = _record_page_created_at(cur, raw_news_id, fix)
+        created_at_fix, change = _record_page_created_at(cur, raw_news_id, fix)
         conn.commit()
-        return "ok", created_at_fix
+        return "ok", created_at_fix, change
     except psycopg2.errors.UniqueViolation:
         conn.rollback()
     _record_extraction(cur, raw_news_id, "", "duplicate", digest)
-    created_at_fix = _record_page_created_at(cur, raw_news_id, fix)
+    created_at_fix, change = _record_page_created_at(cur, raw_news_id, fix)
     conn.commit()
-    return "duplicate", created_at_fix
+    return "duplicate", created_at_fix, change
 
 
 class DispatchPlan:
@@ -225,24 +237,25 @@ class ContentExtractor:
                 should_drop, drop_reasons = is_drop_article(cleaned, title, press_name)
                 if should_drop:
                     _record_extraction(cur, raw_news_id, '', 'dropped')
-                    created_at_fix = _record_page_created_at(cur, raw_news_id, fix)
+                    created_at_fix, change = _record_page_created_at(cur, raw_news_id, fix)
                     conn.commit()
                     return ExtractionResult(raw_news_id, press_name, "dropped", tuple(drop_reasons),
                                             fetch_s=fetched.request_s, container=container,
-                                            created_at_fix=created_at_fix)
+                                            created_at_fix=created_at_fix, created_at_change=change)
 
-                status, created_at_fix = _record_ok_or_duplicate(conn, cur, raw_news_id, cleaned, fix)
+                status, created_at_fix, change = _record_ok_or_duplicate(conn, cur, raw_news_id, cleaned, fix)
                 return ExtractionResult(
                     raw_news_id, press_name, status, detail=f"raw={len(text)} clean={len(cleaned)}",
                     fetch_s=fetched.request_s, container=container, created_at_fix=created_at_fix,
+                    created_at_change=change,
                 )
 
             # 페이지는 받았지만 본문을 뽑지 못함(목록/영상 페이지 등) - 재시도해도 같으므로 확정
             _record_extraction(cur, raw_news_id, '', 'empty')
-            created_at_fix = _record_page_created_at(cur, raw_news_id, fix)
+            created_at_fix, change = _record_page_created_at(cur, raw_news_id, fix)
             conn.commit()
             return ExtractionResult(raw_news_id, press_name, "empty", fetch_s=fetched.request_s, container=container,
-                                    created_at_fix=created_at_fix)
+                                    created_at_fix=created_at_fix, created_at_change=change)
 
         except Exception as e:
             conn.rollback()
@@ -315,9 +328,12 @@ class ContentExtractor:
             # container_missing은 노드를 못 찾아 전체 페이지로 되돌아간 기사 - 페이지 개편 신호라 ingest가 경고한다
             "body_container": {},
             # 저장된 발행 시각이 수집 시각보다 10분 넘게 뒤(미래)여서 기사 페이지의 발행 시각으로 바꾼 행 수 - 언론사별.
-            # created_at_unfixed는 미래였는데 못 바꾼 행의 사유별 개수 - 그 행은 미래인 채 남는다. 사유: no_page_time·no_tz·after_crawl·
-            # too_old(페이지를 읽었다), fetch_failed·error(읽기 전에 끝났다 - 시도마다 센다, 다음 시도에서 고칠 수 있다)
+            # created_at_unfixed는 미래였는데 못 바꾼 행의 사유별 개수 - 그 행은 미래인 채 남는다. 사유: no_page_time·no_tz·conflict·
+            # after_crawl·too_old(페이지를 읽었다), fetch_failed·error(읽기 전에 끝났다 - 시도마다 센다, 다음 시도에서 고칠 수 있다)
             "created_at_from_page": {}, "created_at_unfixed": {},
+            # 바꾼 행의 [행 번호, 바꾸기 전 값(UTC), 바꾼 뒤 값(UTC)] - 행 번호순, 최대 CREATED_AT_FIXED_ROWS_LIMIT개. 원래 RSS 값이 DB에는
+            # 남지 않으므로 이 목록이 되돌리는 근거다(job_runs는 매일 백업된다). 상한을 넘은 행은 건수만 센다(값은 로그에 남는다)
+            "created_at_fixed_rows": [], "created_at_fixed_rows_omitted": 0,
             "deferred_reasons": {}, "press_breaker": {},
             "time_budget_s": time_budget_s, "time_budget_exhausted": False,
         }
@@ -361,6 +377,16 @@ class ContentExtractor:
             elif result.created_at_fix != NOT_FUTURE:
                 reasons = stats["created_at_unfixed"].setdefault(result.press_name, {})
                 reasons[result.created_at_fix] = reasons.get(result.created_at_fix, 0) + 1
+            if result.created_at_change is not None:
+                row = result.created_at_change.as_stats_row()
+                if len(stats["created_at_fixed_rows"]) < CREATED_AT_FIXED_ROWS_LIMIT:
+                    stats["created_at_fixed_rows"].append(row)
+                    # stats는 추출이 끝나야 job_runs에 저장된다 - 도중에 프로세스가 죽어도 이 줄은 컨테이너 로그에 남는다
+                    logger.info("발행 시각을 기사 페이지 값으로 바꿨다: id=%s 전=%s 후=%s", *row)
+                else:
+                    stats["created_at_fixed_rows_omitted"] += 1
+                    logger.warning("발행 시각을 바꾼 행이 목록 상한(%d)을 넘어 stats에 못 남는다: id=%s 전=%s 후=%s",
+                                   CREATED_AT_FIXED_ROWS_LIMIT, *row)
             if result.status == "error" and len(stats["error_samples"]) < 5:
                 stats["error_samples"].append(result.detail)
                 logger.error(f"   [Error] {result.press_name}: {result.detail}")
@@ -396,6 +422,7 @@ class ContentExtractor:
             stats["press_breaker"].setdefault(press, {"failures": failures, "deferred": 0})
         stats["time_budget_exhausted"] = plan.budget_exhausted
         stats["drop_reasons"] = dict(drop_reasons)
+        stats["created_at_fixed_rows"].sort()
         logger.info(
             f"🏁 본문 추출 종료. 성공: {stats['ok']}, 필터링: {stats['dropped']}, 내용없음: {stats['empty']}, "
             f"중복: {stats['duplicate']}, 다운로드 실패: {stats['fetch_failed']}, 에러: {stats['error']}, "
