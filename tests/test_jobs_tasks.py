@@ -139,9 +139,10 @@ def _ingest_extract_only(monkeypatch, extract_stats, extra_argv=()):
     calls = []
 
     class FakeExtractor:
-        def extract_parallel_with_stats(self, workers=None, time_budget_s=None):
+        def extract_parallel_with_stats(self, workers=None, time_budget_s=None, stats=None, checkpoint=None):
             calls.append({"workers": workers, "time_budget_s": time_budget_s})
-            return dict(extract_stats)
+            stats.update(extract_stats)  # 진짜 추출기처럼 넘겨받은 dict를 채워 돌려준다
+            return stats
 
     monkeypatch.setattr(extractor_pkg, "ContentExtractor", FakeExtractor)
     monkeypatch.setattr(ingest, "news_raw_snapshot", lambda: {"total": 0})
@@ -261,9 +262,10 @@ def _ingest_rss_then_extract(monkeypatch, rss_seconds, argv):
     budgets = []
 
     class FakeExtractor:
-        def extract_parallel_with_stats(self, workers=None, time_budget_s=None):
+        def extract_parallel_with_stats(self, workers=None, time_budget_s=None, stats=None, checkpoint=None):
             budgets.append(time_budget_s)
-            return _extract_stats({"a": {"ok": 1}}, time_budget_s=time_budget_s)
+            stats.update(_extract_stats({"a": {"ok": 1}}, time_budget_s=time_budget_s))
+            return stats
 
     monkeypatch.setattr(ingest, "_clock", lambda: now[0])
     monkeypatch.setattr(rss_module, "collect_rss", slow_rss)
@@ -283,6 +285,83 @@ def test_extract_deadline_is_measured_from_ingest_start_so_a_slow_rss_stage_shor
     assert _ingest_rss_then_extract(monkeypatch, 2690, ["--extract-deadline-s", "2700"]) == [60.0]
     # 마감을 주지 않으면(수동 실행) 제한 없음
     assert _ingest_rss_then_extract(monkeypatch, 500, []) == [None]
+
+
+def _ingest_with_extractor_that(monkeypatch, behave, store=None):
+    """추출기 대역이 behave(stats, checkpoint)로 넘겨받은 dict를 채우고(필요하면 중간 저장을 부르고) 끝낸다. run_job으로 돌려 job_runs에 남는 것을 본다."""
+    from jobs.runtime import run_job
+    from jobs.tasks import ingest
+    import crawler.content_extractor as extractor_pkg
+    from tests.test_jobs_runtime import FakeStore
+
+    class FakeExtractor:
+        def extract_parallel_with_stats(self, workers=None, time_budget_s=None, stats=None, checkpoint=None):
+            behave(stats, checkpoint)
+            return stats
+
+    monkeypatch.setattr(extractor_pkg, "ContentExtractor", FakeExtractor)
+    monkeypatch.setattr(ingest, "news_raw_snapshot", lambda: {"total": 0})
+    store = store or FakeStore()
+    notified = []
+    args = build_parser().parse_args(["ingest", "--stages", "extract"])
+    result = run_job("ingest", ingest.run, args=args, store_factory=lambda: store, notify=notified.append, git_sha="abc1234")
+    return result, store
+
+
+ROWS = [[1, "2026-10-26T09:00:00Z", "2026-10-25T09:50:00Z"], [2, "2026-10-26T09:30:00Z", "2026-10-25T09:51:00Z"]]
+
+
+def test_ingest_hands_its_own_stats_dict_to_the_extractor_so_an_interrupted_run_keeps_the_original_pubdates(monkeypatch):
+    """바꾼 행의 원래 발행 시각(created_at_fixed_rows)은 DB 어디에도 없다 - 추출 도중 배포 등으로 SIGTERM을 받아도 job_runs.stats에 남아야 한다."""
+    from jobs.runtime import JobTerminated
+
+    def behave(stats, checkpoint):
+        stats.update(_extract_stats({"국민일보": {"ok": 2}}, created_at_fixed_rows=[list(r) for r in ROWS]))
+        raise JobTerminated(15)
+
+    result, store = _ingest_with_extractor_that(monkeypatch, behave)
+
+    assert result.status == "failed" and "SIGTERM" in result.error
+    assert store.rows[result.run_id]["stats"]["extract"]["created_at_fixed_rows"] == ROWS
+    assert store.rows[result.run_id]["status"] == "failed"
+
+
+def test_ingest_keeps_the_partial_extract_stats_when_the_extraction_raises(monkeypatch):
+    def behave(stats, checkpoint):
+        stats.update(_extract_stats({"국민일보": {"ok": 1}}, created_at_fixed_rows=[list(ROWS[0])]))
+        raise RuntimeError("db gone")
+
+    result, store = _ingest_with_extractor_that(monkeypatch, behave)
+
+    assert result.status == "failed"
+    assert store.rows[result.run_id]["stats"]["extract"]["created_at_fixed_rows"] == [ROWS[0]]
+
+
+def test_the_extractors_checkpoint_writes_the_running_stats_to_job_runs(monkeypatch):
+    """OOM/SIGKILL로 죽으면 끝의 저장이 없다 - 추출기가 부르는 중간 저장이 그때까지의 목록을 job_runs에 쓴다."""
+    from tests.test_jobs_runtime import FakeStore
+
+    store, mid_run = FakeStore(), []
+
+    def behave(stats, checkpoint):
+        stats.update(_extract_stats({"국민일보": {"ok": 2}}, created_at_fixed_rows=[list(r) for r in ROWS]))
+        checkpoint()
+        mid_run.append(dict(store.rows[1]))  # 추출이 아직 끝나지 않았을 때 job_runs에 있는 것
+
+    result, _ = _ingest_with_extractor_that(monkeypatch, behave, store)
+
+    assert result.status == "succeeded"
+    assert mid_run[0]["status"] == "running" and mid_run[0]["stats"]["extract"]["created_at_fixed_rows"] == ROWS
+
+
+def test_ingest_extract_stats_keep_their_keys_and_get_the_duration(monkeypatch):
+    def behave(stats, checkpoint):
+        stats.update(_extract_stats({"국민일보": {"ok": 2}}))
+
+    result, store = _ingest_with_extractor_that(monkeypatch, behave)
+
+    extract = store.rows[result.run_id]["stats"]["extract"]
+    assert extract["targets"] == 2 and extract["ok"] == 2 and extract["duration_s"] >= 0 and extract["deadline_s"] is None
 
 
 def test_extract_deadline_flag_must_be_positive():

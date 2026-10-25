@@ -2,7 +2,7 @@
 
 국민일보 RSS가 2026-10-19부터 수집 시각보다 최대 24시간 뒤의 pubDate를 준다. 본문 추출기는 페이지를 받으므로, 저장된 발행 시각이
 수집 시각보다 10분 넘게 뒤인 행만 페이지의 JSON-LD datePublished(없으면 meta article:published_time)로 바꾼다. 쓰는 값은 그 기사
-자신의 값뿐이다 - JSON-LD는 최상위 기사 노드의 문자열 datePublished만 받고, 중첩 노드·기사가 아닌 노드의 값은 읽지 않는다.
+자신의 값뿐이다 - JSON-LD는 최상위 기사 노드의 문자열 datePublished만 받고, 중첩 노드·기사가 아닌 노드의 값은 읽지 않는다. meta는 <head>의 것만 본다.
 페이지는 모두 구조만 흉내 낸 지어낸 HTML이다(ADR 0023: 기사 본문·제목을 저장소에 넣지 않는다).
 """
 import importlib.util
@@ -98,7 +98,7 @@ def test_other_scripts_are_ignored():
 
 
 @pytest.mark.parametrize("kind", [
-    "NewsArticle", "Article", "BlogPosting", "LiveBlogPosting", "ReportageNewsArticle",
+    "NewsArticle", "Article", "BlogPosting", "LiveBlogPosting", "SocialMediaPosting", "DiscussionForumPosting", "ReportageNewsArticle",
     "http://schema.org/NewsArticle", "https://schema.org/Article", "schema:NewsArticle",
     ["Thing", "NewsArticle"], ["http://schema.org/NewsArticle", "WebPage"],
 ])
@@ -106,7 +106,8 @@ def test_article_and_posting_types_in_all_their_spellings_are_article_nodes(kind
     assert json_ld_of(page(ld_script({"@type": kind, "datePublished": OWN}))) == OWN
 
 
-@pytest.mark.parametrize("kind", [None, "WebPage", "ItemList", "Organization", "ArticleBody", "BreadcrumbList", ["WebPage", "Thing"], 7])
+@pytest.mark.parametrize("kind", [None, "WebPage", "ItemList", "Organization", "ArticleBody", "BreadcrumbList", ["WebPage", "Thing"], 7,
+                                  "JobPosting", "http://schema.org/JobPosting", ["Thing", "JobPosting"]])
 def test_nodes_that_are_not_articles_give_no_value(kind):
     node = {"datePublished": OWN} if kind is None else {"@type": kind, "datePublished": OWN}
     assert json_ld_of(page(ld_script(node))) is None
@@ -123,6 +124,14 @@ def test_an_article_node_in_the_top_level_graph_is_used_and_other_graph_nodes_ar
     assert json_ld_of(page(ld_script({"@graph": [{"@type": "WebPage", "datePublished": OTHER}]}))) is None
     # @graph가 객체 하나여도 같다
     assert json_ld_of(page(ld_script({"@graph": {"@type": "NewsArticle", "datePublished": OWN}}))) == OWN
+
+
+def test_a_job_posting_before_the_article_does_not_decide_in_its_place():
+    """JobPosting(구인 공고)은 Article이 아니다 - 첫 기사 노드로 잘못 잡히면 뒤의 진짜 기사 값을 못 읽는다."""
+    job = {"@context": "https://schema.org", "@type": "JobPosting", "title": "시험 공고", "datePosted": OTHER}
+    assert json_ld_of(page(ld_script(job), ld_script(news_article(OWN)))) == OWN
+    assert json_ld_of(page(ld_script([job, news_article(OWN)]))) == OWN
+    assert json_ld_of(page(ld_script(job))) is None
 
 
 def test_an_article_node_in_a_top_level_array_is_used():
@@ -219,6 +228,77 @@ def test_a_broken_block_is_ignored_when_a_top_level_article_node_was_read_proper
     assert json_ld_of(page(ld_script(BROKEN_OWN), ld_script(no_date))) is None
 
 
+# 국민일보 모양의 깨진 덩어리: @type NewsArticle, 문자열 image, datePublished, 그다음에 author·publisher의 중첩 @type
+BROKEN_KMIB_SHAPE = ('{"@context": "https://schema.org", "@type": "NewsArticle", "headline": "끊긴 "제목" 줄", "image": ["https://example.test/a.jpg"], '
+                     '"datePublished": "%s", "author": [{"@type": "Person", "name": "시험 기자"}], '
+                     '"publisher": {"@type": "Organization", "logo": {"@type": "ImageObject", "url": "u"}}}' % OWN)
+
+
+def test_a_broken_block_shaped_like_the_real_article_template_is_read():
+    with pytest.raises(ValueError):  # JSON이 아니다 - 아래는 정규식 경로다
+        json.loads(BROKEN_KMIB_SHAPE)
+    assert json_ld_of(page(ld_script(BROKEN_KMIB_SHAPE))) == OWN
+
+
+@pytest.mark.parametrize("broken", [
+    # 첫 @type이 기사가 아니다: 안쪽 기사의 값
+    '{"@context":"https://schema.org","@type":"ItemList","itemListElement":[{"@type":"ListItem","item":{"@type":"NewsArticle","datePublished":"%s"}},]}' % OTHER,
+    # 기사 자신의 datePublished가 없고 중첩된 관련 기사만 있다
+    '{"@type":"NewsArticle","headline":"끊긴 "제목" 줄","isRelatedTo":[{"@type":"NewsArticle","datePublished":"%s"}]}' % OTHER,
+    # 기사 자신의 datePublished가 없고 image의 ImageObject에만 값이 있다
+    '{"@type":"NewsArticle","headline":"끊긴 "제목" 줄","image":{"@type":"ImageObject","datePublished":"%s"}}' % OTHER,
+    # 기사 노드의 @type이 둘째 @type 앞에 오지만 값은 그 뒤 중첩 노드에 있다
+    '{"@type":["NewsArticle"],"headline":"끊긴 "제목" 줄","author":{"@type":"Person","datePublished":"%s"}}' % OTHER,
+])
+def test_a_broken_block_never_hands_out_the_date_of_a_nested_node(broken):
+    assert json_ld_of(page(ld_script(broken))) is None
+    assert decide_created_at(STORED_FUTURE, CRAWLED, page(ld_script(broken))) == pp.PageCreatedAt(NO_PAGE_TIME)
+    # 맞는 meta가 있으면 그 값이 쓰인다
+    assert decide_created_at(STORED_FUTURE, CRAWLED, page(ld_script(broken), META)) == pp.PageCreatedAt(
+        CREATED_AT_FIXED, datetime(2026, 10, 25, 9, 50, tzinfo=UTC))
+
+
+def test_a_broken_block_whose_first_type_is_not_an_article_is_dropped_even_if_a_later_type_is():
+    web_page_first = '{"@type": "WebPage", "datePublished": "%s", "mainEntity": {"@type": "NewsArticle"}, "headline": "끊' % OWN
+    assert json_ld_of(page(ld_script(web_page_first))) is None
+    job_first = '{"@type": "JobPosting", "datePublished": "%s", "headline": "끊' % OWN
+    assert json_ld_of(page(ld_script(job_first))) is None
+
+
+def test_the_type_name_list_of_a_broken_block_is_read_up_to_the_closing_bracket_only():
+    # 둘째 @type은 첫 배열이 닫힌 뒤에 있다 - 값이 둘째 @type 앞이면 쓴다
+    ok = '{"@type": ["Thing", "NewsArticle"], "datePublished": "%s", "author": {"@type": "Person"}, "headline": "끊' % OWN
+    assert json_ld_of(page(ld_script(ok))) == OWN
+    # 기사 이름이 첫 배열이 아니라 그 뒤 객체에만 있으면 기사 노드가 아니다
+    late = '{"@type": ["Thing", "WebPage"], "datePublished": "%s", "author": {"@type": "NewsArticle"}, "headline": "끊' % OWN
+    assert json_ld_of(page(ld_script(late))) is None
+
+
+def test_a_type_name_list_is_read_only_within_the_first_few_hundred_characters():
+    names = ", ".join('"x"' for _ in range(200))  # 800글자
+    far = '{"@type": [%s, "NewsArticle"], "datePublished": "%s", "headline": "끊' % (names, OWN)
+    near = '{"@type": ["NewsArticle", %s], "datePublished": "%s", "headline": "끊' % (names, OWN)
+    assert json_ld_of(page(ld_script(far))) is None
+    assert json_ld_of(page(ld_script(near))) == OWN
+
+
+def test_a_block_full_of_unclosed_type_arrays_is_read_in_time_proportional_to_its_size():
+    """닫히지 않은 "@type": [ 가 많으면 예전 정규식이 매번 끝까지 훑어 시간이 크기의 제곱으로 늘었다(450 KB에 5초 넘게)."""
+    import time
+
+    evil = '{"datePublished":"%s",' % OWN + '"@type":[' * 50_000
+    started = time.perf_counter()
+    values = read_page_values(page(ld_script(evil)))
+    decision = decide_created_at(STORED_FUTURE, CRAWLED, page(ld_script(evil)))
+    assert time.perf_counter() - started < 1.5
+    assert values == PageValues(None, ()) and decision == pp.PageCreatedAt(NO_PAGE_TIME)
+    # 이름 칸을 읽는 범위도 상한이 있다: 긴 한 줄짜리 닫히지 않은 배열
+    long_array = '{"@type": ["NewsArticle", ' + ('"x", ' * 200_000) + '"datePublished": "%s"' % OWN
+    started = time.perf_counter()
+    read_page_values(page(ld_script(long_array)))
+    assert time.perf_counter() - started < 1.5
+
+
 def test_a_broken_block_with_several_values_or_without_an_article_type_is_dropped():
     two_values = '{"@type":"NewsArticle","isRelatedTo":[{"@type":"NewsArticle","datePublished":"%s"}],"datePublished":"%s","headline":"끊' % (OTHER, OWN)
     assert json_ld_of(page(ld_script(two_values))) is None
@@ -258,6 +338,35 @@ def test_meta_published_time_is_collected_in_document_order_beside_json_ld():
     by_name = page('<meta content="2026-10-25T18:49:00+09:00" name="article:published_time"/>')
     assert read_page_values(by_name) == PageValues(None, ("2026-10-25T18:49:00+09:00",))
     assert read_page_values(page('<meta property="article:modified_time" content="2026-10-25T19:00:00+09:00">')) == PageValues(None, ())
+
+
+def test_only_the_meta_in_the_head_is_read_not_the_ones_in_the_body():
+    """본문 안(관련 기사 카드 등)의 meta는 그 기사의 것이 아닐 수 있다 - 기사 자신의 JSON-LD 값이 없을 때 그 값이 쓰이면 안 된다."""
+    card = f'<div class="related"><meta property="article:published_time" content="{OTHER}"><a>관련 기사</a></div>'
+    assert read_page_values(page(body=card)) == PageValues(None, ())
+    html = page(ld_script({"@type": "NewsArticle", "headline": "시험 제목"}), body=card)
+    assert read_page_values(html) == PageValues(None, ())
+    assert decide_created_at(STORED_FUTURE, CRAWLED, html) == pp.PageCreatedAt(NO_PAGE_TIME)
+    # head의 meta는 그대로 읽고, body 뒤의 것만 버린다
+    mixed = page(META, body=card)
+    assert read_page_values(mixed) == PageValues(None, (OWN,))
+    assert decide_created_at(STORED_FUTURE, CRAWLED, mixed) == pp.PageCreatedAt(
+        CREATED_AT_FIXED, datetime(2026, 10, 25, 9, 50, tzinfo=UTC))
+    # <body> 속성이 붙어 있어도 같다
+    attributed = f'<html><head>{META}</head><body class="x" id="y">{card}</body></html>'
+    assert read_page_values(attributed) == PageValues(None, (OWN,))
+    # JSON-LD는 본문 안에 있어도 읽는다(meta만 head로 좁혔다)
+    in_body = f'<html><head></head><body>{ld_script(news_article(OWN))}</body></html>'
+    assert read_page_values(in_body) == PageValues(OWN, ())
+
+
+def test_a_page_without_head_and_body_tags_still_has_its_meta_read():
+    assert read_page_values(f"{META}<p>지어낸 문장</p>") == PageValues(None, (OWN,))
+
+
+def test_only_the_first_fifty_meta_values_are_collected():
+    many = "".join(meta_tag(f"2026-10-25T18:{i % 60:02d}:00+09:00") for i in range(120))
+    assert len(read_page_values(page(many)).meta) == pp._MAX_META_VALUES == 50
 
 
 def test_html_entities_in_the_meta_content_are_decoded():
@@ -419,6 +528,44 @@ def test_a_json_ld_value_without_a_zone_is_compared_with_the_meta_wall_clock():
         CREATED_AT_FIXED, datetime(2026, 10, 25, 9, 50, tzinfo=UTC))
     both_naive = page(ld_script(news_article("2026-10-25T18:50:00")), meta_tag("2026-10-25T18:50:00"))
     assert decide_created_at(STORED_FUTURE, CRAWLED, both_naive).outcome == NO_TZ
+
+
+def test_metas_that_disagree_with_each_other_are_a_conflict_even_without_json_ld():
+    two = page(meta_tag("2026-10-25T18:50:00+09:00"), meta_tag("2026-10-23T08:00:00+09:00"))
+    assert decide_created_at(STORED_FUTURE, CRAWLED, two) == pp.PageCreatedAt(CONFLICT)
+    # 10분 안이면 충돌이 아니고 첫 값(시간대 있는 값)을 쓴다 / 같은 값을 두 번 적은 페이지도 충돌이 아니다
+    near = page(meta_tag("2026-10-25T18:50:00+09:00"), meta_tag("2026-10-25T18:40:00+09:00"))
+    assert decide_created_at(STORED_FUTURE, CRAWLED, near) == pp.PageCreatedAt(CREATED_AT_FIXED, datetime(2026, 10, 25, 9, 50, tzinfo=UTC))
+    same = page(meta_tag(OWN), meta_tag("2026-10-25T09:50:00Z"), meta_tag(OWN))
+    assert decide_created_at(STORED_FUTURE, CRAWLED, same) == pp.PageCreatedAt(CREATED_AT_FIXED, datetime(2026, 10, 25, 9, 50, tzinfo=UTC))
+    just_over = page(meta_tag("2026-10-25T18:50:00+09:00"), meta_tag("2026-10-25T18:39:59+09:00"))
+    assert decide_created_at(STORED_FUTURE, CRAWLED, just_over).outcome == CONFLICT
+    # 셋째 값만 어긋나도 충돌이다(둘씩 모두 견준다)
+    third = page(meta_tag("2026-10-25T18:50:00+09:00"), meta_tag("2026-10-25T18:45:00+09:00"), meta_tag("2026-10-25T18:36:00+09:00"))
+    assert decide_created_at(STORED_FUTURE, CRAWLED, third).outcome == CONFLICT
+    # JSON-LD가 meta 둘과 모두 맞아도, meta끼리 어긋나면 충돌이다
+    with_ld = page(ld_script(news_article(OWN)), meta_tag(OWN), meta_tag("2026-10-24T18:50:00+09:00"))
+    assert decide_created_at(STORED_FUTURE, CRAWLED, with_ld).outcome == CONFLICT
+
+
+@pytest.mark.parametrize("date_only", ["2026-10-25", "2026-10-20"])
+def test_a_date_only_value_is_not_compared_with_a_full_time_so_the_other_source_is_used(date_only):
+    """날짜만 적은 값은 자정으로 읽힐 뿐이다 - 시각 있는 값과 18시간쯤 다르다고 충돌로 세면 고칠 수 있던 행이 미래로 남는다."""
+    expected = pp.PageCreatedAt(CREATED_AT_FIXED, datetime(2026, 10, 25, 9, 50, tzinfo=UTC))
+    date_in_json_ld = page(ld_script(news_article(date_only)), meta_tag(OWN))
+    assert decide_created_at(STORED_FUTURE, CRAWLED, date_in_json_ld) == expected
+    date_in_meta = page(ld_script(news_article(OWN)), meta_tag(date_only))
+    assert decide_created_at(STORED_FUTURE, CRAWLED, date_in_meta) == expected
+    # 날짜만 있는 값 둘뿐이면 시각을 정할 수 없다
+    assert decide_created_at(STORED_FUTURE, CRAWLED, page(ld_script(news_article(date_only)), meta_tag(date_only))).outcome == NO_TZ
+    # 시각이 있는 값끼리는 그대로 견준다
+    assert decide_created_at(STORED_FUTURE, CRAWLED, page(ld_script(news_article("2026-10-20T18:50:00+09:00")), meta_tag(OWN))).outcome == CONFLICT
+
+
+@pytest.mark.parametrize("without_zone", ["2026-10-20T18:50:00", "2026-10-20 18:50:00", "2026-10-20T18:50", "2026-10-20 18"])
+def test_a_value_with_a_time_but_no_zone_is_still_compared_by_wall_clock_unlike_a_date_only_value(without_zone):
+    html = page(ld_script(news_article(without_zone)), meta_tag(OWN))
+    assert decide_created_at(STORED_FUTURE, CRAWLED, html).outcome == CONFLICT
 
 
 def test_conflict_is_one_of_the_reasons_the_statistics_count():

@@ -56,6 +56,8 @@ DEFER_TIME_BUDGET = "time_budget"
 RETRYABLE_STATUSES = RETRYABLE_EXTRACT_STATUSES
 # stats.created_at_fixed_rows(발행 시각을 바꾼 행의 원래 값 목록)의 상한 - job_runs.stats가 한 회차에 커지지 않게 한다. 넘친 행은 건수만 센다.
 CREATED_AT_FIXED_ROWS_LIMIT = 200
+# 바꾼 행이 이만큼 쌓일 때마다 호출한 쪽에 중간 저장(checkpoint)을 부탁한다 - 종료 신호가 아니라 OOM/SIGKILL로 죽어도 그때까지의 원래 값 목록이 남는다.
+CREATED_AT_CHECKPOINT_EVERY = 10
 
 
 def content_sha256(text: str) -> str:
@@ -277,12 +279,18 @@ class ContentExtractor:
         return self.extract_parallel_with_stats(num_workers)["ok"]
 
     def extract_parallel_with_stats(self, num_workers=None, time_budget_s: Optional[float] = None,
-                                    clock: Callable[[], float] = time.monotonic) -> Dict[str, Any]:
+                                    clock: Callable[[], float] = time.monotonic,
+                                    stats: Optional[Dict[str, Any]] = None,
+                                    checkpoint: Optional[Callable[[], None]] = None) -> Dict[str, Any]:
         """대상 기사의 본문을 받아 저장하고 통계를 돌려준다.
 
         time_budget_s: 이 시간(초)이 지나면 새 기사를 보내지 않고 남은 기사는 다음 실행으로 미룬다(None이면 제한 없음).
         ingest가 다음 정시 회차를 넘기지 않게 하려는 값이다 - 스케줄러(supercronic)는 앞 실행이 안 끝났으면
         다음 회차를 시작하지 않고 기록도 남기지 않는다(ADR 0026 증거 8).
+        stats: 넘기면 이 dict를 채워 돌려준다(없으면 새로 만든다) - 보존 잡(retention.purge_expired_bodies)과 같은 방식이다.
+        호출한 쪽이 같은 dict를 job_runs.stats에 달아 두면 추출 도중에 끊겨도(종료 신호 · 예외) 그때까지 센 값이 남는다.
+        바꾼 행의 원래 발행 시각(created_at_fixed_rows)이 거기에 있어서 중요하다.
+        checkpoint: 바꾼 행이 CREATED_AT_CHECKPOINT_EVERY개 쌓일 때마다 부르는 중간 저장 함수. 실패해도 추출은 계속한다.
         """
         if num_workers is None:
             num_workers = Settings.PARALLEL_WORKERS
@@ -316,7 +324,7 @@ class ContentExtractor:
         finally:
             release_connection(conn)
 
-        stats: Dict[str, Any] = {
+        fresh: Dict[str, Any] = {
             "targets": len(articles), "workers": num_workers,
             **{status: 0 for status in _RECORDED_STATUSES}, DEFERRED: 0,
             "drop_reasons": {}, "per_press": {}, "error_samples": [],
@@ -337,6 +345,10 @@ class ContentExtractor:
             "deferred_reasons": {}, "press_breaker": {},
             "time_budget_s": time_budget_s, "time_budget_exhausted": False,
         }
+        if stats is None:
+            stats = fresh
+        else:
+            stats.update(fresh)
         if not articles:
             logger.info("💤 본문을 추출할 기사가 없습니다.")
             return stats
@@ -348,6 +360,7 @@ class ContentExtractor:
             deadline=None if time_budget_s is None else started + time_budget_s, clock=clock,
         )
         drop_reasons: Counter = Counter()
+        listed_since_checkpoint = [0]
         progress = tqdm(total=len(articles), desc="🚀 본문 추출 중")
 
         def _count(press_name: str, status: str) -> None:
@@ -371,43 +384,64 @@ class ContentExtractor:
             if result.container:
                 paths = stats["body_container"].setdefault(result.press_name, {})
                 paths[result.container] = paths.get(result.container, 0) + 1
+            listed = False
+            if result.created_at_change is not None:
+                # 원래 값 목록을 건수보다 먼저 채운다. stats는 호출한 쪽(ingest)이 job_runs에 달아 두므로 추출이 끊겨도(종료 신호 · 예외) 거기 남고,
+                # 중간 저장(checkpoint)은 OOM/SIGKILL까지 덮는다. 로그 줄은 그래도 못 남은 경우를 위한 보조 수단이다(컨테이너를 다시 만들면 사라진다)
+                row = result.created_at_change.as_stats_row()
+                if len(stats["created_at_fixed_rows"]) < CREATED_AT_FIXED_ROWS_LIMIT:
+                    stats["created_at_fixed_rows"].append(row)
+                    logger.info("발행 시각을 기사 페이지 값으로 바꿨다: id=%s 전=%s 후=%s", *row)
+                    listed = True
+                else:
+                    stats["created_at_fixed_rows_omitted"] += 1
+                    logger.warning("발행 시각을 바꾼 행이 목록 상한(%d)을 넘어 stats에 못 남는다: id=%s 전=%s 후=%s",
+                                   CREATED_AT_FIXED_ROWS_LIMIT, *row)
             if result.created_at_fix == CREATED_AT_FIXED:
                 fixed = stats["created_at_from_page"]
                 fixed[result.press_name] = fixed.get(result.press_name, 0) + 1
             elif result.created_at_fix != NOT_FUTURE:
                 reasons = stats["created_at_unfixed"].setdefault(result.press_name, {})
                 reasons[result.created_at_fix] = reasons.get(result.created_at_fix, 0) + 1
-            if result.created_at_change is not None:
-                row = result.created_at_change.as_stats_row()
-                if len(stats["created_at_fixed_rows"]) < CREATED_AT_FIXED_ROWS_LIMIT:
-                    stats["created_at_fixed_rows"].append(row)
-                    # stats는 추출이 끝나야 job_runs에 저장된다 - 도중에 프로세스가 죽어도 이 줄은 컨테이너 로그에 남는다
-                    logger.info("발행 시각을 기사 페이지 값으로 바꿨다: id=%s 전=%s 후=%s", *row)
-                else:
-                    stats["created_at_fixed_rows_omitted"] += 1
-                    logger.warning("발행 시각을 바꾼 행이 목록 상한(%d)을 넘어 stats에 못 남는다: id=%s 전=%s 후=%s",
-                                   CREATED_AT_FIXED_ROWS_LIMIT, *row)
+            if listed and checkpoint is not None:
+                listed_since_checkpoint[0] += 1
+                if listed_since_checkpoint[0] >= CREATED_AT_CHECKPOINT_EVERY:
+                    listed_since_checkpoint[0] = 0
+                    try:
+                        checkpoint()
+                    except Exception:  # noqa: BLE001 - 중간 저장을 못 하는 것이 추출을 멈춰서는 안 된다
+                        logger.warning("추출 중간 stats 저장 실패 - 추출은 계속한다", exc_info=True)
             if result.status == "error" and len(stats["error_samples"]) < 5:
                 stats["error_samples"].append(result.detail)
                 logger.error(f"   [Error] {result.press_name}: {result.detail}")
 
+        in_flight: Dict[Any, tuple] = {}
         try:
             if num_workers <= 1:
                 while (article := plan.next_article()) is not None:
                     _collect(self.process_single_article(article))
             else:
-                with _executor(num_workers) as executor:
-                    in_flight: Dict[Any, tuple] = {}
-                    while True:
-                        # 워커 수만큼만 보내 둔다 - 결과를 보고 다음 기사를 고르므로 차단기와 예산이 바로 적용된다.
-                        while len(in_flight) < num_workers and (article := plan.next_article()) is not None:
-                            in_flight[executor.submit(self.process_single_article, article)] = article
-                        if not in_flight:
-                            break
-                        done, _ = wait(list(in_flight), return_when=FIRST_COMPLETED)
-                        for future in done:
-                            in_flight.pop(future)
+                try:
+                    with _executor(num_workers) as executor:
+                        while True:
+                            # 워커 수만큼만 보내 둔다 - 결과를 보고 다음 기사를 고르므로 차단기와 예산이 바로 적용된다.
+                            while len(in_flight) < num_workers and (article := plan.next_article()) is not None:
+                                in_flight[executor.submit(self.process_single_article, article)] = article
+                            if not in_flight:
+                                break
+                            done, _ = wait(list(in_flight), return_when=FIRST_COMPLETED)
+                            for future in done:
+                                in_flight.pop(future)
+                                _collect(future.result())
+                finally:
+                    # 종료 신호나 예외로 빠져나오면 아직 결과를 거두지 못한 작업이 남는다. with가 끝나며 그 작업이 마칠 때까지 기다리므로
+                    # (이미 DB에 커밋했을 수 있다) 여기서 결과를 거둔다 - 바꾼 행의 원래 값은 그 결과에만 있다. 정상 종료 때는 비어 있다.
+                    for future in list(in_flight):
+                        in_flight.pop(future)
+                        try:
                             _collect(future.result())
+                        except Exception:  # noqa: BLE001 - 거두지 못해도 원래 예외(종료 신호)를 가리지 않는다
+                            logger.warning("끊긴 추출의 남은 작업 결과를 거두지 못했다", exc_info=True)
         finally:
             progress.close()
 

@@ -1193,18 +1193,17 @@ CI의 PostgreSQL에서 `tests/integration/test_fix_kmib_created_at_sql.py`가, �
 #### 수집기 수정과 2차 보정 (ADR 0008 "2026-10-25 갱신 2", 코드만 - 배포·실행은 아직)
 
 **수집기(본문 추출기)가 하는 일.** `ai_workspace/crawler/content_extractor/page_pubdate.py`. 기사 페이지를 받은 뒤, 행의 저장된 발행 시각(`raw_news_created_at`)이 수집 시각(`raw_news_crawled_at`, 시간대 없는 UTC)보다 **10분 넘게 뒤**일 때만
-페이지의 JSON-LD `datePublished`(없으면 `<meta property="article:published_time">`)로 바꾼다. 쓰는 값은 그 기사 자신의 것뿐이다 - JSON-LD는 **최상위 기사 노드**(`@type`이 `*Article`/`*Posting`이고 덩어리 최상위이거나 최상위 배열의 항목이거나 최상위 객체의 `@graph` 항목인 노드)의
+페이지의 JSON-LD `datePublished`(없으면 `<head>`의 `<meta property="article:published_time">`)로 바꾼다. 쓰는 값은 그 기사 자신의 것뿐이다 - JSON-LD는 **최상위 기사 노드**(`@type`이 `*Article`이나 `BlogPosting` 같은 게시물 형식이고 — `JobPosting`은 아니다 — 덩어리 최상위이거나 최상위 배열의 항목이거나 최상위 객체의 `@graph` 항목인 노드)의
 **문자열** `datePublished`만 받는다. 그런 노드가 여럿이면 문서 순서로 첫 노드가 정하고, 그 노드에 값이 없으면 JSON-LD 값은 없는 것이다(다음 노드·중첩된 관련 기사·`ItemList`·`image`·`WebPage`의 값으로는 넘어가지 않는다). 정상으로 읽힌 기사 노드가 있으면 깨진 JSON-LD 덩어리는 보지 않고,
-깨진 덩어리뿐일 때는 값이 하나이고 `@type`에 Article/Posting이 보일 때만 쓴다. JSON-LD 값이 없거나 못 쓰면 meta를 본다. **JSON-LD 값과 meta 값이 둘 다 있고 10분 넘게 다르면 쓰지 않는다**(`conflict`). 페이지 값에 시간대가 있고, 수집 시각 + 10분 이하이고, 수집 시각 − 7일 이상일 때만 쓴다(위 3단계 생성기와 같은 조건).
+깨진 덩어리뿐일 때는 값이 하나이고 글자상 첫 `"@type"`이 Article 계열이며 그 값이 둘째 `"@type"`보다 앞에 있을 때만 쓴다. JSON-LD 값이 없거나 못 쓰면 meta를 본다(첫 `<body>` 뒤의 meta는 보지 않는다). **시각이 있는 페이지 값끼리(JSON-LD와 meta, meta와 meta) 10분 넘게 다르면 쓰지 않는다**(`conflict`; 날짜만 적은 값은 견주지 않고 시간대 있는 쪽을 쓴다). 페이지 값에 시간대가 있고, 수집 시각 + 10분 이하이고, 수집 시각 − 7일 이상일 때만 쓴다(위 3단계 생성기와 같은 조건).
 미래가 아닌 행은 읽지도 않는다. 언론사를 가리지 않는다. 추출 결과를 쓰는 같은 트랜잭션에서 쓰고, `WHERE`가 "지금도 미래일 때만"이라 먼저 고쳐진 행(예: 이 절의 보정)은 덮지 않는다.
 **ingest의 `stats.extract`에 남는 키:** `created_at_from_page`(언론사별로 바꾼 행 수), `created_at_unfixed`(미래였는데 못 바꾼 행의 언론사별 사유 개수 - `no_page_time` · `no_tz` · `conflict` · `after_crawl` · `too_old`, 그리고 `fetch_failed` · `error`. 그 행은 미래인 채 남는다),
 `created_at_fixed_rows`(바꾼 행의 `[raw_news_id, 바꾸기 전 값, 바꾼 뒤 값]`, 값은 UTC ISO, 행 번호순, 한 회차에 최대 200개)와 `created_at_fixed_rows_omitted`(200개를 넘어 목록에 못 넣은 행 수 - 그 행의 값은 컨테이너 로그에 남는다).
 `fetch_failed`(페이지를 못 받았다)·`error`(처리 중 예외로 롤백했다)로 끝난 미래 행은 그 시도에서 못 고치고 시도마다 이 두 사유로 센다 - 시도 상한(3회) 안에서 다시 받을 때 고친다. 동아일보는 RSS 요약이라 추출 단계를 거치지 않아 이 경로로는 고치지 못한다.
 
 **수집기가 바꾼 행 되돌리기.** 수집기는 같은 ingest 안에서 RSS 값을 넣고 몇 분 뒤 고치므로 원래 값이 DB의 다른 곳에도 매일 18:10 UTC 백업에도 남지 않는다 - `job_runs.stats.extract.created_at_fixed_rows`(`job_runs`는 백업된다)가 유일한 기록이다.
-되돌릴 ingest 회차의 `job_runs.id`를 정해(위 확인 질의가 `started_at`과 함께 보여 준다) 아래 읽기 전용 질의로 되돌리기 `UPDATE` 문장을 만든다. 문장은 "지금 값이 수집기가 쓴 값 그대로일 때만" 되돌리므로 그 뒤 다른 곳이 다시 바꾼 행은 덮지 않고(`UPDATE 0`),
-출력을 눈으로 확인한 뒤 `BEGIN; ... ROLLBACK;`으로 리허설하고 `COMMIT`한다. `created_at_fixed_rows_omitted`가 0이 아닌 회차는 목록이 모자란다 - 모자란 행은 컨테이너 로그(`발행 시각을 바꾼 행이 목록 상한`)에서 찾는다. `stats`는 추출이 끝나야 저장되므로 회차 도중에 프로세스가 죽었다면(`job_runs`가 `abandoned`·`failed`) 그 회차의 행은
-컨테이너 로그의 `발행 시각을 기사 페이지 값으로 바꿨다: id=… 전=… 후=…` 줄에서 찾는다(로그가 남아 있는 동안).
+되돌릴 ingest 회차의 `job_runs.id`를 정해(아래 "배포 뒤 확인"의 첫 질의가 `started_at`과 함께 보여 준다) 아래 읽기 전용 질의로 되돌리기 `UPDATE` 문장을 만든다. 문장은 "지금 값이 수집기가 쓴 값 그대로일 때만" 되돌리므로 그 뒤 다른 곳이 다시 바꾼 행은 덮지 않고(`UPDATE 0`),
+출력을 눈으로 확인한 뒤 `BEGIN; ... ROLLBACK;`으로 리허설하고 `COMMIT`한다.
 
 ```sql
 -- revert_created_at_from_stats.sql (읽기 전용: UPDATE 문장만 출력한다. <run_ids>는 되돌릴 ingest 회차의 job_runs.id를 쉼표로)
@@ -1218,6 +1217,27 @@ FROM job_runs j, jsonb_array_elements(j.stats -> 'extract' -> 'created_at_fixed_
 WHERE j.job = 'ingest' AND j.id IN (<run_ids>)
 ORDER BY j.id, (r.value ->> 0)::bigint;
 ```
+
+```bash
+# 1) UPDATE 문장 만들기(읽기 전용). 812, 813은 예시 - 되돌릴 회차의 id로 바꾼다
+sed 's/<run_ids>/812, 813/' revert_created_at_from_stats.sql \
+  | ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -U newsletter -d newsletter -f -" > revert_updates.sql
+wc -l revert_updates.sql   # 되돌릴 행 수 = 그 회차들의 created_at_fixed_rows 길이의 합. 문장을 눈으로 읽는다
+# 2) 리허설: 줄마다 UPDATE 1이 나오고(다시 바뀐 행은 UPDATE 0) 마지막에 ROLLBACK
+( echo 'BEGIN;'; cat revert_updates.sql; echo 'ROLLBACK;' ) \
+  | ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 -U newsletter -d newsletter -f -"
+# 3) 적용: 같은 명령의 ROLLBACK을 COMMIT으로
+( echo 'BEGIN;'; cat revert_updates.sql; echo 'COMMIT;' ) \
+  | ssh -F .ops/micro/ssh_config micro "cd ~/newsletter-recsys && sudo docker compose exec -T db psql -X -v ON_ERROR_STOP=1 -U newsletter -d newsletter -f -"
+```
+
+**목록이 모자랄 수 있는 경우.**
+`created_at_fixed_rows_omitted`가 0이 아닌 회차는 목록이 모자란다(한 회차 200개 상한) - 모자란 행은 컨테이너 로그(`발행 시각을 바꾼 행이 목록 상한`)에서 찾는다.
+회차가 도중에 끊겨도 `stats.extract`는 남는다 - ingest가 추출기에 자기 `stats`를 넘겨 채우게 하므로 종료 신호(`docker compose stop`·재배포의 SIGTERM, scheduler의 정지 유예는 60초)나 예외로 빠져나올 때 `runtime`이 그때까지의 목록을 `job_runs`에 쓰고(`failed`),
+바꾼 행이 10개 쌓일 때마다 중간 저장도 한다(OOM/SIGKILL은 마지막 중간 저장까지가 남는다). 그래도 목록에 없을 수 있는 행이 둘 있다.
+① OOM/SIGKILL(`abandoned`)로 죽은 회차에서 마지막 중간 저장 뒤에 바꾼 행(최대 9개). ② 정지 신호가 잡의 프로세스 그룹 전체에 가므로 진행 중이던 워커 프로세스도 같이 끊긴다 - 커밋한 직후에 끊긴 행(워커 수 이하)은 부모가 결과를 받지 못해 목록에 없다.
+①의 원래 값은 컨테이너 로그의 `발행 시각을 기사 페이지 값으로 바꿨다: id=… 전=… 후=…` 줄에 있고(②는 로그에도 없다),
+**`docker compose up -d --build`는 scheduler 컨테이너를 다시 만들어 그 로그도 지운다.** 그래서 `failed`·`abandoned` 회차가 있으면 컨테이너를 다시 만들기 전에 `docker compose logs scheduler | grep '발행 시각을 기사 페이지 값으로'`로 먼저 뽑아 둔다.
 
 **배포 뒤 확인(읽기 전용).** 국민일보 새 행이 있는 회차에서 `created_at_from_page`에 국민일보 건수가 찍히는지, `created_at_unfixed`가 무엇으로 차는지 본다:
 
@@ -1250,10 +1270,11 @@ GROUP BY 1, 2 ORDER BY 1, 2;
 **2차 보정.** 수집기 수정이 닿지 않는 행 - 이미 추출이 끝난 행 - 을 고친다. **수정을 배포한 뒤 한 번** 한다(배포 전에 하면 그 사이 새 미래 행이 또 생긴다). 1차와 달리 언론사를 가리지 않고, 보관 표는 1차(`news_raw_kmib_created_at_fix`)와 따로
 `news_raw_created_at_fix_2`를 써서 1차 보정은 그대로 둔 채 더 고치고 따로 되돌린다. 위 1~6단계와 같은 모양이고 다른 곳만 적는다:
 
-1. **대상 뽑기(VM, 읽기 전용).** 지금 미래이면서 **수집기가 다시 고르지 않는** 행이다: 추출 상태가 `NULL`(아직 대기)인 행과 수집기가 다시 받는 `fetch_failed`·`error`는 빼는데,
-   배포한 수집기가 그 행을 받을 때 스스로 고치고 그 사이 값이 바뀌면 생성 SQL이 "원래 값이 그대로였다"며 통째로 멈추기 때문이다. 수집기가 다시 받는 조건은 추출기의 대상 조회와 같다: 시도 3회 미만(`Settings.MAX_EXTRACT_ATTEMPTS`)이고
-   본문을 비운 적이 없고(`raw_news_content_purged_at IS NULL`) 수집 뒤 30일 안(`BODY_RETENTION_DAYS`)이다. 이 둘을 빠뜨리면 30일이 지났거나 본문을 비운 `fetch_failed`·`error` 행이 수집기도 2차 보정도 못 고치는 행이 된다
-   (`tests/integration/test_extract_created_at_from_page_db.py`가 이 질의와 추출기의 대상 조회가 서로 겹치지도 비지도 않는지 본다).
+1. **대상 뽑기(VM, 읽기 전용).** 지금 미래이면서 **수집기가 다시 고르지 않는** 행이다. 수집기가 다시 고르는 행은 빼는데, 배포한 수집기가 그 행을 받을 때 스스로 고치고 그 사이 값이 바뀌면 생성 SQL이 "원래 값이 그대로였다"며 통째로 멈추기 때문이다.
+   수집기(추출기의 대상 조회)가 고르는 행은 추출 상태가 `NULL`(아직 대기)이거나 `fetch_failed`·`error`이면서 시도 3회 미만(`Settings.MAX_EXTRACT_ATTEMPTS`)인 행 가운데,
+   본문을 비운 적이 없고(`raw_news_content_purged_at IS NULL`) 수집 뒤 30일 안(`BODY_RETENTION_DAYS`)인 행이다. 아래 질의는 이 조건을 **그대로 뒤집은 것**(`NOT (...)`)이라 미래 행은 수집기와 이 질의 가운데 정확히 한 쪽에 든다.
+   `NULL` 상태라도 수집 30일이 지났거나 본문을 비운 행은 수집기가 영영 고르지 않으므로 이 질의의 대상이다(그런 행을 빼면 아무도 못 고친다). 이 질의와 추출기의 대상 조회가 한 행도 겹치거나 빠지지 않는지는
+   `tests/integration/test_extract_created_at_from_page_db.py`가 상태 · 시도 횟수 · 수집 경과 · 본문 비움의 조합으로 본다.
 
    ```sql
    -- future_targets.sql
@@ -1267,8 +1288,8 @@ GROUP BY 1, 2 ORDER BY 1, 2;
           to_char(n.raw_news_crawled_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')
    FROM news_raw n
    WHERE n.raw_news_created_at > (n.raw_news_crawled_at AT TIME ZONE 'UTC') + interval '10 minutes'
-     AND n.raw_news_extract_status IS NOT NULL
-     AND NOT (n.raw_news_extract_status IN ('fetch_failed', 'error') AND n.raw_news_extract_attempts < 3
+     AND NOT ((n.raw_news_extract_status IS NULL
+               OR (n.raw_news_extract_status IN ('fetch_failed', 'error') AND n.raw_news_extract_attempts < 3))
               AND n.raw_news_content_purged_at IS NULL
               AND n.raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - interval '30 days')
    ORDER BY n.raw_news_id;

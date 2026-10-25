@@ -322,14 +322,19 @@ def test_the_runbook_second_pass_query_and_the_extractor_target_query_leave_no_f
 
     # 수집기가 다시 고르는 미래 행: 대기 · 시도 여지가 남은 fetch_failed / error
     picked_by_extractor = {seed("pending", None, 0), seed("retry_failed", "fetch_failed", 1), seed("retry_error", "error", 2)}
-    # 수집기가 다시 고르지 않는 미래 행 = 2차 보정 대상: 이미 끝난 상태 · 시도를 다 쓴 것 · 수집 30일이 지난 것 · 본문을 비운 것
+    # 수집기가 다시 고르지 않는 미래 행 = 2차 보정 대상: 이미 끝난 상태 · 시도를 다 쓴 것 · 수집 30일이 지난 것 · 본문을 비운 것.
+    # 상태가 NULL(대기)이어도 수집 30일이 지났거나 본문을 비웠으면 수집기가 영영 고르지 않는다 - 시도 횟수가 얼마든 같다
     left_for_runbook = {
         seed("ok", "ok", 1), seed("dropped", "dropped", 1), seed("empty", "empty", 1),
         seed("spent_failed", "fetch_failed", 3), seed("spent_error", "error", 3),
         seed("old_failed", "fetch_failed", 1, crawled=old_crawl),
         seed("purged_failed", "fetch_failed", 1, purged=True),
+        seed("old_pending", None, 0, crawled=old_crawl), seed("old_pending_tried", None, 1, crawled=old_crawl),
+        seed("purged_pending", None, 0, purged=True),
+        seed("old_purged_pending", None, 0, crawled=old_crawl, purged=True),
     }
     not_future = seed("normal_failed", "fetch_failed", 1, future=False)  # 수집기만 다시 고른다
+    every_future_row = picked_by_extractor | left_for_runbook
 
     query = runbook_sql("future_targets.sql")
     output = _psql(psql_bin, database_url, schema, query, tmp_path)
@@ -348,3 +353,5 @@ def test_the_runbook_second_pass_query_and_the_extractor_target_query_leave_no_f
     assert runbook_ids == left_for_runbook
     assert extractor_ids == picked_by_extractor | {not_future}
     assert runbook_ids.isdisjoint(extractor_ids)
+    # 미래 행은 수집기와 2차 보정 질의 가운데 정확히 한 쪽이 맡는다 - 어느 쪽도 못 고치는 행이 없다
+    assert (runbook_ids | extractor_ids) >= every_future_row
