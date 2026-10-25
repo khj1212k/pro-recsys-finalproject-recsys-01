@@ -14,7 +14,7 @@ embedding_result IS NULL인 기사만 처리한다.
 """
 import argparse
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 STAGES = ("rss", "extract", "embed")
 
@@ -147,14 +147,28 @@ def warn_failed_feeds(ctx, rss: Dict[str, Any]) -> None:
     피드를 못 읽으면 그 언론사의 이번 회차 신규 기사가 0건이라 추출 단계에 그 언론사 대상이 없을 수 있고, 그러면
     추출 경고도 나지 않는다. 2026-10-16 ~ 10-17 Tier 0에서 동아일보 RSS가 RemoteDisconnected로 실패한 회차 다수는
     추출 대상에 동아일보가 없어 succeeded·경고 없음으로 끝났다 - 수집량이 0인데 알림이 없었다.
-    모든 피드가 실패한 경우는 run()이 실패로 끝내므로 여기까지 오지 않는다."""
+    모든 피드가 실패한 경우는 run()이 실패로 끝내므로 여기까지 오지 않는다.
+
+    피드가 여럿인 언론사(국민일보 여섯, 전자신문 셋)는 언론사마다 한 줄로 묶는다: 모두 실패하면 "피드 N개 모두 실패 -
+    이번 회차 신규 기사 0건", 일부만 실패하면 실패한 피드 이름을 적고 신규 0건이라고 하지 않는다."""
+    by_press: Dict[str, List[Tuple[str, Optional[str]]]] = {}
     for feed, feed_stats in (rss.get("per_feed") or {}).items():
-        error = (feed_stats or {}).get("error")
-        if error:
-            # 원인 종류만 적는다: "RemoteDisconnected: Remote end closed ..." -> "RemoteDisconnected",
-            # "feed unreadable (HTTP 403): ..." -> "feed unreadable (HTTP 403)"
-            kind = str(error).split(":", 1)[0].strip()[:80]
-            ctx.warn(f"{feed}: RSS 수집 실패 ({kind}) - 이번 회차 신규 기사 0건")
+        feed_stats = feed_stats or {}
+        by_press.setdefault(feed_stats.get("press") or feed, []).append((feed, feed_stats.get("error")))
+    for press, feeds in by_press.items():
+        failed = [(feed, error) for feed, error in feeds if error]
+        if not failed:
+            continue
+        # 원인 종류만 적는다: "RemoteDisconnected: Remote end closed ..." -> "RemoteDisconnected",
+        # "feed unreadable (HTTP 403): ..." -> "feed unreadable (HTTP 403)"
+        kinds = ", ".join(dict.fromkeys(str(error).split(":", 1)[0].strip()[:80] for _, error in failed))
+        if len(feeds) == 1:
+            ctx.warn(f"{feeds[0][0]}: RSS 수집 실패 ({kinds}) - 이번 회차 신규 기사 0건")
+        elif len(failed) == len(feeds):
+            ctx.warn(f"{press}: RSS 피드 {len(feeds)}개 모두 실패 ({kinds}) - 이번 회차 신규 기사 0건")
+        else:
+            names = ", ".join(feed for feed, _ in failed)
+            ctx.warn(f"{press}: RSS 피드 {len(feeds)}개 중 {len(failed)}개 실패 ({kinds}) - {names}")
 
 
 def _press_counts(counts: Dict[str, int]) -> Tuple[int, int]:
