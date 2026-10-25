@@ -109,6 +109,8 @@ def _seed(pg_conn, schema):
     _news(pg_conn, schema, kmib, "empty1", "empty", inside(3), None, 0, "")
     # --- 건드리면 안 되는 행
     _news(pg_conn, schema, kmib, "before_ok", "ok", BOUNDARY - timedelta(hours=1), "hb", 6, "정상 본문")  # 붕괴 전
+    # 붕괴 전 템플릿으로 받은 같은 글(before_ok)을 옛 추출기가 정확히 중복으로 잡은 행 - 구 URL·신 URL 이중 수집
+    _news(pg_conn, schema, kmib, "dup_of_before_ok", "duplicate", inside(2), "hb", 0, "")
     _news(pg_conn, schema, kmib, "after_until_ok", "ok", UNTIL + timedelta(hours=1), "ha", 6, "고친 뒤 본문")  # 고친 추출기가 받음
     _news(pg_conn, schema, kmib, "purged_ok", "ok", inside(4), "hp", 99, None, purged=True)  # 본문을 이미 비움
     _news(pg_conn, schema, kmib, "expired_ok", "ok", inside(4), "he", 6, "기한 지남", crawled_days_ago=40)  # 수집 30일 넘음
@@ -247,6 +249,22 @@ def test_apply_stops_on_empty_wide_or_linked_targets_and_missing_arguments(psql_
     with pg_conn.cursor() as cur:
         cur.execute(f'DELETE FROM "{schema}".news_raw WHERE raw_news_title = %s', ("embedded_ok",))
     assert _rows(pg_conn, schema) == before and not _has_audit(pg_conn, schema)  # 어느 실패도 아무것도 커밋하지 않았다
+
+
+def test_duplicate_of_an_ok_row_from_before_the_boundary_is_not_a_target(psql_bin, database_url, pg_conn, schema):
+    """구 URL·신 URL로 이중 수집된 기사를 옛 추출기가 정확히 중복으로 잡은 행은 정상이다. 되돌려 다시 받으면 새 템플릿 추출이
+    붕괴 전 추출과 글자까지 같다는 보장이 없어 같은 기사가 ok 두 벌로 풀릴 수 있다. 특집 글 해시의 duplicate(원본이 boundary
+    이후)는 그대로 대상이다."""
+    _seed(pg_conn, schema)
+    before = _rows(pg_conn, schema)
+
+    done = _run(psql_bin, database_url, schema, FIX_SQL, BOUNDARY_ARG, UNTIL_ARG, "apply=1")
+
+    assert done.returncode == 0, done.stderr
+    assert FIX_NOTICE.search(done.stderr).groups() == ("9", "3", "4", "1", "1")  # duplicate 4행 = dup1~4. dup_of_before_ok는 아니다
+    after = _rows(pg_conn, schema)
+    assert after["dup_of_before_ok"] == before["dup_of_before_ok"] and before["dup_of_before_ok"][0] == "duplicate"
+    assert after["dup1"][0] is None  # 같은 duplicate라도 원본(ok1)이 붕괴 기간이면 되돌린다
 
 
 def test_other_press_can_be_selected_with_the_press_variable(psql_bin, database_url, pg_conn, schema):

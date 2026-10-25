@@ -852,7 +852,7 @@ Mac 덤프(`data/backups/mac-compose-2026-09-26.dump`)의 AI타임스 행도 같
 ### 6.8 국민일보 본문 추출 붕괴 복구 (2026-10-19 ~, 아직 하지 않았다)
 
 **Tier 0는 2026-10-25 현재 옛 추출기(`e9864cf`)로 돌고 있어 국민일보 본문은 특집 카드 글이다.** 원인·증거는
-[ADR 0026](adr/0026-hosting-tiers-and-contingency.md) 결정 9 "2026-10-25 추가"와 증거 12다. 이 절은 고친 추출기를 올리고 영향 행 1,191건(2026-10-25 02:35 UTC 조회)을
+[ADR 0026](adr/0026-hosting-tiers-and-contingency.md) 결정 9 "2026-10-25 추가"와 증거 12다. 이 절은 고친 추출기를 올리고 영향 행 1,190건(2026-10-25 02:56 UTC 조회)을
 다시 받게 하는 절차다. SQL은 파일이다 - `scripts/oci/fix_kmib_body_extraction.sql`(복구)과 `scripts/oci/fix_kmib_body_extraction_revert.sql`(되돌리기),
 CI의 PostgreSQL에서 `tests/integration/test_fix_kmib_body_extraction_sql.py`가 먼저 돌린다.
 
@@ -892,7 +892,7 @@ CI의 PostgreSQL에서 `tests/integration/test_fix_kmib_body_extraction_sql.py`�
 
    기대: `body_container`에 `{"국민일보": {"container": N}}`만 있다. `container_missing`이 있거나 중앙값이 수천 자 이상이면 여기서 멈춘다 - 고친 추출기가 새 페이지에 맞지 않는 것이다.
    주말에는 국민일보 새 행이 적다(하루 20~40건) - 새 행이 5건 이상 쌓인 뒤에 본다.
-3. **사전 확인(읽기 전용).** 스크립트와 같은 조건의 영향 행 수다(2026-10-25 02:35 UTC: duplicate 704, ok 487 = 1,191):
+3. **사전 확인(읽기 전용).** 스크립트와 같은 조건의 영향 행 수다(2026-10-25 02:56 UTC: duplicate 703, ok 487 = 1,190. 원본이 개편 전인 duplicate 1건은 뺀다):
 
    ```sql
    SELECT n.raw_news_extract_status, count(*), count(DISTINCT n.raw_news_content_sha256) AS distinct_hashes,
@@ -901,6 +901,8 @@ CI의 PostgreSQL에서 `tests/integration/test_fix_kmib_body_extraction_sql.py`�
    WHERE p.press_name = '국민일보' AND n.raw_news_extract_status IN ('ok', 'duplicate', 'dropped', 'empty')
      AND n.raw_news_extracted_at >= '2026-10-19 04:00:00+00' AND n.raw_news_extracted_at < '<until>'
      AND n.raw_news_content_purged_at IS NULL AND n.raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - interval '30 days'
+     AND NOT (n.raw_news_extract_status = 'duplicate' AND EXISTS (SELECT 1 FROM news_raw o WHERE o.raw_news_extract_status = 'ok'
+              AND o.raw_news_content_sha256 = n.raw_news_content_sha256 AND o.raw_news_extracted_at < '2026-10-19 04:00:00+00'))
    GROUP BY 1 ORDER BY 1;
    ```
 
@@ -919,7 +921,7 @@ CI의 PostgreSQL에서 `tests/integration/test_fix_kmib_body_extraction_sql.py`�
 
    읽을 것: `NOTICE: fix_kmib reset=<행 수> ok=<n> duplicate=<n> dropped=<n> empty=<n>`, 요약 표(이전 상태별 행 수·서로 다른 해시 수·수집 시각 범위), 끝 줄 `ROLLBACK`/`COMMIT`.
    리허설과 적용은 같은 수치여야 한다(그 사이 옛 추출기가 새 행을 쓰지 않았다면).
-5. **다음 ingest 뒤 확인(읽기 전용).** 되돌린 행은 `ORDER BY raw_news_id`로 오래된 것부터 다시 받는다. 1,191건은 약 15분이라 한두 회차에 끝난다(회차 마감 45분).
+5. **다음 ingest 뒤 확인(읽기 전용).** 되돌린 행은 `ORDER BY raw_news_id`로 오래된 것부터 다시 받는다. 1,190건은 약 15분이라 한두 회차에 끝난다(회차 마감 45분).
 
    ```sql
    SELECT n.raw_news_extract_status, count(*),

@@ -20,6 +20,9 @@
 --     특집 글 그대로가 아니라 본문과 섞인 것이어도 같은 원인이다. 'duplicate'만 되돌리면 이 ok 행 대부분이 남는다
 --   - 본문을 비운 적이 없고(raw_news_content_purged_at IS NULL) 수집한 지 30일이 안 됐다(ADR 0023) - 본문 추출기의 대상
 --     조회(extractor.py)와 같은 조건이라, 이 조건 밖의 행은 되돌려도 다시 받지 못한다. 그래서 건드리지 않는다
+--   - duplicate이면 그 해시의 원본(ok)이 boundary 이전에 추출된 행이 아니다 - 붕괴 전 템플릿으로 받은 같은 글이 이미 있어 옛
+--     추출기가 정확히 중복으로 잡은 행이다(구 URL과 신 URL로 이중 수집된 기사). 되돌려 다시 받으면 새 템플릿 추출이 옛 추출과
+--     글자까지 같다는 보장이 없어 같은 기사가 ok 두 벌로 풀릴 수 있다. 특집 글 해시의 duplicate는 원본이 boundary 이후다
 --
 -- 되돌리는 값 = 수집기가 막 넣은 행(rss_collector.py)과 같다:
 --   추출 상태 NULL, 본문 '', 본문 해시 NULL, 본문 길이 NULL, 추출 시각 NULL, 시도 횟수 0
@@ -96,6 +99,11 @@ WHERE p.press_name = :'press'
   AND n.raw_news_extracted_at < :'until'::timestamptz
   AND n.raw_news_content_purged_at IS NULL
   AND n.raw_news_crawled_at > (now() AT TIME ZONE 'UTC') - interval '30 days'
+  AND NOT (n.raw_news_extract_status = 'duplicate' AND EXISTS (
+        SELECT 1 FROM news_raw o
+        WHERE o.raw_news_extract_status = 'ok'
+          AND o.raw_news_content_sha256 = n.raw_news_content_sha256
+          AND o.raw_news_extracted_at < :'boundary'::timestamptz))
 ORDER BY n.raw_news_id
 FOR UPDATE OF n;
 
