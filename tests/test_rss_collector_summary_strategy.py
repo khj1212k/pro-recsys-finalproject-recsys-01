@@ -216,6 +216,45 @@ def test_summary_dedupe_lookup_asks_each_status_separately_so_each_partial_index
     assert "raw_news_extract_status = ANY" not in sql and "IN (" not in sql
 
 
+def test_url_already_in_the_table_does_not_claim_the_summary_hash_of_a_new_url():
+    # 배포 전 행(이미 있는 URL)은 ON CONFLICT DO NOTHING으로 건너뛰어져 요약을 받지 못한다. 그런 항목이 같은 요약의 해시를 먼저
+    # 차지하면 새 URL이 'duplicate'(본문 '')로 들어가 그 기사는 어느 행에도 본문이 남지 않는다
+    summary = _summary(31)
+    _, rows, _, result = _run(
+        FEEDS,
+        [FakeEntry("http://s.example/old-url", "제목", _recent(), summary=summary),  # 이미 DB에 있다
+         FakeEntry("http://s.example/new-url", "제목", _recent(), summary=summary)],  # 같은 요약의 새 URL
+        existing_urls=["http://s.example/old-url"],
+    )
+    by_url = _by_url(rows)
+    assert set(by_url) == {"http://s.example/new-url"}  # 이미 있는 URL의 행은 만들지 않는다
+    assert by_url["http://s.example/new-url"][6] == RSS_SUMMARY_STATUS
+    assert by_url["http://s.example/new-url"][2] != ""
+    # 건너뜀 = 피드 항목 중 새로 들어가지 않은 것 - 이미 있어 뺀 항목도 센다
+    assert result["inserted"] == 1 and result["skipped"] == 1
+    assert result["per_feed"]["요약언론"]["summary"] == {"stored": 1, "dropped": 0, "duplicate": 0}
+
+
+def test_when_every_entry_is_already_in_the_table_nothing_is_looked_up_or_inserted():
+    log = []
+    sql, rows, lookup, result = _run(
+        FEEDS,
+        [FakeEntry(f"http://s.example/old{i}", "제목", _recent(), summary=_summary(40 + i)) for i in range(3)],
+        existing_urls=[f"http://s.example/old{i}" for i in range(3)],
+        sql_log=log,
+    )
+    assert (sql, rows, lookup) == (None, None, None)  # 해시 조회도, INSERT도 보내지 않는다
+    assert result["inserted"] == 0 and result["skipped"] == 3
+    assert result["per_feed"]["요약언론"]["summary"] == {"stored": 0, "dropped": 0, "duplicate": 0}
+    assert sum("WHERE raw_news_url = ANY" in q for q in log) == 1  # URL 조회는 한 번(피드당)
+
+
+def test_direct_feeds_do_not_look_up_existing_urls():
+    log = []
+    _run({"직접언론": ("direct", "http://x/rss")}, [FakeEntry("http://d.example/9", "제목", _recent())], sql_log=log)
+    assert not [q for q in log if "FROM news_raw" in q]
+
+
 def test_summary_stats_count_only_rows_that_were_really_inserted():
     # 50개가 피드에 계속 남아 있어도 이미 들어간 행(ON CONFLICT로 건너뜀)은 세지 않는다
     entries = [FakeEntry(f"http://s.example/n{i}", "제목", _recent(), summary=_summary(10 + i)) for i in range(3)]

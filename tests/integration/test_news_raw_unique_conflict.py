@@ -201,6 +201,23 @@ def test_collect_rss_summary_feed_inserts_summary_rows_against_real_db(database_
             cur.execute("SELECT count(*) FROM news_raw WHERE press_id = %s AND raw_news_extract_status = 'rss_summary'",
                         (press_id,))
             assert cur.fetchone() == (1,)
+
+        # 배포 전에 들어온 행(이미 있는 URL, 상태 NULL·본문 '')이 같은 묶음의 새 URL보다 먼저 요약 해시를 차지하지 않는다 -
+        # 그 행은 ON CONFLICT로 건너뛰어 요약을 받지 못하므로, 새 URL이 'duplicate'가 되면 그 기사는 어느 행에도 본문이 없다
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO news_raw (press_id, raw_news_title, raw_news_content, raw_news_url, raw_news_crawled_at) "
+                "VALUES (%s, '배포 전', '', %s, NOW())", (press_id, url("pre-deploy")))
+        fourth = run([
+            _FakeEntry(url("pre-deploy"), "배포 전", published, summary=summary("p")),
+            _FakeEntry(url("fresh-same-summary"), "새 기사", published, summary=summary("p")),
+        ])
+        assert (fourth["inserted"], fourth["skipped"]) == (1, 1)
+        assert fourth["per_feed"][press_name]["summary"] == {"stored": 1, "dropped": 0, "duplicate": 0}
+        got = rows()
+        assert got[url("pre-deploy")][:2] == (None, "")  # 기존 행은 그대로다(수집기는 기존 행을 고치지 않는다)
+        assert got[url("fresh-same-summary")][0] == "rss_summary"
+        assert got[url("fresh-same-summary")][1] == rss_summary_text({"summary": summary("p")})
     finally:
         with pg_conn.cursor() as cur:
             cur.execute("DELETE FROM news_raw WHERE press_id = %s", (press_id,))

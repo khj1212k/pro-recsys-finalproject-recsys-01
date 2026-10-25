@@ -74,6 +74,12 @@ def _summary_digest(summary: str) -> str:
     return hashlib.sha256(summary.encode("utf-8")).hexdigest()
 
 
+def _existing_urls(cur, urls) -> Set[str]:
+    """urls 가운데 news_raw에 이미 있는 것. uq_news_raw_raw_news_url을 타는 조회라 비용이 작다."""
+    cur.execute("SELECT raw_news_url FROM news_raw WHERE raw_news_url = ANY(%s)", (sorted(set(urls)),))
+    return {row[0] for row in cur.fetchall()}
+
+
 def _existing_summary_hashes(cur, digests) -> Set[str]:
     """digests 가운데 SUMMARY_DEDUPE_STATUSES 행이 이미 갖고 있는 해시(같은 트랜잭션에서 앞서 넣은 행 포함).
 
@@ -97,6 +103,9 @@ def build_insert_rows(cur, pid, press_name, strategy, entries, now_local, now_ut
     행 = (press_id, 제목, 본문, 링크, 발행 시각, 수집 시각, 추출 상태, 해시, 길이, 추출 시각).
     - 일반 피드('direct'): 본문 ''에 상태 NULL - 본문 추출기가 채운다.
     - 'rss_summary' 피드: 요약을 본문 칸에 넣고 상태 'rss_summary'로 닫아 본문 추출 대상에서 뺀다. 단
+      · 이미 DB에 있는 URL은 행을 만들지 않는다 - INSERT ... ON CONFLICT DO NOTHING이 어차피 건너뛰어 요약을 받지 못하는데,
+        그 항목이 요약 해시를 먼저 차지하면 같은 요약을 가진 새 URL이 'duplicate'(본문 '')로 들어가 그 기사는 어느 행에도
+        본문이 남지 않는다(배포 전 행이 50건 피드에 남아 있는 동안 계속 생긴다). 행 수가 입력보다 적을 수 있다.
       · 요약이 비었거나 is_drop_article이 참이면(짧음·[포토]) 본문 ''에 'dropped'로 닫는다. 본문을 따로 요청하지 않는다 -
         이 출발지는 본문 요청을 거절한다(ADR 0026 증거 10).
       · 같은 요약이 이미 'ok'/'rss_summary' 행에 있거나 이번 묶음에서 앞서 나왔으면 본문 ''에 'duplicate'로 넣는다
@@ -105,6 +114,9 @@ def build_insert_rows(cur, pid, press_name, strategy, entries, now_local, now_ut
     """
     if strategy != RSS_SUMMARY:
         return [(pid, title, '', link, dt, now_local, None, None, None, None) for link, title, dt, _ in entries], {}
+
+    present = _existing_urls(cur, [link for link, _, _, _ in entries]) if entries else set()
+    entries = [entry for entry in entries if entry[0] not in present]
 
     verdicts = []  # (drop 사유 있음, 해시) - 항목 순서대로
     for link, title, dt, summary in entries:
@@ -269,12 +281,13 @@ def collect_rss(hours: int = 100) -> Dict[str, Any]:
                         """,
                         candidates,
                         fetch=True,
-                    )
+                    ) if candidates else []
                     inserted_count = len(inserted_rows)
-                    skipped_count = len(candidates) - inserted_count
+                    # 건너뜀 = 피드 항목 가운데 새로 들어가지 않은 것(이미 있어 build_insert_rows가 뺀 것 포함)
+                    skipped_count = len(entries) - inserted_count
                     feed_stats["inserted"] = inserted_count
                     feed_stats["skipped"] = skipped_count
-                    if summary_status:
+                    if strategy == RSS_SUMMARY:
                         # 이번에 실제로 들어간 요약 행의 상태별 건수(이미 있어 건너뛴 행은 세지 않는다).
                         # 피드가 요약을 비워 보내기 시작하거나 짧은 요약이 많아지면 여기서 드러난다.
                         by_status = Counter(summary_status.get(row[0]) for row in inserted_rows)
