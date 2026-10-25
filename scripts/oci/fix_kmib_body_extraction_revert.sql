@@ -1,5 +1,5 @@
--- scripts/oci/fix_kmib_body_extraction.sql의 복구를 되돌린다 (ADR 0026 결정 9 "2026-10-25 국민일보 본문 추출 붕괴" 절,
--- docs/runbook-hosting.md 6.8). 보관 표까지 지운다 - 그래야 범위를 바꿔 다시 복구할 수 있다.
+-- scripts/oci/fix_kmib_body_extraction.sql의 복구를 되돌린다 (ADR 0026 결정 9의 "2026-10-25 추가"와
+-- 증거 12, docs/runbook-hosting.md 6.8). 보관 표까지 지운다 - 그래야 범위를 바꿔 다시 복구할 수 있다.
 --
 --   psql -X -v ON_ERROR_STOP=1 [-v apply=1] -f <이 파일>
 --
