@@ -192,3 +192,40 @@ def test_collect_rss_flags_unreachable_feed_that_returns_bozo_without_entries():
 
     assert "connection refused" in stats["per_feed"]["먹통언론"]["error"]
     assert stats["failed_feeds"] == 1
+
+
+def test_feeds_on_a_host_that_failed_earlier_in_the_run_are_skipped_without_retry():
+    # 같은 호스트의 피드가 여럿(국민일보 여섯·전자신문 셋)일 때 사이트 하나가 막히면 피드마다 재시도를 곱하지 않는다
+    conn, cur = _make_cursor_conn()
+    cur.fetchone.return_value = (1,)
+
+    bozo_feed = MagicMock()
+    bozo_feed.bozo = 1
+    bozo_feed.bozo_exception = OSError("timed out")
+    bozo_feed.entries = []
+    ok_feed = MagicMock()
+    ok_feed.bozo = 0
+    ok_feed.entries = []
+    calls = []
+
+    def fake_parse(url):
+        calls.append(url)
+        return bozo_feed if "down.example" in url else ok_feed
+
+    feeds = {
+        "막힌언론": ("direct", "http://down.example/all.xml"),
+        "막힌언론_정치": ("direct", "http://down.example/pol.xml"),
+        "막힌언론_경제": ("direct", "http://down.example/eco.xml"),
+        "멀쩡언론": ("direct", "http://up.example/rss"),
+    }
+    with patch("crawler.rss_collector.get_connection", return_value=conn), \
+         patch("crawler.rss_collector.release_connection"), \
+         patch("crawler.rss_collector.Settings.RSS_FEEDS", feeds), \
+         patch("crawler.rss_collector.parse_feed_with_retry", side_effect=fake_parse):
+        stats = collect_rss()
+
+    assert calls == ["http://down.example/all.xml", "http://up.example/rss"]
+    assert "timed out" in stats["per_feed"]["막힌언론"]["error"]
+    for name in ("막힌언론_정치", "막힌언론_경제"):
+        assert stats["per_feed"][name]["error"].startswith("skipped: down.example")
+    assert stats["per_feed"]["멀쩡언론"]["error"] is None

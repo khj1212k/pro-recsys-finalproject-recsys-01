@@ -33,5 +33,10 @@ def test_feed_keys_map_to_press_names_before_the_underscore():
 def test_kmib_reads_the_all_feed_and_section_feeds():
     kmib = sorted(url for name, (_, url) in Settings.RSS_FEEDS.items() if press_name_for_feed(name) == "국민일보")
 
-    assert "https://www.kmib.co.kr/rss/data/kmibRssAll.xml" in kmib
-    assert len(kmib) == 6
+    assert kmib == sorted(f"https://www.kmib.co.kr/rss/data/{name}.xml" for name in (
+        "kmibRssAll", "kmibPolRss", "kmibEcoRss", "kmibSocRss", "kmibIntRss", "kmibLifeRss"))
+
+
+def test_every_seed_press_is_in_the_initial_press_list():
+    from db import schema
+    assert {press for press, _ in schema.RSS_FEED_SEEDS} <= set(schema.PRESS_NAMES)
