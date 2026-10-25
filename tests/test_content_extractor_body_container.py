@@ -43,9 +43,10 @@ def test_kmib_body_is_cut_from_the_article_container_so_the_feature_cards_cannot
 
 
 def test_other_presses_get_the_page_unchanged():
-    """규칙은 국민일보에만 있다. 다른 언론사는 예전과 같은 문자열(같은 객체)을 받는다."""
+    """규칙은 국민일보와 매일경제(test_content_extractor_body_container_mk.py)에만 있다. 다른 언론사는 예전과 같은
+    문자열(같은 객체)을 받는다."""
     page = kmib_like_page()
-    for press in ("동아일보", "경향신문", "매일경제", "한국경제", "세계일보", "전자신문", "AI타임스", "", "국민일보 "):
+    for press in ("동아일보", "경향신문", "한국경제", "세계일보", "전자신문", "AI타임스", "", "국민일보 "):
         selected = select_body_html(page, press)
         assert selected.mode == FULL_PAGE and selected.html is page
 
